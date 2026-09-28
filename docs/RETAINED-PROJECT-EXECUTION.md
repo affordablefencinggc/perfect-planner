@@ -114,3 +114,21 @@ usage includes only observed members. executionElapsedMs includes termination
 and output draining, not just time running project code. The CPU fixture209
 validated the new reporting after208 exposed unavailable post-exit image names;
 image basenames are now captured when the held process is first observed.
+
+Attempt212's module-only trace stayed within the output cap and ended in
+Vitest's nested Rollup native.js after importing child_process. That loader's
+Windows report-header probe calls spawnSync with captured stdio. Attempt213
+isolates captured spawnSync in a tiny copied Node script: it prints the before
+marker, never returns, and reaches the two-second Job CPU cap; settlement is
+observed. This is a failing runtime compatibility probe, not project acceptance.
+
+The selected Node22.23.2 reports libuv1.51.0. Its upstream pipe.c generates pipe
+names outside LOCAL and retries ERROR_ACCESS_DENIED in uv__pipe_server. libuv
+issue5178 and merged fix5181 describe the AppContainer namespace incompatibility:
+https://github.com/libuv/libuv/issues/5178
+https://github.com/libuv/libuv/pull/5181
+https://raw.githubusercontent.com/nodejs/node/v22.23.2/deps/uv/src/win/pipe.c
+This supplies a concrete candidate fix. Still required: a controlled comparison
+and a reviewed runtime containing that fix, then repeat the full original
+Boundaries commands. Do not patch project hooks, disable isolation or raise CPU
+limits to disguise the failure. No runtime replacement has been installed.
