@@ -2,7 +2,7 @@
 //! snapshot or retain custody through durable output acknowledgment. It cannot
 //! confer verification authority. Directory notifications detect namespace changes;
 //! they do not prevent additions. Existing regular files deny write/delete.
-use std::{ffi::c_void,fs::{self,File,OpenOptions},os::windows::{fs::{OpenOptionsExt,MetadataExt},io::AsRawHandle},path::{Path,PathBuf},ptr,time::{Duration,Instant},sync::atomic::{AtomicBool,Ordering}};
+use std::{collections::HashSet,ffi::c_void,fs::{self,File,OpenOptions},os::windows::{fs::{OpenOptionsExt,MetadataExt},io::AsRawHandle},path::{Path,PathBuf},ptr,time::{Duration,Instant},sync::atomic::{AtomicBool,Ordering}};
 type Handle=*mut c_void;
 const UNAVAILABLE:&str="NATIVE_TASK_CANDIDATE_GUARD_UNAVAILABLE";
 const CHANGED:&str="NATIVE_TASK_CANDIDATE_CHANGED_DURING_EXECUTION";
@@ -17,7 +17,7 @@ const CHANGED:&str="NATIVE_TASK_CANDIDATE_CHANGED_DURING_EXECUTION";
  fn WaitForSingleObject(handle:Handle,milliseconds:u32)->u32;
  fn GetFileInformationByHandle(handle:Handle,info:*mut u32)->i32;
 }
-struct Directory{file:Option<File>,event:Handle,overlapped:Option<Box<Overlapped>>,output:Option<Box<[u32;1024]>>,pending:bool}
+struct Directory{path:PathBuf,file:Option<File>,event:Handle,overlapped:Option<Box<Overlapped>>,output:Option<Box<[u32;1024]>>,pending:bool}
 impl Directory{
  fn acquire(path:&Path)->Result<Self,&'static str>{
   // Open the reparse point itself, never its target. Deny directory rename.
@@ -25,16 +25,18 @@ impl Directory{
   let metadata=file.metadata().map_err(|_|UNAVAILABLE)?;
   if !metadata.is_dir()||metadata.file_attributes()&0x400!=0{return Err(UNAVAILABLE);}
   let event=unsafe{CreateEventW(ptr::null(),1,0,ptr::null())};if event.is_null(){return Err(UNAVAILABLE);}
-  let mut guard=Self{file:Some(file),event,overlapped:Some(Box::new(Overlapped{event,..Default::default()})),output:Some(Box::new([0;1024])),pending:false};
+  Ok(Self{path:path.to_path_buf(),file:Some(file),event,overlapped:Some(Box::new(Overlapped{event,..Default::default()})),output:Some(Box::new([0;1024])),pending:false})
+ }
+ fn arm(&mut self)->Result<(),&'static str>{
   // Names, attributes, size, write/creation time and security; ordinary access
   // timestamps do not affect input identity. Any completion (including overflow
   // or error) invalidates; never rearm or discard a notification as harmless.
   // https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-readdirectorychangesw
-  let ok=unsafe{ReadDirectoryChangesW(guard.file.as_ref().unwrap().as_raw_handle(),guard.output.as_mut().unwrap().as_mut_ptr() as *mut c_void,4096,0,0x15f,ptr::null_mut(),guard.overlapped.as_mut().unwrap().as_mut(),ptr::null())};
+  let ok=unsafe{ReadDirectoryChangesW(self.file.as_ref().unwrap().as_raw_handle(),self.output.as_mut().unwrap().as_mut_ptr() as *mut c_void,4096,0,0x15f,ptr::null_mut(),self.overlapped.as_mut().unwrap().as_mut(),ptr::null())};
   if ok==0{return Err(UNAVAILABLE);}
-  guard.pending=true;Ok(guard)
+  self.pending=true;Ok(())
  }
- fn validate(&self)->Result<(),&'static str>{match unsafe{WaitForSingleObject(self.event,0)}{258=>Ok(()),0=>Err(CHANGED),_=>Err(UNAVAILABLE)}}
+ fn validate(&self)->Result<(),&'static str>{if !self.pending{return Err(UNAVAILABLE);}match unsafe{WaitForSingleObject(self.event,0)}{258=>Ok(()),0=>Err(CHANGED),_=>Err(UNAVAILABLE)}}
  fn cancel(&mut self){if self.pending{unsafe{CancelIoEx(self.file.as_ref().unwrap().as_raw_handle(),self.overlapped.as_mut().unwrap().as_mut());}}}
  fn settle(&mut self,deadline:Instant)->Result<(),&'static str>{
   if !self.pending{return Ok(());}
@@ -67,17 +69,18 @@ impl CandidateGuard{
   crate::native_host_resources::verify_config_directory(root)?;
   let mut guard=Self{directories:Vec::new(),files:Vec::new(),settlement_attempted:false};
   let deadline=Instant::now()+Duration::from_secs(30);let mut bytes=0u64;
-  let mut pending=vec![(root.to_path_buf(),0usize)];
+  let mut pending=vec![(root.to_path_buf(),0usize)];let mut inventory=HashSet::new();
   while let Some((directory,depth))=pending.pop(){
    if cancel.load(Ordering::Acquire){return Err("NATIVE_TASK_RUN_UNRESOLVED");}
    if Instant::now()>=deadline||depth>128||guard.directories.len()>=8192{return Err(UNAVAILABLE);}
-   // Watch before listing so even an add/remove that restores the listing is
-   // remembered. Parent observation covers races while opening descendants.
+   // First pin names and contents. No execution or snapshot authority exists
+   // during acquisition. Watching starts only after every input handle exists.
    guard.directories.push(Directory::acquire(&directory)?);
    for entry in fs::read_dir(&directory).map_err(|_|UNAVAILABLE)?{
     if cancel.load(Ordering::Acquire){return Err("NATIVE_TASK_RUN_UNRESOLVED");}
     if Instant::now()>=deadline{return Err(UNAVAILABLE);}
     let path:PathBuf=entry.map_err(|_|UNAVAILABLE)?.path();
+    if !inventory.insert(path.clone()){return Err(UNAVAILABLE);}
     let metadata=fs::symlink_metadata(&path).map_err(|_|UNAVAILABLE)?;
     if metadata.file_attributes()&0x400!=0{return Err(UNAVAILABLE);}
     if metadata.is_dir(){if pending.len()+guard.directories.len()>=8192{return Err(UNAVAILABLE);}pending.push((path,depth+1));continue;}
@@ -91,6 +94,18 @@ impl CandidateGuard{
     guard.files.push(file);
    }
   }
+  for directory in &mut guard.directories{directory.arm()?;}
+  // Close the enumeration-to-watch gap: under active notifications, require
+  // exactly the pinned inventory. New entries cannot become unheld inputs.
+  let mut observed=HashSet::new();
+  for directory in &guard.directories{
+   for entry in fs::read_dir(&directory.path).map_err(|_|UNAVAILABLE)?{
+    if Instant::now()>=deadline||cancel.load(Ordering::Acquire){return Err(UNAVAILABLE);}
+    let path=entry.map_err(|_|UNAVAILABLE)?.path();
+    if !inventory.contains(&path)||!observed.insert(path){return Err(CHANGED);}
+   }
+  }
+  if observed!=inventory{return Err(CHANGED);}
   guard.validate()?;Ok(guard)
  }
  pub(crate) fn validate(&self)->Result<(),&'static str>{for directory in &self.directories{directory.validate()?;}Ok(())}
