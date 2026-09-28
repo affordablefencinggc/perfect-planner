@@ -25,6 +25,8 @@ mod native_host_supervisor;
 mod native_task_containment;
 #[cfg(windows)]
 mod native_task_execution;
+#[cfg(all(test, windows))]
+mod candidate_custody_probe;
 #[cfg(windows)]
 pub use native_task_execution::run_stdio_if_requested as run_task_stdio_if_requested;
 mod native_draft_commands;
