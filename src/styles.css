@@ -5181,7 +5181,7 @@ code {
 .ops-pipeline, .ops-guards { min-height: 100%; display: grid; align-content: start; gap: 14px; padding: 14px; }
 .ops-pipeline > header, .ops-guards > header { display: grid; gap: 3px; font: 11px var(--mono); }
 .ops-pipeline > header span, .ops-guards > header span { color: var(--muted); font-size: 9px; }
-.ops-pipeline > div { display: grid; grid-template-columns: repeat(5, minmax(145px, 1fr)); gap: 10px; }
+.ops-pipeline > .ops-pipeline-stages { display: grid; grid-template-columns: repeat(5, minmax(145px, 1fr)); gap: 10px; }
 .ops-pipeline-stage, .ops-guard-card { position: relative; min-width: 0; border: 1px solid var(--line); border-radius: 8px; background: #fff; color: var(--ink); text-align: left; cursor: pointer; box-shadow: 0 4px 12px rgba(36,45,40,.08); }
 .ops-pipeline-stage { min-height: 138px; padding: 12px; display: grid; align-content: start; gap: 8px; }
 .ops-pipeline-stage:not(:last-child)::after { content: "→"; position: absolute; z-index: 1; right: -17px; top: 55px; color: #7b8680; }
@@ -5199,7 +5199,7 @@ code {
 .ops-guard-card p { margin: 0; color: var(--muted); font: 10px/1.45 var(--sans); }
 @media (max-width: 900px) {
   .ops-panel { grid-template-columns: 150px 1fr; }
-  .ops-pipeline > div, .ops-guards > div { grid-template-columns: 1fr; }
+  .ops-pipeline > .ops-pipeline-stages, .ops-guards > div { grid-template-columns: 1fr; }
   .ops-pipeline-stage:not(:last-child)::after { content: "↓"; right: 12px; top: auto; bottom: -15px; }
 }
 @media (prefers-reduced-motion: reduce) { .ops-panel { transition: none; } }

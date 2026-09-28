@@ -5452,7 +5452,7 @@ function OpsDock({
               <section className="ops-pipeline" aria-label="Local to production delivery pipeline">
                 {!demoMode && <OperationTaskAccounting project={activeProject} diagnostics={scopedDiagnostics} />}
                 <header><strong>Local → production</strong><span>Every transition requires its own evidence receipt.</span></header>
-                <div>
+                <div className="ops-pipeline-stages">
                   {deliveryStages.map((stage, index) => (
                     <button type="button" key={stage.id} className={`ops-pipeline-stage state-${stage.state}`} onClick={() => onToast(`${stage.label}: ${stage.detail}`)}>
                       <small>{String(index + 1).padStart(2, "0")}</small><strong>{stage.label}</strong><span>{stage.detail}</span><b>{stage.state}</b>
