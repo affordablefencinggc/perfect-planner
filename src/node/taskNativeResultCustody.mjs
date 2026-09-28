@@ -23,6 +23,8 @@ export function createTaskNativeResultCustody({grants,observations}){
  }
  return Object.freeze({reconcile,
  async retainCandidate(input){return observations.retainCandidate(structuredClone(input));},
+ async retainInputs(input){return observations.retainInputs(structuredClone(input));},
+ async retainIsolatedProvisional(input){return observations.retainIsolatedProvisional(structuredClone(input));},
  async retainProvisional(input){return observations.retainProvisional(structuredClone(input));},
  async finalize(input){input=structuredClone(input);await observations.finalize(input);return (await reconcile(input.intentReceipt)).observationReceipt;},
  async record(input){
