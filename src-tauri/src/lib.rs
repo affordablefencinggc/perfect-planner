@@ -23,6 +23,7 @@ mod native_host_resources;
 mod native_host_supervisor;
 #[cfg(windows)]
 mod native_task_containment;
+mod native_app_container;
 #[cfg(windows)]
 mod native_task_execution;
 #[cfg(windows)]

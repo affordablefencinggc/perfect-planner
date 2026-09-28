@@ -1,6 +1,7 @@
 //! Private Windows process-lifetime primitive. No IPC, admission or task-success authority.
 //! JOB_LIST binds containment during creation, including the host-crash window.
-//! This is NOT a security sandbox: filesystem/network permissions are unchanged.
+//! Default launches retain user permissions. The explicit AppContainer path
+//! verifies its restricted token before resume; it never falls back to default.
 #![cfg(windows)]
 #![allow(dead_code)] // Intentionally not exposed until host admission/custody is connected.
 
@@ -8,6 +9,7 @@ use std::{ffi::{c_void, OsStr}, io, mem::{size_of, zeroed}, os::windows::ffi::Os
     path::Path, ptr::{null, null_mut}, time::{Duration, Instant}};
 use std::sync::atomic::{AtomicBool,Ordering};
 use std::{cell::{Cell,RefCell},collections::HashMap};
+use crate::native_app_container::{AppContainer,SecurityCapabilities};
 type Handle = *mut c_void;
 #[repr(C)] #[derive(Default)]
 struct Basic { process_time:i64, job_time:i64, flags:u32, minimum:usize, maximum:usize,
@@ -52,8 +54,8 @@ struct Owned(Handle);
 impl Drop for Owned { fn drop(&mut self) { unsafe { CloseHandle(self.0); } } }
 struct Attributes(Vec<usize>);
 impl Attributes {
-    fn for_job(job:&mut Handle,handles:Option<&mut [Handle;3]>)->io::Result<Self> { unsafe {
-        let count=if handles.is_some(){2}else{1};
+    fn for_job(job:&mut Handle,handles:Option<&mut [Handle;3]>,security:Option<&mut SecurityCapabilities>)->io::Result<Self> { unsafe {
+        let count=1+u32::from(handles.is_some())+u32::from(security.is_some());
         let mut bytes=0;
         InitializeProcThreadAttributeList(null_mut(),count,0,&mut bytes);
         if bytes==0 || bytes>65536 { return Err(invalid("attribute allocation")); }
@@ -67,6 +69,11 @@ impl Attributes {
         if let Some(handles)=handles {
             if UpdateProcThreadAttribute(ptr,0,0x00020002,handles.as_mut_ptr().cast(),
                 size_of::<[Handle;3]>(),null_mut(),null_mut())==0 {return Err(io::Error::last_os_error());}
+        }
+        if let Some(security)=security{
+            // SECURITY_CAPABILITIES remains alive until CreateProcess returns.
+            if UpdateProcThreadAttribute(ptr,0,0x00020009,security as *mut _ as *mut c_void,
+                size_of::<SecurityCapabilities>(),null_mut(),null_mut())==0{return Err(io::Error::last_os_error());}
         }
         Ok(result)
     }}
@@ -103,10 +110,10 @@ pub(crate) struct SuspendedTask {
 impl SuspendedTask {
     pub(crate) fn create(executable:&Path,args:&[&OsStr],cwd:&Path,
         environment:&[(&str,&str)],max_processes:u32,memory_bytes:usize)->io::Result<Self> {
-        Self::create_inner(executable,args,cwd,environment,max_processes,memory_bytes,Duration::from_secs(120),None)
+        Self::create_inner(executable,args,cwd,environment,max_processes,memory_bytes,Duration::from_secs(120),None,None)
     }
     fn create_inner(executable:&Path,args:&[&OsStr],cwd:&Path,
-        environment:&[(&str,&str)],max_processes:u32,memory_bytes:usize,cpu_time:Duration,mut stdio:Option<[Handle;3]>)->io::Result<Self> {
+        environment:&[(&str,&str)],max_processes:u32,memory_bytes:usize,cpu_time:Duration,mut stdio:Option<[Handle;3]>,isolation:Option<&AppContainer>)->io::Result<Self> {
         if !executable.is_absolute() || !cwd.is_absolute() || !(1..=64).contains(&max_processes)
             || !(16*1024*1024..=4usize*1024*1024*1024).contains(&memory_bytes)
             ||cpu_time<Duration::from_millis(1)||cpu_time>Duration::from_secs(120) {
@@ -137,7 +144,8 @@ impl SuspendedTask {
             if SetInformationJobObject(job.0,9,&limit as *const _ as *const c_void,size_of::<Extended>()as u32)==0 {
                 return Err(io::Error::last_os_error());
             }
-            let mut job_handle=job.0;let mut attributes=Attributes::for_job(&mut job_handle,stdio.as_mut())?;
+            let mut job_handle=job.0;let mut security=isolation.map(AppContainer::capabilities);
+            let mut attributes=Attributes::for_job(&mut job_handle,stdio.as_mut(),security.as_mut())?;
             let mut startup:StartupEx=zeroed();startup.base.cb=size_of::<StartupEx>()as u32;
             startup.attributes=attributes.ptr(); let mut info:ProcessInfo=zeroed();
             if let Some(handles)=stdio {startup.base.flags=0x100;startup.base.input=handles[0];startup.base.output=handles[1];startup.base.error=handles[2];}
@@ -153,6 +161,11 @@ impl SuspendedTask {
             let mut inside=0;
             if IsProcessInJob(result.process.0,result.job.0,&mut inside)==0 || inside!=1 {
                 return Err(io::Error::new(io::ErrorKind::Other,"containment observation failed"));
+            }
+            if let Some(profile)=isolation{profile.verify_process(result.process.0)?;}
+            #[cfg(test)]if let Some(root)=std::env::var_os("PP_ISOLATION_DIAGNOSTIC_ROOT"){
+                let data=serde_json::json!({"parent":crate::native_app_container::diagnostic_token(-1isize as Handle)?,"thread":crate::native_app_container::diagnostic_thread()?,"child":crate::native_app_container::diagnostic_token(result.process.0)?,"isolatedRequested":isolation.is_some()});
+                std::fs::write(std::path::PathBuf::from(root).join(format!("token-{}.json",info.pid)),serde_json::to_vec_pretty(&data)?)?;
             }
             result.observe_members();
             Ok(result)
@@ -291,22 +304,37 @@ pub(crate) fn run_captured_controlled(executable:&Path,args:&[&OsStr],cwd:&Path,
 // larger limit to both streams would allow output beyond the approved budget.
 pub(crate) fn run_captured_limits(executable:&Path,args:&[&OsStr],cwd:&Path,environment:&[(&str,&str)],
     timeout:Duration,stdout_limit:usize,stderr_limit:usize,combined_limit:usize,cpu_time:Duration,cancel:&AtomicBool)->io::Result<CapturedRun> {
+    run_captured_inner(executable,args,cwd,environment,timeout,stdout_limit,stderr_limit,combined_limit,cpu_time,cancel,None)
+}
+pub(crate) fn run_captured_isolated(executable:&Path,args:&[&OsStr],cwd:&Path,environment:&[(&str,&str)],
+    timeout:Duration,stdout_limit:usize,stderr_limit:usize,combined_limit:usize,cpu_time:Duration,cancel:&AtomicBool,profile:&AppContainer)->io::Result<CapturedRun> {
+    run_captured_inner(executable,args,cwd,environment,timeout,stdout_limit,stderr_limit,combined_limit,cpu_time,cancel,Some(profile))
+}
+fn run_captured_inner(executable:&Path,args:&[&OsStr],cwd:&Path,environment:&[(&str,&str)],
+    timeout:Duration,stdout_limit:usize,stderr_limit:usize,combined_limit:usize,cpu_time:Duration,cancel:&AtomicBool,isolation:Option<&AppContainer>)->io::Result<CapturedRun> {
     if timeout.is_zero()||timeout>Duration::from_secs(300)||stdout_limit==0||stdout_limit>2*1024*1024
         ||stderr_limit==0||stderr_limit>2*1024*1024||combined_limit==0||combined_limit>2*1024*1024
         ||combined_limit>stdout_limit+stderr_limit{return Err(invalid("run limits"));}
     if cancel.load(Ordering::Acquire){return Err(io::Error::new(io::ErrorKind::Interrupted,"cancelled before native start"));}
     let (input,input_writer)=pipe(false)?;drop(input_writer); // Closed stdin, never an interactive prompt.
     let (out_read,out_write)=pipe(true)?;let (err_read,err_write)=pipe(true)?;
-    let mut child=SuspendedTask::create_inner(executable,args,cwd,environment,16,512*1024*1024,cpu_time,
-        Some([input.0,out_write.0,err_write.0]))?;
+    let child=SuspendedTask::create_inner(executable,args,cwd,environment,16,512*1024*1024,cpu_time,
+        Some([input.0,out_write.0,err_write.0]),isolation)?;
     drop(input);drop(out_write);drop(err_write);
-    let mut stdout=Capture{read:out_read,bytes:Vec::new(),observed:0,eof:false};
-    let mut stderr=Capture{read:err_read,bytes:Vec::new(),observed:0,eof:false};
+    let stdout=Capture{read:out_read,bytes:Vec::new(),observed:0,eof:false};
+    let stderr=Capture{read:err_read,bytes:Vec::new(),observed:0,eof:false};
+    capture_prepared(child,stdout,stderr,timeout,stdout_limit,stderr_limit,combined_limit,cpu_time,cancel)
+}
+// Consumes an already suspended, Job-bound task and its explicit output pipes.
+// Caller retains any input/runtime custody until the returned settlement is checked.
+fn capture_prepared(mut child:SuspendedTask,mut stdout:Capture,mut stderr:Capture,
+    timeout:Duration,stdout_limit:usize,stderr_limit:usize,combined_limit:usize,cpu_time:Duration,cancel:&AtomicBool)->io::Result<CapturedRun>{
     let mut remaining=combined_limit;let mut output_truncated=false;let mut io_failed=false;
-    if cancel.load(Ordering::Acquire){return Err(io::Error::new(io::ErrorKind::Interrupted,"cancelled before native resume"));}
-    let mut cancel_observed=false;let mut cpu_time_exceeded=false;let mut cpu_observation_failed=false;let mut cpu_ticks_observed=None;
-    let started=Instant::now();child.resume()?;let mut timed_out=false;
-    loop {
+    // A child exists now: cancellation must observe termination and drain its
+    // pipes instead of returning through a Drop that merely requests a kill.
+    let mut cancel_observed=cancel.load(Ordering::Acquire);let mut cpu_time_exceeded=false;let mut cpu_observation_failed=false;let mut cpu_ticks_observed=None;
+    let started=Instant::now();if !cancel_observed{child.resume()?;}let mut timed_out=false;
+    while !cancel_observed {
         for (capture,limit) in [(&mut stdout,stdout_limit),(&mut stderr,stderr_limit)] {
             match capture.poll(limit,&mut remaining){Ok(overflow)=>output_truncated|=overflow,Err(_)=>io_failed=true}
         }
@@ -363,6 +391,18 @@ pub(crate) fn run_captured_limits(executable:&Path,args:&[&OsStr],cwd:&Path,envi
         let marker=root().join("never-started");assert!(!marker.exists());
         let error=controlled("never-started",Duration::from_secs(2),&AtomicBool::new(true)).unwrap_err();
         assert_eq!(error.kind(),io::ErrorKind::Interrupted);assert!(!marker.exists());
+    }
+    #[test] #[ignore="Requires explicit fresh DANS1 containment fixture"] fn cancellation_after_preparation_settles_without_resume(){
+        let root=root();let marker=root.join("never-started");assert!(!marker.exists());let system=std::env::var("SystemRoot").unwrap();
+        let (stdin,writer)=pipe(false).unwrap();drop(writer);let (out,ow)=pipe(true).unwrap();let (err,ew)=pipe(true).unwrap();
+        let child=SuspendedTask::create_inner(&std::env::current_exe().unwrap(),&[OsStr::new("--ignored"),OsStr::new("--exact"),OsStr::new(fixture_name()),OsStr::new("--nocapture")],&root,
+            &[("SystemRoot",&system),("PP_FIXTURE_MODE","never-started"),("PP_CONTAINMENT_FIXTURE_ROOT",root.to_str().unwrap())],4,128*1024*1024,Duration::from_secs(2),Some([stdin.0,ow.0,ew.0]),None).unwrap();
+        assert!(!child.resumed);drop(stdin);drop(ow);drop(ew);
+        let capture=|read|Capture{read,bytes:Vec::new(),observed:0,eof:false};
+        let run=capture_prepared(child,capture(out),capture(err),Duration::from_secs(5),8192,8192,16384,Duration::from_secs(2),&AtomicBool::new(true)).unwrap();
+        assert!(run.cancel_observed&&!run.timed_out&&!run.io_failed&&run.io_settled);
+        assert!(run.settlement.process_exited&&run.settlement.job_empty_observed&&run.settlement.descendants_settled);
+        assert_ne!(run.settlement.exit_code,Some(0));assert!(run.stdout.is_empty()&&run.stderr.is_empty());assert!(!marker.exists());
     }
     #[test] #[ignore="Requires explicit fresh DANS1 containment fixture"] fn cancellation_after_start_observes_exit_and_pipes(){
         let marker=root().join("cancel-ready");assert!(!marker.exists());let cancel=AtomicBool::new(false);
@@ -504,9 +544,267 @@ pub(crate) fn run_captured_limits(executable:&Path,args:&[&OsStr],cwd:&Path,envi
         assert!(SuspendedTask::create(&root.join("absent.exe"),&[],&root,&[],1,32*1024*1024).is_err());
         assert!(SuspendedTask::create(&std::env::current_exe().unwrap(),&[],&root,&[("A","1"),("a","2")],1,32*1024*1024).is_err());
     }
+    #[test] #[ignore="Requires explicit fresh DANS1 isolation fixture"] fn isolated_check_cannot_read_or_modify_owner_evidence(){
+        let owner=root();let name=format!("perfect-planner.execution.{}-{}",std::process::id(),std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos());
+        std::fs::write(owner.join("profile-name.txt"),&name).unwrap();
+        let profile=AppContainer::create_fresh(&name).unwrap();
+        std::fs::write(owner.join("profile.json"),serde_json::to_vec_pretty(&serde_json::json!({"name":profile.name(),"sid":profile.sid_text(),"folder":profile.folder(),"retained":true})).unwrap()).unwrap();
+        assert!(AppContainer::create_fresh(&name).is_err());
+        let work=profile.folder().join("work");std::fs::create_dir(&work).unwrap();
+        let executable=work.join("isolation-probe.exe");std::fs::copy(std::env::current_exe().unwrap(),&executable).unwrap();
+        let evidence=owner.join("owner-evidence.txt");std::fs::write(&evidence,b"retained-owner-evidence").unwrap();
+        std::fs::write(work.join("input.txt"),b"allowed-input").unwrap();
+        let system=std::env::var("SystemRoot").unwrap();let pid=std::process::id().to_string();
+        // Windows may create Temp with the fresh profile. Inspect either case.
+        let temp=profile.folder().join("Temp");std::fs::create_dir_all(&temp).unwrap();
+        use std::os::windows::fs::MetadataExt;
+        let metadata=std::fs::symlink_metadata(&temp).unwrap();assert!(metadata.is_dir()&&metadata.file_attributes()&0x400==0);
+        let path=Path::new(&system).join("System32");let comspec=path.join("cmd.exe");
+        let environment=[("SystemRoot",system.as_str()),("WINDIR",system.as_str()),("ComSpec",comspec.to_str().unwrap()),
+            ("PATH",path.to_str().unwrap()),("PATHEXT",".COM;.EXE;.BAT;.CMD"),("LOCALAPPDATA",profile.folder().to_str().unwrap()),
+            ("TEMP",temp.to_str().unwrap()),("TMP",temp.to_str().unwrap()),
+            ("PP_FIXTURE_MODE","isolation-probe"),("PP_CONTAINMENT_FIXTURE_ROOT",work.to_str().unwrap()),("PP_OWNER_EVIDENCE",evidence.to_str().unwrap()),("PP_OWNER_PROCESS",pid.as_str())];
+        std::fs::write(owner.join("launch-environment.json"),serde_json::to_vec_pretty(&environment).unwrap()).unwrap();
+        let run=run_captured_isolated(&executable,&[OsStr::new("--ignored"),OsStr::new("--exact"),OsStr::new(fixture_name()),OsStr::new("--nocapture")],
+            &work,&environment,Duration::from_secs(10),8192,8192,16384,Duration::from_secs(2),&AtomicBool::new(false),&profile).unwrap();
+        assert_eq!(run.settlement.exit_code,Some(0));assert!(run.settlement.descendants_settled&&run.io_settled&&!run.io_failed);
+        let stdout=String::from_utf8(run.stdout).unwrap();std::fs::write(owner.join("isolation-child-output.txt"),&stdout).unwrap();
+        assert!(stdout.contains("own-input=true;own-output=true;deny-read=true;deny-write=true;deny-process=true"),"{stdout}");
+        assert_eq!(std::fs::read(&evidence).unwrap(),b"retained-owner-evidence");
+        assert_eq!(std::fs::read(work.join("output.txt")).unwrap(),b"allowed-output");
+    }
+    #[test] #[ignore="Requires independently compiled DANS1 diagnostic helper"] fn standalone_isolated_check_denies_owner_access(){
+        let owner=root();let source=std::path::PathBuf::from(std::env::var_os("PP_TEST_ISOLATION_PROBE").expect("explicit standalone helper required"));
+        assert!(source.is_absolute()&&source.is_file());
+        let name=format!("perfect-planner.execution.{}-{}",std::process::id(),std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos());
+        std::fs::write(owner.join("profile-name.txt"),&name).unwrap();let profile=AppContainer::create_fresh(&name).unwrap();
+        assert!(AppContainer::create_fresh(&name).is_err());
+        std::fs::write(owner.join("profile.json"),serde_json::to_vec_pretty(&serde_json::json!({"name":profile.name(),"sid":profile.sid_text(),"folder":profile.folder(),"retained":true})).unwrap()).unwrap();
+        let work=profile.folder().join("work");std::fs::create_dir(&work).unwrap();
+        let executable=work.join("isolation-probe.exe");std::fs::copy(&source,&executable).unwrap();
+        assert_eq!(std::fs::read(&source).unwrap(),std::fs::read(&executable).unwrap());
+        let temp=profile.folder().join("Temp");std::fs::create_dir_all(&temp).unwrap();
+        use std::os::windows::fs::MetadataExt;
+        let metadata=std::fs::symlink_metadata(&temp).unwrap();assert!(metadata.is_dir()&&metadata.file_attributes()&0x400==0);
+        let system=std::env::var("SystemRoot").unwrap();let pid=std::process::id().to_string();
+        let path=Path::new(&system).join("System32");let comspec=path.join("cmd.exe");
+        let evidence=owner.join("owner-evidence.txt");std::fs::write(&evidence,b"retained-owner-evidence").unwrap();
+        std::fs::write(work.join("input.txt"),b"allowed-input").unwrap();
+        let environment=[("SystemRoot",system.as_str()),("WINDIR",system.as_str()),("ComSpec",comspec.to_str().unwrap()),
+            ("PATH",path.to_str().unwrap()),("PATHEXT",".COM;.EXE;.BAT;.CMD"),("LOCALAPPDATA",profile.folder().to_str().unwrap()),("TEMP",temp.to_str().unwrap()),("TMP",temp.to_str().unwrap()),
+            ("PP_CONTAINMENT_FIXTURE_ROOT",work.to_str().unwrap()),("PP_OWNER_EVIDENCE",evidence.to_str().unwrap()),("PP_OWNER_PROCESS",pid.as_str())];
+        std::fs::write(owner.join("launch-environment.json"),serde_json::to_vec_pretty(&environment).unwrap()).unwrap();
+        // Identical bytes, cwd, environment and Job settings. The ordinary image
+        // stays in the owner fixture: the profile copy's low label lowers its
+        // process integrity even without an AppContainer launch attribute.
+        std::fs::write(owner.join("image-paths.json"),serde_json::to_vec_pretty(&serde_json::json!({"ordinary":source,"isolated":executable,"sameBytes":true})).unwrap()).unwrap();
+        let ordinary=run_captured_limits(&source,&[],&work,&environment,Duration::from_secs(10),8192,8192,16384,Duration::from_secs(2),&AtomicBool::new(false)).unwrap();
+        std::fs::write(owner.join("ordinary-output.txt"),&ordinary.stdout).unwrap();
+        std::fs::write(owner.join("ordinary-error.txt"),&ordinary.stderr).unwrap();
+        assert_eq!(ordinary.settlement.exit_code,Some(0));assert!(ordinary.settlement.descendants_settled&&ordinary.io_settled&&!ordinary.io_failed);
+        assert!(String::from_utf8(ordinary.stdout).unwrap().contains("own-input=true;own-output=true;deny-read=false;deny-write=false;deny-process=false"));
+        assert_eq!(std::fs::read(&evidence).unwrap(),b"tampered-fixture-evidence");
+        std::fs::write(&evidence,b"retained-owner-evidence").unwrap();std::fs::write(work.join("output.txt"),b"reset-control-output").unwrap();
+        let isolated=run_captured_isolated(&executable,&[],&work,&environment,Duration::from_secs(10),8192,8192,16384,Duration::from_secs(2),&AtomicBool::new(false),&profile).unwrap();
+        std::fs::write(owner.join("isolated-output.txt"),&isolated.stdout).unwrap();std::fs::write(owner.join("isolated-error.txt"),&isolated.stderr).unwrap();
+        assert_eq!(isolated.settlement.exit_code,Some(0));assert!(isolated.settlement.descendants_settled&&isolated.io_settled&&!isolated.io_failed);
+        assert!(String::from_utf8(isolated.stdout).unwrap().contains("own-input=true;own-output=true;deny-read=true;deny-write=true;deny-process=true"));
+        assert_eq!(std::fs::read(&evidence).unwrap(),b"retained-owner-evidence");assert_eq!(std::fs::read(work.join("output.txt")).unwrap(),b"allowed-output");
+        assert!(!isolated.timed_out&&!isolated.output_truncated&&!isolated.cancel_observed&&!isolated.cpu_time_exceeded&&!isolated.cpu_observation_failed);
+        // Token mismatch cannot be accepted merely because some AppContainer exists.
+        assert!(profile.verify_process(-1isize as Handle).is_err());
+        let other=AppContainer::create_fresh(&format!("{name}-other")).unwrap();
+        std::fs::write(owner.join("other-profile.json"),serde_json::to_vec_pretty(&serde_json::json!({"name":other.name(),"sid":other.sid_text(),"folder":other.folder(),"retained":true})).unwrap()).unwrap();
+        let suspended=SuspendedTask::create_inner(&executable,&[],&work,&environment,4,128*1024*1024,Duration::from_secs(2),None,Some(&profile)).unwrap();
+        assert!(profile.verify_process(suspended.process.0).is_ok());assert!(other.verify_process(suspended.process.0).is_err());
+        let settled=suspended.stop_and_observe();assert!(settled.process_exited&&settled.job_empty_observed&&settled.descendants_settled);
+        let stopped=run_captured_isolated(&executable,&[],&work,&environment,Duration::from_secs(10),8192,8192,16384,Duration::from_secs(2),&AtomicBool::new(true),&profile).unwrap_err();
+        assert_eq!(stopped.kind(),io::ErrorKind::Interrupted);
+        let marker=work.join("cancel-ready");let cancel=AtomicBool::new(false);let mut waiting=environment.to_vec();waiting.push(("PP_PROBE_MODE","wait"));
+        let cancelled=std::thread::scope(|scope|{
+            let observer=scope.spawn(||{let deadline=Instant::now()+Duration::from_secs(4);while !marker.exists()&&Instant::now()<deadline{std::thread::sleep(Duration::from_millis(2));}let ready=marker.exists();cancel.store(true,Ordering::Release);assert!(ready);});
+            let run=run_captured_isolated(&executable,&[],&work,&waiting,Duration::from_secs(8),8192,8192,16384,Duration::from_secs(2),&cancel,&profile).unwrap();observer.join().unwrap();run
+        });
+        std::fs::write(owner.join("cancelled.txt"),format!("{cancelled:?}")).unwrap();
+        assert!(cancelled.cancel_observed&&!cancelled.timed_out&&!cancelled.io_failed&&cancelled.io_settled&&cancelled.settlement.descendants_settled);
+        let mut descendants=environment.to_vec();descendants.push(("PP_PROBE_MODE","descendant"));
+        let timed=run_captured_isolated(&executable,&[],&work,&descendants,Duration::from_secs(2),8192,8192,16384,Duration::from_secs(2),&AtomicBool::new(false),&profile).unwrap();
+        std::fs::write(owner.join("descendant-timeout.txt"),format!("{timed:?}")).unwrap();
+        assert!(timed.timed_out&&!timed.io_failed&&timed.io_settled&&timed.settlement.descendants_settled);
+        assert!(String::from_utf8(timed.stdout).unwrap().contains("descendant-isolated=true"));
+        assert_eq!(std::fs::read(&evidence).unwrap(),b"retained-owner-evidence");
+    }
+    #[test] #[ignore="Requires fresh DANS1 runtime metadata diagnostic"] fn suspended_runtime_metadata_is_observed_without_execution(){
+        use sha2::{Digest,Sha256};
+        use std::os::windows::{fs::OpenOptionsExt,io::AsRawHandle};
+        #[repr(C)] #[derive(Default)] struct FileBasic {created:i64,accessed:i64,written:i64,changed:i64,attributes:u32}
+        #[link(name="kernel32")] extern "system" {fn GetFileInformationByHandleEx(file:Handle,class:i32,info:*mut c_void,size:u32)->i32;}
+        let owner=root();let name=format!("perfect-planner.execution.{}-{}",std::process::id(),std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos());
+        let profile=AppContainer::create_fresh(&name).unwrap();
+        std::fs::write(owner.join("profile.json"),serde_json::to_vec_pretty(&serde_json::json!({"name":profile.name(),"sid":profile.sid_text(),"folder":profile.folder(),"retained":true})).unwrap()).unwrap();
+        let runtime=profile.create_readonly_directory("runtime").unwrap();let input=profile.create_readonly_directory("inputs").unwrap();
+        let node=runtime.join("node.exe");let source=std::path::PathBuf::from(std::env::var_os("PP_TEST_AGENT_NODE").unwrap());std::fs::copy(&source,&node).unwrap();
+        let digest=format!("{:x}",Sha256::digest(std::fs::read(&source).unwrap()));
+        let _pins=crate::native_host_resources::pin_task_files(&node,&digest,profile.folder(),&input).unwrap();
+        let cancel=AtomicBool::new(false);let guard=crate::native_candidate_guard::CandidateGuard::acquire(&runtime,&cancel).unwrap();
+        let temp=profile.folder().join("Temp");std::fs::create_dir_all(&temp).unwrap();let marker=profile.folder().join("must-not-execute.txt");
+        let system=std::env::var("SystemRoot").unwrap();let sys32=Path::new(&system).join("System32");let comspec=sys32.join("cmd.exe");
+        let snapshot=|label:&str|{
+            let file=std::fs::OpenOptions::new().read(true).share_mode(7).open(&node).unwrap();let mut basic=FileBasic::default();
+            assert_ne!(unsafe{GetFileInformationByHandleEx(file.as_raw_handle(),0,&mut basic as *mut _ as *mut c_void,size_of::<FileBasic>()as u32)},0);
+            let ea=std::process::Command::new(sys32.join("fsutil.exe")).args([OsStr::new("file"),OsStr::new("queryEA"),node.as_os_str()]).output().unwrap();
+            let report=serde_json::json!({"node":node,"sha256":format!("{:x}",Sha256::digest(std::fs::read(&node).unwrap())),"created":basic.created,"accessed":basic.accessed,"written":basic.written,"changed":basic.changed,"attributes":basic.attributes,"eaExit":ea.status.code(),"ea":String::from_utf8_lossy(&ea.stdout),"eaError":String::from_utf8_lossy(&ea.stderr),"eaOutputHash":format!("{:x}",Sha256::digest(&ea.stdout)),"notifications":guard.diagnostic_notifications(),"markerExists":marker.exists()});
+            std::fs::write(owner.join(format!("suspended-{label}.json")),serde_json::to_vec_pretty(&report).unwrap()).unwrap();report
+        };
+        let before=snapshot("before");
+        let environment=[("SystemRoot",system.as_str()),("WINDIR",system.as_str()),("ComSpec",comspec.to_str().unwrap()),("PATH",sys32.to_str().unwrap()),("LOCALAPPDATA",profile.folder().to_str().unwrap()),("TEMP",temp.to_str().unwrap()),("TMP",temp.to_str().unwrap()),("PP_TEST_MARKER",marker.to_str().unwrap())];
+        let task=SuspendedTask::create_inner(&node,&[OsStr::new("-e"),OsStr::new("require('node:fs').writeFileSync(process.env.PP_TEST_MARKER,'unexpected')")],&input,&environment,2,256*1024*1024,Duration::from_secs(10),None,Some(&profile)).unwrap();
+        let after=snapshot("created");assert!(!task.resumed);assert!(!marker.exists());assert_eq!(before["sha256"],after["sha256"]);assert_eq!(after["sha256"],digest);
+        let settled=task.stop_and_observe();assert!(settled.process_exited&&settled.job_empty_observed&&settled.descendants_settled);assert!(!marker.exists());
+        snapshot("stopped");
+        std::fs::write(owner.join("diagnostic-scope.txt"),"Suspended metadata observation only. No resume, no runtime guard success claimed, no product authority.").unwrap();
+    }
+    #[test] #[ignore="Requires real copied Node runtime on DANS1"] fn node_runtime_protects_inputs_and_separates_outputs(){
+        use sha2::{Digest,Sha256};
+        let owner=root();let name=format!("perfect-planner.execution.{}-{}",std::process::id(),std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos());
+        std::fs::write(owner.join("profile-name.txt"),&name).unwrap();let profile=AppContainer::create_fresh(&name).unwrap();
+        std::fs::write(owner.join("profile.json"),serde_json::to_vec_pretty(&serde_json::json!({"name":profile.name(),"sid":profile.sid_text(),"folder":profile.folder(),"retained":true})).unwrap()).unwrap();
+        let input=profile.create_readonly_directory("inputs").unwrap();let runtime=profile.create_readonly_directory("runtime").unwrap();
+        assert!(profile.create_readonly_directory("inputs").is_err());assert!(profile.create_readonly_directory("../foreign").is_err());
+        let output=profile.folder().join("output");std::fs::create_dir(&output).unwrap();let temp=profile.folder().join("Temp");std::fs::create_dir_all(&temp).unwrap();
+        std::fs::create_dir(input.join("nested")).unwrap();std::fs::write(input.join("nested/input.txt"),b"allowed-input").unwrap();
+        std::fs::write(input.join("nested/dependency.cjs"),b"module.exports=41;").unwrap();
+        let node=runtime.join("node.exe");let source=std::path::PathBuf::from(std::env::var_os("PP_TEST_AGENT_NODE").unwrap());assert!(source.is_absolute());std::fs::copy(&source,&node).unwrap();
+        assert_eq!(Sha256::digest(std::fs::read(&source).unwrap()),Sha256::digest(std::fs::read(&node).unwrap()));
+        let helper=runtime.join("permission-probe.exe");std::fs::copy(std::env::var_os("PP_TEST_ISOLATION_PROBE").unwrap(),&helper).unwrap();
+        let script=runtime.join("probe.cjs");std::fs::write(&script,include_str!("../tests/fixtures/isolation_probe.cjs")).unwrap();
+        let benign_script=runtime.join("benign.cjs");std::fs::write(&benign_script,b"const fs=require('node:fs'),p=require('node:path'),a=require('node:assert/strict');a.equal(fs.readFileSync(p.join(process.env.PP_NODE_INPUT,'nested/input.txt'),'utf8'),'allowed-input');a.equal(require(p.join(process.env.PP_NODE_INPUT,'nested/dependency.cjs')),41);fs.writeFileSync(p.join(process.env.PP_NODE_OUTPUT,'benign.txt'),'benign-output');console.log('benign-node-complete');").unwrap();
+        let paths=vec![input.clone(),input.join("nested"),input.join("nested/input.txt"),input.join("nested/dependency.cjs"),runtime.clone(),node.clone(),helper.clone(),script.clone(),benign_script.clone()];
+        let descriptors=||paths.iter().map(|path|serde_json::json!({"path":path,"descriptor":AppContainer::descriptor(path).unwrap(),"sha256":if path.is_file(){Some(format!("{:x}",Sha256::digest(std::fs::read(path).unwrap())))}else{None}})).collect::<Vec<_>>();
+        let metadata=||{use std::os::windows::fs::MetadataExt;paths.iter().map(|path|{let m=std::fs::metadata(path).unwrap();serde_json::json!({"path":path,"attributes":m.file_attributes(),"created":m.creation_time(),"written":m.last_write_time(),"accessed":m.last_access_time(),"bytes":m.file_size()})}).collect::<Vec<_>>()};
+        std::fs::write(owner.join("metadata-before.json"),serde_json::to_vec_pretty(&metadata()).unwrap()).unwrap();
+        let before=descriptors();std::fs::write(owner.join("protected-before.json"),serde_json::to_vec_pretty(&before).unwrap()).unwrap();
+        let node_digest=format!("{:x}",Sha256::digest(std::fs::read(&node).unwrap()));
+        let _ancestor_pins=crate::native_host_resources::pin_task_files(&node,&node_digest,profile.folder(),&input).unwrap();
+        let cancel=AtomicBool::new(false);let inputs_guard=crate::native_candidate_guard::CandidateGuard::acquire(&input,&cancel).unwrap();let runtime_guard=crate::native_candidate_guard::CandidateGuard::acquire(&runtime,&cancel).unwrap();
+        let phase=|name:&str|{std::fs::write(owner.join(format!("notifications-{name}.json")),serde_json::to_vec_pretty(&serde_json::json!({"input":inputs_guard.diagnostic_notifications(),"runtime":runtime_guard.diagnostic_notifications(),"metadata":metadata()})).unwrap()).unwrap();};
+        phase("before");
+        let system=std::env::var("SystemRoot").unwrap();let path=Path::new(&system).join("System32");let comspec=path.join("cmd.exe");
+        let evidence=owner.join("owner-evidence.txt");std::fs::write(&evidence,b"retained-owner-evidence").unwrap();
+        let environment=[("SystemRoot",system.as_str()),("WINDIR",system.as_str()),("ComSpec",comspec.to_str().unwrap()),("PATH",path.to_str().unwrap()),("PATHEXT",".COM;.EXE;.BAT;.CMD"),
+            ("LOCALAPPDATA",profile.folder().to_str().unwrap()),("TEMP",temp.to_str().unwrap()),("TMP",temp.to_str().unwrap()),("PP_NODE_INPUT",input.to_str().unwrap()),("PP_NODE_RUNTIME",runtime.to_str().unwrap()),("PP_NODE_OUTPUT",output.to_str().unwrap()),("PP_OWNER_EVIDENCE",evidence.to_str().unwrap()),("PP_CONTAINMENT_FIXTURE_ROOT",input.to_str().unwrap())];
+        std::fs::write(owner.join("launch-environment.json"),serde_json::to_vec_pretty(&environment).unwrap()).unwrap();
+        // These flags are part of this qualified invocation. Link/reparse
+        // refusal and held guards precede use; no global drive grants are added.
+        let args=[OsStr::new("--preserve-symlinks"),OsStr::new("--preserve-symlinks-main"),script.as_os_str()];
+        std::fs::write(owner.join("node-args.json"),serde_json::to_vec_pretty(&args.iter().map(|a|a.to_str().unwrap()).collect::<Vec<_>>()).unwrap()).unwrap();
+        let benign=run_captured_isolated(&node,&[args[0],args[1],benign_script.as_os_str()],&input,&environment,Duration::from_secs(10),8192,8192,16384,Duration::from_secs(3),&cancel,&profile).unwrap();
+        std::fs::write(owner.join("benign-output.txt"),&benign.stdout).unwrap();std::fs::write(owner.join("benign-error.txt"),&benign.stderr).unwrap();
+        phase("after-benign");assert_eq!(benign.settlement.exit_code,Some(0));assert!(benign.settlement.descendants_settled&&benign.io_settled&&!benign.io_failed);
+        assert_eq!(std::fs::read(output.join("benign.txt")).unwrap(),b"benign-output");inputs_guard.validate().unwrap();runtime_guard.validate().unwrap();
+        let run=run_captured_isolated(&node,&args,&input,&environment,Duration::from_secs(10),8192,8192,16384,Duration::from_secs(3),&cancel,&profile).unwrap();
+        std::fs::write(owner.join("node-output.txt"),&run.stdout).unwrap();std::fs::write(owner.join("node-error.txt"),&run.stderr).unwrap();
+        std::fs::write(owner.join("node-settlement.txt"),format!("{run:?}")).unwrap();
+        phase("after-node");
+        assert_eq!(run.settlement.exit_code,Some(0));assert!(run.settlement.descendants_settled&&run.io_settled&&!run.io_failed&&!run.timed_out&&!run.output_truncated);
+        let result:serde_json::Value=serde_json::from_slice(&run.stdout).unwrap();assert_eq!(result["denied"].as_array().unwrap().len(),14);
+        let mut permissions=environment.to_vec();permissions.push(("PP_PROBE_MODE","permissions"));
+        let acl=run_captured_isolated(&helper,&[],&input,&permissions,Duration::from_secs(10),8192,8192,16384,Duration::from_secs(3),&cancel,&profile).unwrap();
+        std::fs::write(owner.join("permission-output.txt"),&acl.stdout).unwrap();std::fs::write(owner.join("permission-error.txt"),&acl.stderr).unwrap();
+        phase("after-permissions");
+        assert_eq!(acl.settlement.exit_code,Some(0));assert!(acl.settlement.descendants_settled&&acl.io_settled&&!acl.io_failed);
+        assert!(String::from_utf8(acl.stdout).unwrap().contains("permission-probes=5;write-retry-denied=true"));
+        assert_eq!(std::fs::read(&evidence).unwrap(),b"retained-owner-evidence");assert_eq!(std::fs::read(output.join("output.txt")).unwrap(),b"allowed-output");
+        let after=descriptors();std::fs::write(owner.join("protected-after.json"),serde_json::to_vec_pretty(&after).unwrap()).unwrap();assert_eq!(before,after);
+        phase("after-descriptors");
+        inputs_guard.finish().unwrap();runtime_guard.finish().unwrap();
+    }
+    #[test] #[ignore="Requires real copied Node runtime on DANS1"] fn prepared_node_runtime_protects_inputs_and_separates_outputs(){
+        use sha2::{Digest,Sha256};
+        let owner=root();let name=format!("perfect-planner.execution.{}-{}",std::process::id(),std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos());
+        std::fs::write(owner.join("profile-name.txt"),&name).unwrap();let profile=AppContainer::create_fresh(&name).unwrap();
+        std::fs::write(owner.join("profile.json"),serde_json::to_vec_pretty(&serde_json::json!({"name":profile.name(),"sid":profile.sid_text(),"folder":profile.folder(),"retained":true})).unwrap()).unwrap();
+        let input=profile.create_readonly_directory("inputs").unwrap();let runtime=profile.create_readonly_directory("runtime").unwrap();
+        assert!(profile.create_readonly_directory("inputs").is_err());assert!(profile.create_readonly_directory("../foreign").is_err());
+        let output=profile.folder().join("output");std::fs::create_dir(&output).unwrap();let temp=profile.folder().join("Temp");std::fs::create_dir_all(&temp).unwrap();
+        std::fs::create_dir(input.join("nested")).unwrap();std::fs::write(input.join("nested/input.txt"),b"allowed-input").unwrap();
+        std::fs::write(input.join("nested/dependency.cjs"),b"module.exports=41;").unwrap();
+        let node=runtime.join("node.exe");let source=std::path::PathBuf::from(std::env::var_os("PP_TEST_AGENT_NODE").unwrap());assert!(source.is_absolute());std::fs::copy(&source,&node).unwrap();
+        assert_eq!(Sha256::digest(std::fs::read(&source).unwrap()),Sha256::digest(std::fs::read(&node).unwrap()));
+        let helper=runtime.join("permission-probe.exe");std::fs::copy(std::env::var_os("PP_TEST_ISOLATION_PROBE").unwrap(),&helper).unwrap();
+        let script=runtime.join("probe.cjs");std::fs::write(&script,include_str!("../tests/fixtures/isolation_probe.cjs")).unwrap();
+        let benign_script=runtime.join("benign.cjs");std::fs::write(&benign_script,b"const fs=require('node:fs'),p=require('node:path'),a=require('node:assert/strict');a.equal(fs.readFileSync(p.join(process.env.PP_NODE_INPUT,'nested/input.txt'),'utf8'),'allowed-input');a.equal(require(p.join(process.env.PP_NODE_INPUT,'nested/dependency.cjs')),41);fs.writeFileSync(p.join(process.env.PP_NODE_OUTPUT,'benign.txt'),'benign-output');console.log('benign-node-complete');").unwrap();
+        let paths=vec![input.clone(),input.join("nested"),input.join("nested/input.txt"),input.join("nested/dependency.cjs"),runtime.clone(),node.clone(),helper.clone(),script.clone(),benign_script.clone()];
+        let descriptors=||paths.iter().map(|path|serde_json::json!({"path":path,"descriptor":AppContainer::descriptor(path).unwrap(),"sha256":if path.is_file(){Some(format!("{:x}",Sha256::digest(std::fs::read(path).unwrap())))}else{None}})).collect::<Vec<_>>();
+        let metadata=||{use std::os::windows::fs::MetadataExt;paths.iter().map(|path|{let m=std::fs::metadata(path).unwrap();serde_json::json!({"path":path,"attributes":m.file_attributes(),"created":m.creation_time(),"written":m.last_write_time(),"accessed":m.last_access_time(),"bytes":m.file_size()})}).collect::<Vec<_>>()};
+        std::fs::write(owner.join("metadata-before.json"),serde_json::to_vec_pretty(&metadata()).unwrap()).unwrap();
+        let before=descriptors();std::fs::write(owner.join("protected-before.json"),serde_json::to_vec_pretty(&before).unwrap()).unwrap();
+        let node_digest=format!("{:x}",Sha256::digest(std::fs::read(&node).unwrap()));
+        let _ancestor_pins=crate::native_host_resources::pin_task_files(&node,&node_digest,profile.folder(),&input).unwrap();
+        let cancel=AtomicBool::new(false);let inputs_guard=crate::native_candidate_guard::CandidateGuard::acquire(&input,&cancel).unwrap();
+        let system=std::env::var("SystemRoot").unwrap();let path=Path::new(&system).join("System32");let comspec=path.join("cmd.exe");
+        let evidence=owner.join("owner-evidence.txt");std::fs::write(&evidence,b"retained-owner-evidence").unwrap();
+        let environment=[("SystemRoot",system.as_str()),("WINDIR",system.as_str()),("ComSpec",comspec.to_str().unwrap()),("PATH",path.to_str().unwrap()),("PATHEXT",".COM;.EXE;.BAT;.CMD"),
+            ("LOCALAPPDATA",profile.folder().to_str().unwrap()),("TEMP",temp.to_str().unwrap()),("TMP",temp.to_str().unwrap()),("PP_NODE_INPUT",input.to_str().unwrap()),("PP_NODE_RUNTIME",runtime.to_str().unwrap()),("PP_NODE_OUTPUT",output.to_str().unwrap()),("PP_OWNER_EVIDENCE",evidence.to_str().unwrap()),("PP_CONTAINMENT_FIXTURE_ROOT",input.to_str().unwrap())];
+        std::fs::write(owner.join("launch-environment.json"),serde_json::to_vec_pretty(&environment).unwrap()).unwrap();
+        // These flags are part of this qualified invocation. Link/reparse
+        // refusal and held guards precede use; no global drive grants are added.
+        let args=[OsStr::new("--preserve-symlinks"),OsStr::new("--preserve-symlinks-main"),script.as_os_str()];
+        std::fs::write(owner.join("node-args.json"),serde_json::to_vec_pretty(&args.iter().map(|a|a.to_str().unwrap()).collect::<Vec<_>>()).unwrap()).unwrap();
+        let helper_digest=format!("{:x}",Sha256::digest(std::fs::read(&helper).unwrap()));
+        let _helper_pins=crate::native_host_resources::pin_task_files(&helper,&helper_digest,profile.folder(),&input).unwrap();
+        let mut permissions=environment.to_vec();permissions.push(("PP_PROBE_MODE","permissions"));
+        let prepare=|exe:&Path,arguments:&[&OsStr],env:&[(&str,&str)]|{
+            let (stdin,writer)=pipe(false).unwrap();drop(writer);let (out,ow)=pipe(true).unwrap();let (err,ew)=pipe(true).unwrap();
+            let child=SuspendedTask::create_inner(exe,arguments,&input,env,16,512*1024*1024,Duration::from_secs(3),Some([stdin.0,ow.0,ew.0]),Some(&profile)).unwrap();
+            drop(stdin);drop(ow);drop(ew);
+            (child,Capture{read:out,bytes:Vec::new(),observed:0,eof:false},Capture{read:err,bytes:Vec::new(),observed:0,eof:false})
+        };
+        // All actual child processes remain suspended during OS image preparation.
+        // No runtime notifications are discarded: the execution epoch begins below.
+        let benign_pending=prepare(&node,&[args[0],args[1],benign_script.as_os_str()],&environment);
+        let attack_pending=prepare(&node,&args,&environment);
+        let permissions_pending=prepare(&helper,&[],&permissions);
+        assert!(!output.join("benign.txt").exists()&&!output.join("output.txt").exists());
+        let runtime_guard=crate::native_candidate_guard::CandidateGuard::acquire(&runtime,&cancel).unwrap();
+        assert_eq!(before,descriptors());inputs_guard.validate().unwrap();runtime_guard.validate().unwrap();
+        profile.verify_process(benign_pending.0.process.0).unwrap();profile.verify_process(attack_pending.0.process.0).unwrap();profile.verify_process(permissions_pending.0.process.0).unwrap();
+        let execute=|(child,out,err)|capture_prepared(child,out,err,Duration::from_secs(10),8192,8192,16384,Duration::from_secs(3),&cancel).unwrap();
+        let phase=|name:&str|{std::fs::write(owner.join(format!("notifications-{name}.json")),serde_json::to_vec_pretty(&serde_json::json!({"input":inputs_guard.diagnostic_notifications(),"runtime":runtime_guard.diagnostic_notifications(),"metadata":metadata()})).unwrap()).unwrap();};
+        phase("before");
+        let benign=execute(benign_pending);
+        std::fs::write(owner.join("benign-output.txt"),&benign.stdout).unwrap();std::fs::write(owner.join("benign-error.txt"),&benign.stderr).unwrap();
+        phase("after-benign");assert_eq!(benign.settlement.exit_code,Some(0));assert!(benign.settlement.descendants_settled&&benign.io_settled&&!benign.io_failed);
+        assert_eq!(std::fs::read(output.join("benign.txt")).unwrap(),b"benign-output");inputs_guard.validate().unwrap();runtime_guard.validate().unwrap();
+        let run=execute(attack_pending);
+        std::fs::write(owner.join("node-output.txt"),&run.stdout).unwrap();std::fs::write(owner.join("node-error.txt"),&run.stderr).unwrap();
+        std::fs::write(owner.join("node-settlement.txt"),format!("{run:?}")).unwrap();
+        phase("after-node");
+        assert_eq!(run.settlement.exit_code,Some(0));assert!(run.settlement.descendants_settled&&run.io_settled&&!run.io_failed&&!run.timed_out&&!run.output_truncated);
+        let result:serde_json::Value=serde_json::from_slice(&run.stdout).unwrap();assert_eq!(result["denied"].as_array().unwrap().len(),14);
+        let acl=execute(permissions_pending);
+        std::fs::write(owner.join("permission-output.txt"),&acl.stdout).unwrap();std::fs::write(owner.join("permission-error.txt"),&acl.stderr).unwrap();
+        phase("after-permissions");
+        assert_eq!(acl.settlement.exit_code,Some(0));assert!(acl.settlement.descendants_settled&&acl.io_settled&&!acl.io_failed);
+        assert!(String::from_utf8(acl.stdout).unwrap().contains("permission-probes=5;write-retry-denied=true"));
+        assert_eq!(std::fs::read(&evidence).unwrap(),b"retained-owner-evidence");assert_eq!(std::fs::read(output.join("output.txt")).unwrap(),b"allowed-output");
+        let after=descriptors();std::fs::write(owner.join("protected-after.json"),serde_json::to_vec_pretty(&after).unwrap()).unwrap();assert_eq!(before,after);
+        phase("after-descriptors");
+        inputs_guard.finish().unwrap();runtime_guard.finish().unwrap();
+    }
     #[test] #[ignore="inert child entry; launched only inside the tested Job"] fn fixture(){
         let mode=std::env::var("PP_FIXTURE_MODE").unwrap();
         let root=std::path::PathBuf::from(std::env::var_os("PP_CONTAINMENT_FIXTURE_ROOT").unwrap());
+        if mode=="isolation-probe"{
+            let evidence=std::env::var_os("PP_OWNER_EVIDENCE").unwrap();let pid=std::env::var("PP_OWNER_PROCESS").unwrap().parse().unwrap();
+            let own_input=std::fs::read(root.join("input.txt")).unwrap()==b"allowed-input";
+            let own_output=std::fs::write(root.join("output.txt"),b"allowed-output").is_ok();
+            let deny_read=std::fs::read(&evidence).err().is_some_and(|e|e.kind()==io::ErrorKind::PermissionDenied);
+            let deny_write=std::fs::write(&evidence,b"tampered-fixture-evidence").err().is_some_and(|e|e.kind()==io::ErrorKind::PermissionDenied);
+            let process=unsafe{OpenProcess(0x28,0,pid)};let deny_process=process.is_null()&&io::Error::last_os_error().raw_os_error()==Some(5);
+            if !process.is_null(){unsafe{CloseHandle(process);}}
+            println!("own-input={own_input};own-output={own_output};deny-read={deny_read};deny-write={deny_write};deny-process={deny_process}");return;
+        }
         if mode=="memory"{
             #[link(name="kernel32")] extern "system"{
                 fn VirtualAlloc(address:*mut c_void,bytes:usize,kind:u32,protection:u32)->*mut c_void;

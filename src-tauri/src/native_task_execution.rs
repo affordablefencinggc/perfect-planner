@@ -65,7 +65,7 @@ fn execute_until(value:&Value,environment:&[(&str,&str)],cancel:&AtomicBool,expi
 type Exchange<'a>=dyn FnMut(&str,&Value)->Result<Option<String>,&'static str>+'a;
 fn execute_with_custody(value:&Value,environment:&[(&str,&str)],cancel:&AtomicBool,expires_at:Option<u64>,mut exchange:Option<&mut Exchange<'_>>)->Result<Value,&'static str>{
     let s=parse(value)?;
-    let _pins=crate::native_host_resources::pin_task_files(&s.executable_path,&s.executable_digest,&s.registered_root,&s.cwd)?;
+    let pins=crate::native_host_resources::pin_task_files(&s.executable_path,&s.executable_digest,&s.registered_root,&s.cwd)?;
     let candidate=crate::native_candidate_guard::CandidateGuard::acquire(&s.registered_root,cancel)?;
     if let Some(exchange)=exchange.as_mut(){exchange("ready",&Value::Null)?;candidate.validate()?;}
     if let Some(deadline)=expires_at{
@@ -73,13 +73,17 @@ fn execute_with_custody(value:&Value,environment:&[(&str,&str)],cancel:&AtomicBo
         if now>=deadline as u128{return Err("NATIVE_TASK_GRANT_EXPIRED");}
     }
     let args:Vec<&OsStr>=s.args.iter().map(|s|OsStr::new(s)).collect();
-    let run=crate::native_task_containment::run_captured_limits(&s.executable_path,&args,&s.cwd,environment,
+    let run=match crate::native_task_containment::run_captured_limits(&s.executable_path,&args,&s.cwd,environment,
         Duration::from_millis(s.timeout_ms),s.output_limits.stdout_bytes,s.output_limits.stderr_bytes,s.output_limits.combined_bytes,
-        Duration::from_secs(120),cancel).map_err(|_|"NATIVE_TASK_RUN_UNRESOLVED")?;
+        Duration::from_secs(120),cancel){Ok(run)=>run,Err(_)=>{
+            // The runner's error does not certify whether a process was created
+            // or settled. This single-use host retains all custody until exit.
+            std::mem::forget(candidate);std::mem::forget(pins);return Err("NATIVE_TASK_RUN_UNRESOLVED");
+        }};
     if !run.settlement.process_exited||!run.settlement.job_empty_observed||!run.settlement.descendants_settled||!run.io_settled||run.io_failed{
         // Single-use stdio host: retain protection until host termination and
         // enclosing Job cleanup when descendant/I/O settlement is unknown.
-        std::mem::forget(candidate);return Err("NATIVE_TASK_RUN_UNRESOLVED");
+        std::mem::forget(candidate);std::mem::forget(pins);return Err("NATIVE_TASK_RUN_UNRESOLVED");
     }
     // Refuse undecodable output rather than silently rewriting evidence or
     // expanding replacement characters beyond the reviewed byte budget.
@@ -171,6 +175,12 @@ fn run_custody_stdio()->Result<(),&'static str>{
   let locked=crate::native_host_resources::pin_task_files(&file,&pin,&root,&root).unwrap();
   assert!(fs::write(&file,b"changed").is_err());assert!(fs::remove_file(&file).is_err());assert!(fs::rename(&root,root.with_extension("moved")).is_err());
   drop(locked);fs::write(&file,b"changed").unwrap();
+ }
+ #[test]fn runner_error_keeps_custody_until_single_use_host_exit(){
+  let(root,mut spec)=fixture();let runtime=root.with_extension("runtime");fs::create_dir(&runtime).unwrap();let exe=runtime.join("invalid-executable.exe");fs::write(&exe,b"not a PE image").unwrap();let input=root.join("input.txt");fs::write(&input,b"retained input").unwrap();
+  spec["executablePath"]=json!(exe);spec["executableDigest"]=json!(format!("{:x}",Sha256::digest(fs::read(&exe).unwrap())));spec["args"]=json!([]);
+  assert_eq!(execute(&spec,&[],&AtomicBool::new(false)).unwrap_err(),"NATIVE_TASK_RUN_UNRESOLVED");
+  assert!(fs::write(&input,b"must stay pinned").is_err());assert!(fs::write(&exe,b"must stay pinned").is_err());assert!(fs::rename(&root,root.with_extension("moved")).is_err());assert!(fs::rename(&runtime,runtime.with_extension("runtime-moved")).is_err());
  }
  #[test]fn transient_nested_candidate_change_refuses_an_observation(){
   let(root,spec)=fixture();fs::create_dir(root.join("nested")).unwrap();

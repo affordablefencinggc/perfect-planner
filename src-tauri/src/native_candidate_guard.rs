@@ -118,6 +118,17 @@ impl CandidateGuard{
   guard.validate()?;Ok(guard)
  }
  pub(crate) fn validate(&self)->Result<(),&'static str>{for directory in &self.directories{directory.validate()?;}Ok(())}
+ #[cfg(test)]pub(crate) fn diagnostic_notifications(&self)->Vec<serde_json::Value>{
+  self.directories.iter().filter_map(|directory|{
+   if unsafe{WaitForSingleObject(directory.event,0)}!=0{return None;}
+   let mut bytes=0;let completed=unsafe{GetOverlappedResult(directory.file.as_ref().unwrap().as_raw_handle(),directory.overlapped.as_ref().unwrap().as_ref() as *const Overlapped as *mut Overlapped,&mut bytes,0)};
+   // Observation only. Never inspect a buffer until the kernel reports completion;
+   // never acknowledge, reset, rearm or turn the original invalidation into success.
+   if completed==0{return Some(serde_json::json!({"directory":directory.path,"completed":false,"error":unsafe{GetLastError()}}));}
+   let raw=directory.output.as_ref().unwrap();let words=((bytes as usize+3)/4).min(raw.len());
+   Some(serde_json::json!({"directory":directory.path,"completed":true,"bytes":bytes,"overflow":bytes==0,"words":raw[..words]}))
+  }).collect()
+ }
  pub(crate) fn finish(mut self)->Result<(),&'static str>{
   self.validate()?;
   self.settle_all()
