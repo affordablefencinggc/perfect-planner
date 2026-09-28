@@ -73,13 +73,16 @@ impl AppContainer{
  pub(crate) fn capabilities(&self)->SecurityCapabilities{SecurityCapabilities{sid:self.sid.0,capabilities:null_mut(),count:0,reserved:0}}
  /// Independently derive the policy for the root, inherited directories and
  /// inherited files. Never accept whatever ACL happens to exist after copying.
- pub(crate) fn readonly_descriptors(&self)->io::Result<[String;3]>{unsafe{
+ pub(crate) fn readonly_descriptors(&self)->io::Result<[String;3]>{self.directory_descriptors(false)}
+ pub(crate) fn workspace_descriptors(&self)->io::Result<[String;3]>{self.directory_descriptors(true)}
+ fn directory_descriptors(&self,writable:bool)->io::Result<[String;3]>{unsafe{
   use windows_sys::Win32::Security::Authorization::{ConvertStringSecurityDescriptorToSecurityDescriptorW,ConvertSecurityDescriptorToStringSecurityDescriptorW};
   let mut token=null_mut();if OpenProcessToken(-1isize as Handle,8,&mut token)==0{return Err(io::Error::last_os_error());}let token=Token(token);
   let user=token_data(token.0,1)?;let user=sid_string(*user.as_ptr().cast::<Handle>())?;let owner=token_data(token.0,4)?;let owner=sid_string(*owner.as_ptr().cast::<Handle>())?;
   let mut result=Vec::new();
   for(protected,flags)in [("P","OICI"),("","OICIID"),("","ID")]{
-   let sddl=wide(&format!("O:{owner}D:{protected}(A;{flags};FA;;;SY)(A;{flags};FA;;;BA)(A;{flags};FA;;;{user})(A;{flags};FRFX;;;{})",self.sid_text));
+   let access=if writable{"FA"}else{"FRFX"};
+   let sddl=wide(&format!("O:{owner}D:{protected}(A;{flags};FA;;;SY)(A;{flags};FA;;;BA)(A;{flags};FA;;;{user})(A;{flags};{access};;;{})",self.sid_text));
    let mut descriptor=null_mut();if ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl.as_ptr(),1,&mut descriptor,null_mut())==0{return Err(io::Error::last_os_error());}
    let mut encoded=null_mut();let ok=ConvertSecurityDescriptorToStringSecurityDescriptorW(descriptor,1,5,&mut encoded,null_mut());let error=io::Error::last_os_error();LocalFree(descriptor);
    if ok==0{return Err(error);}let text=string(encoded);LocalFree(encoded.cast());result.push(text?);
@@ -88,12 +91,16 @@ impl AppContainer{
  }}
  /// Only new children of this fresh owned profile; never changes existing ACLs.
  /// The caller must retain file/directory guards against writable-parent replacement.
- pub(crate) fn create_readonly_directory(&self,name:&str)->io::Result<PathBuf>{unsafe{
+ pub(crate) fn create_readonly_directory(&self,name:&str)->io::Result<PathBuf>{
+  if !matches!(name,"inputs"|"runtime"){return Err(failure("unsupported protected tree"));}self.create_directory(name,false)
+ }
+ pub(crate) fn create_workspace_directory(&self)->io::Result<PathBuf>{self.create_directory("workspace",true)}
+ fn create_directory(&self,name:&str,writable:bool)->io::Result<PathBuf>{unsafe{
   use windows_sys::Win32::Security::{Authorization::ConvertStringSecurityDescriptorToSecurityDescriptorW,SECURITY_ATTRIBUTES};
-  if !matches!(name,"inputs"|"runtime"){return Err(failure("unsupported protected tree"));}
   let mut token=null_mut();if OpenProcessToken(-1isize as Handle,8,&mut token)==0{return Err(io::Error::last_os_error());}let token=Token(token);
   let user=token_data(token.0,1)?;let owner=sid_string(*user.as_ptr().cast::<Handle>())?;
-  let sddl=wide(&format!("D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;{owner})(A;OICI;FRFX;;;{})",self.sid_text));
+  let access=if writable{"FA"}else{"FRFX"};
+  let sddl=wide(&format!("D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;{owner})(A;OICI;{access};;;{})",self.sid_text));
   let mut descriptor=null_mut();if ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl.as_ptr(),1,&mut descriptor,null_mut())==0{return Err(io::Error::last_os_error());}
   struct Memory(Handle);impl Drop for Memory{fn drop(&mut self){unsafe{LocalFree(self.0);}}}let descriptor=Memory(descriptor);
   let security=SECURITY_ATTRIBUTES{nLength:size_of::<SECURITY_ATTRIBUTES>()as u32,lpSecurityDescriptor:descriptor.0,bInheritHandle:0};

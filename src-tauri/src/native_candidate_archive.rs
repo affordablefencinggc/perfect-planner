@@ -29,6 +29,24 @@ pub(crate) struct ArchiveManifest{
 // The owner persists this exact manifest alongside its run, then binds the
 // digest to the retained observation. A returned value alone is not durable.
 pub(crate) struct RetainedInputs{pub manifest:ArchiveManifest,pub digest:String,guard:CandidateGuard,_pins:PinnedDirectoryNames,deadline:Option<Instant>}
+#[derive(Debug,Clone,Serialize,Deserialize,PartialEq,Eq)]
+#[serde(rename_all="camelCase",deny_unknown_fields)]
+pub(crate) struct WorkingCopyManifest{
+ schema_version:u32,kind:String,binding:ArchiveBinding,archive_digest:String,
+ root:PathBuf,policy:String,entries:Vec<Entry>,total_bytes:u64,execution_authorized:bool,
+}
+pub(crate) struct PreparedWorkingCopy{pub manifest:WorkingCopyManifest,pub digest:String,guard:CandidateGuard,pins:PinnedDirectoryNames,deadline:Instant}
+pub(crate) struct WorkingCopy{pub manifest:WorkingCopyManifest,pub digest:String,_pins:PinnedDirectoryNames}
+impl PreparedWorkingCopy{
+ // Caller releases only immediately before resuming its admitted child. This
+ // ends input immutability for the execution COPY, never for the archive.
+ pub(crate) fn release(self,cancel:&AtomicBool)->Result<WorkingCopy>{
+  check(cancel,self.deadline)?;let(entries,bytes)=inventory(&self.manifest.root,&self.guard,cancel,self.deadline)?;
+  if entries!=self.manifest.entries||bytes!=self.manifest.total_bytes{return Err(CHANGED);}
+  self.guard.finish()?;check(cancel,self.deadline)?;
+  Ok(WorkingCopy{manifest:self.manifest,digest:self.digest,_pins:self.pins})
+ }
+}
 fn hex(value:&str)->bool{value.len()==64&&value.bytes().all(|b|b.is_ascii_digit()||(b'a'..=b'f').contains(&b))}
 fn binding_valid(binding:&ArchiveBinding)->bool{!binding.run_id.is_empty()&&binding.run_id.len()<=128&&binding.run_id.bytes().all(|b|b.is_ascii_alphanumeric()||b"._:-".contains(&b))&&[&binding.root_identity,&binding.candidate_digest,&binding.intent_digest].iter().all(|s|hex(s))}
 fn check(cancel:&AtomicBool,deadline:Instant)->Result<()>{if cancel.load(Ordering::Acquire){Err("NATIVE_TASK_ARCHIVE_CANCELLED")}else if Instant::now()>=deadline{Err(LIMIT)}else{Ok(())}}
@@ -77,6 +95,40 @@ fn inventory(root:&Path,guard:&CandidateGuard,cancel:&AtomicBool,deadline:Instan
  entries.sort_by(|a,b|a.path.cmp(&b.path));guard.validate()?;Ok((entries,total))
 }
 impl RetainedInputs{
+ // Native-owned fixed destination in the SAME fresh profile. Caller reserves
+ // global storage separately; byte_budget is this copy's admitted byte ceiling.
+ pub(crate) fn prepare_workspace(&self,profile:&AppContainer,byte_budget:u64,cancel:&AtomicBool,deadline:Instant)->Result<PreparedWorkingCopy>{
+  let deadline=self.deadline.map_or(deadline,|d|d.min(deadline));check(cancel,deadline)?;
+  if self.manifest.profile_sid!=profile.sid_text()||self.manifest.profile_name!=profile.name(){return Err(INVALID);}
+  if byte_budget>2*1024*1024*1024||self.manifest.total_bytes>byte_budget{return Err(LIMIT);}
+  let(entries,bytes)=inventory(self.root(),&self.guard,cancel,deadline)?;
+  if entries!=self.manifest.entries||bytes!=self.manifest.total_bytes{return Err(CHANGED);}
+  let policy=profile.workspace_descriptors().map_err(|_|UNAVAILABLE)?;
+  let root=profile.create_workspace_directory().map_err(|_|UNAVAILABLE)?;let pins=pin_directory_names(&root)?;
+  let mut construction=Vec::new();let mut directories:Vec<_>=entries.iter().filter(|e|e.kind=="directory"&&!e.path.is_empty()).collect();
+  directories.sort_by_key(|e|(e.path.matches('/').count(),e.path.clone()));
+  for entry in directories{
+   check(cancel,deadline)?;let directory=root.join(entry.path.replace('/',"\\"));fs::create_dir(&directory).map_err(|_|UNAVAILABLE)?;
+   let pin=OpenOptions::new().read(true).share_mode(3).custom_flags(0x02200000).open(&directory).map_err(|_|UNAVAILABLE)?;stamp(&pin,false)?;construction.push(pin);
+  }
+  let index:HashMap<_,_>=entries.iter().map(|e|(e.path.as_str(),e)).collect();
+  for(path,file)in self.guard.pinned_files(){
+   check(cancel,deadline)?;let name=relative(self.root(),path)?;let expected=index.get(name.as_str()).filter(|e|e.kind=="file").ok_or(INVALID)?;
+   let before=stamp(file,true)?;default_stream_only(file,true)?;let mut input=file;input.rewind().map_err(|_|UNAVAILABLE)?;
+   let mut output=OpenOptions::new().write(true).create_new(true).share_mode(0).custom_flags(0x00200000).open(root.join(name.replace('/',"\\"))).map_err(|_|UNAVAILABLE)?;
+   let mut copied=0u64;let mut hash=Sha256::new();let mut buffer=[0u8;65536];
+   loop{check(cancel,deadline)?;let n=input.read(&mut buffer).map_err(|_|UNAVAILABLE)?;if n==0{break;}copied=copied.checked_add(n as u64).ok_or(LIMIT)?;if copied>expected.bytes{return Err(CHANGED);}output.write_all(&buffer[..n]).map_err(|_|UNAVAILABLE)?;hash.update(&buffer[..n]);}
+   if copied!=expected.bytes||Some(format!("{:x}",hash.finalize()))!=expected.sha256||stamp(file,true)?!=before{return Err(CHANGED);}default_stream_only(file,true)?;
+   output.sync_all().map_err(|_|UNAVAILABLE)?;
+  }
+  let guard=CandidateGuard::acquire(&root,cancel)?;let(copied,total_bytes)=inventory(&root,&guard,cancel,deadline)?;
+  if copied.iter().any(|e|e.descriptor!=policy[if e.path.is_empty(){0}else if e.kind=="directory"{1}else{2}]){return Err("NATIVE_TASK_WORKSPACE_POLICY_CHANGED");}
+  if total_bytes!=bytes||copied.len()!=entries.len()||copied.iter().zip(&entries).any(|(a,b)|a.path!=b.path||a.kind!=b.kind||a.bytes!=b.bytes||a.sha256!=b.sha256){return Err(CHANGED);}
+  self.guard.validate()?;check(cancel,deadline)?;drop(construction);
+  let manifest=WorkingCopyManifest{schema_version:1,kind:"NATIVE_TASK_INITIAL_WORKING_COPY".into(),binding:self.manifest.binding.clone(),archive_digest:self.digest.clone(),root,policy:"appcontainer-writable-copy-v1".into(),entries:copied,total_bytes,execution_authorized:false};
+  let bytes=serde_json::to_vec(&manifest).map_err(|_|INVALID)?;if bytes.len()>32*1024*1024{return Err(LIMIT);}let digest=format!("{:x}",Sha256::digest(&bytes));
+  Ok(PreparedWorkingCopy{manifest,digest,guard,pins,deadline})
+ }
  pub(crate) fn create(source:&Path,profile:&AppContainer,binding:ArchiveBinding,cancel:&AtomicBool)->Result<Self>{Self::create_observed(source,profile,binding,cancel,||{})}
  pub(crate) fn create_until(source:&Path,profile:&AppContainer,binding:ArchiveBinding,cancel:&AtomicBool,deadline:Instant)->Result<Self>{Self::create_observed_until(source,profile,binding,cancel,Some(deadline),||{})}
  fn create_observed(source:&Path,profile:&AppContainer,binding:ArchiveBinding,cancel:&AtomicBool,before_commit:impl FnOnce())->Result<Self>{
@@ -164,6 +216,64 @@ impl RetainedInputs{
   // Expire the shared clock without a two-minute test sleep. The real disk
   // archive remains unchanged; validation must not allocate another 120 sec.
   archive.deadline=Some(Instant::now());assert_eq!(archive.validate(&cancel),Err(LIMIT));assert_eq!(archive.finish(&cancel),Err(LIMIT));
+ }
+ #[test]fn workspace_starts_exact_then_mutates_without_changing_retained_inputs(){
+  let(source,profile,binding)=fixture("workspace-copy");fs::create_dir(source.join("empty")).unwrap();fs::write(source.join("input"),b"original").unwrap();let cancel=AtomicBool::new(false);
+  let archive=RetainedInputs::create(&source,&profile,binding,&cancel).unwrap();let prepared=archive.prepare_workspace(&profile,8,&cancel,Instant::now()+Duration::from_secs(30)).unwrap();
+  assert_eq!(prepared.manifest.archive_digest,archive.digest);assert_eq!(prepared.manifest.total_bytes,8);assert!(prepared.manifest.root.join("empty").is_dir());assert!(!prepared.manifest.execution_authorized);
+  assert!(fs::write(prepared.manifest.root.join("input"),b"premature").is_err());
+  let working=prepared.release(&cancel).unwrap();fs::write(working.manifest.root.join("input"),b"generated change").unwrap();fs::write(working.manifest.root.join("cache"),b"generated cache").unwrap();
+  assert_eq!(fs::read(source.join("input")).unwrap(),b"original");assert_eq!(fs::read(archive.root().join("input")).unwrap(),b"original");archive.validate(&cancel).unwrap();
+  assert!(fs::rename(&working.manifest.root,working.manifest.root.with_extension("moved")).is_err());
+ }
+ #[test]fn workspace_budget_cancel_expiry_and_foreign_profile_refuse_before_creation(){
+  for mode in ["budget","cancel","expired","foreign"]{
+   let(source,profile,binding)=fixture(&format!("workspace-{mode}"));fs::write(source.join("input"),b"original").unwrap();let cancel=AtomicBool::new(false);let archive=RetainedInputs::create(&source,&profile,binding,&cancel).unwrap();
+   if mode=="cancel"{cancel.store(true,Ordering::Release);}let deadline=Instant::now()+if mode=="expired"{Duration::ZERO}else{Duration::from_secs(30)};
+   let foreign=if mode=="foreign"{Some(fixture("workspace-other-profile").1)}else{None};let selected=foreign.as_ref().unwrap_or(&profile);
+   assert!(archive.prepare_workspace(selected,if mode=="budget"{7}else{8},&cancel,deadline).is_err());assert!(!selected.folder().join("workspace").exists());
+  }
+ }
+ #[test]fn workspace_transient_change_or_expired_release_remains_unresolved(){
+  for mode in ["changed","expired"]{
+   let(source,profile,binding)=fixture(&format!("workspace-release-{mode}"));fs::write(source.join("input"),b"original").unwrap();let cancel=AtomicBool::new(false);let archive=RetainedInputs::create(&source,&profile,binding,&cancel).unwrap();
+   let mut prepared=archive.prepare_workspace(&profile,8,&cancel,Instant::now()+Duration::from_secs(30)).unwrap();let retained=prepared.manifest.root.clone();
+   if mode=="changed"{fs::write(retained.join("transient"),b"change").unwrap();fs::remove_file(retained.join("transient")).unwrap();}else{prepared.deadline=Instant::now();}
+   assert!(prepared.release(&cancel).is_err());assert_eq!(fs::read(retained.join("input")).unwrap(),b"original");archive.validate(&cancel).unwrap();
+  }
+ }
+ #[test]fn workspace_changed_permissions_prevent_release(){
+  let(source,profile,binding)=fixture("workspace-acl");fs::write(source.join("input"),b"original").unwrap();let cancel=AtomicBool::new(false);let archive=RetainedInputs::create(&source,&profile,binding,&cancel).unwrap();
+  let prepared=archive.prepare_workspace(&profile,8,&cancel,Instant::now()+Duration::from_secs(30)).unwrap();change_descriptor(&prepared.manifest.root.join("input"),profile.sid_text());assert!(prepared.release(&cancel).is_err());archive.validate(&cancel).unwrap();
+ }
+ #[test]fn duplicate_workspace_preparation_preserves_first_copy(){
+  let(source,profile,binding)=fixture("workspace-duplicate");fs::write(source.join("input"),b"original").unwrap();let cancel=AtomicBool::new(false);let archive=RetainedInputs::create(&source,&profile,binding,&cancel).unwrap();let deadline=Instant::now()+Duration::from_secs(30);
+  let prepared=archive.prepare_workspace(&profile,8,&cancel,deadline).unwrap();let manifest=prepared.manifest.clone();let digest=prepared.digest.clone();assert!(archive.prepare_workspace(&profile,8,&cancel,deadline).is_err());
+  let released=prepared.release(&cancel).unwrap();assert_eq!(released.manifest,manifest);assert_eq!(released.digest,digest);assert_eq!(fs::read(released.manifest.root.join("input")).unwrap(),b"original");archive.validate(&cancel).unwrap();
+ }
+ #[test]#[ignore="DANS1 desktop session and actual Node required"]fn actual_isolated_node_writes_only_execution_copy(){
+  use std::ffi::OsStr;
+  let(source,profile,binding)=fixture("workspace-node");fs::write(source.join("input"),b"original").unwrap();
+  fs::write(source.join("check.cjs"),br#"const fs=require('node:fs'),p=require('node:path'),a=require('node:assert/strict');a.equal(fs.readFileSync('input','utf8'),'original');fs.writeFileSync('input','changed by child');fs.mkdirSync('dist');fs.writeFileSync('dist/output','built');a.throws(()=>fs.writeFileSync(p.join(process.env.PP_INPUTS,'input'),'tampered'));a.throws(()=>fs.writeFileSync(p.join(process.env.PP_SOURCE,'input'),'tampered'));console.log('workspace generated; original and archive denied');"#).unwrap();
+  let cancel=AtomicBool::new(false);let archive=RetainedInputs::create(&source,&profile,binding,&cancel).unwrap();let prepared=archive.prepare_workspace(&profile,1024*1024,&cancel,Instant::now()+Duration::from_secs(60)).unwrap();let cwd=prepared.manifest.root.clone();
+  let runtime=profile.create_readonly_directory("runtime").unwrap();let node=runtime.join("node.exe");fs::copy(std::env::var_os("PP_TEST_AGENT_NODE").unwrap(),&node).unwrap();let script=cwd.join("check.cjs");let system=std::env::var("SystemRoot").unwrap();let mut prepared=Some(prepared);let mut working=None;let mut runtime_guard=None;
+  let run=crate::native_task_containment::run_captured_isolated_after_retention(&node,&[OsStr::new("--preserve-symlinks"),OsStr::new("--preserve-symlinks-main"),script.as_os_str()],&cwd,&[("SystemRoot",&system),("WINDIR",&system),("LOCALAPPDATA",profile.folder().to_str().unwrap()),("TEMP",profile.folder().to_str().unwrap()),("TMP",profile.folder().to_str().unwrap()),("PP_INPUTS",archive.root().to_str().unwrap()),("PP_SOURCE",source.to_str().unwrap())],Duration::from_secs(10),8192,8192,16384,Duration::from_secs(120),&cancel,&profile,||{
+   runtime_guard=Some(CandidateGuard::acquire(&runtime,&cancel).map_err(std::io::Error::other)?);working=Some(prepared.take().unwrap().release(&cancel).map_err(std::io::Error::other)?);Ok(())
+  }).unwrap();
+  assert_eq!(run.settlement.exit_code,Some(0),"{}",String::from_utf8_lossy(&run.stderr));assert!(run.settlement.process_exited&&run.settlement.job_empty_observed&&run.settlement.descendants_settled&&run.io_settled&&!run.io_failed);
+  assert_eq!(fs::read(cwd.join("input")).unwrap(),b"changed by child");assert_eq!(fs::read(cwd.join("dist/output")).unwrap(),b"built");assert_eq!(fs::read(source.join("input")).unwrap(),b"original");archive.validate(&cancel).unwrap();runtime_guard.unwrap().finish().unwrap();assert!(working.is_some());
+ }
+ #[test]#[ignore="Explicit disposable DANS1 Boundaries copy and free-space check required"]fn actual_boundaries_archive_and_working_copy(){
+  let source=PathBuf::from(std::env::var_os("PP_BOUNDARIES_COPY_SOURCE").expect("explicit disposable source"));
+  assert_eq!(source,PathBuf::from(r"C:\Users\danie\Documents\perfect-planner-tests\boundaries-copy-20260927-51\boundary-viewer"));
+  let(_,profile,binding)=fixture("boundaries-workspace");let cancel=AtomicBool::new(false);let started=Instant::now();let deadline=started+Duration::from_secs(240);
+  let archive=RetainedInputs::create_until(&source,&profile,binding,&cancel,deadline).unwrap();
+  eprintln!("Boundaries immutable archive prepared in {} ms",started.elapsed().as_millis());
+  assert!(archive.manifest.total_bytes>900_000_000);assert!(archive.manifest.entries.iter().filter(|e|e.kind=="file").count()>50_000);
+  let prepared=archive.prepare_workspace(&profile,2*1024*1024*1024,&cancel,deadline).unwrap();eprintln!("Boundaries working copy prepared in {} ms",started.elapsed().as_millis());let working=prepared.release(&cancel).unwrap();
+  assert_eq!(archive.manifest.total_bytes,working.manifest.total_bytes);assert_eq!(archive.manifest.entries.len(),working.manifest.entries.len());archive.validate(&cancel).unwrap();
+  let evidence=serde_json::json!({"scope":"actual disposable project copy, synthetic binding, no project command executed","source":source,"profile":profile.name(),"archive":archive.root(),"workspace":working.manifest.root,"entries":archive.manifest.entries.len(),"bytes":archive.manifest.total_bytes,"archiveDigest":archive.digest,"initialWorkingCopyDigest":working.digest,"elapsedMs":started.elapsed().as_millis(),"executionAuthorized":false});
+  fs::write(PathBuf::from(std::env::var_os("PP_ARCHIVE_FIXTURE_ROOT").unwrap()).join("boundaries-copy-result.json"),serde_json::to_vec_pretty(&evidence).unwrap()).unwrap();
  }
  #[test]fn complete_copy_retains_bytes_empty_directories_and_git_metadata(){
   let(source,profile,binding)=fixture("complete");fs::create_dir(source.join("empty")).unwrap();fs::create_dir(source.join(".git")).unwrap();fs::write(source.join(".git/config"),b"inert configuration, never executed").unwrap();fs::write(source.join("input.txt"),b"retained input").unwrap();
