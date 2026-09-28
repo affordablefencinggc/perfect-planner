@@ -98,9 +98,9 @@ function windowsLaunch(command, args, cwd) {
 
 /** Bounded process primitive. Authorization and executable selection belong to callers. */
 export function runBoundedProcess(command,args,options={}){return boundedProcess(command,args,options,MAX_TIMEOUT,MAX_OUTPUT);}
-// Native task protocol allows five-minute checks plus bounded helper startup
-// and settlement. JSON escaping can expand 2 MiB of output to 12 MiB.
-export function runBoundedTaskProcess(command,args,options={}){return boundedProcess(command,args,options,310_000,13*1024*1024);}
+// Five-minute checks plus 30s candidate acquisition, 1s guard settlement and
+// 14s helper startup/transport margin. JSON output can expand to 12 MiB.
+export function runBoundedTaskProcess(command,args,options={}){return boundedProcess(command,args,options,345_000,13*1024*1024);}
 function boundedProcess(command, args, { cwd, env = process.env, timeoutMs = 10_000, maxBytes = 65_536, input = "", signal: abortSignal } = {}, timeoutLimit,outputLimit) {
   if(abortSignal!==undefined&&!(abortSignal instanceof AbortSignal))refuse('invalid-command-signal');
   if(abortSignal?.aborted)return Promise.resolve({exit:null,signal:null,stdout:'',stderr:'',reason:'git-cancelled',timedOut:false,outputBytes:0,outputComplete:false,cleanupComplete:true});

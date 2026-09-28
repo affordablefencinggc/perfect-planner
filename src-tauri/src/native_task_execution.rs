@@ -61,7 +61,7 @@ pub(crate) fn execute(value:&Value,environment:&[(&str,&str)],cancel:&AtomicBool
 fn execute_until(value:&Value,environment:&[(&str,&str)],cancel:&AtomicBool,expires_at:Option<u64>)->Result<Value,&'static str>{
     let s=parse(value)?;
     let _pins=crate::native_host_resources::pin_task_files(&s.executable_path,&s.executable_digest,&s.registered_root,&s.cwd)?;
-    let candidate=crate::native_candidate_guard::CandidateGuard::acquire(&s.registered_root)?;
+    let candidate=crate::native_candidate_guard::CandidateGuard::acquire(&s.registered_root,cancel)?;
     if let Some(deadline)=expires_at{
         let now=std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(|_|"NATIVE_TASK_CLOCK_INVALID")?.as_millis();
         if now>=deadline as u128{return Err("NATIVE_TASK_GRANT_EXPIRED");}
@@ -70,6 +70,11 @@ fn execute_until(value:&Value,environment:&[(&str,&str)],cancel:&AtomicBool,expi
     let run=crate::native_task_containment::run_captured_limits(&s.executable_path,&args,&s.cwd,environment,
         Duration::from_millis(s.timeout_ms),s.output_limits.stdout_bytes,s.output_limits.stderr_bytes,s.output_limits.combined_bytes,
         Duration::from_secs(120),cancel).map_err(|_|"NATIVE_TASK_RUN_UNRESOLVED")?;
+    if !run.settlement.process_exited||!run.settlement.job_empty_observed||!run.settlement.descendants_settled||!run.io_settled||run.io_failed{
+        // Single-use stdio host: retain protection until host termination and
+        // enclosing Job cleanup when descendant/I/O settlement is unknown.
+        std::mem::forget(candidate);return Err("NATIVE_TASK_RUN_UNRESOLVED");
+    }
     candidate.finish()?;
     // Refuse undecodable output rather than silently rewriting evidence or
     // expanding replacement characters beyond the reviewed byte budget.
@@ -128,7 +133,14 @@ fn execute_until(value:&Value,environment:&[(&str,&str)],cancel:&AtomicBool,expi
   assert_eq!(fs::read_dir(root.join("nested")).unwrap().count(),0);
   assert_eq!(observed.unwrap_err(),"NATIVE_TASK_CANDIDATE_CHANGED_DURING_EXECUTION");
  }
+ #[test]fn native_child_cannot_overwrite_an_existing_candidate_input(){
+  let(root,spec)=fixture();fs::create_dir(root.join("nested")).unwrap();fs::write(root.join("nested/input.txt"),b"original").unwrap();
+  let system=std::env::var("SystemRoot").unwrap();
+  let observed=execute(&spec,&[("SystemRoot",&system),("PP_ADAPTER_CHILD","input-write-denied")],&AtomicBool::new(false)).unwrap();
+  assert_eq!(observed["exitCode"],0);assert_eq!(fs::read(root.join("nested/input.txt")).unwrap(),b"original");
+  fs::write(root.join("nested/input.txt"),b"released after settlement").unwrap();
+ }
  #[test]#[ignore="inert child invoked only by adapter test"]fn child(){
-  match std::env::var("PP_ADAPTER_CHILD").as_deref(){Ok("fail")=>std::process::exit(7),Ok("invalid-utf8")=>{use std::io::Write;std::io::stdout().write_all(&[0xff]).unwrap();},Ok("transient-candidate")=>{let file=std::env::current_dir().unwrap().join("nested/transient.txt");fs::write(&file,b"changed during check").unwrap();fs::remove_file(file).unwrap();},_=>println!("native-adapter-child")}
+  match std::env::var("PP_ADAPTER_CHILD").as_deref(){Ok("fail")=>std::process::exit(7),Ok("invalid-utf8")=>{use std::io::Write;std::io::stdout().write_all(&[0xff]).unwrap();},Ok("transient-candidate")=>{let file=std::env::current_dir().unwrap().join("nested/transient.txt");fs::write(&file,b"changed during check").unwrap();fs::remove_file(file).unwrap();},Ok("input-write-denied")=>{assert!(fs::write(std::env::current_dir().unwrap().join("nested/input.txt"),b"corrupted").is_err());},_=>println!("native-adapter-child")}
  }
 }

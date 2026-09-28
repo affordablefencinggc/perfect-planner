@@ -44,7 +44,7 @@ export function createNativeTaskExecutionAdapter({executable,executableDigest,cw
    if(Date.now()>=expiresAtMs)throw Error('NATIVE_TASK_GRANT_EXPIRED');
    if(path.relative(cwd,await realpath(cwd))||!(await lstat(cwd)).isDirectory())throw Error('NATIVE_TASK_HOST_PATH_INVALID');
    scratch=await allocateCompilationTemp(compilationTempRoot);
-   const result=await runBoundedTaskProcess(executable,['--planner-task-stdio'],{cwd,env:{SystemRoot:'C:\\Windows',WINDIR:'C:\\Windows',TEMP:scratch.directory,TMP:scratch.directory},timeoutMs:spec.timeoutMs+10000,maxBytes:13*1024*1024,input:wire,signal});
+   const result=await runBoundedTaskProcess(executable,['--planner-task-stdio'],{cwd,env:{SystemRoot:'C:\\Windows',WINDIR:'C:\\Windows',TEMP:scratch.directory,TMP:scratch.directory},timeoutMs:spec.timeoutMs+45000,maxBytes:13*1024*1024,input:wire,signal});
    settled=result.cleanupComplete===true;
    if(!settled)throw Object.assign(Error('NATIVE_TASK_TRANSPORT_CLEANUP_UNCERTAIN'),{cleanupComplete:false});
    if(result.exit!==0||result.reason||!result.outputComplete)throw Error('NATIVE_TASK_TRANSPORT_UNRESOLVED');
