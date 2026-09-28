@@ -11,6 +11,7 @@ export function createTaskNativeResultCustody({grants,observations}){
   const state=await inspectGrants(),entry=state.grants.find(item=>item.grant.grantId===intent?.grantId);
   if(!entry?.intentReceipt||wire(entry.intentReceipt)!==wire(intent))throw Error('NATIVE_RESULT_CUSTODY_INTENT_MISMATCH');
   const saved=await read(entry.intentReceipt);
+  if(saved.receipt.kind==='NATIVE_TASK_PROVISIONAL_RECEIPT')throw Error('NATIVE_TASK_FINALIZATION_UNRESOLVED');
   // Recover the exact original request if a link flush/reply was lost. A new
   // journal head must not turn that retry into a conflicting or second event.
   const prior=state.history.find(item=>item.event==='result-recorded'&&item.grant.grantId===intent.grantId);
@@ -20,7 +21,10 @@ export function createTaskNativeResultCustody({grants,observations}){
   if(wire(after.receipt)!==wire(saved.receipt))throw Error('NATIVE_RESULT_CUSTODY_ARTIFACT_CHANGED');
   return freeze({observationReceipt:after.receipt,observationLink:linked.observationLink,executionAuthorized:false});
  }
- return Object.freeze({reconcile,async record(input){
+ return Object.freeze({reconcile,
+ async retainProvisional(input){return observations.retainProvisional(structuredClone(input));},
+ async finalize(input){input=structuredClone(input);await observations.finalize(input);return (await reconcile(input.intentReceipt)).observationReceipt;},
+ async record(input){
   input=structuredClone(input);await write(input);
   return (await reconcile(input.intentReceipt)).observationReceipt;
  }});
