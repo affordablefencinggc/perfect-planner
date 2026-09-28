@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
 import {mkdtemp,writeFile} from 'node:fs/promises';
-import {runBoundedTaskConversation} from '../src/node/guardedGitRunner.mjs';
+import {runBoundedTaskConversation,runBoundedRetainedTaskConversation} from '../src/node/guardedGitRunner.mjs';
 
 async function fixture(body){
  assert.equal(os.hostname().toLowerCase(),'dans1');
@@ -12,6 +12,16 @@ async function fixture(body){
  return {directory,file};
 }
 const interactive=`import readline from 'node:readline';let n=0;const lines=readline.createInterface({input:process.stdin});lines.on('line',line=>{const v=JSON.parse(line);if(n===0&&v.start!==true)process.exit(8);if(n>0&&v.reply!==n)process.exit(9);n++;console.log(JSON.stringify({frame:n}));if(n===3)lines.close();});`;
+
+test('retained execution requires four ordered frames without extending the legacy protocol',async()=>{
+ const f=await fixture(interactive.replace('n===3','n===4')),seen=[];
+ const result=await runBoundedRetainedTaskConversation(process.execPath,[f.file],{cwd:f.directory,timeoutMs:15000,input:'{"start":true}'},async value=>{seen.push(value.frame);return value.frame===4?null:{reply:value.frame};});
+ assert.equal(result.exit,0);assert.equal(result.cleanupComplete,true);assert.equal(result.outputComplete,true);assert.deepEqual(seen,[1,2,3,4]);
+ const legacy=await runBoundedTaskConversation(process.execPath,[f.file],{cwd:f.directory,timeoutMs:15000,input:'{"start":true}'},async value=>value.frame===4?null:{reply:value.frame});
+ assert.equal(legacy.reason,'native-conversation-order');assert.equal(legacy.outputComplete,false);
+ const short=await fixture(interactive);const incomplete=await runBoundedRetainedTaskConversation(process.execPath,[short.file],{cwd:short.directory,timeoutMs:15000,input:'{"start":true}'},async value=>value.frame===3?null:{reply:value.frame});
+ assert.equal(incomplete.reason,'native-conversation-incomplete');assert.equal(incomplete.outputComplete,false);
+});
 test('actual contained child exchanges three ordered frames and awaits each response',async()=>{
  const f=await fixture(interactive),seen=[];
  const result=await runBoundedTaskConversation(process.execPath,[f.file],{cwd:f.directory,timeoutMs:15000,input:'{"start":true}'},async value=>{seen.push(value.frame);await new Promise(r=>setTimeout(r,15));return value.frame===3?null:{reply:value.frame};});

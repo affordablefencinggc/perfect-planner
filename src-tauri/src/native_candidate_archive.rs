@@ -28,7 +28,7 @@ pub(crate) struct ArchiveManifest{
 }
 // The owner persists this exact manifest alongside its run, then binds the
 // digest to the retained observation. A returned value alone is not durable.
-pub(crate) struct RetainedInputs{pub manifest:ArchiveManifest,pub digest:String,guard:CandidateGuard,_pins:PinnedDirectoryNames}
+pub(crate) struct RetainedInputs{pub manifest:ArchiveManifest,pub digest:String,guard:CandidateGuard,_pins:PinnedDirectoryNames,deadline:Option<Instant>}
 fn hex(value:&str)->bool{value.len()==64&&value.bytes().all(|b|b.is_ascii_digit()||(b'a'..=b'f').contains(&b))}
 fn binding_valid(binding:&ArchiveBinding)->bool{!binding.run_id.is_empty()&&binding.run_id.len()<=128&&binding.run_id.bytes().all(|b|b.is_ascii_alphanumeric()||b"._:-".contains(&b))&&[&binding.root_identity,&binding.candidate_digest,&binding.intent_digest].iter().all(|s|hex(s))}
 fn check(cancel:&AtomicBool,deadline:Instant)->Result<()>{if cancel.load(Ordering::Acquire){Err("NATIVE_TASK_ARCHIVE_CANCELLED")}else if Instant::now()>=deadline{Err(LIMIT)}else{Ok(())}}
@@ -78,8 +78,12 @@ fn inventory(root:&Path,guard:&CandidateGuard,cancel:&AtomicBool,deadline:Instan
 }
 impl RetainedInputs{
  pub(crate) fn create(source:&Path,profile:&AppContainer,binding:ArchiveBinding,cancel:&AtomicBool)->Result<Self>{Self::create_observed(source,profile,binding,cancel,||{})}
+ pub(crate) fn create_until(source:&Path,profile:&AppContainer,binding:ArchiveBinding,cancel:&AtomicBool,deadline:Instant)->Result<Self>{Self::create_observed_until(source,profile,binding,cancel,Some(deadline),||{})}
  fn create_observed(source:&Path,profile:&AppContainer,binding:ArchiveBinding,cancel:&AtomicBool,before_commit:impl FnOnce())->Result<Self>{
-  if !binding_valid(&binding){return Err(INVALID);}let deadline=Instant::now()+Duration::from_secs(120);check(cancel,deadline)?;
+  Self::create_observed_until(source,profile,binding,cancel,None,before_commit)
+ }
+ fn create_observed_until(source:&Path,profile:&AppContainer,binding:ArchiveBinding,cancel:&AtomicBool,shared_deadline:Option<Instant>,before_commit:impl FnOnce())->Result<Self>{
+  if !binding_valid(&binding){return Err(INVALID);}let local_deadline=Instant::now()+Duration::from_secs(120);let deadline=shared_deadline.map_or(local_deadline,|d|d.min(local_deadline));check(cancel,deadline)?;
   let _source_pins=pin_directory_names(source)?;let source_guard=CandidateGuard::acquire(source,cancel)?;
   // Inspect all names/streams and hash the pinned population before copying.
   let(source_entries,source_bytes)=inventory(source,&source_guard,cancel,deadline)?;
@@ -109,7 +113,7 @@ impl RetainedInputs{
   source_guard.finish()?;check(cancel,deadline)?;guard.validate()?;drop(construction);
   let manifest=ArchiveManifest{schema_version:1,kind:"NATIVE_TASK_RETAINED_INPUTS".into(),binding,profile_name:profile.name().into(),profile_sid:profile.sid_text().into(),root,readonly_policy:"appcontainer-rx-owner-full-v1".into(),entries,total_bytes,execution_authorized:false};
   let bytes=serde_json::to_vec(&manifest).map_err(|_|INVALID)?;if bytes.len()>32*1024*1024{return Err(LIMIT);}let digest=format!("{:x}",Sha256::digest(&bytes));
-  Ok(Self{manifest,digest,guard,_pins:pins})
+  Ok(Self{manifest,digest,guard,_pins:pins,deadline:shared_deadline})
  }
  pub(crate) fn root(&self)->&Path{&self.manifest.root}
  pub(crate) fn member(&self,name:&str,directory:bool)->Result<PathBuf>{
@@ -119,7 +123,9 @@ impl RetainedInputs{
  }
  pub(crate) fn finish(self,cancel:&AtomicBool)->Result<()>{self.validate(cancel)?;self.guard.finish()}
  pub(crate) fn validate(&self,cancel:&AtomicBool)->Result<()>{
-  let(entries,bytes)=inventory(self.root(),&self.guard,cancel,Instant::now()+Duration::from_secs(120))?;
+  let local_deadline=Instant::now()+Duration::from_secs(120);let deadline=self.deadline.map_or(local_deadline,|d|d.min(local_deadline));check(cancel,deadline)?;
+  let(entries,bytes)=inventory(self.root(),&self.guard,cancel,deadline)?;
+  check(cancel,deadline)?;
   if entries!=self.manifest.entries||bytes!=self.manifest.total_bytes{return Err(CHANGED);}Ok(())
  }
  pub(crate) fn reopen(bytes:&[u8],digest:&str,binding:&ArchiveBinding,cancel:&AtomicBool)->Result<Self>{
@@ -127,7 +133,7 @@ impl RetainedInputs{
   let manifest:ArchiveManifest=serde_json::from_slice(bytes).map_err(|_|INVALID)?;
   if manifest.schema_version!=1||manifest.kind!="NATIVE_TASK_RETAINED_INPUTS"||manifest.readonly_policy!="appcontainer-rx-owner-full-v1"||manifest.execution_authorized||manifest.binding!=*binding||!binding_valid(binding)||serde_json::to_vec(&manifest).map_err(|_|INVALID)?!=bytes{return Err(INVALID);}
   let pins=pin_directory_names(&manifest.root)?;let guard=CandidateGuard::acquire(&manifest.root,cancel)?;
-  let retained=Self{manifest,digest:digest.into(),guard,_pins:pins};retained.validate(cancel)?;Ok(retained)
+  let retained=Self{manifest,digest:digest.into(),guard,_pins:pins,deadline:None};retained.validate(cancel)?;Ok(retained)
  }
 }
 
@@ -148,6 +154,16 @@ impl RetainedInputs{
   let binding=ArchiveBinding{run_id:format!("archive-{label}"),root_identity:"a".repeat(64),candidate_digest:"b".repeat(64),intent_digest:"c".repeat(64)};
   fs::write(base.join(format!("{label}-profile.json")),serde_json::to_vec_pretty(&serde_json::json!({"name":profile.name(),"folder":profile.folder(),"retained":true})).unwrap()).unwrap();
   (source,profile,binding)
+ }
+ #[test]fn shared_deadline_is_not_renewed_by_validation_or_finalization(){
+  let(source,profile,binding)=fixture("shared-deadline");let cancel=AtomicBool::new(false);
+  assert!(matches!(RetainedInputs::create_until(&source,&profile,binding.clone(),&cancel,Instant::now()),Err(LIMIT)));
+  assert!(!profile.folder().join("inputs").exists());
+  let shared=Instant::now()+Duration::from_secs(120);let mut archive=RetainedInputs::create_until(&source,&profile,binding,&cancel,shared).unwrap();
+  assert_eq!(archive.deadline,Some(shared));archive.validate(&cancel).unwrap();assert_eq!(archive.deadline,Some(shared));
+  // Expire the shared clock without a two-minute test sleep. The real disk
+  // archive remains unchanged; validation must not allocate another 120 sec.
+  archive.deadline=Some(Instant::now());assert_eq!(archive.validate(&cancel),Err(LIMIT));assert_eq!(archive.finish(&cancel),Err(LIMIT));
  }
  #[test]fn complete_copy_retains_bytes_empty_directories_and_git_metadata(){
   let(source,profile,binding)=fixture("complete");fs::create_dir(source.join("empty")).unwrap();fs::create_dir(source.join(".git")).unwrap();fs::write(source.join(".git/config"),b"inert configuration, never executed").unwrap();fs::write(source.join("input.txt"),b"retained input").unwrap();

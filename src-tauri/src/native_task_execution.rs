@@ -34,6 +34,7 @@ fn parse(value:&Value)->Result<Spec,&'static str>{
 pub fn run_stdio_if_requested()->Option<i32>{
     use std::io::{Read,Write};
     let args:Vec<_>=std::env::args_os().collect();
+    if args.get(1).and_then(|s|s.to_str())==Some("--planner-retained-task-stdio"){return Some(if args.len()==2&&run_retained_custody_stdio().is_ok(){0}else{2});}
     if args.get(1).and_then(|s|s.to_str())==Some("--planner-task-custody-stdio"){return Some(if args.len()==2&&run_custody_stdio().is_ok(){0}else{2});}
     if args.get(1).and_then(|s|s.to_str())!=Some("--planner-task-stdio"){return None;}
     if args.len()!=2{return Some(2);}
@@ -55,6 +56,43 @@ pub fn run_stdio_if_requested()->Option<i32>{
         std::io::stdout().write_all(&output).and_then(|_|std::io::stdout().flush()).map_err(|_|())
     })();
     Some(if result.is_ok(){0}else{2})
+}
+
+// Explicit private retained-Node protocol. The owner binds root identity and
+// allocates scratch outside the project. No ordinary-execution fallback exists.
+fn run_retained_custody_stdio()->Result<(),&'static str>{
+ use std::{cell::RefCell,io::{BufRead,Read,Write}};
+ fn read(reader:&mut impl BufRead)->Result<Value,&'static str>{
+  let mut bytes=Vec::new();loop{let available=reader.fill_buf().map_err(|_|"NATIVE_TASK_PROTOCOL_IO")?;if available.is_empty(){return Err("NATIVE_TASK_PROTOCOL_EOF");}
+   let n=available.iter().position(|b|*b==b'\n').map(|i|i+1).unwrap_or(available.len());if bytes.len()+n>65536{return Err("NATIVE_TASK_PROTOCOL_LIMIT");}bytes.extend_from_slice(&available[..n]);reader.consume(n);if bytes.last()==Some(&b'\n'){break;}}
+  serde_json::from_slice(&bytes).map_err(|_|"NATIVE_TASK_PROTOCOL_INVALID")
+ }
+ fn send(value:&Value)->Result<(),&'static str>{let mut bytes=serde_json::to_vec(value).map_err(|_|"NATIVE_TASK_PROTOCOL_INVALID")?;bytes.push(b'\n');std::io::stdout().write_all(&bytes).and_then(|_|std::io::stdout().flush()).map_err(|_|"NATIVE_TASK_PROTOCOL_IO")}
+ #[derive(Deserialize)]#[serde(rename_all="camelCase",deny_unknown_fields)]
+ struct Envelope{schema_version:u32,execution_spec:Value,expires_at_ms:u64,root_identity:String,owner_directory:PathBuf}
+ let reader=RefCell::new(std::io::BufReader::new(std::io::stdin()));let envelope:Envelope=serde_json::from_value(read(&mut *reader.borrow_mut())?).map_err(|_|"NATIVE_TASK_PROTOCOL_INVALID")?;
+ if envelope.schema_version!=3||!digest(&envelope.root_identity)||envelope.expires_at_ms>9_007_199_254_740_991{return Err("NATIVE_TASK_PROTOCOL_INVALID");}
+ let spec=parse(&envelope.execution_spec)?;
+ let first=spec.args.first().filter(|s|!s.is_empty()&&!s.starts_with('-')).ok_or("NATIVE_TASK_RETAINED_SCRIPT_REQUIRED")?;
+ let script=PathBuf::from(first);let script=if script.is_absolute(){script}else{spec.cwd.join(script)};
+ let relative=|path:&std::path::Path|->Result<String,&'static str>{let value=path.strip_prefix(&spec.registered_root).map_err(|_|"NATIVE_TASK_RETAINED_PATH_OUTSIDE_ROOT")?;let mut parts=Vec::new();for part in value.components(){let std::path::Component::Normal(name)=part else{return Err("NATIVE_TASK_RETAINED_PATH_INVALID");};parts.push(name.to_str().ok_or("NATIVE_TASK_RETAINED_PATH_INVALID")?);}Ok(parts.join("/"))};
+ let native=crate::native_retained_execution::NodeSpec{binding:crate::native_candidate_archive::ArchiveBinding{run_id:spec.run_id.clone(),root_identity:envelope.root_identity,candidate_digest:spec.candidate_digest.clone(),intent_digest:spec.intent_digest.clone()},source:spec.registered_root.clone(),cwd:relative(&spec.cwd)?,script:relative(&script)?,args:spec.args[1..].to_vec(),node:spec.executable_path.clone(),node_digest:spec.executable_digest.clone(),owner_directory:envelope.owner_directory,expires_at_ms:envelope.expires_at_ms,timeout:Duration::from_millis(spec.timeout_ms),stdout_limit:spec.output_limits.stdout_bytes,stderr_limit:spec.output_limits.stderr_bytes,combined_limit:spec.output_limits.combined_bytes};
+ let base=json!({"schemaVersion":3,"runId":spec.run_id,"intentDigest":spec.intent_digest,"candidateDigest":spec.candidate_digest,"checkContractDigest":spec.check_contract_digest,"executionAuthorized":false});
+ let exchange=|kind:&str,fields:Value,expected_kind:&str,expected_fields:Value|->Result<Value,&'static str>{
+  let mut outgoing=base.clone();outgoing["kind"]=json!(kind);for(k,v)in fields.as_object().ok_or("NATIVE_TASK_PROTOCOL_INVALID")?{outgoing[k]=v.clone();}send(&outgoing)?;
+  let reply=read(&mut *reader.borrow_mut())?;let mut expected=base.clone();expected["kind"]=json!(expected_kind);for(k,v)in expected_fields.as_object().ok_or("NATIVE_TASK_PROTOCOL_INVALID")?{expected[k]=v.clone();}
+  if expected_kind=="NATIVE_TASK_OUTPUT_RETAINED"{let digest=reply["artifactDigest"].as_str().filter(|s|digest(s)).ok_or("NATIVE_TASK_RETAINED_ACK_INVALID")?;expected["artifactDigest"]=json!(digest);}
+  if reply!=expected{return Err("NATIVE_TASK_PROTOCOL_BINDING");}Ok(reply)
+ };
+ let outcome=crate::native_retained_execution::execute(&native,&AtomicBool::new(false),||{exchange("NATIVE_TASK_GUARD_READY",json!({}),"NATIVE_TASK_CANDIDATE_CONFIRMED",json!({}))?;Ok(())},|artifact|{
+  exchange("NATIVE_TASK_INPUTS_READY",json!({"path":artifact.path,"bytes":artifact.bytes,"retainedInputsDigest":artifact.digest}),"NATIVE_TASK_INPUTS_RETAINED",json!({"retainedInputsDigest":artifact.digest}))?;Ok(artifact.digest.clone())
+ },|run,inputs_digest|{
+  let stdout=String::from_utf8(run.stdout.clone()).map_err(|_|"NATIVE_TASK_OUTPUT_ENCODING_INVALID")?;let stderr=String::from_utf8(run.stderr.clone()).map_err(|_|"NATIVE_TASK_OUTPUT_ENCODING_INVALID")?;
+  let observation=json!({"schemaVersion":2,"kind":"NATIVE_TASK_OBSERVATION","runId":spec.run_id,"exitCode":run.settlement.exit_code,"timedOut":run.timed_out,"cancelObserved":run.cancel_observed,"outputTruncated":run.output_truncated,"cpuTimeExceeded":run.cpu_time_exceeded,"cpuObservationFailed":run.cpu_observation_failed,"descendantsSettled":run.settlement.descendants_settled,"processExited":run.settlement.process_exited,"jobEmptyObserved":run.settlement.job_empty_observed,"ioSettled":run.io_settled,"ioFailed":run.io_failed,"stdout":stdout,"stderr":stderr});
+  let reply=exchange("NATIVE_TASK_OBSERVATION_READY",json!({"observation":observation,"retainedInputsDigest":inputs_digest}),"NATIVE_TASK_OUTPUT_RETAINED",json!({"retainedInputsDigest":inputs_digest}))?;Ok(reply["artifactDigest"].as_str().ok_or("NATIVE_TASK_RETAINED_ACK_INVALID")?.into())
+ })?;
+ let mut finalization=base;finalization["kind"]=json!("NATIVE_TASK_GUARD_FINALIZED");finalization["artifactDigest"]=json!(outcome.result_artifact_digest);finalization["retainedInputsDigest"]=json!(outcome.input_artifact_digest);send(&finalization)?;
+ let mut extra=[0u8;1];if reader.borrow_mut().read(&mut extra).map_err(|_|"NATIVE_TASK_PROTOCOL_IO")?!=0{return Err("NATIVE_TASK_PROTOCOL_EXTRA");}Ok(())
 }
 pub(crate) fn execute(value:&Value,environment:&[(&str,&str)],cancel:&AtomicBool)->Result<Value,&'static str>{
     execute_until(value,environment,cancel,None)

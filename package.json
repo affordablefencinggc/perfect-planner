@@ -20,6 +20,7 @@
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
     "test:native": "cargo test --manifest-path src-tauri/Cargo.toml",
+    "test:retained-native": "node --test tests/native-retained-connection.integration.mjs",
     "preview": "vite preview",
     "test:sites": "node --test tests/sites-worker.test.mjs",
     "test:mcp": "node --test tests/perfect-planner-mcp.test.mjs",

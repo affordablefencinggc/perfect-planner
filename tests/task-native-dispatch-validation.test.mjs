@@ -1,8 +1,20 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createTaskNativeDispatch,parseNativeTaskObservation,nativeTaskSettlementObserved} from '../src/node/taskNativeDispatch.mjs';
+import {createTaskNativeDispatch,createRetainedTaskNativeDispatch,parseNativeTaskObservation,nativeTaskSettlementObserved} from '../src/node/taskNativeDispatch.mjs';
 const admitted=()=>({firstIntent:true,intentReceipt:{runId:'run-fixture',recordDigest:'a'.repeat(64)},executionSpec:{runId:'run-fixture',intentDigest:'a'.repeat(64),outputLimits:{stdoutBytes:10,stderrBytes:10,combinedBytes:15}},consumptionReceipt:{expiresAt:new Date(Date.now()+60000).toISOString()}});
 const result=()=>({schemaVersion:1,kind:'NATIVE_TASK_OBSERVATION',runId:'run-fixture',exitCode:0,timedOut:false,cancelObserved:false,outputTruncated:false,cpuTimeExceeded:false,cpuObservationFailed:false,processExited:true,jobEmptyObserved:true,ioSettled:true,ioFailed:false,stdout:'ok',stderr:''});
+test('retained dispatch exposes only retained writers and refuses a legacy finalization',async()=>{
+ for(const legacy of [false,true]){
+  const intent=admitted(),seen=[];
+  const nativeCustody={retainCandidate:async()=>{},retainProvisional:async()=>{throw Error('legacy writer invoked');},retainInputs:async input=>{seen.push(input.artifactDigest);},retainIsolatedProvisional:async input=>{seen.push(input.retainedInputsDigest);},finalize:async()=>{seen.push('finalized');return {};}};
+  const dispatch=createRetainedTaskNativeDispatch({review:{recordAssignedExecutionIntent:async()=>intent,inspectOwnGrantReceipt:async()=>intent},nativeCustody,executeNative:async(spec,callbacks)=>{
+   assert.equal(Object.hasOwn(callbacks,'retainProvisional'),false);await callbacks.retainInputs(Buffer.from('fixture'),'b'.repeat(64));await callbacks.retainIsolatedProvisional(result(),'c'.repeat(64),'b'.repeat(64));
+   return {observation:result(),finalization:legacy?{schemaVersion:2}:{schemaVersion:3,retainedInputsDigest:'b'.repeat(64)}};
+  }});
+  if(legacy)await assert.rejects(dispatch.dispatch({}),/NATIVE_TASK_DISPATCH_UNRESOLVED/);else await dispatch.dispatch({});
+  assert.deepEqual(seen,legacy?['b'.repeat(64),'b'.repeat(64)]:['b'.repeat(64),'b'.repeat(64),'finalized']);
+ }
+});
 // These are host-boundary validation tests, not native process execution proof.
 test('missing candidate retention capability is refused before admission',()=>{
  let admittedCalls=0;

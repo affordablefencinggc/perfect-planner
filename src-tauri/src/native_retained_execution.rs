@@ -5,7 +5,7 @@
 use crate::{native_app_container::AppContainer,native_candidate_archive::{ArchiveBinding,RetainedInputs},native_candidate_guard::CandidateGuard,native_host_resources::{pin_directory_names,pin_task_files},native_task_containment::{CapturedRun,run_captured_isolated_after_retention}};
 use serde_json::json;
 use sha2::{Digest,Sha256};
-use std::{ffi::OsStr,fs::{self,File,OpenOptions},io::{Read,Write,Seek},os::windows::fs::OpenOptionsExt,path::{Path,PathBuf},sync::atomic::{AtomicBool,Ordering},time::{Duration,SystemTime,UNIX_EPOCH}};
+use std::{ffi::OsStr,fs::{self,File,OpenOptions},io::{Read,Write,Seek},os::windows::fs::OpenOptionsExt,path::{Path,PathBuf},sync::atomic::{AtomicBool,Ordering},time::{Duration,Instant,SystemTime,UNIX_EPOCH}};
 type Result<T>=std::result::Result<T,&'static str>;
 const INVALID:&str="NATIVE_RETAINED_EXECUTION_INVALID";
 const UNRESOLVED:&str="NATIVE_RETAINED_EXECUTION_UNRESOLVED";
@@ -120,8 +120,12 @@ pub(crate) fn execute(spec:&NodeSpec,cancel:&AtomicBool,mut confirm_candidate:im
  if owner_canonical.starts_with(&source_canonical)||source_canonical.starts_with(&owner_canonical){return Err(INVALID);}
  let original_pins=pin_task_files(&spec.node,&spec.node_digest,&spec.source,&spec.source)?;let source_guard=CandidateGuard::acquire(&spec.source,cancel)?;
  confirm_candidate()?;source_guard.validate()?;available(spec,cancel)?;
+ // One remaining retention budget includes the admitted task time. Archive
+ // creation and every later validation share it; callbacks never renew it.
+ // The outer contained transport remains the hard wall-clock backstop.
+ let retention_deadline=Instant::now()+spec.timeout+Duration::from_secs(120);
  let name=format!("perfect-planner.execution.{}-{}",std::process::id(),SystemTime::now().duration_since(UNIX_EPOCH).map_err(|_|INVALID)?.as_nanos());let profile=AppContainer::create_fresh(&name).map_err(|_|UNRESOLVED)?;
- let archive=RetainedInputs::create(&spec.source,&profile,spec.binding.clone(),cancel)?;let cwd=archive.member(&spec.cwd,true)?;let script=archive.member(&spec.script,false)?;
+ let archive=RetainedInputs::create_until(&spec.source,&profile,spec.binding.clone(),cancel,retention_deadline)?;let cwd=archive.member(&spec.cwd,true)?;let script=archive.member(&spec.script,false)?;
  let runtime=profile.create_readonly_directory("runtime").map_err(|_|UNRESOLVED)?;let runtime_pins=pin_directory_names(&runtime)?;let node=runtime.join("node.exe");
  let mut original=OpenOptions::new().read(true).share_mode(1).custom_flags(0x00200000).open(&spec.node).map_err(|_|UNRESOLVED)?;
  let mut destination=OpenOptions::new().write(true).create_new(true).share_mode(0).custom_flags(0x00200000).open(&node).map_err(|_|UNRESOLVED)?;

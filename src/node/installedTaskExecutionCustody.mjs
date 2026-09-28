@@ -7,8 +7,8 @@ import {createTaskNativeObservationStore} from './taskNativeObservationStore.mjs
 import {createTaskNativeResultCustody} from './taskNativeResultCustody.mjs';
 import {createTaskNativeOwnerResultReads} from './taskNativeOwnerResultReads.mjs';
 import {createTaskProposalReview} from './taskProposalReview.mjs';
-import {createTaskNativeDispatch,nativeTaskSettlementObserved} from './taskNativeDispatch.mjs';
-import {createNativeTaskExecutionAdapter} from './nativeTaskExecutionAdapter.mjs';
+import {createTaskNativeDispatch,createRetainedTaskNativeDispatch,nativeTaskSettlementObserved} from './taskNativeDispatch.mjs';
+import {createNativeTaskExecutionAdapter,createRetainedNativeTaskExecutionAdapter} from './nativeTaskExecutionAdapter.mjs';
 import {createSession,heartbeatSession,releaseSession,inspectReleasedSession} from './sessionRegistry.mjs';
 import {createTaskEnrollmentStore} from './taskEnrollmentStore.mjs';
 import {candidateSnapshot} from './mergedStateRunner.mjs';
@@ -29,7 +29,14 @@ export function createInstalledTaskExecutionCustody({stateDirectory,binding,obse
   const enrollmentConfig={journalPath:path.join(stateDirectory,`${binding.projectId}.execution-enrollments.jsonl`),projectId:binding.projectId,rootIdentity:binding.rootIdentity};
   const review=createTaskProposalReview({proposalConfig,confirmationPath,checkContract,contractCustody,preflightConfig:{registeredRoot,sessionRegistryPath,enrollmentConfig,grantConfig}});
   const options={secretCustody:secretCustody?{...secretCustody}:undefined};
-  const dispatch=createTaskNativeDispatch({review,executeNative:createNativeTaskExecutionAdapter(nativeConfig),nativeCustody:custody});
+  // This private installation setting is captured once. Request data cannot
+  // switch retention modes, and unsupported retained invocations never fall back.
+  const mode=nativeConfig.executionMode??'legacy';
+  if(!['legacy','retained-node'].includes(mode))throw Error('INSTALLED_EXECUTION_CONFIG_INVALID');
+  const isolated=mode==='retained-node';
+  const adapter=isolated?createRetainedNativeTaskExecutionAdapter:createNativeTaskExecutionAdapter;
+  const dispatcher=isolated?createRetainedTaskNativeDispatch:createTaskNativeDispatch;
+  const dispatch=dispatcher({review,executeNative:adapter({...nativeConfig,rootIdentity:binding.rootIdentity}),nativeCustody:custody});
   let closed=false,cleanupUncertain=false;const pending=new Set();
   async function current(){if(closed)throw Error('INSTALLED_EXECUTION_CLOSED');const observed=await observeBinding();if(closed)throw Error('INSTALLED_EXECUTION_CLOSED');if(['projectId','rootIdentity','censusDigest'].some(k=>observed?.[k]!==binding[k]))throw Error('INSTALLED_EXECUTION_BINDING_CHANGED');}
   async function prepareResults(){

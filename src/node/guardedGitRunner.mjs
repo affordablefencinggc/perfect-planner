@@ -113,7 +113,13 @@ export function runBoundedTaskConversation(command,args,options,onFrame){
  if(typeof onFrame!=='function')refuse('invalid-command-conversation');
  return boundedProcess(command,args,options,555_000,13*1024*1024,onFrame);
 }
-function boundedProcess(command, args, { cwd, env = process.env, timeoutMs = 10_000, maxBytes = 65_536, input = "", signal: abortSignal } = {}, timeoutLimit,outputLimit,onFrame) {
+// Retained-input execution adds one acknowledged artifact frame. Its payload
+// stays out of stdout; neither output nor reply-byte allowances are increased.
+export function runBoundedRetainedTaskConversation(command,args,options,onFrame){
+ if(typeof onFrame!=='function')refuse('invalid-command-conversation');
+ return boundedProcess(command,args,options,555_000,13*1024*1024,onFrame,4);
+}
+function boundedProcess(command, args, { cwd, env = process.env, timeoutMs = 10_000, maxBytes = 65_536, input = "", signal: abortSignal } = {}, timeoutLimit,outputLimit,onFrame,frameLimit=3) {
   if(abortSignal!==undefined&&!(abortSignal instanceof AbortSignal))refuse('invalid-command-signal');
   if(abortSignal?.aborted)return Promise.resolve({exit:null,signal:null,stdout:'',stderr:'',reason:'git-cancelled',timedOut:false,outputBytes:0,outputComplete:false,cleanupComplete:true});
   if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > timeoutLimit || !Number.isInteger(maxBytes) || maxBytes < 1 || maxBytes > outputLimit) refuse("invalid-command-bounds");
@@ -138,7 +144,7 @@ function boundedProcess(command, args, { cwd, env = process.env, timeoutMs = 10_
       finished = true;
       clearTimeout(timer); clearTimeout(fallback);
       abortSignal?.removeEventListener('abort',onAbort);
-      if(onFrame&&(frameBuffer.length||frameCount!==3||!conversationEnded))reason??='native-conversation-incomplete';
+      if(onFrame&&(frameBuffer.length||frameCount!==frameLimit||!conversationEnded))reason??='native-conversation-incomplete';
       conversationAbort.abort();
       // Never report settlement while a retention write is still in flight.
       exchange.finally(()=>resolve({ exit: reason ? null : exit, signal, stdout: Buffer.concat(stdout).toString("utf8"), stderr: Buffer.concat(stderr).toString("utf8"), reason, timedOut: reason === "git-time-limit", outputBytes: bytes, outputComplete: !reason, cleanupComplete:cleanupComplete&&callbackCleanupComplete }));
@@ -164,7 +170,7 @@ function boundedProcess(command, args, { cwd, env = process.env, timeoutMs = 10_
       frameBuffer=Buffer.concat([frameBuffer,chunk]);
       const newline=frameBuffer.indexOf(10);if(newline<0)return;
       // Native must wait for our reply. Pipelined/extra frames are not allowed.
-      if(awaitingReply||conversationEnded||frameCount>=3||newline!==frameBuffer.length-1){stop('native-conversation-order');return;}
+      if(awaitingReply||conversationEnded||frameCount>=frameLimit||newline!==frameBuffer.length-1){stop('native-conversation-order');return;}
       const frame=frameBuffer.subarray(0,newline);frameBuffer=Buffer.alloc(0);frameCount++;awaitingReply=true;
       exchange=exchange.then(async()=>{
         if(reason||finished)return;

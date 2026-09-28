@@ -25,10 +25,13 @@ export function nativeTaskSettlementObserved(value){
   return value?.schemaVersion===2&&value.processExited===true&&value.jobEmptyObserved===true
     &&value.descendantsSettled===true&&value.ioSettled===true&&value.ioFailed!==true;
 }
-export function createTaskNativeDispatch({review,executeNative,recordObservation,nativeCustody}){
+export function createTaskNativeDispatch(config){return createDispatch(config,false);}
+export function createRetainedTaskNativeDispatch(config){return createDispatch(config,true);}
+function createDispatch({review,executeNative,recordObservation,nativeCustody},isolated){
   if(typeof review?.recordAssignedExecutionIntent!=='function'||typeof review?.inspectOwnGrantReceipt!=='function'||typeof executeNative!=='function')throw Error('NATIVE_TASK_DISPATCH_CONFIG_INVALID');
   if(recordObservation!==undefined&&typeof recordObservation!=='function')throw Error('NATIVE_TASK_DISPATCH_CONFIG_INVALID');
   if(nativeCustody&&(typeof nativeCustody.retainCandidate!=='function'||typeof nativeCustody.retainProvisional!=='function'||typeof nativeCustody.finalize!=='function'))throw Error('NATIVE_TASK_DISPATCH_CONFIG_INVALID');
+  if(isolated&&(!nativeCustody||typeof nativeCustody.retainInputs!=='function'||typeof nativeCustody.retainIsolatedProvisional!=='function'))throw Error('NATIVE_TASK_DISPATCH_CONFIG_INVALID');
   const record=review.recordAssignedExecutionIntent.bind(review),inspect=review.inspectOwnGrantReceipt.bind(review),execute=executeNative;
   const pending=new Map();
   async function perform({expected,confirmationId,enrollmentHead,input,consumptionReceipt,request},sessionOptions={},captureOptions={}){
@@ -44,9 +47,13 @@ export function createTaskNativeDispatch({review,executeNative,recordObservation
       try{
         const value=await execute(spec,{signal,expiresAt:admitted.consumptionReceipt.expiresAt,...(nativeCustody?{
           retainCandidate:manifest=>nativeCustody.retainCandidate({intentReceipt:intent,executionSpec:spec,manifest}),
-          retainProvisional:(observation,candidateManifestDigest)=>nativeCustody.retainProvisional({intentReceipt:intent,executionSpec:spec,observation,candidateManifestDigest})
+          ...(isolated?{
+           retainInputs:(artifactBytes,artifactDigest)=>nativeCustody.retainInputs({intentReceipt:intent,executionSpec:spec,artifactBytes,artifactDigest}),
+           retainIsolatedProvisional:(observation,candidateManifestDigest,retainedInputsDigest)=>nativeCustody.retainIsolatedProvisional({intentReceipt:intent,executionSpec:spec,observation,candidateManifestDigest,retainedInputsDigest})
+          }:{retainProvisional:(observation,candidateManifestDigest)=>nativeCustody.retainProvisional({intentReceipt:intent,executionSpec:spec,observation,candidateManifestDigest})})
         }:{})});
-        const result=parseNativeTaskObservation(nativeCustody?value.observation:value,spec);
+          const result=parseNativeTaskObservation(nativeCustody?value.observation:value,spec);
+          if(isolated&&(value.finalization?.schemaVersion!==3||!(/^[a-f0-9]{64}$/).test(value.finalization?.retainedInputsDigest??'')))fail('NATIVE_TASK_ISOLATED_FINALIZATION_REQUIRED',intent);
         const stored=nativeCustody?await nativeCustody.finalize({intentReceipt:intent,finalization:value.finalization}):recordObservation?await recordObservation({intentReceipt:intent,executionSpec:spec,observation:result}):null;
         return freeze({intentReceipt:intent,dispatchObserved:true,state:'result-unverified',observation:result,observationReceipt:stored,executionAuthorized:false});
       }catch(error){
