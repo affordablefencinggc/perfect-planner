@@ -98,6 +98,29 @@ test('installed owner composes reviewed enrollment, grant, native run and owner 
  await owner.releaseWorker(credentials);await assert.rejects(owner.inspectOriginal({...input,grantId:issued.grant.grantId}),/authentication refused/);
  assert.equal((await owner.shutdown()).cleanupComplete,true);assert.throws(()=>owner.createWorker('after close'),/CLOSED/);
 });
+
+test('actual native output with a mismatched retention binding preserves unresolved intent without relaunch',{skip:!enabled||!process.env.PP_NATIVE_TASK_HOST},async()=>{
+ for(const key of ['candidateDigest','checkContractDigest']){
+  const f=await fixture('pass');let captured;
+  const dispatch=createTaskNativeDispatch({review:f.review,executeNative:f.executeNative,recordObservation:async input=>{
+   captured=structuredClone(input);
+   return f.recordObservation({...input,executionSpec:{...input.executionSpec,[key]:'f'.repeat(64)}});
+  }});
+  await assert.rejects(dispatch.dispatch(f.args),error=>error.message==='NATIVE_TASK_DISPATCH_UNRESOLVED'&&error.cause?.message==='NATIVE_TASK_OBSERVATION_CUSTODY_UNRESOLVED');
+  assert.equal(f.launches(),1);assert.equal(captured.observation.exitCode,0);
+  await assert.rejects(lstat(path.join(f.composition.root,'observations',captured.intentReceipt.runId+'.json')),{code:'ENOENT'});
+  const before=await readFile(path.join(f.composition.root,'grant.jsonl'));
+  const state=await f.grants.inspect();assert.equal(state.revision,3);assert.equal(state.history.some(row=>row.event==='result-recorded'),false);
+  const replay=await dispatch.dispatch(f.args);assert.equal(replay.dispatchObserved,false);assert.equal(replay.state,'original-intent-retained');assert.equal(f.launches(),1);
+  assert.deepEqual(await readFile(path.join(f.composition.root,'grant.jsonl')),before);
+  // Explicitly retain the authentic in-memory control observation; never rerun
+  // the native process to repair missing custody or forge completion authority.
+  await f.recordObservation(captured);
+  const reopened=createTaskNativeObservationStore({directory:path.join(f.composition.root,'observations'),projectId:f.composition.binding.projectId,rootIdentity:f.composition.binding.rootIdentity});
+  const saved=await reopened.inspect(captured.intentReceipt);assert.equal(saved.observation.exitCode,0);assert.equal(saved.receipt.state,'result-unverified');assert.equal(saved.receipt.executionAuthorized,false);
+  assert.equal((await f.grants.inspect()).revision,4);assert.equal(f.launches(),1);
+ }
+});
 test('durable installed execution request retains failed native result without retrying the run',{skip:!enabled||!process.env.PP_NATIVE_TASK_HOST},async()=>{
  const f=await fixture('fail'),c=f.composition,stateDirectory=path.join(c.root,'request-state');await mkdir(stateDirectory);
  const custody=createInstalledTaskExecutionCustody({stateDirectory,binding:c.binding,observeBinding:async()=>c.binding});
