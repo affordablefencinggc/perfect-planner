@@ -1,17 +1,49 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,readFile,writeFile,open,link,symlink} from 'node:fs/promises';
+import {mkdtemp,readFile,writeFile,open,link,symlink,access} from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
+import {createHash} from 'node:crypto';
 import {createTaskNativeObservationStore} from '../src/node/taskNativeObservationStore.mjs';
 async function fixture(){
  const directory=await mkdtemp(path.join(os.tmpdir(),'pp-native-observation-'));
  const config={directory,projectId:'pp_observation',rootIdentity:'a'.repeat(64)};
- const intentReceipt={schemaVersion:1,kind:'TASK_EXECUTION_INTENT_RECEIPT',projectId:config.projectId,rootIdentity:config.rootIdentity,runId:'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',recordDigest:'b'.repeat(64),consumptionDigest:'c'.repeat(64),binding:{taskId:'T0001'},state:'launch-unresolved',executionAuthorized:false};
- const executionSpec={runId:intentReceipt.runId,intentDigest:intentReceipt.recordDigest,outputLimits:{stdoutBytes:1000,stderrBytes:1000,combinedBytes:1500}};
+ const intentReceipt={schemaVersion:1,kind:'TASK_EXECUTION_INTENT_RECEIPT',projectId:config.projectId,rootIdentity:config.rootIdentity,runId:'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',recordDigest:'b'.repeat(64),consumptionDigest:'c'.repeat(64),binding:{taskId:'T0001',candidateDigest:'d'.repeat(64),checkContractDigest:'e'.repeat(64)},state:'launch-unresolved',executionAuthorized:false};
+ const executionSpec={runId:intentReceipt.runId,intentDigest:intentReceipt.recordDigest,candidateDigest:intentReceipt.binding.candidateDigest,checkContractDigest:intentReceipt.binding.checkContractDigest,outputLimits:{stdoutBytes:1000,stderrBytes:1000,combinedBytes:1500}};
  const observation={schemaVersion:1,kind:'NATIVE_TASK_OBSERVATION',runId:intentReceipt.runId,exitCode:7,timedOut:false,cancelObserved:false,outputTruncated:false,cpuTimeExceeded:false,cpuObservationFailed:false,processExited:true,jobEmptyObserved:true,ioSettled:true,ioFailed:false,stdout:'retained output',stderr:'failure'};
  return {config,store:createTaskNativeObservationStore(config),input:{intentReceipt,executionSpec,observation},file:path.join(directory,intentReceipt.runId+'.json')};
 }
+test('candidate and check-contract mismatch cannot create a retained result',async()=>{
+ for(const key of ['candidateDigest','checkContractDigest']){
+  for(const mode of ['different','missing','malformed']){
+   const f=await fixture();
+   if(mode==='missing')delete f.input.executionSpec[key];else f.input.executionSpec[key]=mode==='different'?'f'.repeat(64):'not-a-digest';
+   await assert.rejects(f.store.record(f.input),/NATIVE_TASK_OBSERVATION_CUSTODY_UNRESOLVED/);
+   await assert.rejects(access(f.file),{code:'ENOENT'});
+  }
+ }
+});
+
+test('invalid admitted binding refuses retention even when the supplied spec matches',async()=>{
+ for(const key of ['candidateDigest','checkContractDigest']){
+  const f=await fixture();f.input.intentReceipt.binding[key]='invalid';f.input.executionSpec[key]='invalid';
+  await assert.rejects(f.store.record(f.input),/NATIVE_TASK_OBSERVATION_CUSTODY_UNRESOLVED/);
+  await assert.rejects(access(f.file),{code:'ENOENT'});
+ }
+});
+
+test('legacy observations remain readable without rewriting or promoting trust',async()=>{
+ const f=await fixture();delete f.input.intentReceipt.binding.candidateDigest;delete f.input.intentReceipt.binding.checkContractDigest;
+ delete f.input.executionSpec.candidateDigest;delete f.input.executionSpec.checkContractDigest;
+ const canonical=v=>Array.isArray(v)?v.map(canonical):v&&typeof v==='object'?Object.fromEntries(Object.keys(v).sort().map(k=>[k,canonical(v[k])])):v;
+ const wire=v=>JSON.stringify(canonical(v)),hash=v=>createHash('sha256').update(v).digest('hex');
+ const body={schemaVersion:1,kind:'NATIVE_TASK_RETAINED_OBSERVATION',intentReceipt:f.input.intentReceipt,executionSpecDigest:hash(wire(f.input.executionSpec)),outputLimits:f.input.executionSpec.outputLimits,observation:f.input.observation};
+ const bytes=Buffer.from(wire({...body,recordDigest:hash(wire(body))})+'\n');await writeFile(f.file,bytes);
+ const reopened=await f.store.inspect(f.input.intentReceipt);
+ assert.deepEqual(reopened.observation,f.input.observation);assert.equal(reopened.receipt.state,'result-unverified');assert.equal(reopened.receipt.executionAuthorized,false);
+ await assert.rejects(f.store.record(f.input),/NATIVE_TASK_OBSERVATION_CUSTODY_UNRESOLVED/);
+ assert.deepEqual(await readFile(f.file),bytes);
+});
 test('concurrent identical observation writes and reopened inspection retain one identity',async()=>{
  const f=await fixture(),[a,b]=await Promise.all([f.store.record(f.input),f.store.record(f.input)]);assert.deepEqual(a,b);
  const reopened=createTaskNativeObservationStore(f.config),r=await reopened.inspect(f.input.intentReceipt);assert.deepEqual(r.receipt,a);assert.deepEqual(r.observation,f.input.observation);assert.equal(r.receipt.state,'result-unverified');assert.equal(r.receipt.executionAuthorized,false);

@@ -17,7 +17,7 @@ async function fixture(){
  const consumed=await c.grants.consume(bound,{grantId,requestId:'consume',expectedRevision:1});
  const intent=(await c.grants.recordExecutionIntent(consumed.consumptionReceipt,{grantId,requestId:'intent',expectedRevision:2})).intentReceipt;
  const observation={schemaVersion:1,kind:'NATIVE_TASK_OBSERVATION',runId:intent.runId,exitCode:7,timedOut:false,cancelObserved:false,outputTruncated:false,cpuTimeExceeded:false,cpuObservationFailed:false,processExited:true,jobEmptyObserved:true,ioSettled:true,ioFailed:false,stdout:'PRIVATE OUTPUT',stderr:'PRIVATE FAILURE'};
- await c.custody.record({intentReceipt:intent,executionSpec:{runId:intent.runId,intentDigest:intent.recordDigest,outputLimits:{stdoutBytes:100,stderrBytes:100,combinedBytes:200}},observation});
+ await c.custody.record({intentReceipt:intent,executionSpec:{runId:intent.runId,intentDigest:intent.recordDigest,candidateDigest:intent.binding.candidateDigest,checkContractDigest:intent.binding.checkContractDigest,outputLimits:{stdoutBytes:100,stderrBytes:100,combinedBytes:200}},observation});
  const config={proposalConfig:{journalPath:path.join(root,'proposals.jsonl'),projectId:binding.projectId,rootIdentity:binding.rootIdentity},confirmationPath:path.join(root,'confirmations.json'),registeredBinding:observeBinding,actor:'Owner',source:'controlled-owner-host',presenterConfig:{executable:path.join(root,'not-launched.exe'),executableDigest:'e'.repeat(64),cwd:root},taskResults:c.results};
  return {root,binding,observeBinding,c,grantId,config,rebind:()=>{current={...binding,rootIdentity:'f'.repeat(64)};}};
 }
@@ -82,7 +82,7 @@ test('owner page reads 20 real retained outcomes with two journal inspections an
   const {grant}=await f.c.grants.issue(b,{requestId:`issue-${i}`,expectedRevision:revision,ttlMs:300000});
   const consumed=await f.c.grants.consume(b,{grantId:grant.grantId,requestId:`consume-${i}`,expectedRevision:revision+1});
   const {intentReceipt:intent}=await f.c.grants.recordExecutionIntent(consumed.consumptionReceipt,{grantId:grant.grantId,requestId:`intent-${i}`,expectedRevision:revision+2});
-  await f.c.custody.record({intentReceipt:intent,executionSpec:{runId:intent.runId,intentDigest:intent.recordDigest,outputLimits:{stdoutBytes:100,stderrBytes:100,combinedBytes:200}},observation:{...original.observation,runId:intent.runId,exitCode:i%2?0:7}});
+  await f.c.custody.record({intentReceipt:intent,executionSpec:{runId:intent.runId,intentDigest:intent.recordDigest,candidateDigest:intent.binding.candidateDigest,checkContractDigest:intent.binding.checkContractDigest,outputLimits:{stdoutBytes:100,stderrBytes:100,combinedBytes:200}},observation:{...original.observation,runId:intent.runId,exitCode:i%2?0:7}});
  }
  let inspections=0,artifacts=0;
  const reader=createTaskNativeOwnerResultReads({grants:{inspect:async()=>{inspections++;return f.c.grants.inspect();}},observations:{inspect:async intent=>{artifacts++;return f.c.observations.inspect(intent);}},binding:f.binding,observeBinding:f.observeBinding});
@@ -139,3 +139,4 @@ test('owner page protocol refuses summaries from another reference or arbitrary 
   assert.equal(reply.ok,false);assert.equal(reply.error.code,'NATIVE_TASK_RESULT_UNAVAILABLE');await host.shutdown();
  }
 });
+

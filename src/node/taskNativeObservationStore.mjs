@@ -44,6 +44,11 @@ export function createTaskNativeObservationStore({directory,projectId,rootIdenti
   async record({intentReceipt,executionSpec,observation}){
    const original=intent(structuredClone(intentReceipt)),spec=structuredClone(executionSpec);
    if(!spec||spec.runId!==original.runId||spec.intentDigest!==original.recordDigest)fail();
+   // Bind the handoff to the admitted candidate and required checks before any
+   // filesystem mutation. Historical inspection remains observational only.
+   for(const key of ['candidateDigest','checkContractDigest']){
+    if(!hex(original.binding[key])||!hex(spec[key])||spec[key]!==original.binding[key])fail();
+   }
    const outputLimits=limits(spec.outputLimits),result=parseNativeTaskObservation(structuredClone(observation),spec);
    const body={schemaVersion:1,kind:'NATIVE_TASK_RETAINED_OBSERVATION',intentReceipt:original,executionSpecDigest:hash(wire(spec)),outputLimits,observation:result};
    const record={...body,recordDigest:hash(wire(body))};
