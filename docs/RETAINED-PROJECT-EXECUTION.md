@@ -104,3 +104,13 @@ as a Vitest assertion failure. Process, Job, descendants and output streams
 settled, and immutable-input/runtime validation both returned `Ok(())`.
 The qualification test remains failing. No CPU limit was raised. Next diagnose
 which process/startup stage consumes CPU before deciding a compatibility fix.
+
+Attempt 210 identifies the observed Vitest Node process (PID15456, matched to
+its saved live command) as using119.75 CPU seconds, including107.078125 kernel
+seconds. The npm Node process used0.21875 CPU seconds. These counters identify
+where to investigate; they do not prove which function or system call is at fault.
+The job again reached120 CPU seconds without a test summary. Captured process
+usage includes only observed members. executionElapsedMs includes termination
+and output draining, not just time running project code. The CPU fixture209
+validated the new reporting after208 exposed unavailable post-exit image names;
+image basenames are now captured when the held process is first observed.

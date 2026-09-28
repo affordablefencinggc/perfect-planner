@@ -36,6 +36,7 @@ struct Startup { cb:u32, reserved:*mut u16, desktop:*mut u16, title:*mut u16,
     fn CloseHandle(handle:Handle)->i32;
     fn OpenProcess(access:u32,inherit:i32,pid:u32)->Handle;
     fn GetProcessTimes(process:Handle,created:*mut u64,exited:*mut u64,kernel:*mut u64,user:*mut u64)->i32;
+    fn QueryFullProcessImageNameW(process:Handle,flags:u32,name:*mut u16,size:*mut u32)->i32;
     fn InitializeProcThreadAttributeList(list:*mut c_void,count:u32,flags:u32,size:*mut usize)->i32;
     fn UpdateProcThreadAttribute(list:*mut c_void,flags:u32,attribute:usize,value:*mut c_void,
         size:usize,previous:*mut c_void,returned:*mut usize)->i32;
@@ -105,7 +106,7 @@ fn quoted(value:&OsStr)->io::Result<Vec<u16>> {
 // Owned by one host run, never serializable or constructible by a renderer request.
 pub(crate) struct SuspendedTask {
     job:Owned, process:Owned, thread:Owned, resumed:bool,
-    members:RefCell<HashMap<(u32,u64),Owned>>, membership_observed:Cell<bool>,
+    members:RefCell<HashMap<(u32,u64),Owned>>, member_images:RefCell<HashMap<(u32,u64),Option<String>>>, membership_observed:Cell<bool>,
 }
 impl SuspendedTask {
     pub(crate) fn create(executable:&Path,args:&[&OsStr],cwd:&Path,
@@ -157,7 +158,7 @@ impl SuspendedTask {
                 return Err(io::Error::last_os_error());
             }
             let result=Self{job,process:Owned(info.process),thread:Owned(info.thread),resumed:false,
-                members:RefCell::new(HashMap::new()),membership_observed:Cell::new(true)};
+                members:RefCell::new(HashMap::new()),member_images:RefCell::new(HashMap::new()),membership_observed:Cell::new(true)};
             let mut inside=0;
             if IsProcessInJob(result.process.0,result.job.0,&mut inside)==0 || inside!=1 {
                 return Err(io::Error::new(io::ErrorKind::Other,"containment observation failed"));
@@ -192,6 +193,16 @@ impl SuspendedTask {
             size_of::<Accounting>()as u32,null_mut())==0 {None} else {Some(a)}
     }}
     fn active(&self)->Option<u32> {self.accounting().map(|value|value.active)}
+    fn process_usage(&self)->Vec<ProcessUsage> {unsafe {
+        let mut result=Vec::new();
+        for (&(pid,created),handle) in self.members.borrow().iter(){
+            let(mut observed_created,mut exited,mut kernel,mut user)=(0u64,0u64,0u64,0u64);
+            let times=GetProcessTimes(handle.0,&mut observed_created,&mut exited,&mut kernel,&mut user)!=0&&observed_created==created;
+            let image=self.member_images.borrow().get(&(pid,created)).cloned().flatten();
+            result.push(ProcessUsage{pid,created,image,kernel_ticks:times.then_some(kernel),user_ticks:times.then_some(user)});
+        }
+        result.sort_by_key(|p|(p.pid,p.created));result
+    }}
     // Hold a handle to every observed member. PID reuse cannot satisfy an old
     // member because each handle is keyed by its process creation time.
     // A process that exits between inventory and OpenProcess is uncertainty,
@@ -221,6 +232,11 @@ impl SuspendedTask {
             let mut members=self.members.borrow_mut();
             if !members.contains_key(&(pid,created)) {
                 if members.len()>=4096{self.membership_observed.set(false);continue;}
+            let mut name=vec![0u16;32768];let mut length=name.len() as u32;
+            let image=if QueryFullProcessImageNameW(handle.0,0,name.as_mut_ptr(),&mut length)!=0&&(length as usize)<name.len(){
+                String::from_utf16(&name[..length as usize]).ok().and_then(|s|Path::new(&s).file_name().map(|n|n.to_string_lossy().into_owned()))
+            }else{None};
+                self.member_images.borrow_mut().insert((pid,created),image);
                 members.insert((pid,created),handle);
             }
         }
@@ -283,11 +299,14 @@ impl Capture {
         Ok(accepted<read as usize)
     }}
 }
+#[derive(Debug,serde::Serialize)]
+pub(crate) struct ProcessUsage{pub pid:u32,pub created:u64,pub image:Option<String>,pub kernel_ticks:Option<u64>,pub user_ticks:Option<u64>}
 #[derive(Debug)] pub(crate) struct CapturedRun {
     pub stdout:Vec<u8>,pub stderr:Vec<u8>,pub stdout_observed:u64,pub stderr_observed:u64,
     pub timed_out:bool,pub output_truncated:bool,pub io_settled:bool,pub io_failed:bool,
     pub cancel_observed:bool,pub cpu_time_exceeded:bool,pub cpu_observation_failed:bool,
     pub cpu_ticks_observed:Option<u64>,
+    pub process_usage:Vec<ProcessUsage>,pub execution_elapsed_ms:u128,
     pub settlement:Settlement,
 }
 // Host-only runner. Not an admission API, and still no full cleanup or success certificate.
@@ -389,7 +408,8 @@ fn capture_prepared(mut child:SuspendedTask,mut stdout:Capture,mut stderr:Captur
     }
     Ok(CapturedRun{stdout:stdout.bytes,stderr:stderr.bytes,stdout_observed:stdout.observed,
         stderr_observed:stderr.observed,timed_out,output_truncated,io_settled:stdout.eof&&stderr.eof&&!io_failed,
-        io_failed,settlement,cancel_observed,cpu_time_exceeded,cpu_observation_failed,cpu_ticks_observed})
+        io_failed,settlement,cancel_observed,cpu_time_exceeded,cpu_observation_failed,cpu_ticks_observed,
+        process_usage:child.process_usage(),execution_elapsed_ms:started.elapsed().as_millis()})
 }
 
 #[cfg(test)] mod tests {
@@ -440,6 +460,9 @@ fn capture_prepared(mut child:SuspendedTask,mut stdout:Capture,mut stderr:Captur
         let run=controlled("busy",Duration::from_millis(50),&AtomicBool::new(false)).unwrap();
         assert!(!run.timed_out&&!run.cancel_observed&&!run.cpu_observation_failed);
         assert!(run.cpu_time_exceeded);assert!(run.cpu_ticks_observed.unwrap()>=500000);
+        assert!(!run.process_usage.is_empty());assert!(run.execution_elapsed_ms>0);
+        assert!(run.process_usage.iter().all(|p|p.created>0&&p.image.is_some()&&p.kernel_ticks.is_some()&&p.user_ticks.is_some()),"{:?}",run.process_usage);
+        assert!(run.process_usage.iter().map(|p|p.kernel_ticks.unwrap()+p.user_ticks.unwrap()).sum::<u64>()>=500000);
         assert!(run.settlement.process_exited&&run.settlement.job_empty_observed&&run.io_settled);
         assert_ne!(run.settlement.exit_code,Some(0));
     }
