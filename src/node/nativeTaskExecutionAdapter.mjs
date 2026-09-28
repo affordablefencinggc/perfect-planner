@@ -29,12 +29,13 @@ async function verifyExecutable(file,digest){
 export function createNativeTaskExecutionAdapter({executable,executableDigest,cwd,compilationTempRoot}){
  if(!absolute(executable)||!hash(executableDigest)||!absolute(cwd)||!absolute(compilationTempRoot))throw Error('NATIVE_TASK_ADAPTER_CONFIG_INVALID');
  let busy=false;
- return async function executeNative(input,{signal,expiresAt,retainProvisional}={}){
+ return async function executeNative(input,{signal,expiresAt,retainProvisional,retainCandidate}={}){
   if(typeof retainProvisional!=='function')throw Error('NATIVE_TASK_RETENTION_REQUIRED');
   if(busy)throw Error('NATIVE_TASK_ADAPTER_BUSY');busy=true;let scratch,settled=false;
   try{
    const spec=structuredClone(input),expiresAtMs=Date.parse(expiresAt);
    if(!Number.isSafeInteger(expiresAtMs)||expiresAtMs<=Date.now())throw Error('NATIVE_TASK_GRANT_EXPIRED');
+   if(typeof retainCandidate!=='function')throw Error('NATIVE_TASK_CANDIDATE_RETENTION_REQUIRED');
    const wire=JSON.stringify({schemaVersion:2,executionSpec:spec,expiresAtMs});
    if(!wire||Buffer.byteLength(wire)>65536||!Number.isInteger(spec.timeoutMs)||spec.timeoutMs<1||spec.timeoutMs>300000||!hash(spec.intentDigest))throw Error('NATIVE_TASK_SPEC_INVALID');
    if(signal?.aborted)throw Error('NATIVE_TASK_CANCELLED_BEFORE_DISPATCH');
@@ -43,21 +44,25 @@ export function createNativeTaskExecutionAdapter({executable,executableDigest,cw
    if(path.relative(cwd,await realpath(cwd))||!(await lstat(cwd)).isDirectory())throw Error('NATIVE_TASK_HOST_PATH_INVALID');
    scratch=await allocateCompilationTemp(compilationTempRoot);
    const base={schemaVersion:2,runId:spec.runId,intentDigest:spec.intentDigest,candidateDigest:spec.candidateDigest,checkContractDigest:spec.checkContractDigest,executionAuthorized:false};
-   let phase=0,observation,retained,finalization;
+   let phase=0,observation,retained,finalization,candidateReceipt;
    const exact=(value,expected)=>value&&Object.keys(value).sort().join('|')===Object.keys(expected).sort().join('|')&&Object.entries(expected).every(([key,item])=>JSON.stringify(value[key])===JSON.stringify(item));
    const result=await runBoundedTaskConversation(executable,['--planner-task-custody-stdio'],{cwd,env:{SystemRoot:'C:\\Windows',WINDIR:'C:\\Windows',TEMP:scratch.directory,TMP:scratch.directory},timeoutMs:spec.timeoutMs+255000,maxBytes:13*1024*1024,input:wire,signal},async(frame,{signal:conversationSignal})=>{
     if(phase===0){
      if(!exact(frame,{...base,kind:'NATIVE_TASK_GUARD_READY'}))throw Error('NATIVE_TASK_PROTOCOL_BINDING');
-     const candidate=await candidateSnapshot(spec.registeredRoot,undefined,{signal:conversationSignal});
+     const candidate=await candidateSnapshot(spec.registeredRoot,undefined,{signal:conversationSignal,includeManifest:true});
      if(candidate.cleanupComplete===false)throw Object.assign(Error('NATIVE_TASK_CANDIDATE_CLEANUP_UNCERTAIN'),{cleanupComplete:false});
      if(!candidate.valid||candidate.snapshotSchemaVersion!==2||candidate.digest!==spec.candidateDigest)throw Error('NATIVE_TASK_CANDIDATE_CHANGED');
+     candidateReceipt=await retainCandidate(candidate.manifest);
+     if(candidateReceipt?.kind!=='NATIVE_TASK_CANDIDATE_MANIFEST_RECEIPT'||candidateReceipt.runId!==spec.runId||candidateReceipt.intentDigest!==spec.intentDigest||candidateReceipt.candidateDigest!==spec.candidateDigest||candidateReceipt.executionAuthorized!==false||!hash(candidateReceipt.artifactDigest))throw Error('NATIVE_TASK_CANDIDATE_RETENTION_INVALID');
      if(Date.now()>=expiresAtMs)throw Error('NATIVE_TASK_GRANT_EXPIRED');
      phase=1;return {...base,kind:'NATIVE_TASK_CANDIDATE_CONFIRMED'};
     }
     if(phase===1){
      if(!exact(frame,{...base,kind:'NATIVE_TASK_OBSERVATION_READY',observation:frame?.observation}))throw Error('NATIVE_TASK_PROTOCOL_BINDING');
      observation=parseNativeTaskObservation(frame.observation,spec);
-     retained=await retainProvisional(observation);
+     // The retained observation includes this manifest's hash. The existing
+     // native output acknowledgment/finalization binds that complete artifact.
+     retained=await retainProvisional(observation,candidateReceipt.artifactDigest);
      if(retained?.kind!=='NATIVE_TASK_PROVISIONAL_RECEIPT'||retained.state!=='retained-provisional'||retained.runId!==spec.runId||retained.intentDigest!==spec.intentDigest||retained.executionAuthorized!==false||!hash(retained.artifactDigest))throw Error('NATIVE_TASK_RETENTION_INVALID');
      phase=2;return {...base,kind:'NATIVE_TASK_OUTPUT_RETAINED',artifactDigest:retained.artifactDigest};
     }

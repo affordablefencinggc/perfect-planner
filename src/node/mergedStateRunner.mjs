@@ -33,7 +33,7 @@ function validCiGates(gates) {
     return commandCount <= 256 && Array.from(gate.commands).every((command) => command && typeof command.executable === "string" && command.executable.trim().length > 0 && command.executable.length <= 4096 && !command.executable.includes("\0") && Array.isArray(command.args) && command.args.length <= 128 && Array.from(command.args).every((arg) => typeof arg === "string" && arg.length <= 4096 && !arg.includes("\0")));
   });
 }
-async function captureCandidateSnapshot(cwd, gitRun, checkpoint=()=>{}) {
+async function captureCandidateSnapshot(cwd, gitRun, checkpoint=()=>{}, includeManifest=false) {
   checkpoint();
   const snapshotRoot = await realpath(cwd);
   const commands = [
@@ -84,11 +84,12 @@ async function captureCandidateSnapshot(cwd, gitRun, checkpoint=()=>{}) {
     const current=await lstat(observed.target),before=observed.info;
     if(!current.isFile()||current.isSymbolicLink()||current.dev!==before.dev||current.ino!==before.ino||current.size!==before.size||current.mode!==before.mode||current.mtimeMs!==before.mtimeMs||current.ctimeMs!==before.ctimeMs||await realpath(observed.target)!==observed.canonical)return {valid:false,reason:'candidate file changed after read'};
   }
-  const body = JSON.stringify({ schemaVersion: 2, index: createHash("sha256").update(results[0]).digest("hex"), entries });
-  return { valid: true, snapshotSchemaVersion: 2, digest: createHash("sha256").update(body).digest("hex"), files: files.length, bytes };
+  const manifest = { schemaVersion: 2, index: createHash("sha256").update(results[0]).digest("hex"), entries };
+  const body = JSON.stringify(manifest);
+  return { valid: true, snapshotSchemaVersion: 2, digest: createHash("sha256").update(body).digest("hex"), files: files.length, bytes, ...(includeManifest?{manifest}:{}) };
 }
-export async function candidateSnapshot(cwd, gitRun = git, {signal,timeoutMs=120000}={}) {
-  if(!Number.isInteger(timeoutMs)||timeoutMs<1||timeoutMs>120000||(signal!==undefined&&!(signal instanceof AbortSignal)))return {valid:false,reason:'candidate capture options invalid'};
+export async function candidateSnapshot(cwd, gitRun = git, {signal,timeoutMs=120000,includeManifest=false}={}) {
+  if(typeof includeManifest!=='boolean'||!Number.isInteger(timeoutMs)||timeoutMs<1||timeoutMs>120000||(signal!==undefined&&!(signal instanceof AbortSignal)))return {valid:false,reason:'candidate capture options invalid'};
   const controller=new AbortController(),deadline=performance.now()+timeoutMs;
   let stopReason=null;
   const stop=reason=>{stopReason??=reason;controller.abort();};
@@ -103,7 +104,7 @@ export async function candidateSnapshot(cwd, gitRun = git, {signal,timeoutMs=120
       const value=await gitRun(root,args,{signal:controller.signal,timeoutMs:Math.max(1,Math.min(10000,Math.ceil(deadline-performance.now()))),maxBytes:8_000_000});
       if(value.cleanupComplete===false)throw Object.assign(Error('candidate process cleanup uncertain'),{cleanupComplete:false,code:'GIT_PROCESS_UNCERTAIN'});
       checkpoint();return value;
-    },checkpoint);
+    },checkpoint,includeManifest);
     checkpoint();return result;
   } catch(error) {
     if(error.cleanupComplete===false||error.code==='GIT_PROCESS_UNCERTAIN')return {valid:false,reason:'candidate process cleanup uncertain',cleanupComplete:false,code:'GIT_PROCESS_UNCERTAIN'};

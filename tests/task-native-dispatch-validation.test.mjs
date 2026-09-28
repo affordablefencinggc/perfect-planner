@@ -4,6 +4,12 @@ import {createTaskNativeDispatch,parseNativeTaskObservation,nativeTaskSettlement
 const admitted=()=>({firstIntent:true,intentReceipt:{runId:'run-fixture',recordDigest:'a'.repeat(64)},executionSpec:{runId:'run-fixture',intentDigest:'a'.repeat(64),outputLimits:{stdoutBytes:10,stderrBytes:10,combinedBytes:15}},consumptionReceipt:{expiresAt:new Date(Date.now()+60000).toISOString()}});
 const result=()=>({schemaVersion:1,kind:'NATIVE_TASK_OBSERVATION',runId:'run-fixture',exitCode:0,timedOut:false,cancelObserved:false,outputTruncated:false,cpuTimeExceeded:false,cpuObservationFailed:false,processExited:true,jobEmptyObserved:true,ioSettled:true,ioFailed:false,stdout:'ok',stderr:''});
 // These are host-boundary validation tests, not native process execution proof.
+test('missing candidate retention capability is refused before admission',()=>{
+ let admittedCalls=0;
+ const review={recordAssignedExecutionIntent:async()=>{admittedCalls++;return admitted();},inspectOwnGrantReceipt:async()=>admitted()};
+ assert.throws(()=>createTaskNativeDispatch({review,executeNative:async()=>result(),nativeCustody:{retainProvisional:async()=>{},finalize:async()=>{}}}),/NATIVE_TASK_DISPATCH_CONFIG_INVALID/);
+ assert.equal(admittedCalls,0);
+});
 test('malformed, foreign and contradictory native replies retain unresolved intent',async()=>{
   for(const change of [{runId:'other'},{exitCode:-1},{exitCode:2**32},{ioFailed:true},{processExited:false},{timedOut:'false'},{stdout:'x'.repeat(11)},{stdout:'x'.repeat(8),stderr:'x'.repeat(8)},{cleanupComplete:true}]){
     const intent=admitted();const dispatch=createTaskNativeDispatch({review:{recordAssignedExecutionIntent:async()=>intent,inspectOwnGrantReceipt:async()=>intent},executeNative:async()=>({...result(),...change})});

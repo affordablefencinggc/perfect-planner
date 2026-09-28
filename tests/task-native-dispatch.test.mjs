@@ -190,6 +190,35 @@ test('lost reply after actual failed native execution cannot cause a relaunch',{
   assert.equal(recovered.intentReceipt.runId,retry.intentReceipt.runId);assert.equal(recovered.intentReceipt.state,'launch-unresolved');assert.equal(recovered.launchAllowed,false);
 });
 
+test('native candidate manifest is retained under guard and required for later result reads',{skip:!enabled||!process.env.PP_NATIVE_TASK_HOST},async()=>{
+ const f=await fixture('pass');let retained;
+ const dispatch=createTaskNativeDispatch({...f,nativeCustody:{...f.nativeCustody,retainCandidate:async input=>{
+  await assert.rejects(writeFile(path.join(f.candidateRoot,'input.txt'),'forbidden during manifest retention'));
+  const receipt=await f.nativeCustody.retainCandidate(input);retained={input,receipt};return receipt;
+ }}});
+ const result=await dispatch.dispatch(f.args);assert.equal(result.observation.exitCode,0);assert.ok(retained);
+ const file=path.join(f.composition.root,'observations',result.intentReceipt.runId+'.candidate.json'),bytes=await readFile(file);
+ const observation=JSON.parse(await readFile(path.join(f.composition.root,'observations',result.intentReceipt.runId+'.json'),'utf8'));
+ assert.equal(observation.schemaVersion,3);assert.equal(observation.candidateManifestDigest,createHash('sha256').update(bytes).digest('hex'));
+ assert.deepEqual(JSON.parse(bytes).manifest,retained.input.manifest);
+ await writeFile(path.join(f.candidateRoot,'input.txt'),'later candidate');
+ assert.equal((await f.observationStore.inspect(result.intentReceipt)).receipt.state,'result-unverified');assert.deepEqual(await readFile(file),bytes);
+ await unlink(file);await assert.rejects(f.resultCustody.reconcile(result.intentReceipt));
+ await assert.rejects(dispatch.dispatch(f.args),/TASK_GRANT_CONTEXT_MISMATCH/);assert.equal(f.launches(),1);assert.equal((await f.grants.inspect()).revision,4);
+});
+
+test('native candidate retention failure or lost reply leaves the first intent unresolved',{skip:!enabled||!process.env.PP_NATIVE_TASK_HOST},async()=>{
+ for(const retainFirst of [false,true]){
+  const f=await fixture('pass');let intent;
+  const dispatch=createTaskNativeDispatch({...f,nativeCustody:{...f.nativeCustody,retainCandidate:async input=>{
+   intent=input.intentReceipt;if(retainFirst)await f.nativeCustody.retainCandidate(input);throw Error('controlled manifest persistence reply failure');
+  },retainProvisional:async()=>{assert.fail('no check output may be retained after failed candidate confirmation');}}});
+  await assert.rejects(dispatch.dispatch(f.args),/NATIVE_TASK_DISPATCH_UNRESOLVED/);assert.ok(intent);
+  await assert.rejects(f.observationStore.inspect(intent));assert.equal((await f.grants.inspect()).revision,3);
+  assert.equal((await createTaskNativeDispatch(f).dispatch(f.args)).dispatchObserved,false);assert.equal(f.launches(),1);
+ }
+});
+
 test('native guard remains held during retention and interrupted custody cannot be replayed',{skip:!enabled||!process.env.PP_NATIVE_TASK_HOST},async()=>{
  for(const mode of ['transient-change','cancel-after-retention','lost-retention-reply']){
   const f=await fixture('pass'),abort=new AbortController();let original;

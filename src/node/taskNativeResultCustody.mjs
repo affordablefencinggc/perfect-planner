@@ -22,6 +22,7 @@ export function createTaskNativeResultCustody({grants,observations}){
   return freeze({observationReceipt:after.receipt,observationLink:linked.observationLink,executionAuthorized:false});
  }
  return Object.freeze({reconcile,
+ async retainCandidate(input){return observations.retainCandidate(structuredClone(input));},
  async retainProvisional(input){return observations.retainProvisional(structuredClone(input));},
  async finalize(input){input=structuredClone(input);await observations.finalize(input);return (await reconcile(input.intentReceipt)).observationReceipt;},
  async record(input){

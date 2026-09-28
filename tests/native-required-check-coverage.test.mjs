@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {mkdtemp,mkdir,readFile,writeFile} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import {createHash} from 'node:crypto';
 import {createInstalledTaskExecutionCustody} from '../src/node/installedTaskExecutionCustody.mjs';
 import {createTaskLedgerAuthorityStore} from '../src/node/taskLedgerAuthorityStore.mjs';
 import {createTaskCheckContract} from '../src/node/taskCheckContract.mjs';
@@ -32,14 +33,18 @@ async function fixture(){
  const {enrollment}=await owner.enroll(expected,confirmation.id,[{taskId:'T0001',workerId:'worker',credentials}],{expectedRevision:0,requestId:'enroll'});
  let sequence=0;
  async function retain(checkId,{exitCode=0,provisional=false,override={}}={}){
+  const manifest={schemaVersion:2,index:override.candidateDigest??'e'.repeat(64),entries:[]};
+  const candidateDigest=createHash('sha256').update(JSON.stringify(manifest)).digest('hex');
   const bound={proposalRevision:1,proposalDigest:expected.headDigest,checkContractDigest:contract.contractDigest,enrollmentEpoch:enrollment.epoch,taskId:'T0001',checkId,attemptId:'attempt',attemptNumber:1,workerId:'worker',sessionId:credentials.id,candidateSchemaVersion:2,candidateDigest:'e'.repeat(64),policyVersion:1,policyDigest:contract.policyDigest,...override};
+  bound.candidateDigest=candidateDigest;
   const revision=(await c.grants.inspect()).revision,request=++sequence;
   const {grant}=await c.grants.issue(bound,{requestId:`issue${request}`,expectedRevision:revision,ttlMs:300000});
   const consumed=await c.grants.consume(bound,{grantId:grant.grantId,requestId:`consume${request}`,expectedRevision:revision+1});
   const {intentReceipt}=await c.grants.recordExecutionIntent(consumed.consumptionReceipt,{grantId:grant.grantId,requestId:`intent${request}`,expectedRevision:revision+2});
   const executionSpec={runId:intentReceipt.runId,intentDigest:intentReceipt.recordDigest,candidateDigest:bound.candidateDigest,checkContractDigest:bound.checkContractDigest,outputLimits:{stdoutBytes:100,stderrBytes:100,combinedBytes:200}};
   const observation={schemaVersion:2,kind:'NATIVE_TASK_OBSERVATION',runId:intentReceipt.runId,exitCode,timedOut:false,cancelObserved:false,outputTruncated:false,cpuTimeExceeded:false,cpuObservationFailed:false,processExited:true,jobEmptyObserved:true,descendantsSettled:true,ioSettled:true,ioFailed:false,stdout:'fixture',stderr:''};
-  const receipt=await c.custody.retainProvisional({intentReceipt,executionSpec,observation});
+  const candidate=await c.custody.retainCandidate({intentReceipt,executionSpec,manifest});
+  const receipt=await c.custody.retainProvisional({intentReceipt,executionSpec,observation,candidateManifestDigest:candidate.artifactDigest});
   if(!provisional)await c.custody.finalize({intentReceipt,finalization:{schemaVersion:2,kind:'NATIVE_TASK_GUARD_FINALIZED',runId:intentReceipt.runId,intentDigest:intentReceipt.recordDigest,candidateDigest:bound.candidateDigest,checkContractDigest:bound.checkContractDigest,artifactDigest:receipt.artifactDigest,executionAuthorized:false}});
   return {grantId:grant.grantId,intentReceipt};
  }

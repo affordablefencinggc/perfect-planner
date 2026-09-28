@@ -1,8 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,mkdir,readFile,writeFile,unlink,open,link} from 'node:fs/promises';
+import {mkdtemp,mkdir,readFile,writeFile,unlink,open,link,lstat} from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
+import {createHash} from 'node:crypto';
 import {createInstalledTaskExecutionCustody} from '../src/node/installedTaskExecutionCustody.mjs';
 
 async function fixture(){
@@ -12,13 +13,15 @@ async function fixture(){
  const config={stateDirectory:root,binding,observeBinding:async()=>binding};
  const custody=createInstalledTaskExecutionCustody(config);
  const directory=path.join(root,`${binding.projectId}.native-observations`);await mkdir(directory);
- const bound={proposalRevision:1,proposalDigest:'a'.repeat(64),checkContractDigest:'b'.repeat(64),enrollmentEpoch:1,taskId:'T0001',checkId:'unit',attemptId:'attempt1',attemptNumber:1,workerId:'worker1',sessionId:'session1',candidateSchemaVersion:2,candidateDigest:'c'.repeat(64),policyVersion:1,policyDigest:'d'.repeat(64)};
+ const manifest={schemaVersion:2,index:'c'.repeat(64),entries:[]},candidateDigest=createHash('sha256').update(JSON.stringify(manifest)).digest('hex');
+ const bound={proposalRevision:1,proposalDigest:'a'.repeat(64),checkContractDigest:'b'.repeat(64),enrollmentEpoch:1,taskId:'T0001',checkId:'unit',attemptId:'attempt1',attemptNumber:1,workerId:'worker1',sessionId:'session1',candidateSchemaVersion:2,candidateDigest,policyVersion:1,policyDigest:'d'.repeat(64)};
  const {grant}=await custody.grants.issue(bound,{requestId:'issue',expectedRevision:0,ttlMs:300000});
  const consumed=await custody.grants.consume(bound,{grantId:grant.grantId,requestId:'consume',expectedRevision:1});
  const {intentReceipt}=await custody.grants.recordExecutionIntent(consumed.consumptionReceipt,{grantId:grant.grantId,requestId:'intent',expectedRevision:2});
  const executionSpec={runId:intentReceipt.runId,intentDigest:intentReceipt.recordDigest,candidateDigest:bound.candidateDigest,checkContractDigest:bound.checkContractDigest,outputLimits:{stdoutBytes:100,stderrBytes:100,combinedBytes:200}};
  const observation={schemaVersion:2,kind:'NATIVE_TASK_OBSERVATION',runId:intentReceipt.runId,exitCode:0,timedOut:false,cancelObserved:false,outputTruncated:false,cpuTimeExceeded:false,cpuObservationFailed:false,processExited:true,jobEmptyObserved:true,descendantsSettled:true,ioSettled:true,ioFailed:false,stdout:'controlled output',stderr:''};
- const input={intentReceipt,executionSpec,observation};
+ const candidateReceipt=await custody.custody.retainCandidate({intentReceipt,executionSpec,manifest});
+ const input={intentReceipt,executionSpec,observation,candidateManifestDigest:candidateReceipt.artifactDigest};
  return {root,directory,config,custody,input,grantId:grant.grantId,journal:path.join(root,`${binding.projectId}.execution-grants.jsonl`),file:path.join(directory,intentReceipt.runId+'.json')};
 }
 function frame(f,receipt){return {schemaVersion:2,kind:'NATIVE_TASK_GUARD_FINALIZED',runId:f.input.intentReceipt.runId,intentDigest:f.input.intentReceipt.recordDigest,candidateDigest:f.input.executionSpec.candidateDigest,checkContractDigest:f.input.executionSpec.checkContractDigest,artifactDigest:receipt.artifactDigest,executionAuthorized:false};}
@@ -112,8 +115,12 @@ test('unsettled observations cannot be finalized, while a settled failed check c
 test('complete bytes after a failed sync cannot link until recovery re-sync succeeds',async t=>{
  const f=await fixture(),receipt=await f.custody.custody.retainProvisional(f.input);
  const handle=await open(f.file,'r'),proto=Object.getPrototypeOf(handle),original=proto.sync;await handle.close();
+ const finalPath=path.join(f.directory,f.input.intentReceipt.runId+'.finalization.json');
  let calls=0,failSync=true;
- t.mock.method(proto,'sync',async function(){calls++;if(failSync)throw Error('injected flush failure');return original.call(this);});
+ // Candidate evidence now also syncs before finalization. Inject failure only
+ // after the finalization file exists, retaining this test's original boundary:
+ // complete finalization bytes whose durability was not acknowledged.
+ t.mock.method(proto,'sync',async function(){calls++;const finalExists=await lstat(finalPath).then(()=>true,error=>{if(error.code==='ENOENT')return false;throw error;});if(failSync&&finalExists)throw Error('injected flush failure');return original.call(this);});
  await assert.rejects(f.custody.custody.finalize({intentReceipt:f.input.intentReceipt,finalization:frame(f,receipt)}),/injected flush failure/);
  const retained=await readFile(path.join(f.directory,f.input.intentReceipt.runId+'.finalization.json'));
  assert.equal(JSON.parse(retained).artifactDigest,receipt.artifactDigest);
