@@ -312,6 +312,21 @@ pub(crate) fn run_captured_isolated(executable:&Path,args:&[&OsStr],cwd:&Path,en
 }
 fn run_captured_inner(executable:&Path,args:&[&OsStr],cwd:&Path,environment:&[(&str,&str)],
     timeout:Duration,stdout_limit:usize,stderr_limit:usize,combined_limit:usize,cpu_time:Duration,cancel:&AtomicBool,isolation:Option<&AppContainer>)->io::Result<CapturedRun> {
+    run_captured_prepared(executable,args,cwd,environment,timeout,stdout_limit,stderr_limit,combined_limit,cpu_time,cancel,isolation,||Ok(()))
+}
+// Private owner callback runs once while the real child is suspended. Refusal
+// still terminates/drains that child; it never escapes through an early Drop.
+// The caller retains its guards on any error because an error is not settlement.
+pub(crate) fn run_captured_isolated_after_retention(executable:&Path,args:&[&OsStr],cwd:&Path,environment:&[(&str,&str)],
+    timeout:Duration,stdout_limit:usize,stderr_limit:usize,combined_limit:usize,cpu_time:Duration,cancel:&AtomicBool,profile:&AppContainer,before_resume:impl FnOnce()->io::Result<()>)->io::Result<CapturedRun>{
+    run_captured_prepared(executable,args,cwd,environment,timeout,stdout_limit,stderr_limit,combined_limit,cpu_time,cancel,Some(profile),before_resume)
+}
+#[derive(Debug)]struct SettledPreparationRefusal(io::Error);
+impl std::fmt::Display for SettledPreparationRefusal{fn fmt(&self,f:&mut std::fmt::Formatter<'_>)->std::fmt::Result{write!(f,"prepared task refused after observed cleanup: {}",self.0)}}
+impl std::error::Error for SettledPreparationRefusal{}
+pub(crate) fn preparation_refusal_settled(error:&io::Error)->bool{error.get_ref().is_some_and(|source|source.is::<SettledPreparationRefusal>())}
+fn run_captured_prepared(executable:&Path,args:&[&OsStr],cwd:&Path,environment:&[(&str,&str)],
+    timeout:Duration,stdout_limit:usize,stderr_limit:usize,combined_limit:usize,cpu_time:Duration,cancel:&AtomicBool,isolation:Option<&AppContainer>,before_resume:impl FnOnce()->io::Result<()>)->io::Result<CapturedRun>{
     if timeout.is_zero()||timeout>Duration::from_secs(300)||stdout_limit==0||stdout_limit>2*1024*1024
         ||stderr_limit==0||stderr_limit>2*1024*1024||combined_limit==0||combined_limit>2*1024*1024
         ||combined_limit>stdout_limit+stderr_limit{return Err(invalid("run limits"));}
@@ -323,6 +338,11 @@ fn run_captured_inner(executable:&Path,args:&[&OsStr],cwd:&Path,environment:&[(&
     drop(input);drop(out_write);drop(err_write);
     let stdout=Capture{read:out_read,bytes:Vec::new(),observed:0,eof:false};
     let stderr=Capture{read:err_read,bytes:Vec::new(),observed:0,eof:false};
+    if let Err(error)=before_resume(){
+        let result=capture_prepared(child,stdout,stderr,timeout,stdout_limit,stderr_limit,combined_limit,cpu_time,&AtomicBool::new(true))?;
+        if !result.settlement.process_exited||!result.settlement.job_empty_observed||!result.settlement.descendants_settled||!result.io_settled||result.io_failed{return Err(invalid("refused prepared child cleanup unresolved"));}
+        return Err(io::Error::new(io::ErrorKind::PermissionDenied,SettledPreparationRefusal(error)));
+    }
     capture_prepared(child,stdout,stderr,timeout,stdout_limit,stderr_limit,combined_limit,cpu_time,cancel)
 }
 // Consumes an already suspended, Job-bound task and its explicit output pipes.
@@ -791,6 +811,36 @@ fn capture_prepared(mut child:SuspendedTask,mut stdout:Capture,mut stderr:Captur
         let after=descriptors();std::fs::write(owner.join("protected-after.json"),serde_json::to_vec_pretty(&after).unwrap()).unwrap();assert_eq!(before,after);
         phase("after-descriptors");
         inputs_guard.finish().unwrap();runtime_guard.finish().unwrap();
+    }
+    #[test] #[ignore="Requires real copied Node runtime in DANS1 desktop session"] fn reopened_archive_runs_real_node_with_retained_dependencies(){
+        use crate::native_candidate_archive::{ArchiveBinding,RetainedInputs};
+        use sha2::{Digest,Sha256};
+        let owner=root();let source=owner.join("source");std::fs::create_dir(&source).unwrap();std::fs::create_dir(source.join("nested")).unwrap();std::fs::create_dir(source.join("empty")).unwrap();
+        std::fs::write(source.join("nested/input.txt"),b"retained input").unwrap();std::fs::write(source.join("nested/dependency.cjs"),b"module.exports=41;").unwrap();
+        std::fs::write(source.join("check.cjs"),br#"const fs=require('node:fs'),p=require('node:path'),a=require('node:assert/strict');a.equal(fs.readFileSync(p.join(__dirname,'nested/input.txt'),'utf8'),'retained input');a.equal(require('./nested/dependency.cjs'),41);a.ok(fs.statSync(p.join(__dirname,'empty')).isDirectory());a.throws(()=>fs.writeFileSync(p.join(__dirname,'nested/input.txt'),'changed'));a.throws(()=>fs.writeFileSync(p.join(__dirname,'new-input'),'changed'));fs.writeFileSync(p.join(process.env.PP_NODE_OUTPUT,'result.json'),JSON.stringify({answer:require('./nested/dependency.cjs')+1}));console.log('retained-archive-check:42');"#).unwrap();
+        let name=format!("perfect-planner.execution.{}-{}",std::process::id(),std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos());let profile=AppContainer::create_fresh(&name).unwrap();
+        let binding=ArchiveBinding{run_id:"retained-node-check".into(),root_identity:"a".repeat(64),candidate_digest:"b".repeat(64),intent_digest:"c".repeat(64)};let cancel=AtomicBool::new(false);
+        let archive=RetainedInputs::create(&source,&profile,binding.clone(),&cancel).unwrap();let manifest=serde_json::to_vec(&archive.manifest).unwrap();let digest=archive.digest.clone();
+        std::fs::write(owner.join("retained-manifest.json"),&manifest).unwrap();drop(archive);
+        // Remove the source's original names, preserving its bytes. The real
+        // invocation below can only obtain its modules from the retained copy.
+        std::fs::rename(&source,owner.join("source-preserved")).unwrap();
+        let archive=RetainedInputs::reopen(&std::fs::read(owner.join("retained-manifest.json")).unwrap(),&digest,&binding,&cancel).unwrap();
+        let runtime=profile.create_readonly_directory("runtime").unwrap();let node=runtime.join("node.exe");let node_source=std::path::PathBuf::from(std::env::var_os("PP_TEST_AGENT_NODE").unwrap());std::fs::copy(&node_source,&node).unwrap();
+        let node_hash=format!("{:x}",Sha256::digest(std::fs::read(&node_source).unwrap()));assert_eq!(format!("{:x}",Sha256::digest(std::fs::read(&node).unwrap())),node_hash);
+        let output=profile.folder().join("output");std::fs::create_dir(&output).unwrap();let temp=profile.folder().join("Temp");std::fs::create_dir_all(&temp).unwrap();
+        let system=std::env::var("SystemRoot").unwrap();let env=[("SystemRoot",system.as_str()),("WINDIR",system.as_str()),("LOCALAPPDATA",profile.folder().to_str().unwrap()),("TEMP",temp.to_str().unwrap()),("TMP",temp.to_str().unwrap()),("PP_NODE_OUTPUT",output.to_str().unwrap())];
+        let script=archive.root().join("check.cjs");let args=[OsStr::new("--preserve-symlinks"),OsStr::new("--preserve-symlinks-main"),script.as_os_str()];
+        let _pins=crate::native_host_resources::pin_task_files(&node,&node_hash,profile.folder(),archive.root()).unwrap();
+        let(stdin,writer)=pipe(false).unwrap();drop(writer);let(out,ow)=pipe(true).unwrap();let(err,ew)=pipe(true).unwrap();
+        let child=SuspendedTask::create_inner(&node,&args,archive.root(),&env,16,512*1024*1024,Duration::from_secs(3),Some([stdin.0,ow.0,ew.0]),Some(&profile)).unwrap();drop(stdin);drop(ow);drop(ew);
+        let runtime_guard=crate::native_candidate_guard::CandidateGuard::acquire(&runtime,&cancel).unwrap();archive.validate(&cancel).unwrap();profile.verify_process(child.process.0).unwrap();assert!(!output.join("result.json").exists());
+        let capture=|read|Capture{read,bytes:Vec::new(),observed:0,eof:false};
+        let result=capture_prepared(child,capture(out),capture(err),Duration::from_secs(10),8192,8192,16384,Duration::from_secs(3),&cancel).unwrap();
+        std::fs::write(owner.join("node-output.txt"),&result.stdout).unwrap();std::fs::write(owner.join("node-error.txt"),&result.stderr).unwrap();std::fs::write(owner.join("node-settlement.txt"),format!("{result:?}")).unwrap();
+        assert_eq!(result.settlement.exit_code,Some(0));assert!(result.settlement.process_exited&&result.settlement.job_empty_observed&&result.settlement.descendants_settled&&result.io_settled&&!result.io_failed&&!result.timed_out&&!result.output_truncated);
+        assert_eq!(String::from_utf8(result.stdout).unwrap().trim(),"retained-archive-check:42");assert_eq!(std::fs::read(output.join("result.json")).unwrap(),br#"{"answer":42}"#);archive.validate(&cancel).unwrap();runtime_guard.finish().unwrap();
+        std::fs::write(owner.join("proof.json"),serde_json::to_vec_pretty(&serde_json::json!({"archiveDigest":digest,"runtimeDigest":node_hash,"profile":profile.name(),"root":archive.root(),"sourceMoved":true,"result":42,"executionAuthorized":false,"scope":"private retained-input execution; not production dispatch or human consent"})).unwrap()).unwrap();
     }
     #[test] #[ignore="inert child entry; launched only inside the tested Job"] fn fixture(){
         let mode=std::env::var("PP_FIXTURE_MODE").unwrap();

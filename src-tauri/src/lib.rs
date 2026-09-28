@@ -28,6 +28,10 @@ mod native_app_container;
 mod native_task_execution;
 #[cfg(windows)]
 mod native_candidate_guard;
+#[cfg(windows)]
+mod native_candidate_archive;
+#[cfg(windows)]
+mod native_retained_execution;
 #[cfg(all(test, windows))]
 mod candidate_custody_probe;
 #[cfg(windows)]

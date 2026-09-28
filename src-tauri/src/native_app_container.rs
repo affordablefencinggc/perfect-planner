@@ -36,7 +36,7 @@ fn sid_string(sid:Handle)->io::Result<String>{unsafe{
  let result=string(value);LocalFree(value.cast());result
 }}
 fn token_data(token:Handle,class:u32)->io::Result<Vec<usize>>{unsafe{
- let minimum=match class{1|25=>size_of::<Handle>()+size_of::<u32>(),31=>size_of::<Handle>(),21=>1,12|18|20|29|30=>4,_=>return Err(failure("unsupported token information class"))};
+ let minimum=match class{1|25=>size_of::<Handle>()+size_of::<u32>(),4|31=>size_of::<Handle>(),21=>1,12|18|20|29|30=>4,_=>return Err(failure("unsupported token information class"))};
  let mut needed=0;GetTokenInformation(token,class,null_mut(),0,&mut needed);
  if (needed as usize)<minimum||needed>65536{return Err(failure(&format!("token information limit: class={class} required={needed} minimum={minimum}")));}
  // DANS1 reports one byte for TokenHasRestrictions despite the documented
@@ -71,6 +71,21 @@ impl AppContainer{
  pub(crate) fn name(&self)->&str{&self.name}
  pub(crate) fn sid_text(&self)->&str{&self.sid_text}
  pub(crate) fn capabilities(&self)->SecurityCapabilities{SecurityCapabilities{sid:self.sid.0,capabilities:null_mut(),count:0,reserved:0}}
+ /// Independently derive the policy for the root, inherited directories and
+ /// inherited files. Never accept whatever ACL happens to exist after copying.
+ pub(crate) fn readonly_descriptors(&self)->io::Result<[String;3]>{unsafe{
+  use windows_sys::Win32::Security::Authorization::{ConvertStringSecurityDescriptorToSecurityDescriptorW,ConvertSecurityDescriptorToStringSecurityDescriptorW};
+  let mut token=null_mut();if OpenProcessToken(-1isize as Handle,8,&mut token)==0{return Err(io::Error::last_os_error());}let token=Token(token);
+  let user=token_data(token.0,1)?;let user=sid_string(*user.as_ptr().cast::<Handle>())?;let owner=token_data(token.0,4)?;let owner=sid_string(*owner.as_ptr().cast::<Handle>())?;
+  let mut result=Vec::new();
+  for(protected,flags)in [("P","OICI"),("","OICIID"),("","ID")]{
+   let sddl=wide(&format!("O:{owner}D:{protected}(A;{flags};FA;;;SY)(A;{flags};FA;;;BA)(A;{flags};FA;;;{user})(A;{flags};FRFX;;;{})",self.sid_text));
+   let mut descriptor=null_mut();if ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl.as_ptr(),1,&mut descriptor,null_mut())==0{return Err(io::Error::last_os_error());}
+   let mut encoded=null_mut();let ok=ConvertSecurityDescriptorToStringSecurityDescriptorW(descriptor,1,5,&mut encoded,null_mut());let error=io::Error::last_os_error();LocalFree(descriptor);
+   if ok==0{return Err(error);}let text=string(encoded);LocalFree(encoded.cast());result.push(text?);
+  }
+  result.try_into().map_err(|_|failure("readonly policy incomplete"))
+ }}
  /// Only new children of this fresh owned profile; never changes existing ACLs.
  /// The caller must retain file/directory guards against writable-parent replacement.
  pub(crate) fn create_readonly_directory(&self,name:&str)->io::Result<PathBuf>{unsafe{

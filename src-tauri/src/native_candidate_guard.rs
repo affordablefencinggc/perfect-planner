@@ -63,7 +63,7 @@ impl Drop for Directory{
   unsafe{CloseHandle(self.event);}
  }
 }
-pub(crate) struct CandidateGuard{directories:Vec<Directory>,files:Vec<File>,settlement_attempted:bool}
+pub(crate) struct CandidateGuard{directories:Vec<Directory>,files:Vec<(PathBuf,File)>,settlement_attempted:bool}
 impl CandidateGuard{
  pub(crate) fn acquire(root:&Path,cancel:&AtomicBool)->Result<Self,&'static str>{
   Self::acquire_after_pinning(root,cancel,||{})
@@ -95,7 +95,7 @@ impl CandidateGuard{
     let mut info=[0u32;13];
     if unsafe{GetFileInformationByHandle(file.as_raw_handle(),info.as_mut_ptr())}==0||info[10]!=1{return Err(UNAVAILABLE);}
     bytes=bytes.checked_add(held.len()).ok_or(UNAVAILABLE)?;if bytes>2*1024*1024*1024{return Err(UNAVAILABLE);}
-    guard.files.push(file);
+    guard.files.push((path,file));
    }
   }
   before_watch();
@@ -118,6 +118,10 @@ impl CandidateGuard{
   guard.validate()?;Ok(guard)
  }
  pub(crate) fn validate(&self)->Result<(),&'static str>{for directory in &self.directories{directory.validate()?;}Ok(())}
+ // Borrow the already held handles; callers must retain this guard and validate
+ // notifications before accepting any derived inventory or copied bytes.
+ pub(crate) fn pinned_files(&self)->impl Iterator<Item=(&Path,&File)>{self.files.iter().map(|(path,file)|(path.as_path(),file))}
+ pub(crate) fn pinned_directories(&self)->impl Iterator<Item=(&Path,&File)>{self.directories.iter().map(|directory|(directory.path.as_path(),directory.file.as_ref().unwrap()))}
  #[cfg(test)]pub(crate) fn diagnostic_notifications(&self)->Vec<serde_json::Value>{
   self.directories.iter().filter_map(|directory|{
    if unsafe{WaitForSingleObject(directory.event,0)}!=0{return None;}

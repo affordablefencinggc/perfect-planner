@@ -53,6 +53,32 @@ fn verify_file(path:&Path,pin:&str,limit:u64,expected:Option<u64>,collect:bool)-
 #[cfg(windows)]
 pub(crate) struct PinnedTaskFiles{_executable:File,_directories:Vec<File>}
 #[cfg(windows)]
+pub(crate) struct PinnedDirectoryNames{_directories:Vec<File>}
+#[cfg(windows)]
+pub(crate) fn pin_directory_names(root:&Path)->Result<PinnedDirectoryNames,&'static str>{
+    pin_directory_names_observed(root,|_|{})
+}
+#[cfg(windows)]
+fn pin_directory_names_observed(root:&Path,mut observed:impl FnMut(&Path))->Result<PinnedDirectoryNames,&'static str>{
+    use std::os::windows::fs::{OpenOptionsExt,MetadataExt};
+    verify_config_directory(root)?;let mut directories=Vec::new();
+    let ancestors:Vec<_>=root.ancestors().collect();
+    for ancestor in ancestors.iter().rev(){
+        let file=fs::OpenOptions::new().read(true).share_mode(3).custom_flags(0x02200000).open(ancestor).map_err(|_|"NATIVE_TASK_DIRECTORY_PIN_UNAVAILABLE")?;
+        let metadata=file.metadata().map_err(|_|"NATIVE_TASK_DIRECTORY_PIN_UNAVAILABLE")?;
+        if !metadata.is_dir()||metadata.file_attributes()&0x400!=0{return Err("NATIVE_TASK_DIRECTORY_PIN_UNAVAILABLE");}
+        let current=fs::OpenOptions::new().read(true).share_mode(7).custom_flags(0x02200000).open(ancestor).map_err(|_|"NATIVE_TASK_DIRECTORY_PIN_UNAVAILABLE")?;
+        if identity(&file)?!=identity(&current)?{return Err("NATIVE_TASK_DIRECTORY_PIN_UNAVAILABLE");}
+        directories.push(file);observed(ancestor);
+    }
+    verify_config_directory(root)?;
+    for(ancestor,file)in ancestors.iter().rev().zip(&directories){
+        let current=fs::OpenOptions::new().read(true).share_mode(7).custom_flags(0x02200000).open(ancestor).map_err(|_|"NATIVE_TASK_DIRECTORY_PIN_UNAVAILABLE")?;
+        if identity(file)?!=identity(&current)?{return Err("NATIVE_TASK_DIRECTORY_PIN_UNAVAILABLE");}
+    }
+    Ok(PinnedDirectoryNames{_directories:directories})
+}
+#[cfg(windows)]
 pub(crate) fn pin_task_files(executable:&Path,pin:&str,root:&Path,cwd:&Path)->Result<PinnedTaskFiles,&'static str>{
     use std::os::windows::fs::OpenOptionsExt;
     if !hash(pin){return Err("NATIVE_TASK_EXECUTABLE_PIN_INVALID");}
@@ -165,6 +191,13 @@ pub(crate) fn verify_agent_helper(resource_directory:&Path)->Result<VerifiedAgen
 #[cfg(test)]
 mod tests{
     use super::*;use serde_json::{json,Value};
+    #[cfg(windows)]#[test]fn parent_name_is_pinned_before_observing_its_child(){
+        assert_eq!(std::env::var("COMPUTERNAME").unwrap().to_lowercase(),"dans1");let base=PathBuf::from(std::env::var_os("PP_ARCHIVE_FIXTURE_ROOT").expect("fresh fixture required"));
+        let parent=base.join("parent-pin");let child=parent.join("child");fs::create_dir(&parent).unwrap();fs::create_dir(&child).unwrap();let moved=base.join("parent-moved");
+        assert!(parent.starts_with(&base)&&moved.starts_with(&base));
+        let pins=pin_directory_names_observed(&child,|path|{if path==child{assert!(fs::rename(&parent,&moved).is_err(),"An unpinned parent must not be replaceable while child custody is being established");}}).unwrap();
+        assert!(child.is_dir());drop(pins);
+    }
     #[test]fn helper_is_optional_but_requires_the_compiled_package_pin_and_exact_bytes(){
         let (base,mut manifest,pin)=fixture();
         assert_eq!(helper_with_pin(&base,Some(&pin)).unwrap_err(),"NATIVE_AGENT_HELPER_NOT_PACKAGED");
