@@ -236,6 +236,43 @@ test('installed owner derives complete required-check coverage from retained nat
  await reopened.shutdown();
 });
 
+test('durable full-task request executes the approved set once under one shared worker',{skip:!enabled||!process.env.PP_NATIVE_TASK_HOST},async()=>{
+ const f=await fixture('pass',1,3),c=f.composition,stateDirectory=path.join(c.root,'full-task-state');await mkdir(stateDirectory);
+ const custody=createInstalledTaskExecutionCustody({stateDirectory,binding:c.binding,observeBinding:async()=>c.binding});
+ const ownerConfig={...c,registeredRoot:f.candidateRoot,actor:'full-task-owner',nativeConfig:{executable:path.normalize(process.env.PP_NATIVE_TASK_HOST),executableDigest:process.env.PP_NATIVE_TASK_HOST_SHA256,cwd:c.root,compilationTempRoot:path.join(stateDirectory,'compilation')}};
+ const selection={expected:f.args.expected,contractHead:{revision:1,headDigest:'a'.repeat(64)}},directory=path.join(stateDirectory,'requests');
+ const owner=custody.createExecution(ownerConfig),requests=createNativeTaskExecutionRequests({directory,binding:c.binding,selection,owner});
+ const request={requestId:'full-task-1',...selection,confirmationId:f.args.confirmationId,taskId:'T0001',attemptId:'full-attempt',attemptNumber:1};
+ const result=await requests.executeTask(request);assert.equal(result.state,'results-recorded');assert.equal(result.checkCount,3);assert.equal(result.authorityVerified,false);assert.equal(result.cleanupComplete,true);
+ const coverage=await owner.inspectAttempt({expected:request.expected,confirmationId:request.confirmationId,grantId:result.anchorGrantId});
+ assert.deepEqual(coverage.failed,['native2']);assert.deepEqual(coverage.missing,[]);assert.deepEqual(coverage.unresolved,[]);
+ const state=await custody.grants.inspect();assert.equal(state.revision,12);assert.equal(new Set(state.grants.map(e=>e.grant.binding.sessionId)).size,1);assert.equal(new Set(state.grants.map(e=>e.grant.binding.enrollmentEpoch)).size,1);
+ assert.deepEqual(await requests.executeTask(request),result);assert.equal((await custody.grants.inspect()).revision,12);
+ await requests.shutdown();await owner.shutdown();
+ const batchKey=createHash('sha256').update(`task:${request.requestId}`).digest('hex');
+ await rename(path.join(directory,`${batchKey}.result.json`),path.join(directory,`${batchKey}.result.interrupted-fixture`));
+ await rename(path.join(directory,`${batchKey}.check-2.result.json`),path.join(directory,`${batchKey}.check-2.result.interrupted-fixture`));
+ const reopened=createNativeTaskExecutionRequests({directory,binding:c.binding,selection,owner:custody.createExecution(ownerConfig)});
+ assert.deepEqual(await reopened.recoverTask(request),result);assert.deepEqual(await reopened.executeTask(request),result);assert.equal((await custody.grants.inspect()).revision,12);assert.equal((await reopened.shutdown()).cleanupComplete,true);
+});
+
+test('interrupted full-task request does not relaunch settled checks or start missing checks',{skip:!enabled||!process.env.PP_NATIVE_TASK_HOST},async()=>{
+ const f=await fixture('pass',1,3),c=f.composition,stateDirectory=path.join(c.root,'interrupted-task-state');await mkdir(stateDirectory);
+ const custody=createInstalledTaskExecutionCustody({stateDirectory,binding:c.binding,observeBinding:async()=>c.binding});
+ const ownerConfig={...c,registeredRoot:f.candidateRoot,actor:'interrupted-task-owner',nativeConfig:{executable:path.normalize(process.env.PP_NATIVE_TASK_HOST),executableDigest:process.env.PP_NATIVE_TASK_HOST_SHA256,cwd:c.root,compilationTempRoot:path.join(stateDirectory,'compilation')}};
+ const owner=custody.createExecution(ownerConfig),selection={expected:f.args.expected,contractHead:{revision:1,headDigest:'a'.repeat(64)}},directory=path.join(stateDirectory,'requests');
+ let launches=0;const interrupted={...owner,dispatch:async(...args)=>{launches++;await owner.dispatch(...args);throw Error('controlled lost reply after finalized first check');}};
+ const request={requestId:'interrupted-task',...selection,confirmationId:f.args.confirmationId,taskId:'T0001',attemptId:'interrupted-attempt',attemptNumber:1};
+ const requests=createNativeTaskExecutionRequests({directory,binding:c.binding,selection,owner:interrupted});
+ await assert.rejects(requests.executeTask(request),/controlled lost reply/);assert.equal(launches,1);assert.equal((await custody.grants.inspect()).revision,4);
+ await requests.shutdown();await owner.shutdown();
+ const reopenedOwner=custody.createExecution(ownerConfig),reopened=createNativeTaskExecutionRequests({directory,binding:c.binding,selection,owner:reopenedOwner});
+ await assert.rejects(reopened.recoverTask(request),/UNRESOLVED/);
+ await assert.rejects(reopened.executeTask(request),/UNRESOLVED/);
+ await assert.rejects(reopened.executeTask({...request,requestId:'replacement'}),/UNRESOLVED/);
+ assert.equal((await custody.grants.inspect()).revision,4);await reopened.shutdown();await reopenedOwner.shutdown();
+});
+
 test('155 actual native checks preserve one failure and every result across owner restart', {skip:!enabled||!process.env.PP_NATIVE_TASK_HOST||process.env.PP_NATIVE_POPULATION!=='155',timeout:900000},async()=>{
   const file=process.env.PP_NATIVE_DISPATCH_RESULTS;
  let prior;try{prior=JSON.parse(await readFile(file,'utf8'));}catch(error){if(error.code!=='ENOENT')throw error;}

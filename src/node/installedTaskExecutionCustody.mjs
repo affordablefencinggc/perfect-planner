@@ -11,6 +11,7 @@ import {createTaskNativeDispatch,nativeTaskSettlementObserved} from './taskNativ
 import {createNativeTaskExecutionAdapter} from './nativeTaskExecutionAdapter.mjs';
 import {createSession,heartbeatSession,releaseSession,inspectReleasedSession} from './sessionRegistry.mjs';
 import {createTaskEnrollmentStore} from './taskEnrollmentStore.mjs';
+import {candidateSnapshot} from './mergedStateRunner.mjs';
 
 // Supervisor-owned shared path derivation for later admitted execution and
 // current owner reads. Construction does not create files or enable execution.
@@ -35,9 +36,59 @@ export function createInstalledTaskExecutionCustody({stateDirectory,binding,obse
    async function safe(directory){for(let p=directory;;p=path.dirname(p)){const s=await lstat(p);if(!s.isDirectory()||s.isSymbolicLink()||path.relative(p,await realpath(p)))throw Error('INSTALLED_EXECUTION_STORAGE_UNSAFE');if(path.dirname(p)===p)break;}}
    await safe(stateDirectory);try{await mkdir(observationDirectory);}catch(error){if(error.code!=='EEXIST')throw error;}await safe(observationDirectory);
   }
+  const canonical=v=>Array.isArray(v)?v.map(canonical):v&&typeof v==='object'?Object.fromEntries(Object.keys(v).sort().map(k=>[k,canonical(v[k])])):v;
+  const wire=v=>JSON.stringify(canonical(v)),digest=v=>createHash('sha256').update(wire(v)).digest('hex');
+  function taskCheckSet(context,request,candidateDigest){
+   const contract=context.checkContract,task=contract.tasks.find(t=>t.taskId===request.taskId);
+   if(!task||typeof candidateDigest!=='string'||!/^[a-f0-9]{64}$/.test(candidateDigest))throw Error('NATIVE_TASK_CHECK_SET_INVALID');
+   return {schemaVersion:1,kind:'NATIVE_TASK_CHECK_SET',projectId:binding.projectId,rootIdentity:binding.rootIdentity,proposalRevision:context.proposal.hostRevision,proposalDigest:context.proposal.recordHash,checkContractDigest:contract.contractDigest,policyVersion:contract.policyVersion,policyDigest:contract.policyDigest,taskId:request.taskId,candidateDigest,
+    checks:task.checks.map(c=>({checkId:c.checkId,timeoutMs:c.timeoutMs})),totalBudgetMs:180000+task.checks.reduce((sum,c)=>sum+c.timeoutMs+675000,0),executionAuthorized:false};
+  }
   // Private owner capabilities only. Worker credentials never become renderer
   // results; transport composition must keep them inside the native host.
   const methods={
+   async reviewTaskChecks(request){
+    request=structuredClone(request);await current();
+    return review.withApprovedProposal(request.expected,request.confirmationId,async context=>{
+     const candidate=await candidateSnapshot(registeredRoot);
+     if(!candidate.valid||candidate.snapshotSchemaVersion!==2||candidate.cleanupComplete===false)throw Object.assign(Error('NATIVE_TASK_CHECK_SET_CANDIDATE_UNAVAILABLE'),{cleanupComplete:candidate.cleanupComplete});
+     await current();return taskCheckSet(context,request,candidate.digest);
+    });
+   },
+   async recoverTaskResults(input){
+    const {request,key,checkSet,session,checkRefs}=structuredClone(input);await current();
+    const fail=()=>{throw Error('NATIVE_TASK_BATCH_UNRESOLVED');};
+    const enrollmentStore=createTaskEnrollmentStore(enrollmentConfig);
+    const snapshot=await review.withApprovedProposal(request.expected,request.confirmationId,async context=>{
+     if(wire(checkSet)!==wire(taskCheckSet(context,request,checkSet?.candidateDigest))||!session||session.actor!==actor||session.workerId!==`native-${key.slice(0,32)}`||!Array.isArray(checkRefs)||checkRefs.length!==checkSet.checks.length)fail();
+     const state=await grants.inspect(),enrollments=await enrollmentStore.inspect();
+     const selected=state.grants.filter(e=>e.grant.binding.taskId===request.taskId&&e.grant.binding.attemptId===request.attemptId);
+     if(selected.length!==checkRefs.length)fail();
+     const refs=[];
+     for(const [index,check]of checkSet.checks.entries()){
+      const ref=checkRefs[index],entry=selected.find(e=>e.grant.grantId===ref?.grantId),b=entry?.grant.binding;
+      const issued=state.history.find(r=>r.event==='issued'&&r.grant.grantId===ref?.grantId);
+      const intent=state.history.find(r=>r.event==='intent-recorded'&&r.grant.grantId===ref?.grantId);
+      if(intent?.request.requestId!==`intent-${key}-${index}`)fail();
+      if(!b||issued?.request.requestId!==`issue-${key}-${index}`||entry.state!=='result-recorded'||b.checkId!==check.checkId||b.attemptNumber!==request.attemptNumber||b.candidateDigest!==checkSet.candidateDigest||b.workerId!==session.workerId||b.sessionId!==session.sessionId||b.proposalDigest!==checkSet.proposalDigest||b.checkContractDigest!==checkSet.checkContractDigest)fail();
+      if(b.proposalRevision!==checkSet.proposalRevision||b.policyVersion!==checkSet.policyVersion||b.policyDigest!==checkSet.policyDigest||b.candidateSchemaVersion!==2)fail();
+      const enrollment=enrollments.history.find(row=>row.epoch===b.enrollmentEpoch),mapping=enrollment?.snapshot;
+      if(enrollment?.requestId!==`enroll-${key}`||!mapping||mapping.hostRevision!==b.proposalRevision||mapping.proposalDigest!==b.proposalDigest||mapping.checkContractDigest!==b.checkContractDigest||mapping.policyVersion!==b.policyVersion||mapping.policyDigest!==b.policyDigest||mapping.assignments.length!==1||!mapping.assignments.some(a=>a.taskId===b.taskId&&a.workerId===b.workerId&&a.sessionId===b.sessionId&&a.actor===actor))fail();
+      const result=await results.readOwner({grantId:ref.grantId});
+      if(!result.journalLinked||result.runId!==entry.intentReceipt?.runId||result.intentDigest!==entry.intentReceipt?.recordDigest||result.artifactDigest!==entry.observationLink?.artifactDigest||!nativeTaskSettlementObserved(result.process)||result.process.exitCode===null||result.failureReasons.some(r=>r!=='nonzero-exit'))fail();
+      const expected={checkId:check.checkId,grantId:ref.grantId,runId:result.runId,intentDigest:result.intentDigest,artifactDigest:result.artifactDigest};
+      if(wire(ref)!==wire(expected)&&wire(ref)!==wire({checkId:check.checkId,grantId:ref.grantId}))fail();refs.push(expected);
+     }
+     if(!await inspectReleasedSession(sessionRegistryPath,{id:session.sessionId,actor}))fail();
+     const after=await grants.inspect();await current();if(after.headDigest!==state.headDigest||after.revision!==state.revision)fail();
+     return {approvalDigest:digest(context.confirmation),grantHead:state.headDigest,grantRevision:state.revision,enrollmentHead:enrollments.headDigest,enrollmentRevision:enrollments.revision,value:{anchorGrantId:refs[0].grantId,checkCount:refs.length,checkSetDigest:digest(checkSet),checksDigest:digest(refs),checkRefs:refs,executionAuthorized:false}};
+    });
+    return review.withApprovedProposal(request.expected,request.confirmationId,async context=>{
+     const state=await grants.inspect(),enrollments=await enrollmentStore.inspect();await current();
+     if(digest(context.confirmation)!==snapshot.approvalDigest||state.headDigest!==snapshot.grantHead||state.revision!==snapshot.grantRevision||enrollments.headDigest!==snapshot.enrollmentHead||enrollments.revision!==snapshot.enrollmentRevision)fail();
+     return snapshot.value;
+    });
+   },
    async inspectAttempt(input){
     input=structuredClone(input);await current();
     const fail=code=>{throw Error(`NATIVE_TASK_COVERAGE_${code}`);};

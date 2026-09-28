@@ -82,3 +82,25 @@ test('diagnostic storage refusal remains unresolved and preserves the original f
  const names=await readdir(f.directory);assert.ok(names.some(n=>n.endsWith('.original.json')));assert.equal(names.some(n=>n.endsWith('.result.json')),false);
  await assert.rejects(createNativeTaskExecutionRequests(f.config).execute(f.request),/UNRESOLVED/);assert.equal((await f.api.shutdown()).cleanupComplete,false);
 });
+
+// Request-store interruption tests use synthetic owner responses; native proof
+// lives in task-native-dispatch.test.mjs.
+async function batchFixture(){
+ const f=await fixture();const request={...f.request};delete request.checkId;
+ const checkSet={schemaVersion:1,kind:'NATIVE_TASK_CHECK_SET',projectId:f.config.binding.projectId,rootIdentity:f.config.binding.rootIdentity,proposalRevision:1,proposalDigest:request.expected.headDigest,checkContractDigest:'b'.repeat(64),policyVersion:1,policyDigest:'c'.repeat(64),taskId:'T0001',candidateDigest:'d'.repeat(64),checks:[{checkId:'unit',timeoutMs:1000}],totalBudgetMs:856000,executionAuthorized:false};
+ Object.assign(f.config.owner,{reviewTaskChecks:async()=>checkSet,heartbeatWorker:async()=>{},recoverTaskResults:async()=>{throw Error('NATIVE_TASK_BATCH_UNRESOLVED');}});
+ return {...f,request,checkSet,api:createNativeTaskExecutionRequests(f.config)};
+}
+test('batch interrupted directory claim blocks both batch and single replacement',async()=>{
+ const f=await batchFixture();await mkdir(f.directory);
+ await writeFile(path.join(f.directory,'active.json'),JSON.stringify({key:'a'.repeat(64),originalDigest:'b'.repeat(64)}));
+ await assert.rejects(f.api.executeTask(f.request),/UNRESOLVED/);
+ await assert.rejects(f.api.execute({...f.request,checkId:'unit',requestId:'replacement'}),/UNRESOLVED/);
+ assert.equal(f.counts().workers,0);assert.equal(f.counts().runs,0);
+});
+test('batch rejects malformed approved check sets before worker creation',async()=>{
+ for(const patch of [{checks:[{checkId:'unit',timeoutMs:300001}]},{totalBudgetMs:1},{projectId:'foreign'},{policyDigest:'invalid'},{checks:[{checkId:'unit',timeoutMs:1000},{checkId:'unit',timeoutMs:1000}]}]){
+  const f=await batchFixture();Object.assign(f.checkSet,patch);
+  await assert.rejects(f.api.executeTask(f.request),/CHECK_SET_INVALID/);assert.equal(f.counts().workers,0);
+ }
+});
