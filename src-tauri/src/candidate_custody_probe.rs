@@ -19,15 +19,15 @@ type Handle=*mut c_void;
  fn UnmapViewOfFile(address:*const c_void)->i32;
  fn FlushViewOfFile(address:*const c_void,bytes:usize)->i32;
 }
-struct WritableMapping{handle:Handle,view:*mut c_void}
+pub(crate) struct WritableMapping{handle:Handle,view:*mut c_void}
 impl WritableMapping{
- fn open(file:&File)->Self{
+ pub(crate) fn open(file:&File)->Self{
   let handle=unsafe{CreateFileMappingW(file.as_raw_handle(),ptr::null(),4,0,0,ptr::null())};assert!(!handle.is_null());
   let view=unsafe{MapViewOfFile(handle,2,0,0,8)};
   if view.is_null(){unsafe{CloseHandle(handle);}panic!("mapping failed");}
   Self{handle,view}
  }
- fn write(&self,bytes:&[u8;8]){unsafe{ptr::copy_nonoverlapping(bytes.as_ptr(),self.view as *mut u8,8);assert_ne!(FlushViewOfFile(self.view,8),0);}}
+ pub(crate) fn write(&self,bytes:&[u8;8]){unsafe{ptr::copy_nonoverlapping(bytes.as_ptr(),self.view as *mut u8,8);assert_ne!(FlushViewOfFile(self.view,8),0);}}
 }
 impl Drop for WritableMapping{fn drop(&mut self){unsafe{UnmapViewOfFile(self.view);CloseHandle(self.handle);}}}
 struct DirectoryObservation{file:Option<File>,event:Handle,overlapped:Option<Box<Overlapped>>,output:Option<Box<[u8;24]>>,pending:bool}

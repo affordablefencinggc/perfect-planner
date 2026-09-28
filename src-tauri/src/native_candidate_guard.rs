@@ -44,7 +44,8 @@ impl Directory{
   let remaining=deadline.saturating_duration_since(Instant::now()).as_millis().min(1000) as u32;
   if unsafe{WaitForSingleObject(self.event,remaining)}!=0{return Err(UNAVAILABLE);}
   let mut bytes=0;let ok=unsafe{GetOverlappedResult(handle,overlap,&mut bytes,0)};
-  if ok==0&&unsafe{GetLastError()}!=995{return Err(UNAVAILABLE);}
+  if ok!=0{self.pending=false;return Err(CHANGED);}
+  if unsafe{GetLastError()}!=995{return Err(UNAVAILABLE);}
   self.pending=false;Ok(())
  }
 }
@@ -94,11 +95,15 @@ impl CandidateGuard{
     guard.files.push(file);
    }
   }
-  for directory in &mut guard.directories{directory.arm()?;}
+  for directory in &mut guard.directories{
+   if Instant::now()>=deadline||cancel.load(Ordering::Acquire){return Err(UNAVAILABLE);}
+   directory.arm()?;
+  }
   // Close the enumeration-to-watch gap: under active notifications, require
   // exactly the pinned inventory. New entries cannot become unheld inputs.
   let mut observed=HashSet::new();
   for directory in &guard.directories{
+   if Instant::now()>=deadline||cancel.load(Ordering::Acquire){return Err(UNAVAILABLE);}
    for entry in fs::read_dir(&directory.path).map_err(|_|UNAVAILABLE)?{
     if Instant::now()>=deadline||cancel.load(Ordering::Acquire){return Err(UNAVAILABLE);}
     let path=entry.map_err(|_|UNAVAILABLE)?.path();
@@ -119,7 +124,7 @@ impl CandidateGuard{
   // per directory. Individual Drop never waits after this shared budget.
   for directory in &mut self.directories{directory.cancel();}
   let deadline=Instant::now()+Duration::from_secs(1);let mut result=Ok(());
-  for directory in &mut self.directories{if directory.settle(deadline).is_err(){result=Err(UNAVAILABLE);}}
+  for directory in &mut self.directories{if let Err(error)=directory.settle(deadline){if result.is_ok(){result=Err(error);}}}
   result
  }
 }
@@ -147,5 +152,19 @@ impl Drop for CandidateGuard{fn drop(&mut self){if !self.settlement_attempted{le
   assert!(fs::rename(root.join("0"),root.join("renamed")).is_err());
   let start=Instant::now();guard.finish().unwrap();assert!(start.elapsed()<Duration::from_secs(3));
   fs::rename(root.join("0"),root.join("renamed")).unwrap();fs::write(root.join("renamed/input"),b"released").unwrap();
+ }
+ #[test]fn late_notification_cannot_be_discarded_by_watch_cancellation(){
+  let root=root("late-change");let mut guard=CandidateGuard::acquire(&root,&AtomicBool::new(false)).unwrap();
+  guard.validate().unwrap();
+  fs::write(root.join("late-input"),b"changed after validation").unwrap();
+  assert_eq!(guard.settle_all(),Err(CHANGED));
+ }
+ #[test]fn existing_writable_mapping_refuses_candidate_acquisition(){
+  let root=root("mapped-input");let file=root.join("input");fs::write(&file,b"original").unwrap();
+  let writer=OpenOptions::new().read(true).write(true).share_mode(7).open(&file).unwrap();
+  let mapping=crate::candidate_custody_probe::WritableMapping::open(&writer);drop(writer);
+  mapping.write(b"changed!");mapping.write(b"original");
+  assert!(matches!(CandidateGuard::acquire(&root,&AtomicBool::new(false)),Err(UNAVAILABLE)));
+  drop(mapping);assert_eq!(fs::read(file).unwrap(),b"original");
  }
 }
