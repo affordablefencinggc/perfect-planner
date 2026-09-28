@@ -1,24 +1,23 @@
 //! Execution-window input protection. This does not bind the earlier Node
 //! snapshot or retain custody through durable output acknowledgment. It cannot
-//! confer verification authority. Directory oplocks detect namespace changes;
+//! confer verification authority. Directory notifications detect namespace changes;
 //! they do not prevent additions. Existing regular files deny write/delete.
 use std::{ffi::c_void,fs::{self,File,OpenOptions},os::windows::{fs::{OpenOptionsExt,MetadataExt},io::AsRawHandle},path::{Path,PathBuf},ptr,time::{Duration,Instant},sync::atomic::{AtomicBool,Ordering}};
 type Handle=*mut c_void;
 const UNAVAILABLE:&str="NATIVE_TASK_CANDIDATE_GUARD_UNAVAILABLE";
 const CHANGED:&str="NATIVE_TASK_CANDIDATE_CHANGED_DURING_EXECUTION";
-#[repr(C)]struct Request{version:u16,length:u16,level:u32,flags:u32}
 #[repr(C)]#[derive(Default)]struct Overlapped{internal:usize,internal_high:usize,offset:u32,offset_high:u32,event:Handle}
 #[link(name="kernel32")]extern "system"{
  fn CreateEventW(attributes:*const c_void,manual:i32,initial:i32,name:*const u16)->Handle;
  fn CloseHandle(handle:Handle)->i32;
- fn DeviceIoControl(handle:Handle,code:u32,input:*const c_void,input_size:u32,output:*mut c_void,output_size:u32,returned:*mut u32,overlapped:*mut Overlapped)->i32;
+ fn ReadDirectoryChangesW(handle:Handle,output:*mut c_void,output_size:u32,subtree:i32,filter:u32,returned:*mut u32,overlapped:*mut Overlapped,completion:*const c_void)->i32;
  fn GetLastError()->u32;
  fn CancelIoEx(handle:Handle,overlapped:*mut Overlapped)->i32;
  fn GetOverlappedResult(handle:Handle,overlapped:*mut Overlapped,bytes:*mut u32,wait:i32)->i32;
  fn WaitForSingleObject(handle:Handle,milliseconds:u32)->u32;
  fn GetFileInformationByHandle(handle:Handle,info:*mut u32)->i32;
 }
-struct Directory{file:Option<File>,event:Handle,overlapped:Option<Box<Overlapped>>,output:Option<Box<[u8;24]>>,pending:bool}
+struct Directory{file:Option<File>,event:Handle,overlapped:Option<Box<Overlapped>>,output:Option<Box<[u32;1024]>>,pending:bool}
 impl Directory{
  fn acquire(path:&Path)->Result<Self,&'static str>{
   // Open the reparse point itself, never its target. Deny directory rename.
@@ -26,10 +25,13 @@ impl Directory{
   let metadata=file.metadata().map_err(|_|UNAVAILABLE)?;
   if !metadata.is_dir()||metadata.file_attributes()&0x400!=0{return Err(UNAVAILABLE);}
   let event=unsafe{CreateEventW(ptr::null(),1,0,ptr::null())};if event.is_null(){return Err(UNAVAILABLE);}
-  let mut guard=Self{file:Some(file),event,overlapped:Some(Box::new(Overlapped{event,..Default::default()})),output:Some(Box::new([0;24])),pending:false};
-  let request=Request{version:1,length:12,level:1,flags:1};
-  let ok=unsafe{DeviceIoControl(guard.file.as_ref().unwrap().as_raw_handle(),0x90240,&request as *const _ as *const c_void,12,guard.output.as_mut().unwrap().as_mut_ptr() as *mut c_void,24,ptr::null_mut(),guard.overlapped.as_mut().unwrap().as_mut())};
-  if ok!=0||unsafe{GetLastError()}!=997{return Err(UNAVAILABLE);}
+  let mut guard=Self{file:Some(file),event,overlapped:Some(Box::new(Overlapped{event,..Default::default()})),output:Some(Box::new([0;1024])),pending:false};
+  // Names, attributes, size, write/creation time and security; ordinary access
+  // timestamps do not affect input identity. Any completion (including overflow
+  // or error) invalidates; never rearm or discard a notification as harmless.
+  // https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-readdirectorychangesw
+  let ok=unsafe{ReadDirectoryChangesW(guard.file.as_ref().unwrap().as_raw_handle(),guard.output.as_mut().unwrap().as_mut_ptr() as *mut c_void,4096,0,0x15f,ptr::null_mut(),guard.overlapped.as_mut().unwrap().as_mut(),ptr::null())};
+  if ok==0{return Err(UNAVAILABLE);}
   guard.pending=true;Ok(guard)
  }
  fn validate(&self)->Result<(),&'static str>{match unsafe{WaitForSingleObject(self.event,0)}{258=>Ok(()),0=>Err(CHANGED),_=>Err(UNAVAILABLE)}}
