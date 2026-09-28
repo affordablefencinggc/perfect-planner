@@ -1,7 +1,7 @@
 // Private host transport prerequisite, not a production CLI or authenticated IPC.
 // The flow (including native presenter, paths and actor) is host-installed only.
 import {parseNativeTaskObservation} from './taskNativeDispatch.mjs';
-import {validateNativeExecutionRequest} from './nativeTaskExecutionRequests.mjs';
+import {validateNativeExecutionRequest,validateNativeTaskExecutionRequest} from './nativeTaskExecutionRequests.mjs';
 import {validateNativeTaskIndexRequest,validateNativeTaskResultIndex} from '../shared/nativeTaskResultIndex.js';
 import {validateNativeTaskOutcomePage} from '../shared/nativeTaskOutcomePage.js';
 const LINE_BYTES=16384,RESPONSE_BYTES=65536,MAX_REQUESTS=128;
@@ -88,7 +88,12 @@ function taskResult(value,payload){
   if(JSON.stringify(value.failureReasons)!==JSON.stringify(reasons)||value.state!==(reasons.length?'failure-observed':'result-unverified'))throw Error('PROTOCOL_RESULT_INVALID');
   return {schemaVersion:1,projectId:value.projectId,rootIdentity:value.rootIdentity,grantId:value.grantId,runId:value.runId,taskId:value.taskId,checkId:value.checkId,attemptId:value.attemptId,attemptNumber:value.attemptNumber,workerId:value.workerId,state:value.state,exitCode:process.exitCode,failureReasons:reasons,artifactDigest:value.artifactDigest,intentDigest:value.intentDigest,journalLinked:value.journalLinked,observationLinkDigest:value.observationLinkDigest,cleanup:'unknown',authorityVerified:false,executionAuthorized:false};
 }
-function executionResult(value,payload){
+function executionResult(value,payload,batch=false){
+  if(batch){
+   const keys=['schemaVersion','kind','requestId','originalDigest','anchorGrantId','checkCount','checkSetDigest','checksDigest','state','cleanupComplete','authorityVerified','executionAuthorized'];
+   if(!exact(value,keys)||value.schemaVersion!==1||value.kind!=='NATIVE_TASK_EXECUTION_RECEIPT'||value.requestId!==payload.requestId||!['originalDigest','checkSetDigest','checksDigest'].every(k=>digest(value[k]))||typeof value.anchorGrantId!=='string'||!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(value.anchorGrantId)||!Number.isSafeInteger(value.checkCount)||value.checkCount<1||value.checkCount>256||value.state!=='results-recorded'||value.cleanupComplete!==true||value.authorityVerified!==false||value.executionAuthorized!==false)throw Error('PROTOCOL_RESULT_INVALID');
+   return Object.fromEntries(keys.map(k=>[k,value[k]]));
+  }
   if(value?.kind==='NATIVE_CHECK_NOT_STARTED_RECEIPT'){
    const keys=['schemaVersion','kind','requestId','originalDigest','proofDigest','state','cleanupComplete','executionAuthorized'];
    if(!exact(value,keys)||value.schemaVersion!==1||value.requestId!==payload.requestId||!digest(value.originalDigest)||!digest(value.proofDigest)||value.state!=='not-started'||value.cleanupComplete!==true||value.executionAuthorized!==false)throw Error('PROTOCOL_RESULT_INVALID');
@@ -108,7 +113,8 @@ export function createNativeReviewHostProtocol({flow,submission,checkPreparation
   if(flow.recoverOriginalRequest!==undefined&&typeof flow.recoverOriginalRequest!=='function')throw Error('NATIVE_REVIEW_PROTOCOL_CONFIG_INVALID');
   const recoverOriginal=flow.recoverOriginalRequest?.bind(flow);
   if(executionRequests!==undefined&&(!executionRequests||['execute','recover'].some(k=>typeof executionRequests[k]!=='function')))throw Error('NATIVE_REVIEW_PROTOCOL_CONFIG_INVALID');
-  const execution=executionRequests?Object.fromEntries(['execute','recover'].map(k=>[k,executionRequests[k].bind(executionRequests)])):null;
+  if(executionRequests&&['executeTask','recoverTask'].some(k=>executionRequests[k]!==undefined)&&['executeTask','recoverTask'].some(k=>typeof executionRequests[k]!=='function'))throw Error('NATIVE_REVIEW_PROTOCOL_CONFIG_INVALID');
+  const execution=executionRequests?Object.fromEntries(['execute','recover','executeTask','recoverTask'].filter(k=>typeof executionRequests[k]==='function').map(k=>[k,executionRequests[k].bind(executionRequests)])):null;
   if(submission!==undefined&&(!submission||typeof submission.inspectHead!=='function'||typeof submission.submitDraft!=='function'))throw Error('NATIVE_REVIEW_PROTOCOL_CONFIG_INVALID');
   const drafts=submission?{inspectHead:submission.inspectHead.bind(submission),submitDraft:submission.submitDraft.bind(submission)}:null;
   if(submission?.proposeTaskChange!==undefined&&typeof submission.proposeTaskChange!=='function')throw Error('NATIVE_REVIEW_PROTOCOL_CONFIG_INVALID');
@@ -140,8 +146,9 @@ export function createNativeReviewHostProtocol({flow,submission,checkPreparation
       if(token(request?.requestId))requestId=request.requestId;
       if(!exact(request,['version','requestId','command','payload'])||request.version!==1||!token(requestId))return response(requestId,false,'PROTOCOL_INVALID_REQUEST');
       const {command,payload}=request;
-      const executing=execution&&['execute-check','recover-check-execution'].includes(command);
-      let executionValid=false;if(executing){try{validateNativeExecutionRequest(payload);executionValid=true;}catch{}}
+      const batchExecuting=execution?.executeTask&&['execute-task','recover-task-execution'].includes(command);
+      const executing=execution&&(['execute-check','recover-check-execution'].includes(command)||batchExecuting);
+      let executionValid=false;if(executing){try{(batchExecuting?validateNativeTaskExecutionRequest:validateNativeExecutionRequest)(payload);executionValid=true;}catch{}}
       const cancelling=command==='cancel-review';
       const submitting=command==='submit-draft'&&drafts;
       const changing=command==='propose-task-change'&&changeTask;
@@ -169,7 +176,7 @@ export function createNativeReviewHostProtocol({flow,submission,checkPreparation
       seen.add(requestId);if(cancelling)cancelBusy=true;else{busy=true;if(command==='review-proposal'||originalReview)activeReview=requestId;}
       try {
         freeze(payload);let result;
-        if(executing)result=executionResult(await execution[command==='execute-check'?'execute':'recover'](payload),payload);
+        if(executing)result=executionResult(await execution[batchExecuting?(command==='execute-task'?'executeTask':'recoverTask'):(command==='execute-check'?'execute':'recover')](payload),payload,Boolean(batchExecuting));
         else if(resultPage)result=validateNativeTaskOutcomePage(await readPage(payload),payload,undefined,(v,grantId)=>taskResult(v,{grantId}));
         else if(resultIndex)result=validateNativeTaskResultIndex(await listResult(payload),payload);
         else if(resultRead)result=taskResult(await readResult(payload),payload);

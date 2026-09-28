@@ -5,15 +5,17 @@ use super::*;
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 pub struct ExecutionRequest{
  identity:InspectRequest,setup_reference:String,expected:Head,contract_head:Value,
- request_id:String,confirmation_id:String,task_id:String,check_id:String,attempt_id:String,attempt_number:u64,
+ request_id:String,confirmation_id:String,task_id:String,
+ #[serde(default,skip_serializing_if="Option::is_none")] check_id:Option<String>,attempt_id:String,attempt_number:u64,
 }
-fn payload(r:&ExecutionRequest)->Value{json!({"requestId":r.request_id,"expected":r.expected,"contractHead":r.contract_head,"confirmationId":r.confirmation_id,"taskId":r.task_id,"checkId":r.check_id,"attemptId":r.attempt_id,"attemptNumber":r.attempt_number})}
+fn payload(r:&ExecutionRequest)->Value{let mut value=json!({"requestId":r.request_id,"expected":r.expected,"contractHead":r.contract_head,"confirmationId":r.confirmation_id,"taskId":r.task_id,"attemptId":r.attempt_id,"attemptNumber":r.attempt_number});if let Some(check)=&r.check_id{value["checkId"]=json!(check);}value}
+fn command(r:&ExecutionRequest,recovery:bool)->&'static str{match(r.check_id.is_none(),recovery){(true,false)=>"execute-task",(true,true)=>"recover-task-execution",(false,false)=>"execute-check",(false,true)=>"recover-check-execution"}}
 fn validate_request(r:&ExecutionRequest)->Result<(),DraftError>{
  validate(&r.identity)?;
  let h=&r.contract_head;
  let id=&r.task_id;
  let task=(5..=7).contains(&id.len())&&id.starts_with('T')&&id.as_bytes()[1..].iter().all(u8::is_ascii_digit)&&id[1..].parse::<u32>().ok().is_some_and(|n|n>0&&format!("T{n:04}")==*id);
- if !digest(&r.setup_reference)||![&r.request_id,&r.confirmation_id,&r.check_id,&r.attempt_id].iter().all(|s|request_token(s))||!task||r.attempt_number==0||r.attempt_number>9_007_199_254_740_991||r.expected.host_revision==0||!head_valid(&r.expected)
+ if !digest(&r.setup_reference)||![&r.request_id,&r.confirmation_id,&r.attempt_id].iter().all(|s|request_token(s))||r.check_id.as_ref().is_some_and(|s|!request_token(s))||!task||r.attempt_number==0||r.attempt_number>9_007_199_254_740_991||r.expected.host_revision==0||!head_valid(&r.expected)
   ||!h.as_object().is_some_and(|o|o.len()==2&&o.contains_key("revision")&&o.contains_key("headDigest"))||!h["revision"].as_u64().is_some_and(|n|n>0&&n<=9_007_199_254_740_991)||!h["headDigest"].as_str().is_some_and(digest){return Err(error("NATIVE_CHECK_EXECUTION_INVALID"));}Ok(())
 }
 fn read(path:&Path)->Result<Value,DraftError>{
@@ -37,8 +39,12 @@ fn terminal(value:&Value,r:&ExecutionRequest,binding:&Binding)->Result<Value,Dra
  let keys=["schemaVersion","kind","requestId","originalDigest","grantId","runId","intentDigest","artifactDigest","state","cleanupComplete","executionAuthorized"];
  let uuid=|v:&Value|v.as_str().is_some_and(|s|s.len()==36&&s.bytes().enumerate().all(|(i,b)|if [8,13,18,23].contains(&i){b==b'-'}else{b.is_ascii_digit()||(b'a'..=b'f').contains(&b)}));
  // serde_json Value maps sort keys; this matches the helper's canonical JSON.
- let original=json!({"schemaVersion":1,"binding":binding,"request":payload(r)});
+ let original=json!({"schemaVersion":if r.check_id.is_none(){2}else{1},"binding":binding,"request":payload(r)});
  let original_digest=format!("{:x}",Sha256::digest(serde_json::to_vec(&original).unwrap()));
+ if r.check_id.is_none(){
+  let keys=["schemaVersion","kind","requestId","originalDigest","anchorGrantId","checkCount","checkSetDigest","checksDigest","state","cleanupComplete","authorityVerified","executionAuthorized"];
+  if !value.as_object().is_some_and(|o|o.len()==keys.len()&&keys.iter().all(|k|o.contains_key(*k)))||value["schemaVersion"]!=1||value["kind"]!="NATIVE_TASK_EXECUTION_RECEIPT"||value["requestId"]!=r.request_id||value["originalDigest"]!=original_digest||!uuid(&value["anchorGrantId"])||!value["checkCount"].as_u64().is_some_and(|n|(1..=256).contains(&n))||!["checkSetDigest","checksDigest"].iter().all(|k|value[k].as_str().is_some_and(digest))||value["state"]!="results-recorded"||value["cleanupComplete"]!=true||value["authorityVerified"]!=false||value["executionAuthorized"]!=false{return Err(error("NATIVE_CHECK_EXECUTION_RESULT_INVALID"));}return Ok(value.clone());
+ }
  if value["kind"]=="NATIVE_CHECK_NOT_STARTED_RECEIPT"{
   let keys=["schemaVersion","kind","requestId","originalDigest","proofDigest","state","cleanupComplete","executionAuthorized"];
   if !value.as_object().is_some_and(|o|o.len()==keys.len()&&keys.iter().all(|k|o.contains_key(*k)))||value["schemaVersion"]!=1||value["requestId"]!=r.request_id||value["originalDigest"]!=original_digest||!value["proofDigest"].as_str().is_some_and(digest)||value["state"]!="not-started"||value["cleanupComplete"]!=true||value["executionAuthorized"]!=false{return Err(error("NATIVE_CHECK_EXECUTION_RESULT_INVALID"));}
@@ -49,7 +55,8 @@ fn terminal(value:&Value,r:&ExecutionRequest,binding:&Binding)->Result<Value,Dra
 fn response(r:&ExecutionRequest,binding:&Binding,receipt:Value,retained:bool,recovered:bool)->Value{
  json!({"schemaVersion":1,"binding":binding,"requestId":r.request_id,"expected":r.expected,"contractHead":r.contract_head,"receipt":receipt,"retainedResult":retained,"recoveredSession":recovered,"executionAuthorized":false,"cleanupComplete":true})
 }
-pub(super) fn perform(app:tauri::AppHandle,r:ExecutionRequest,recovery:bool)->Result<Value,DraftError>{
+pub(super) fn perform(app:tauri::AppHandle,r:ExecutionRequest,recovery:bool,batch:bool)->Result<Value,DraftError>{
+ if r.check_id.is_none()!=batch{return Err(error("NATIVE_CHECK_EXECUTION_INVALID"));}
  validate_request(&r)?;
  let(resources,mut config)=check_preparation::configuration(&app,&r.identity,&r.setup_reference)?;
  config.prepared_check_selection=Some(json!({"expected":r.expected,"contractHead":r.contract_head}));
@@ -71,7 +78,7 @@ fn settle_saved_pending(state:&Path,r:&ExecutionRequest)->Result<(),DraftError>{
   let prior=store.sequence().checked_sub(1).ok_or_else(||uncertain(true))?;
   let diagnostics=dir.join(format!("{}.diagnostics-v2",binding.project_id)).join(format!("{:016x}",prior/256)).join(&session);
   let intent=read(&diagnostics.join(format!("{session}.intent.json")))?;
-  if intent["schemaVersion"]!=1||intent["sessionId"]!=session||intent["binding"]!=json!(binding)||!matches!(intent["command"].as_str(),Some("execute-check"|"recover-check-execution"))||intent["originalRequestId"]!=r.request_id||intent["originalObligationDigest"]!=hash||intent["executionAuthorized"]!=false||intent["recoveryAuthorized"]!=false{return Err(uncertain(true));}
+  if intent["schemaVersion"]!=1||intent["sessionId"]!=session||intent["binding"]!=json!(binding)||(intent["command"]!=command(r,false)&&intent["command"]!=command(r,true))||intent["originalRequestId"]!=r.request_id||intent["originalObligationDigest"]!=hash||intent["executionAuthorized"]!=false||intent["recoveryAuthorized"]!=false{return Err(uncertain(true));}
   let proof=read(&diagnostics.join(format!("{session}.supervisor.json")))?;
   if proof["schemaVersion"]!=1||proof["sessionId"]!=session||proof["reason"]!="NATIVE_HOST_REQUEST_FINISHED"||proof["executionAuthorizationObserved"]!=false||proof["executionAuthorized"]!=false||["processExited","descendantsSettled","ioSettled","cleanupComplete"].iter().any(|k|proof[k]!=true){return Err(uncertain(true));}
   let result=dir.join(format!("{key}.result.json"));
@@ -101,7 +108,7 @@ fn run_with<F:FnOnce(&Path,&HostConfiguration,&Value)->crate::native_host_superv
   return Ok(response(r,&config.expected_binding,receipt,true,recovery));
  }
  if !recovery&&(existed||guard.outstanding.is_some()){guard.append("PRE_DISPATCH_REFUSED")?;return Err(uncertain(true));}
- let command=if recovery{"recover-check-execution"}else{"execute-check"};
+ let command=command(r,recovery);
  let diagnostic=prepare_live_diagnostics(&mut guard,&dir,&config.expected_binding,true,Some((&r.request_id,&hash)),command)?;
  guard.append("BEGIN")?;guard.outstanding=Some(r.request_id.clone());guard.outstanding_digest=Some(hash.clone());
  let proof=dispatch(resources,config,&json!({"version":1,"requestId":guard.session,"command":command,"payload":payload(r)}));
@@ -131,6 +138,21 @@ fn run_with<F:FnOnce(&Path,&HostConfiguration,&Value)->crate::native_host_superv
   json!({"schemaVersion":1,"kind":"NATIVE_CHECK_EXECUTION_RECEIPT","requestId":r.request_id,"originalDigest":format!("{:x}",Sha256::digest(serde_json::to_vec(&original).unwrap())),"grantId":"11111111-1111-4111-8111-111111111111","runId":"22222222-2222-4222-8222-222222222222","intentDigest":"a".repeat(64),"artifactDigest":"b".repeat(64),"state":"result-recorded","cleanupComplete":true,"executionAuthorized":false})
  }
  fn good(r:&ExecutionRequest,c:&HostConfiguration)->crate::native_host_supervisor::SupervisorReceipt{proof(Some(json!({"ok":true,"result":receipt(r,&c.expected_binding)})))}
+ fn batch_receipt(r:&ExecutionRequest,binding:&Binding)->Value{
+  let original=json!({"schemaVersion":2,"binding":binding,"request":payload(r)});
+  json!({"schemaVersion":1,"kind":"NATIVE_TASK_EXECUTION_RECEIPT","requestId":r.request_id,"originalDigest":format!("{:x}",Sha256::digest(serde_json::to_vec(&original).unwrap())),"anchorGrantId":"11111111-1111-4111-8111-111111111111","checkCount":3,"checkSetDigest":"a".repeat(64),"checksDigest":"b".repeat(64),"state":"results-recorded","cleanupComplete":true,"authorityVerified":false,"executionAuthorized":false})
+ }
+ #[test]fn full_task_native_receipt_recovery_is_exact_and_does_not_relaunch(){
+  let(dir,c,mut r)=fixture();r.check_id=None;
+  assert!(run_with(&dir,&c,&r,false,|_,_,request|{assert_eq!(request["command"],"execute-task");assert!(request["payload"].get("checkId").is_none());proof(None)}).is_err());
+  assert!(run_with(&dir,&c,&r,false,|_,_,_|panic!("batch replay")).is_err());
+  let receipt=batch_receipt(&r,&c.expected_binding);
+  let result=run_with(&dir,&c,&r,true,|_,_,request|{assert_eq!(request["command"],"recover-task-execution");proof(Some(json!({"ok":true,"result":receipt})))}).unwrap();
+  assert_eq!(result["receipt"],receipt);
+  assert_eq!(run_with(&dir,&c,&r,false,|_,_,_|panic!("cached batch relaunch")).unwrap()["receipt"],receipt);
+  for(key,value)in [("checkCount",json!(0)),("checkCount",json!(257)),("authorityVerified",json!(true)),("cleanupComplete",json!(false)),("kind",json!("NATIVE_CHECK_EXECUTION_RECEIPT"))]{let mut bad=receipt.clone();bad[key]=value;assert!(terminal(&bad,&r,&c.expected_binding).is_err());}
+  r.check_id=Some("unit".into());assert!(run_with(&dir,&c,&r,true,|_,_,_|panic!("changed scope")).is_err());
+ }
  #[test]fn exact_original_precedes_dispatch_and_retry_reads_retained_result(){
   let(dir,c,r)=fixture();let first=run_with(&dir,&c,&r,false,|_,_,request|{
    let key=format!("{:x}",Sha256::digest(r.request_id.as_bytes()));assert_eq!(read(&dir.join("native-check-execution-v1").join(format!("{key}.original.json"))).unwrap(),serde_json::to_value(&r).unwrap());

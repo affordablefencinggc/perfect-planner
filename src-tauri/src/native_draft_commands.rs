@@ -22,12 +22,22 @@ pub use check_execution::ExecutionRequest;
 #[tauri::command]
 pub async fn execute_native_check(app:tauri::AppHandle,request:ExecutionRequest)->Result<Value,DraftError>{
     let admission=Admission::acquire()?;
-    tauri::async_runtime::spawn_blocking(move||{let _admission=admission;check_execution::perform(app,request,false)}).await.map_err(|_|uncertain(true))?
+    tauri::async_runtime::spawn_blocking(move||{let _admission=admission;check_execution::perform(app,request,false,false)}).await.map_err(|_|uncertain(true))?
 }
 #[tauri::command]
 pub async fn recover_native_check_execution(app:tauri::AppHandle,request:ExecutionRequest)->Result<Value,DraftError>{
     let admission=Admission::acquire()?;
-    tauri::async_runtime::spawn_blocking(move||{let _admission=admission;check_execution::perform(app,request,true)}).await.map_err(|_|uncertain(true))?
+    tauri::async_runtime::spawn_blocking(move||{let _admission=admission;check_execution::perform(app,request,true,false)}).await.map_err(|_|uncertain(true))?
+}
+#[tauri::command]
+pub async fn execute_native_task(app:tauri::AppHandle,request:ExecutionRequest)->Result<Value,DraftError>{
+    let admission=Admission::acquire()?;
+    tauri::async_runtime::spawn_blocking(move||{let _admission=admission;check_execution::perform(app,request,false,true)}).await.map_err(|_|uncertain(true))?
+}
+#[tauri::command]
+pub async fn recover_native_task_execution(app:tauri::AppHandle,request:ExecutionRequest)->Result<Value,DraftError>{
+    let admission=Admission::acquire()?;
+    tauri::async_runtime::spawn_blocking(move||{let _admission=admission;check_execution::perform(app,request,true,true)}).await.map_err(|_|uncertain(true))?
 }
 #[tauri::command]
 pub async fn review_native_checks(app:tauri::AppHandle,request:ReviewRequest)->Result<Value,DraftError>{

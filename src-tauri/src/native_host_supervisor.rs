@@ -102,7 +102,7 @@ fn review_payload(command:&str,p:&Value)->bool{
     }
 }
 fn selected_review_request(selection:Option<&Value>,request:&Value)->Result<(),&'static str>{
-    if matches!(request["command"].as_str(),Some("execute-check"|"recover-check-execution")){
+    if matches!(request["command"].as_str(),Some("execute-check"|"recover-check-execution"|"execute-task"|"recover-task-execution")){
         let selected=selection.ok_or("NATIVE_HOST_EXECUTION_SELECTION_MISMATCH")?;
         if !exact(selected,&["expected","contractHead"])||!saved_head(&selected["expected"],"hostRevision")||!saved_head(&selected["contractHead"],"revision")||request["payload"]["expected"]!=selected["expected"]||request["payload"]["contractHead"]!=selected["contractHead"]{return Err("NATIVE_HOST_EXECUTION_SELECTION_MISMATCH");}
     }
@@ -117,8 +117,9 @@ fn selected_review_request(selection:Option<&Value>,request:&Value)->Result<(),&
 }
 fn request_line(request:&Value)->Result<Vec<u8>,&'static str>{
     let command=request["command"].as_str().unwrap_or("");
-    let executing=matches!(command,"execute-check"|"recover-check-execution");
-    if executing&&!execution_payload(&request["payload"]){return Err("NATIVE_HOST_REQUEST_INVALID");}
+    let batch=matches!(command,"execute-task"|"recover-task-execution");
+    let executing=matches!(command,"execute-check"|"recover-check-execution")||batch;
+    if executing&&!(if batch{task_execution_payload(&request["payload"])}else{execution_payload(&request["payload"])}){return Err("NATIVE_HOST_REQUEST_INVALID");}
     let read=matches!(command,"read-proposal-snapshot"|"read-proposal-brief"|"read-proposal-task"|"read-proposal-request");
     if matches!(command,"review-original-request"|"recover-original-request"|"review-proposal"|"recover-interrupted-request"|"inspect-recovery"|"recover-presentation"|"cancel-review")&&!review_payload(command,&request["payload"]){return Err("NATIVE_HOST_REQUEST_INVALID");}
     let preparing=command=="prepare-checks";
@@ -145,10 +146,17 @@ fn execution_payload(p:&Value)->bool{
     });
     exact(p,&["requestId","expected","contractHead","confirmationId","taskId","checkId","attemptId","attemptNumber"])&&["requestId","confirmationId","checkId","attemptId"].iter().all(|k|id(k))&&task&&saved_head(&p["expected"],"hostRevision")&&saved_head(&p["contractHead"],"revision")&&p["attemptNumber"].as_u64().is_some_and(|n|n>0&&n<=9_007_199_254_740_991)
 }
+fn task_execution_payload(p:&Value)->bool{
+    if !exact(p,&["requestId","expected","contractHead","confirmationId","taskId","attemptId","attemptNumber"]){return false;}
+    let mut single=p.clone();single["checkId"]=json!("batch");execution_payload(&single)
+}
 fn request_timeout(request:&Value)->Duration{
     // Three admission captures (360s), guarded conversation (555s, including
     // its fourth capture), and 60s admission/settlement. No grant extension.
-    Duration::from_secs(if request["command"]=="execute-check"{975}else{150})
+    // Full-task admission allows at most 256 checks, each bounded at 975s,
+    // plus the initial candidate capture (120s) and settlement margin (60s).
+    // The owner applies the smaller actual check-set budget between stages.
+    Duration::from_secs(if request["command"]=="execute-task"{256*975+180+120}else if request["command"]=="execute-check"{975}else{150})
 }
 #[derive(Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
@@ -346,18 +354,21 @@ mod containment{
     }
     #[test]
     #[ignore="Requires DANS1 current package and explicit isolated execution fixture"]
-    fn actual_full_supervisor_execution_and_replay(){full_supervisor_fixture(false);}
+    fn actual_full_supervisor_execution_and_replay(){full_supervisor_fixture(false,false);}
     #[test]
     #[ignore="Requires DANS1 current package and explicit isolated failure/retry fixture"]
-    fn actual_full_supervisor_failure_retry_preserves_both_attempts(){full_supervisor_fixture(true);}
-    fn full_supervisor_fixture(failing:bool){
+    fn actual_full_supervisor_failure_retry_preserves_both_attempts(){full_supervisor_fixture(true,false);}
+    #[test]
+    #[ignore]
+    fn actual_full_task_batch_records_all_checks_and_recovers(){full_supervisor_fixture(false,true);}
+    fn full_supervisor_fixture(failing:bool,batch:bool){
         use sha2::{Digest,Sha256};
         assert_eq!(std::env::var("COMPUTERNAME").unwrap().to_lowercase(),"dans1");
         let out=PathBuf::from(std::env::var_os("PP_SUPERVISOR_EXECUTION_OUT").expect("fixture output"));
         std::fs::create_dir(&out).unwrap();
         let root=out.join("candidate");let state=out.join("state");let registry=out.join("registry");
         for p in [&root,&state,&registry]{std::fs::create_dir(p).unwrap();}
-        std::fs::write(root.join("package.json"),serde_json::to_vec(&json!({"name":"inert-supervisor-fixture","version":"1.0.0","private":true,"scripts":{"test":"node fixture.cjs"}})).unwrap()).unwrap();
+        std::fs::write(root.join("package.json"),serde_json::to_vec(&json!({"name":"inert-supervisor-fixture","version":"1.0.0","private":true,"scripts":if batch{json!({"test":"node fixture.cjs","build":"node -e \"process.exitCode=7\"","verify:secrets":"node -e \"process.exitCode=0\""})}else{json!({"test":"node fixture.cjs"})}})).unwrap()).unwrap();
         std::fs::write(root.join("package-lock.json"),b"{\"name\":\"inert-supervisor-fixture\",\"version\":\"1.0.0\",\"lockfileVersion\":3,\"packages\":{}}").unwrap();
         std::fs::write(root.join("fixture.cjs"),b"setTimeout(()=>{const value=require('node:fs').readFileSync('input.txt','utf8');console.log('planner-supervisor-fixture:'+value);process.exitCode=value==='pass'?0:7},300);").unwrap();
         std::fs::write(root.join("input.txt"),if failing {b"fail"}else{b"pass"}).unwrap();
@@ -370,7 +381,7 @@ mod containment{
         let resource=PathBuf::from(std::env::var_os("PP_TEST_NATIVE_HOST_RESOURCE_ROOT").expect("resource"));let installed=crate::native_host_resources::verify_installed(&resource).unwrap();
         let exe=resource.join("perfect-planner-desktop.exe");let exe_digest=format!("{:x}",Sha256::digest(std::fs::read(&exe).unwrap()));
         let npm=PathBuf::from(std::env::var_os("PP_SUPERVISOR_NPM_CLI").expect("npm"));let npm_digest=format!("{:x}",Sha256::digest(std::fs::read(&npm).unwrap()));
-        let initial=json!({"packageConfig":{"packageRoot":installed.package_root,"manifestDigest":installed.manifest_digest},"metadataConfig":{"executable":exe,"executableDigest":exe_digest,"registryRoot":registry,"workspaceId":"supervisor-fixture","registryRevision":reg["registryRevision"],"rootIdentity":reg["rootIdentity"]},"stateDirectory":state,"actor":"qualification-runner","source":"scripted-inert-fixture-not-human-consent","checkProfileProvision":{"profileId":"npm-project-checks-v1","registeredRoot":root,"npmCli":{"path":npm,"sha256":npm_digest},"assignments":[{"taskId":"T0001","categories":["tests"]}]}});
+        let initial=json!({"packageConfig":{"packageRoot":installed.package_root,"manifestDigest":installed.manifest_digest},"metadataConfig":{"executable":exe,"executableDigest":exe_digest,"registryRoot":registry,"workspaceId":"supervisor-fixture","registryRevision":reg["registryRevision"],"rootIdentity":reg["rootIdentity"]},"stateDirectory":state,"actor":"qualification-runner","source":"scripted-inert-fixture-not-human-consent","checkProfileProvision":{"profileId":"npm-project-checks-v1","registeredRoot":root,"npmCli":{"path":npm,"sha256":npm_digest},"assignments":[{"taskId":"T0001","categories":if batch{json!(["tests","build","secrets"])}else{json!(["tests"])}}]}});
         let config_file=out.join("config.json");std::fs::write(&config_file,serde_json::to_vec_pretty(&initial).unwrap()).unwrap();
         let mut node=std::process::Command::new(resource.join("native-review-host/runtime/node.exe"));
         #[cfg(windows)] {use std::os::windows::process::CommandExt;node.creation_flags(0x08000000);}
@@ -378,6 +389,22 @@ mod containment{
         std::fs::write(out.join("prepare.out.log"),&prepared.stdout).unwrap();std::fs::write(out.join("prepare.err.log"),&prepared.stderr).unwrap();assert!(prepared.status.success(),"fixture preparation failed");
         let v:Value=serde_json::from_slice(&std::fs::read(&config_file).unwrap()).unwrap();let m=&v["metadataConfig"];let text=|v:&Value|v.as_str().unwrap().to_owned();
         let config=HostConfiguration{metadata_executable:exe,metadata_digest:exe_digest,registry_root:registry,state_directory:state.clone(),workspace_id:"supervisor-fixture".into(),registry_revision:m["registryRevision"].as_u64().unwrap().try_into().unwrap(),expected_binding:serde_json::from_value(v["expectedBinding"].clone()).unwrap(),actor:text(&v["actor"]),source:text(&v["source"]),check_contract:None,check_profile_provision:Some(v["checkProfileProvision"].clone()),prepared_check_selection:Some(v["preparedCheckSelection"].clone())};
+        if batch {
+            let mut request=v["executionRequest"].clone();request.as_object_mut().unwrap().remove("checkId");
+            let mut saved=Value::Null;let mut receipts=Vec::new();
+            for(index,command)in ["execute-task","execute-task","recover-task-execution"].iter().enumerate(){
+                let proof=run_single(&resource,&config,&json!({"version":1,"requestId":format!("batch-{index}"),"command":command,"payload":request}));
+                receipts.push(serde_json::to_value(&proof).unwrap());std::fs::write(out.join("batch-receipts.json"),serde_json::to_vec_pretty(&receipts).unwrap()).unwrap();
+                assert_eq!(proof.reason,"NATIVE_HOST_REQUEST_FINISHED","{proof:?}");assert!(proof.cleanup_complete&&proof.process_exited&&proof.descendants_settled&&proof.io_settled);
+                let reply=proof.reply.unwrap();assert_eq!(reply["ok"],true,"{reply:?}");let result=&reply["result"];assert_eq!(result["state"],"results-recorded");assert_eq!(result["checkCount"],3);assert_eq!(result["authorityVerified"],false);
+                if index==0{saved=result.clone();}else{assert_eq!(*result,saved);}
+                let journal=std::fs::read_to_string(state.join(format!("{}.execution-grants.jsonl",config.expected_binding.project_id))).unwrap();assert_eq!(journal.lines().count(),12);
+            }
+            let proof=run_single(&resource,&config,&json!({"version":1,"requestId":"batch-outcomes","command":"read-task-result-page","payload":{"offset":0,"expectedHeadDigest":null}}));
+            assert!(proof.cleanup_complete);let reply=proof.reply.unwrap();assert_eq!(reply["ok"],true,"{reply:?}");let rows=reply["result"]["outcomes"].as_array().unwrap();assert_eq!(rows.len(),3);
+            for(check,exit)in [("npm-tests",0),("npm-build",7),("npm-secrets",0)]{let row=rows.iter().find(|r|r["value"]["checkId"]==check).unwrap();assert_eq!(row["phase"],"ready");assert_eq!(row["value"]["exitCode"],exit);assert_eq!(row["value"]["authorityVerified"],false);}
+            std::fs::write(out.join("batch-outcomes.json"),serde_json::to_vec_pretty(&reply).unwrap()).unwrap();return;
+        }
         let mut receipts=Vec::new();let mut original=Value::Null;
         for (index,command) in ["execute-check","execute-check","recover-check-execution"].iter().enumerate(){
             let proof=run_single(&resource,&config,&json!({"version":1,"requestId":format!("full-supervisor-{index}"),"command":command,"payload":v["executionRequest"]}));
@@ -423,14 +450,16 @@ mod containment{
     #[test]fn execution_requires_exact_selected_heads_and_no_caller_authority(){
         let selection=json!({"expected":{"hostRevision":1,"headDigest":"a".repeat(64)},"contractHead":{"revision":2,"headDigest":"b".repeat(64)}});
         let payload=json!({"requestId":"original-1","expected":selection["expected"],"contractHead":selection["contractHead"],"confirmationId":"approved-1","taskId":"T0001","checkId":"tests","attemptId":"attempt-1","attemptNumber":1});
-        for command in ["execute-check","recover-check-execution"]{
-            let request=json!({"version":1,"requestId":"transport-1","command":command,"payload":payload});
+        for command in ["execute-check","recover-check-execution","execute-task","recover-task-execution"]{
+            let mut selected_payload=payload.clone();let batch=matches!(command,"execute-task"|"recover-task-execution");if batch{selected_payload.as_object_mut().unwrap().remove("checkId");}
+            let request=json!({"version":1,"requestId":"transport-1","command":command,"payload":selected_payload});
             assert!(request_line(&request).is_ok());assert!(selected_review_request(Some(&selection),&request).is_ok());assert!(selected_review_request(None,&request).is_err());
             for key in ["expected","contractHead"]{let mut changed=selection.clone();changed[key]["headDigest"]=json!("c".repeat(64));assert!(selected_review_request(Some(&changed),&request).is_err());}
             for key in ["credentials","executable","actor","executionAuthorized","workerId"]{let mut bad=request.clone();bad["payload"][key]=json!("caller");assert!(request_line(&bad).is_err());}
             for id in ["T0000","T00001","T1","T1000000","../foreign"]{let mut bad=request.clone();bad["payload"]["taskId"]=json!(id);assert!(request_line(&bad).is_err());}
             for n in [0u64,9_007_199_254_740_992]{let mut bad=request.clone();bad["payload"]["attemptNumber"]=json!(n);assert!(request_line(&bad).is_err());}
-            assert_eq!(request_timeout(&request),Duration::from_secs(if command=="execute-check"{975}else{150}));
+            if batch{for key in ["checkId","checks","totalBudgetMs"]{let mut bad=request.clone();bad["payload"][key]=json!("caller");assert!(request_line(&bad).is_err());}}
+            assert_eq!(request_timeout(&request),Duration::from_secs(if command=="execute-task"{256*975+300}else if command=="execute-check"{975}else{150}));
         }
         assert_eq!(request_timeout(&json!({"command":"review-proposal"})),Duration::from_secs(150));
     }

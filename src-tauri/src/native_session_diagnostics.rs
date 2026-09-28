@@ -64,8 +64,8 @@ fn retain_legacy_inventory(state:&Path,root:&Path,binding:&Binding)->Result<(),D
 
 pub(super) fn prepare(state:&Path,guard:&session_store::LiveGuard,binding:&Binding,submitted:bool,original:Option<(&str,&str)>,command:&str)->Result<DiagnosticSession,DraftError>{
  if guard.begun||binding.root_identity!=guard.root_identity()||binding.project_id!=project_id(guard.root_identity())
-  ||!matches!(command,"execute-check"|"recover-check-execution"|"review-proposal"|"recover-original-request"|"inspect-proposal"|"submit-draft"|"read-proposal-snapshot"|"prepare-checks"|"inspect-checks"|"inspect-task-result"|"list-task-results"|"read-task-result-page")
-  ||submitted!=matches!(command,"execute-check"|"recover-check-execution"|"review-proposal"|"recover-original-request"|"submit-draft"|"prepare-checks")||submitted!=original.is_some()
+  ||!matches!(command,"execute-check"|"recover-check-execution"|"execute-task"|"recover-task-execution"|"review-proposal"|"recover-original-request"|"inspect-proposal"|"submit-draft"|"read-proposal-snapshot"|"prepare-checks"|"inspect-checks"|"inspect-task-result"|"list-task-results"|"read-task-result-page")
+  ||submitted!=matches!(command,"execute-check"|"recover-check-execution"|"execute-task"|"recover-task-execution"|"review-proposal"|"recover-original-request"|"submit-draft"|"prepare-checks")||submitted!=original.is_some()
   ||original.is_some_and(|(id,hash)|!request_token(id)||!digest(hash)){return Err(error("NATIVE_DRAFT_DIAGNOSTIC_INVALID"));}
  let root=state.join(format!("{}.diagnostics-v2",binding.project_id));directory(&root)?;
  retain_legacy_inventory(state,&root,binding)?;

@@ -125,7 +125,8 @@ export function createNativeReviewHostComposition({proposalConfig,confirmationPa
   if(executionRequests!==undefined&&(!executionRequests||['execute','recover','shutdown'].some(k=>typeof executionRequests[k]!=='function')))throw Error('NATIVE_COMPOSITION_CONFIG_INVALID');
   const pendingExecutions=new Set();
   const closeExecution=executionRequests?.shutdown.bind(executionRequests);
-  const scopedExecution=executionRequests?Object.fromEntries(['execute','recover'].map(method=>{
+  if(executionRequests&&['executeTask','recoverTask'].some(k=>executionRequests[k]!==undefined)&&['executeTask','recoverTask'].some(k=>typeof executionRequests[k]!=='function'))throw Error('NATIVE_COMPOSITION_CONFIG_INVALID');
+  const scopedExecution=executionRequests?Object.fromEntries(['execute','recover','executeTask','recoverTask'].filter(k=>typeof executionRequests[k]==='function').map(method=>{
     const invoke=executionRequests[method].bind(executionRequests);
     return [method,payload=>{
       if(stopped)throw Error('NATIVE_COMPOSITION_STOPPED');

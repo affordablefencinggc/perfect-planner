@@ -84,3 +84,18 @@ test('not-started recovery receipt never invents a grant or execution',async()=>
  const host=createNativeCheckSetupHost(project(),{runtime,invoke:async()=>value});assert.equal((await host.recoverExecution(request)).receipt.state,'not-started');
  for(const patch of [{grantId:'11111111-1111-4111-8111-111111111111'},{state:'result-recorded'},{proofDigest:'bad'},{cleanupComplete:false},{executionAuthorized:true}]){const bad=createNativeCheckSetupHost(project(),{runtime,invoke:async()=>({...value,receipt:{...terminal,...patch}})});await assert.rejects(bad.recoverExecution(request));}
 });
+
+test('full-task adapter preserves batch scope and rejects false batch authority',async()=>{
+ const request={setupReference,expected:input().expected,contractHead:receipt().contractHead,requestId:'task-1',confirmationId:'approved-1',taskId:'T0001',attemptId:'attempt-1',attemptNumber:1};
+ const terminal={schemaVersion:1,kind:'NATIVE_TASK_EXECUTION_RECEIPT',requestId:request.requestId,originalDigest:'a'.repeat(64),anchorGrantId:'11111111-1111-4111-8111-111111111111',checkCount:3,checkSetDigest:'b'.repeat(64),checksDigest:'c'.repeat(64),state:'results-recorded',cleanupComplete:true,authorityVerified:false,executionAuthorized:false};
+ const result={schemaVersion:1,binding,requestId:request.requestId,expected:request.expected,contractHead:request.contractHead,receipt:terminal,retainedResult:false,recoveredSession:false,executionAuthorized:false,cleanupComplete:true};
+ const host=createNativeCheckSetupHost(project(),{runtime,invoke:async(command,args)=>{assert.equal(command,'execute_native_task');assert.equal(Object.hasOwn(args.request,'checkId'),false);return result;}});
+ assert.deepEqual((await host.executeTask(request)).receipt,terminal);
+ for(const patch of [{checkId:'tests'},{checks:['tests']},{credentials:{}}])assert.throws(()=>host.executeTask({...request,...patch}));
+ for(const patch of [{authorityVerified:true},{checkCount:257},{checksDigest:'bad'},{cleanupComplete:false},{kind:'NATIVE_CHECK_EXECUTION_RECEIPT'},{privatePath:'hidden'}]){
+  const bad=createNativeCheckSetupHost(project(),{runtime,invoke:async()=>({...result,receipt:{...terminal,...patch}})});await assert.rejects(bad.executeTask(request));
+ }
+ const recovered=createNativeCheckSetupHost(project(),{runtime,invoke:async command=>{assert.equal(command,'recover_native_task_execution');return {...result,retainedResult:true,recoveredSession:true};}});
+ assert.deepEqual((await recovered.recoverTaskExecution(request)).receipt,terminal);
+ await assert.rejects(host.recoverTaskExecution(request));
+});

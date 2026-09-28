@@ -158,3 +158,20 @@ test('private recovery projects a distinct not-started receipt and refuses false
   const result=JSON.parse(await protocol.dispatchLine(encode('recover-check-execution',payload)));assert.equal(result.ok,patch===null);if(!patch)assert.deepEqual(result.result,receipt);
  }
 });
+
+test('full-task commands freeze input and expose only bounded batch receipts',async()=>{
+ const payload={requestId:'batch-1',expected:head,contractHead:{revision:1,headDigest:'b'.repeat(64)},confirmationId:'confirmation-1',taskId:'T0001',attemptId:'attempt-1',attemptNumber:1};
+ const receipt={schemaVersion:1,kind:'NATIVE_TASK_EXECUTION_RECEIPT',requestId:payload.requestId,originalDigest:'c'.repeat(64),anchorGrantId:'11111111-1111-4111-8111-111111111111',checkCount:3,checkSetDigest:'d'.repeat(64),checksDigest:'e'.repeat(64),state:'results-recorded',cleanupComplete:true,authorityVerified:false,executionAuthorized:false};
+ let calls=0;const run=async input=>{calls++;assert.ok(Object.isFrozen(input.expected));assert.deepEqual(input,payload);return receipt;};
+ const capabilities={execute:async()=>{throw Error('single called');},recover:async()=>{throw Error('single called');},executeTask:run,recoverTask:run};
+ const protocol=createNativeReviewHostProtocol({flow:make(),executionRequests:capabilities});capabilities.executeTask=async()=>{throw Error('mutated');};
+ for(const command of ['execute-task','recover-task-execution']){const result=JSON.parse(await protocol.dispatchLine(encode(command,payload,command)));assert.equal(result.ok,true);assert.deepEqual(result.result,receipt);}
+ assert.equal(calls,2);
+ for(const patch of [{checkId:'injected'},{checks:['injected']},{credentials:{token:'PRIVATE'}},{attemptNumber:0}])assert.equal(JSON.parse(await protocol.dispatchLine(encode('execute-task',{...payload,...patch},`invalid-${calls++}`))).ok,false);
+ for(const patch of [{checkCount:0},{checkCount:257},{authorityVerified:true},{executionAuthorized:true},{cleanupComplete:false},{requestId:'foreign'},{secret:'PRIVATE'},{anchorGrantId:'bad'},{checksDigest:'bad'}]){
+  const p=createNativeReviewHostProtocol({flow:make(),executionRequests:{...capabilities,executeTask:async()=>({...receipt,...patch})}});
+  const reply=await p.dispatchLine(encode('execute-task',payload));assert.equal(JSON.parse(reply).ok,false);assert.equal(reply.includes('PRIVATE'),false);
+ }
+ const absent=createNativeReviewHostProtocol({flow:make(),executionRequests:{execute:run,recover:run}});
+ assert.equal(JSON.parse(await absent.dispatchLine(encode('execute-task',payload))).ok,false);
+});

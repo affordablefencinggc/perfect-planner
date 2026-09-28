@@ -23,6 +23,8 @@ export const nativeInvokeHandlers = Object.freeze([
   'native_draft_commands::recover_native_check_review',
   'native_draft_commands::execute_native_check',
   'native_draft_commands::recover_native_check_execution',
+  'native_draft_commands::execute_native_task',
+  'native_draft_commands::recover_native_task_execution',
   'native_draft_commands::inspect_native_task_result',
   'native_draft_commands::list_native_task_results',
   'native_draft_commands::read_native_task_result_page',

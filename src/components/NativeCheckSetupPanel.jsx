@@ -1,6 +1,7 @@
 import {useEffect,useMemo,useRef,useState} from 'react';
 import {createNativeCheckSetupHost} from '../native/checkSetupHost.js';
 import {createNativeTaskResultHost} from '../native/taskResultHost.js';
+import {readNativeTaskBatchOutcome} from '../native/taskBatchOutcome.js';
 const checkLabels={tests:'Tests',build:'Build',secrets:'Secret check'};
 const scriptNames={tests:'test',build:'build',secrets:'verify:secrets'};
 
@@ -66,22 +67,26 @@ function CheckSetup({host,results,snapshot,disabled}){
  async function readOutcome(receipt,original){
   if(receipt.receipt.state==='not-started'){if(alive.current){setOutcome(null);setNote('The saved check did not start. Its original request and recovery proof are retained. You can start a new approved attempt.');}return;}
   if(!results?.available)throw Error('Result reader unavailable. Keep the saved request and recover its result.');
+  if(receipt.receipt.kind==='NATIVE_TASK_EXECUTION_RECEIPT'){
+   const value=await readNativeTaskBatchOutcome(results,receipt.receipt,original);
+   if(alive.current){setOutcome(value);setNote('All recorded check results match this saved task attempt. Review each outcome below; the task remains unverified.');}return;
+  }
   const value=await results.read({grantId:receipt.receipt.grantId});
   if(value.runId!==receipt.receipt.runId||value.intentDigest!==receipt.receipt.intentDigest||value.artifactDigest!==receipt.receipt.artifactDigest||value.taskId!==original.taskId||value.checkId!==original.checkId||value.attemptId!==original.attemptId||value.attemptNumber!==original.attemptNumber)throw Error('Result does not match the saved check request. Keep the original for recovery.');
   if(alive.current){setOutcome(value);setNote(receipt.retainedResult?'Saved check result recovered. No check was started by recovery.':'Check result saved. Review the outcome below.');}
  }
- const execute=()=>perform(async()=>{
+ const execute=(batch=false)=>perform(async()=>{
   if(!approved||executionPending||pending||!selectedCheck||!active.some(t=>t.id===taskId))throw Error('Refresh the exact approval and resolve any saved check before running.');
   const previous=executionOriginal.current;
-  const input={...approval.original,requestId:crypto.randomUUID(),confirmationId:approval.confirmation.id,taskId,checkId:selectedCheck,attemptId:crypto.randomUUID(),attemptNumber:previous?previous.attemptNumber+1:1};
+  const input={...approval.original,requestId:crypto.randomUUID(),confirmationId:approval.confirmation.id,taskId,...(batch?{}:{checkId:selectedCheck}),attemptId:crypto.randomUUID(),attemptNumber:previous?previous.attemptNumber+1:1};
   if(!Number.isSafeInteger(input.attemptNumber)||input.attemptNumber<1)throw Error('Attempt history is unavailable. Recover the original check.');
   try{localStorage.setItem(cacheKey+':execution',JSON.stringify(input));}catch{throw Error('Request reference could not be saved. The check was not started.');}
   executionOriginal.current=input;setSavedExecution(input);setExecutionReceipt(null);setOutcome(null);
-  const receipt=await host.execute(input);if(!alive.current)return;setExecutionReceipt(receipt);await readOutcome(receipt,input);
+  const receipt=await host[batch?'executeTask':'execute'](input);if(!alive.current)return;setExecutionReceipt(receipt);await readOutcome(receipt,input);
  });
  const recoverExecution=()=>perform(async()=>{
   setOutcome(null);setExecutionReceipt(null);const original=executionOriginal.current;
-  const receipt=await host.recoverExecution(original);if(!alive.current)return;setExecutionReceipt(receipt);await readOutcome(receipt,original);
+  const receipt=await host[Object.hasOwn(original??{},'checkId')?'recoverExecution':'recoverTaskExecution'](original);if(!alive.current)return;setExecutionReceipt(receipt);await readOutcome(receipt,original);
  });
  return <section className="task-draft-delivery" aria-label="Native check setup">
   <h3>Set up and run checks</h3><p>Choose the repository checks to prepare, review their exact scripts in the native dialog, then run an approved check.</p>
@@ -104,20 +109,22 @@ function CheckSetup({host,results,snapshot,disabled}){
   </div>
   <fieldset disabled={!ready} style={{margin:'16px 0',padding:16,border:'1px solid #aaa',borderRadius:8}}>
    <legend>Run an approved check</legend>
-   <p>{executionPending?'A saved check needs recovery before another run.':approved?'Native approval matches these prepared checks. Choose one check to run.':'Refresh check status and obtain or recover native approval before running.'}</p>
+   <p>{executionPending?'A saved check needs recovery before another run.':approved?'Native approval matches these prepared checks. Run all approved checks for the task, or choose a single check.':'Refresh check status and obtain or recover native approval before running.'}</p>
    <div className="task-draft-delivery-heading">
     <label>Task <select aria-label="Check task" value={taskId} onChange={e=>setTaskId(e.target.value)} disabled={executionPending}>{active.map(t=><option key={t.id} value={t.id}>{t.id}{t.title?` — ${t.title}`:''}</option>)}</select></label>
     <label>Check <select aria-label="Check type" value={selectedCheck} onChange={e=>setCheckId(e.target.value)} disabled={executionPending||!checkOptions.length}>{!checkOptions.length&&<option value="">Refresh the saved setup</option>}{checkOptions.map(check=><option key={check.id} value={check.id}>{check.label}</option>)}</select></label>
-    <button type="button" disabled={!approved||executionPending||Boolean(pending)||!taskId||!selectedCheck||!results?.available} onClick={execute}>{outcome?'Run a new check attempt':'Run selected check'}</button>
+    <button type="button" disabled={!approved||executionPending||Boolean(pending)||!taskId||!selectedCheck||!results?.available} onClick={()=>execute(true)}>Run all approved task checks</button>
+    <button type="button" disabled={!approved||executionPending||Boolean(pending)||!taskId||!selectedCheck||!results?.available} onClick={()=>execute(false)}>{outcome?'Run a new check attempt':'Run selected check'}</button>
     <button type="button" disabled={!savedExecution||cacheBlocked} onClick={recoverExecution}>Recover saved check</button>
    </div>
-   {savedExecution&&<p>{savedExecution.taskId} · {savedExecution.checkId} · request attempt {savedExecution.attemptNumber}. {executionReceipt?(executionReceipt.receipt.state==='not-started'?'Native recovery confirms the check did not start.':'Native result receipt retained.'):'Execution outcome has not been confirmed in this view.'}</p>}
-   {outcome&&<div aria-label="Selected check result" role="status"><strong>{outcome.state==='failure-observed'?'Check failed':'Check returned — task unverified'}</strong><p>Observed exit: {outcome.exitCode??'not recorded'}. {outcome.failureReasons.join(' · ')}</p><p>{outcome.state==='failure-observed'?'Review the failure before starting a new attempt.':'Verify the required evidence before completing the task.'} This result does not mark the task complete.</p></div>}
+   {savedExecution&&<p>{savedExecution.taskId} · {savedExecution.checkId??'All approved task checks'} · request attempt {savedExecution.attemptNumber}. {executionReceipt?(executionReceipt.receipt.state==='not-started'?'Native recovery confirms the check did not start.':'Native result receipt retained.'):'Execution outcome has not been confirmed in this view.'}</p>}
+   {outcome?.batch&&<div aria-label="Task check results" role="status"><strong>{outcome.checks.length} check results recorded — task unverified</strong><ul>{outcome.checks.map(check=><li key={check.grantId}>{check.checkId}: {check.state==='failure-observed'?'Failed':'Returned'} · exit {check.exitCode??'unknown'}{check.failureReasons.length?` · ${check.failureReasons.join(' · ')}`:''}</li>)}</ul><p>Review failures and required evidence before completing this task.</p></div>}
+   {outcome&&!outcome.batch&&<div aria-label="Selected check result" role="status"><strong>{outcome.state==='failure-observed'?'Check failed':'Check returned — task unverified'}</strong><p>Observed exit: {outcome.exitCode??'not recorded'}. {outcome.failureReasons.join(' · ')}</p><p>{outcome.state==='failure-observed'?'Review the failure before starting a new attempt.':'Verify the required evidence before completing the task.'} This result does not mark the task complete.</p></div>}
   </fieldset>
   {reference&&<details><summary>Saved setup reference</summary><p style={{overflowWrap:'anywhere',userSelect:'all'}}>{reference}</p><p>This identifier is not a key or permission. Native storage verifies it.</p></details>}
   {state&&<p>Read check revision {state.contractHead.revision}. {pending?'An original request is outstanding. Retry preserves its exact setup and revision.':'No outstanding preparation recorded.'}</p>}
   {savedReview&&<details><summary>Saved review request</summary><pre style={{whiteSpace:'pre-wrap',overflowWrap:'anywhere',userSelect:'all'}}>{JSON.stringify(savedReview,null,2)}</pre><p>This is a request reference, not approval or permission.</p></details>}
-  {savedExecution&&<details><summary>Saved check request</summary><pre style={{whiteSpace:'pre-wrap',overflowWrap:'anywhere',userSelect:'all'}}>{JSON.stringify(savedExecution,null,2)}</pre><p>Keep this exact request if the outcome is unknown. Recovery does not start another check.</p>{executionReceipt&&<p>{executionReceipt.receipt.state==='not-started'?<>Recovery proof: {executionReceipt.receipt.proofDigest}</>:<>Grant: {executionReceipt.receipt.grantId} · Run: {executionReceipt.receipt.runId}</>}</p>}</details>}
+  {savedExecution&&<details><summary>Saved check request</summary><pre style={{whiteSpace:'pre-wrap',overflowWrap:'anywhere',userSelect:'all'}}>{JSON.stringify(savedExecution,null,2)}</pre><p>Keep this exact request if the outcome is unknown. Recovery does not start another check.</p>{executionReceipt&&<p>{executionReceipt.receipt.state==='not-started'?<>Recovery proof: {executionReceipt.receipt.proofDigest}</>:<>{executionReceipt.receipt.kind==='NATIVE_TASK_EXECUTION_RECEIPT'?<>Task check set: {executionReceipt.receipt.checkSetDigest}</>:<>Grant: {executionReceipt.receipt.grantId} · Run: {executionReceipt.receipt.runId}</>}</>}</p>}</details>}
   {busy&&<p role="status">Waiting for native check request… Running checks may take several minutes.</p>}
   {note&&<p role="status">{note}</p>}{error&&<p role="alert">{error} Refresh status before attempting another preparation.</p>}
   {cacheWarning&&<p role="alert">{cacheWarning}</p>}
