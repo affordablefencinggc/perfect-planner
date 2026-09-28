@@ -104,6 +104,7 @@ test('actual native output with a mismatched retention binding preserves unresol
   const f=await fixture('pass');let captured;
   const dispatch=createTaskNativeDispatch({review:f.review,executeNative:f.executeNative,recordObservation:async input=>{
    captured=structuredClone(input);
+   assert.notEqual(input.executionSpec[key],'f'.repeat(64));
    return f.recordObservation({...input,executionSpec:{...input.executionSpec,[key]:'f'.repeat(64)}});
   }});
   await assert.rejects(dispatch.dispatch(f.args),error=>error.message==='NATIVE_TASK_DISPATCH_UNRESOLVED'&&error.cause?.message==='NATIVE_TASK_OBSERVATION_CUSTODY_UNRESOLVED');
@@ -115,9 +116,11 @@ test('actual native output with a mismatched retention binding preserves unresol
   assert.deepEqual(await readFile(path.join(f.composition.root,'grant.jsonl')),before);
   // Explicitly retain the authentic in-memory control observation; never rerun
   // the native process to repair missing custody or forge completion authority.
-  await f.recordObservation(captured);
+  const controlReceipt=await f.recordObservation(captured);
   const reopened=createTaskNativeObservationStore({directory:path.join(f.composition.root,'observations'),projectId:f.composition.binding.projectId,rootIdentity:f.composition.binding.rootIdentity});
   const saved=await reopened.inspect(captured.intentReceipt);assert.equal(saved.observation.exitCode,0);assert.equal(saved.receipt.state,'result-unverified');assert.equal(saved.receipt.executionAuthorized,false);
+  assert.deepEqual(saved.observation,captured.observation);assert.deepEqual(saved.receipt,controlReceipt);
+  assert.equal(saved.receipt.intentDigest,captured.intentReceipt.recordDigest);assert.equal(saved.receipt.runId,captured.intentReceipt.runId);
   assert.equal((await f.grants.inspect()).revision,4);assert.equal(f.launches(),1);
  }
 });
