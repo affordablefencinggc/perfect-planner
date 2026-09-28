@@ -66,6 +66,9 @@ impl Drop for Directory{
 pub(crate) struct CandidateGuard{directories:Vec<Directory>,files:Vec<File>,settlement_attempted:bool}
 impl CandidateGuard{
  pub(crate) fn acquire(root:&Path,cancel:&AtomicBool)->Result<Self,&'static str>{
+  Self::acquire_after_pinning(root,cancel,||{})
+ }
+ fn acquire_after_pinning(root:&Path,cancel:&AtomicBool,before_watch:impl FnOnce())->Result<Self,&'static str>{
   if cancel.load(Ordering::Acquire){return Err("NATIVE_TASK_RUN_UNRESOLVED");}
   crate::native_host_resources::verify_config_directory(root)?;
   let mut guard=Self{directories:Vec::new(),files:Vec::new(),settlement_attempted:false};
@@ -95,6 +98,7 @@ impl CandidateGuard{
     guard.files.push(file);
    }
   }
+  before_watch();
   for directory in &mut guard.directories{
    if Instant::now()>=deadline||cancel.load(Ordering::Acquire){return Err(UNAVAILABLE);}
    directory.arm()?;
@@ -166,5 +170,13 @@ impl Drop for CandidateGuard{fn drop(&mut self){if !self.settlement_attempted{le
   mapping.write(b"changed!");mapping.write(b"original");
   assert!(matches!(CandidateGuard::acquire(&root,&AtomicBool::new(false)),Err(UNAVAILABLE)));
   drop(mapping);assert_eq!(fs::read(file).unwrap(),b"original");
+ }
+ #[test]fn new_unheld_input_between_pinning_and_watches_is_refused(){
+  let root=root("acquisition-change");fs::write(root.join("original"),b"input").unwrap();
+  let result=CandidateGuard::acquire_after_pinning(&root,&AtomicBool::new(false),||{
+   fs::write(root.join("unheld"),b"new input").unwrap();
+  });
+  assert!(matches!(result,Err(CHANGED)));assert_eq!(fs::read(root.join("unheld")).unwrap(),b"new input");
+  fs::write(root.join("original"),b"pins released").unwrap();
  }
 }
