@@ -61,6 +61,7 @@ pub(crate) fn execute(value:&Value,environment:&[(&str,&str)],cancel:&AtomicBool
 fn execute_until(value:&Value,environment:&[(&str,&str)],cancel:&AtomicBool,expires_at:Option<u64>)->Result<Value,&'static str>{
     let s=parse(value)?;
     let _pins=crate::native_host_resources::pin_task_files(&s.executable_path,&s.executable_digest,&s.registered_root,&s.cwd)?;
+    let candidate=crate::native_candidate_guard::CandidateGuard::acquire(&s.registered_root)?;
     if let Some(deadline)=expires_at{
         let now=std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(|_|"NATIVE_TASK_CLOCK_INVALID")?.as_millis();
         if now>=deadline as u128{return Err("NATIVE_TASK_GRANT_EXPIRED");}
@@ -69,6 +70,7 @@ fn execute_until(value:&Value,environment:&[(&str,&str)],cancel:&AtomicBool,expi
     let run=crate::native_task_containment::run_captured_limits(&s.executable_path,&args,&s.cwd,environment,
         Duration::from_millis(s.timeout_ms),s.output_limits.stdout_bytes,s.output_limits.stderr_bytes,s.output_limits.combined_bytes,
         Duration::from_secs(120),cancel).map_err(|_|"NATIVE_TASK_RUN_UNRESOLVED")?;
+    candidate.finish()?;
     // Refuse undecodable output rather than silently rewriting evidence or
     // expanding replacement characters beyond the reviewed byte budget.
     let stdout=String::from_utf8(run.stdout).map_err(|_|"NATIVE_TASK_OUTPUT_ENCODING_INVALID")?;
@@ -119,7 +121,14 @@ fn execute_until(value:&Value,environment:&[(&str,&str)],cancel:&AtomicBool,expi
   assert!(fs::write(&file,b"changed").is_err());assert!(fs::remove_file(&file).is_err());assert!(fs::rename(&root,root.with_extension("moved")).is_err());
   drop(locked);fs::write(&file,b"changed").unwrap();
  }
+ #[test]fn transient_nested_candidate_change_refuses_an_observation(){
+  let(root,spec)=fixture();fs::create_dir(root.join("nested")).unwrap();
+  let system=std::env::var("SystemRoot").unwrap();
+  let observed=execute(&spec,&[("SystemRoot",&system),("PP_ADAPTER_CHILD","transient-candidate")],&AtomicBool::new(false));
+  assert_eq!(fs::read_dir(root.join("nested")).unwrap().count(),0);
+  assert_eq!(observed.unwrap_err(),"NATIVE_TASK_CANDIDATE_CHANGED_DURING_EXECUTION");
+ }
  #[test]#[ignore="inert child invoked only by adapter test"]fn child(){
-  match std::env::var("PP_ADAPTER_CHILD").as_deref(){Ok("fail")=>std::process::exit(7),Ok("invalid-utf8")=>{use std::io::Write;std::io::stdout().write_all(&[0xff]).unwrap();},_=>println!("native-adapter-child")}
+  match std::env::var("PP_ADAPTER_CHILD").as_deref(){Ok("fail")=>std::process::exit(7),Ok("invalid-utf8")=>{use std::io::Write;std::io::stdout().write_all(&[0xff]).unwrap();},Ok("transient-candidate")=>{let file=std::env::current_dir().unwrap().join("nested/transient.txt");fs::write(&file,b"changed during check").unwrap();fs::remove_file(file).unwrap();},_=>println!("native-adapter-child")}
  }
 }

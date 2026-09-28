@@ -25,6 +25,8 @@ mod native_host_supervisor;
 mod native_task_containment;
 #[cfg(windows)]
 mod native_task_execution;
+#[cfg(windows)]
+mod native_candidate_guard;
 #[cfg(all(test, windows))]
 mod candidate_custody_probe;
 #[cfg(windows)]
