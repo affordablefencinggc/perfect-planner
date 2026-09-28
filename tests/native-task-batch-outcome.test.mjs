@@ -15,3 +15,12 @@ test('batch display refuses missing, changed, duplicate, stale and unavailable r
  const mutations=[f=>{f.receipt.checksDigest='f'.repeat(64);},f=>{f.pages[1].outcomes[0].phase='unavailable';},f=>{f.pages[1].page.entries[0].attemptNumber=2;},f=>{f.pages[1].page.journalHead.headDigest='b'.repeat(64);},f=>{f.pages[1].page.nextOffset=1;},f=>{f.receipt.checkCount=2;},f=>{f.pages[1].outcomes[0].value.journalLinked=false;},f=>{f.pages[1].outcomes[0].value.checkId='check-0';}];
  for(const mutate of mutations){const f=fixture();mutate(f);await assert.rejects(readNativeTaskBatchOutcome(f.reader,f.receipt,f.request));}
 });
+
+test('partial attempt inspection preserves recorded failures and unfinished checks without settling',async()=>{
+ const {readNativeTaskAttemptProgress}=await import('../src/native/taskBatchOutcome.js');const f=fixture();
+ f.pages[0].page.entries[0].lifecycleState='intent-recorded';f.pages[0].outcomes=[{grantId:'grant-2',phase:'unavailable',value:null}];
+ const result=await readNativeTaskAttemptProgress(f.reader,f.request);assert.equal(result.complete,false);assert.equal(result.authorityVerified,false);assert.equal(result.checks[0].outcome,null);assert.equal(result.checks[1].outcome.exitCode,7);
+ const empty={readPage:async()=>({page:{offset:0,journalHead:{headDigest:'a'.repeat(64)},entries:[],nextOffset:null},outcomes:[]})};
+ const none=await readNativeTaskAttemptProgress(empty,f.request);assert.deepEqual(none.checks,[]);assert.equal(none.complete,false);
+ f.pages[1].page.journalHead.headDigest='b'.repeat(64);await assert.rejects(readNativeTaskAttemptProgress(f.reader,f.request));
+});

@@ -1,7 +1,7 @@
 import {useEffect,useMemo,useRef,useState} from 'react';
 import {createNativeCheckSetupHost} from '../native/checkSetupHost.js';
 import {createNativeTaskResultHost} from '../native/taskResultHost.js';
-import {readNativeTaskBatchOutcome} from '../native/taskBatchOutcome.js';
+import {readNativeTaskBatchOutcome,readNativeTaskAttemptProgress} from '../native/taskBatchOutcome.js';
 const checkLabels={tests:'Tests',build:'Build',secrets:'Secret check'};
 const scriptNames={tests:'test',build:'build',secrets:'verify:secrets'};
 
@@ -20,6 +20,7 @@ function CheckSetup({host,results,snapshot,disabled}){
  const [taskId,setTaskId]=useState(snapshot?.ledger?.tasks.find(t=>!t.archived)?.id??''),[checkId,setCheckId]=useState('pp-tests');
  const [profileId,setProfileId]=useState('perfect-planner-checks-v1'),[categories,setCategories]=useState(['tests','build','secrets']);
  const [savedSetup,setSavedSetup]=useState(null);
+ const [attemptProgress,setAttemptProgress]=useState(null),[progressError,setProgressError]=useState('');
  const executionOriginal=useRef(null);
  const alive=useRef(true),inflight=useRef(false),reviewOriginal=useRef(null),reviewCompleted=useRef(false);
  const cacheKey=host?`pp-check-setup-ref-v1:${host.binding.projectId}:${host.binding.rootIdentity}:${host.binding.censusDigest}`:null;
@@ -65,6 +66,7 @@ function CheckSetup({host,results,snapshot,disabled}){
   if(alive.current){setApproval({original:reviewOriginal.current,confirmation:receipt.confirmation});setNote(`Saved native review ${receipt.confirmation.status}. ${receipt.recoveredSession?'Interrupted session recovered. ':'Original decision read. '}No task was executed.`);}
  });
  async function readOutcome(receipt,original){
+  if(alive.current){setAttemptProgress(null);setProgressError('');}
   if(receipt.receipt.state==='not-started'){if(alive.current){setOutcome(null);setNote('The saved check did not start. Its original request and recovery proof are retained. You can start a new approved attempt.');}return;}
   if(!results?.available)throw Error('Result reader unavailable. Keep the saved request and recover its result.');
   if(receipt.receipt.kind==='NATIVE_TASK_EXECUTION_RECEIPT'){
@@ -81,12 +83,17 @@ function CheckSetup({host,results,snapshot,disabled}){
   const input={...approval.original,requestId:crypto.randomUUID(),confirmationId:approval.confirmation.id,taskId,...(batch?{}:{checkId:selectedCheck}),attemptId:crypto.randomUUID(),attemptNumber:previous?previous.attemptNumber+1:1};
   if(!Number.isSafeInteger(input.attemptNumber)||input.attemptNumber<1)throw Error('Attempt history is unavailable. Recover the original check.');
   try{localStorage.setItem(cacheKey+':execution',JSON.stringify(input));}catch{throw Error('Request reference could not be saved. The check was not started.');}
-  executionOriginal.current=input;setSavedExecution(input);setExecutionReceipt(null);setOutcome(null);
+  executionOriginal.current=input;setSavedExecution(input);setExecutionReceipt(null);setOutcome(null);setAttemptProgress(null);setProgressError('');
   const receipt=await host[batch?'executeTask':'execute'](input);if(!alive.current)return;setExecutionReceipt(receipt);await readOutcome(receipt,input);
  });
  const recoverExecution=()=>perform(async()=>{
   setOutcome(null);setExecutionReceipt(null);const original=executionOriginal.current;
   const receipt=await host[Object.hasOwn(original??{},'checkId')?'recoverExecution':'recoverTaskExecution'](original);if(!alive.current)return;setExecutionReceipt(receipt);await readOutcome(receipt,original);
+ });
+ const inspectAttempt=()=>perform(async()=>{
+  setAttemptProgress(null);setProgressError('');
+  try{const value=await readNativeTaskAttemptProgress(results,executionOriginal.current);if(alive.current)setAttemptProgress(value);}
+  catch{if(alive.current)setProgressError('Saved attempt history could not be read. The original request remains unresolved; no checks were restarted.');}
  });
  return <section className="task-draft-delivery" aria-label="Native check setup">
   <h3>Set up and run checks</h3><p>Choose the repository checks to prepare, review their exact scripts in the native dialog, then run an approved check.</p>
@@ -116,9 +123,12 @@ function CheckSetup({host,results,snapshot,disabled}){
     <button type="button" disabled={!approved||executionPending||Boolean(pending)||!taskId||!selectedCheck||!results?.available} onClick={()=>execute(true)}>Run all approved task checks</button>
     <button type="button" disabled={!approved||executionPending||Boolean(pending)||!taskId||!selectedCheck||!results?.available} onClick={()=>execute(false)}>{outcome?'Run a new check attempt':'Run selected check'}</button>
     <button type="button" disabled={!savedExecution||cacheBlocked} onClick={recoverExecution}>Recover saved check</button>
+    <button type="button" disabled={!savedExecution||cacheBlocked||!results?.available} onClick={inspectAttempt}>Inspect saved attempt</button>
    </div>
    {savedExecution&&<p>{savedExecution.taskId} · {savedExecution.checkId??'All approved task checks'} · request attempt {savedExecution.attemptNumber}. {executionReceipt?(executionReceipt.receipt.state==='not-started'?'Native recovery confirms the check did not start.':'Native result receipt retained.'):'Execution outcome has not been confirmed in this view.'}</p>}
    {outcome?.batch&&<div aria-label="Task check results" role="status"><strong>{outcome.checks.length} check results recorded — task unverified</strong><ul>{outcome.checks.map(check=><li key={check.grantId}>{check.checkId}: {check.state==='failure-observed'?'Failed':'Returned'} · exit {check.exitCode??'unknown'}{check.failureReasons.length?` · ${check.failureReasons.join(' · ')}`:''}</li>)}</ul><p>Review failures and required evidence before completing this task.</p></div>}
+   {attemptProgress&&<div aria-label="Saved attempt progress" role="status"><strong>Recorded attempt history — completion unconfirmed</strong><p>This is a saved observation, not live worker activity. Checks without a record may not have started. Recover the original request before another run.</p>{attemptProgress.checks.length?<ul>{attemptProgress.checks.map(check=><li key={check.grantId}>{check.checkId}: {check.outcome?`${check.outcome.state==='failure-observed'?'Failed':'Returned — unverified'} · exit ${check.outcome.exitCode??'unknown'}`:`${check.lifecycleState} — result unavailable`}</li>)}</ul>:<p>No check records were found for this attempt. This does not prove that execution never started.</p>}</div>}
+   {progressError&&<p role="alert">{progressError}</p>}
    {outcome&&!outcome.batch&&<div aria-label="Selected check result" role="status"><strong>{outcome.state==='failure-observed'?'Check failed':'Check returned — task unverified'}</strong><p>Observed exit: {outcome.exitCode??'not recorded'}. {outcome.failureReasons.join(' · ')}</p><p>{outcome.state==='failure-observed'?'Review the failure before starting a new attempt.':'Verify the required evidence before completing the task.'} This result does not mark the task complete.</p></div>}
   </fieldset>
   {reference&&<details><summary>Saved setup reference</summary><p style={{overflowWrap:'anywhere',userSelect:'all'}}>{reference}</p><p>This identifier is not a key or permission. Native storage verifies it.</p></details>}
