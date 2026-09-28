@@ -14,7 +14,22 @@ type Handle=*mut c_void;
  fn CancelIoEx(handle:Handle,overlapped:*mut Overlapped)->i32;
  fn GetOverlappedResult(handle:Handle,overlapped:*mut Overlapped,bytes:*mut u32,wait:i32)->i32;
  fn WaitForSingleObject(handle:Handle,milliseconds:u32)->u32;
+ fn CreateFileMappingW(file:Handle,attributes:*const c_void,protect:u32,size_high:u32,size_low:u32,name:*const u16)->Handle;
+ fn MapViewOfFile(mapping:Handle,access:u32,offset_high:u32,offset_low:u32,bytes:usize)->*mut c_void;
+ fn UnmapViewOfFile(address:*const c_void)->i32;
+ fn FlushViewOfFile(address:*const c_void,bytes:usize)->i32;
 }
+struct WritableMapping{handle:Handle,view:*mut c_void}
+impl WritableMapping{
+ fn open(file:&File)->Self{
+  let handle=unsafe{CreateFileMappingW(file.as_raw_handle(),ptr::null(),4,0,0,ptr::null())};assert!(!handle.is_null());
+  let view=unsafe{MapViewOfFile(handle,2,0,0,8)};
+  if view.is_null(){unsafe{CloseHandle(handle);}panic!("mapping failed");}
+  Self{handle,view}
+ }
+ fn write(&self,bytes:&[u8;8]){unsafe{ptr::copy_nonoverlapping(bytes.as_ptr(),self.view as *mut u8,8);assert_ne!(FlushViewOfFile(self.view,8),0);}}
+}
+impl Drop for WritableMapping{fn drop(&mut self){unsafe{UnmapViewOfFile(self.view);CloseHandle(self.handle);}}}
 struct DirectoryObservation{file:Option<File>,event:Handle,overlapped:Option<Box<Overlapped>>,output:Option<Box<[u8;24]>>,pending:bool}
 impl DirectoryObservation{
  fn acquire(path:&Path)->Result<Self,String>{
@@ -100,6 +115,19 @@ fn child_process(root:&Path,mode:&str){
  let root=fixture("cross-process-transient");let guard=DirectoryObservation::acquire(&root).unwrap();
  assert!(!guard.changed().unwrap());child_process(&root,"add-delete");
  assert_eq!(fs::read_dir(&root).unwrap().count(),0);guard.wait_changed().unwrap();guard.finish().unwrap();
+}
+#[test]fn writable_mapping_must_be_refused_or_invalidate_observation(){
+ let root=fixture("preexisting-mapping");let path=root.join("input.txt");fs::write(&path,b"original").unwrap();
+ let writer=OpenOptions::new().read(true).write(true).share_mode(7).open(&path).unwrap();
+ let mapping=WritableMapping::open(&writer);drop(writer);
+ let held=OpenOptions::new().read(true).share_mode(1).open(&path);
+ if let Err(error)=held{assert_eq!(error.raw_os_error(),Some(32),"Only a sharing refusal qualifies");return;}
+ let _held=held.unwrap();let guard=DirectoryObservation::acquire(&root).unwrap();assert!(!guard.changed().unwrap());
+ mapping.write(b"changed!");assert_eq!(fs::read(&path).unwrap(),b"changed!");
+ mapping.write(b"original");assert_eq!(fs::read(&path).unwrap(),b"original");
+ let invalidated=guard.changed().unwrap();guard.finish().unwrap();
+ println!("MAPPING_PROBE inputRestored=true heldReadGranted=true invalidationObserved={invalidated}");
+ assert!(invalidated,"Existing writable mapping bypassed read-sharing and directory invalidation");
 }
 #[test]#[ignore="only launched as a bounded inert mutation child"]fn mutation_child(){
  let root=PathBuf::from(std::env::var_os("PP_CUSTODY_CHILD_ROOT").unwrap());
