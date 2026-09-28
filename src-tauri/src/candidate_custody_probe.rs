@@ -79,3 +79,33 @@ fn fixture(name:&str)->PathBuf{
  assert!(fs::write(&file,b"changed").is_err());assert!(fs::remove_file(&file).is_err());assert_eq!(fs::read(&file).unwrap(),b"original");
  drop(held);fs::write(&file,b"released").unwrap();
 }
+fn child_process(root:&Path,mode:&str){
+ use std::{os::windows::process::CommandExt,process::{Command,Stdio},time::{Duration,Instant}};
+ let name=concat!(module_path!(),"::mutation_child").split_once("::").unwrap().1;
+ let mut child=Command::new(std::env::current_exe().unwrap()).args(["--ignored","--exact",name,"--nocapture"])
+  .env_clear().env("SystemRoot",std::env::var("SystemRoot").unwrap()).env("PP_CUSTODY_CHILD_ROOT",root).env("PP_CUSTODY_CHILD_MODE",mode)
+  .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).creation_flags(0x08000000).spawn().unwrap();
+ let deadline=Instant::now()+Duration::from_secs(5);
+ loop{if let Some(status)=child.try_wait().unwrap(){assert!(status.success(),"mutation child failed");break;}
+  if Instant::now()>=deadline{child.kill().unwrap();child.wait().unwrap();panic!("mutation child exceeded deadline");}
+  std::thread::sleep(Duration::from_millis(10));
+ }
+}
+#[test]fn another_process_cannot_write_a_held_input(){
+ let root=fixture("cross-process-held");let file=root.join("input.txt");fs::write(&file,b"original").unwrap();
+ let held=OpenOptions::new().read(true).share_mode(1).open(&file).unwrap();child_process(&root,"write-denied");
+ assert_eq!(fs::read(&file).unwrap(),b"original");drop(held);
+}
+#[test]fn another_process_transient_addition_invalidates_directory(){
+ let root=fixture("cross-process-transient");let guard=DirectoryObservation::acquire(&root).unwrap();
+ assert!(!guard.changed().unwrap());child_process(&root,"add-delete");
+ assert_eq!(fs::read_dir(&root).unwrap().count(),0);guard.wait_changed().unwrap();guard.finish().unwrap();
+}
+#[test]#[ignore="only launched as a bounded inert mutation child"]fn mutation_child(){
+ let root=PathBuf::from(std::env::var_os("PP_CUSTODY_CHILD_ROOT").unwrap());
+ match std::env::var("PP_CUSTODY_CHILD_MODE").unwrap().as_str(){
+  "write-denied"=>assert!(fs::write(root.join("input.txt"),b"changed").is_err()),
+  "add-delete"=>{let file=root.join("temporary.txt");fs::write(&file,b"temporary").unwrap();fs::remove_file(file).unwrap();},
+  _=>panic!("unknown mutation mode")
+ }
+}
