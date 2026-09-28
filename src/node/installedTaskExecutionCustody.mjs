@@ -28,7 +28,7 @@ export function createInstalledTaskExecutionCustody({stateDirectory,binding,obse
   const enrollmentConfig={journalPath:path.join(stateDirectory,`${binding.projectId}.execution-enrollments.jsonl`),projectId:binding.projectId,rootIdentity:binding.rootIdentity};
   const review=createTaskProposalReview({proposalConfig,confirmationPath,checkContract,contractCustody,preflightConfig:{registeredRoot,sessionRegistryPath,enrollmentConfig,grantConfig}});
   const options={secretCustody:secretCustody?{...secretCustody}:undefined};
-  const dispatch=createTaskNativeDispatch({review,executeNative:createNativeTaskExecutionAdapter(nativeConfig),recordObservation:custody.record});
+  const dispatch=createTaskNativeDispatch({review,executeNative:createNativeTaskExecutionAdapter(nativeConfig),nativeCustody:custody});
   let closed=false,cleanupUncertain=false;const pending=new Set();
   async function current(){if(closed)throw Error('INSTALLED_EXECUTION_CLOSED');const observed=await observeBinding();if(closed)throw Error('INSTALLED_EXECUTION_CLOSED');if(['projectId','rootIdentity','censusDigest'].some(k=>observed?.[k]!==binding[k]))throw Error('INSTALLED_EXECUTION_BINDING_CHANGED');}
   async function prepareResults(){

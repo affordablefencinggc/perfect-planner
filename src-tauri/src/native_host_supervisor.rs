@@ -146,9 +146,9 @@ fn execution_payload(p:&Value)->bool{
     exact(p,&["requestId","expected","contractHead","confirmationId","taskId","checkId","attemptId","attemptNumber"])&&["requestId","confirmationId","checkId","attemptId"].iter().all(|k|id(k))&&task&&saved_head(&p["expected"],"hostRevision")&&saved_head(&p["contractHead"],"revision")&&p["attemptNumber"].as_u64().is_some_and(|n|n>0&&n<=9_007_199_254_740_991)
 }
 fn request_timeout(request:&Value)->Duration{
-    // Four 120-second candidate captures, five-minute check, and 60 seconds for
-    // admission/settlement. This transport ceiling never extends grant expiry.
-    Duration::from_secs(if request["command"]=="execute-check"{840}else{150})
+    // Three admission captures (360s), guarded conversation (555s, including
+    // its fourth capture), and 60s admission/settlement. No grant extension.
+    Duration::from_secs(if request["command"]=="execute-check"{975}else{150})
 }
 #[derive(Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
@@ -413,9 +413,9 @@ mod containment{
         }
     }
     #[test]fn execution_budget_covers_all_candidate_observations_and_check(){
-        // issue, consume, intent, then the native adapter's final capture.
-        let capture_budget=Duration::from_secs(4*120);
-        let check_budget=Duration::from_secs(300);
+        // issue, consume, intent; the conversation includes guarded capture.
+        let capture_budget=Duration::from_secs(3*120);
+        let check_budget=Duration::from_secs(300+255);
         let settlement_budget=Duration::from_secs(60);
         assert!(request_timeout(&json!({"command":"execute-check"}))>=capture_budget+check_budget+settlement_budget);
         assert_eq!(request_timeout(&json!({"command":"recover-check-execution"})),Duration::from_secs(150));
@@ -430,7 +430,7 @@ mod containment{
             for key in ["credentials","executable","actor","executionAuthorized","workerId"]{let mut bad=request.clone();bad["payload"][key]=json!("caller");assert!(request_line(&bad).is_err());}
             for id in ["T0000","T00001","T1","T1000000","../foreign"]{let mut bad=request.clone();bad["payload"]["taskId"]=json!(id);assert!(request_line(&bad).is_err());}
             for n in [0u64,9_007_199_254_740_992]{let mut bad=request.clone();bad["payload"]["attemptNumber"]=json!(n);assert!(request_line(&bad).is_err());}
-            assert_eq!(request_timeout(&request),Duration::from_secs(if command=="execute-check"{840}else{150}));
+            assert_eq!(request_timeout(&request),Duration::from_secs(if command=="execute-check"{975}else{150}));
         }
         assert_eq!(request_timeout(&json!({"command":"review-proposal"})),Duration::from_secs(150));
     }

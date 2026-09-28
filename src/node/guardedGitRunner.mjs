@@ -42,6 +42,12 @@ using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 public static class PlannerGuardedJob {
+  static async Task PumpInput(System.IO.Stream source, System.IO.Stream destination) {
+    byte[] buffer = new byte[8192]; int count;
+    while ((count = await source.ReadAsync(buffer, 0, buffer.Length)) != 0) {
+      await destination.WriteAsync(buffer, 0, count); await destination.FlushAsync();
+    }
+  }
   [StructLayout(LayoutKind.Sequential)] struct Basic { public long ProcessTime, JobTime; public uint Flags; public UIntPtr Minimum, Maximum; public uint Active; public UIntPtr Affinity; public uint Priority, Scheduling; }
   [StructLayout(LayoutKind.Sequential)] struct Io { public ulong ReadOperations, WriteOperations, OtherOperations, ReadBytes, WriteBytes, OtherBytes; }
   [StructLayout(LayoutKind.Sequential)] struct Extended { public Basic Basic; public Io Io; public UIntPtr ProcessMemory, JobMemory, PeakProcessMemory, PeakJobMemory; }
@@ -57,7 +63,7 @@ public static class PlannerGuardedJob {
     if (!SetInformationJobObject(job, 9, ref limits, (uint)Marshal.SizeOf(typeof(Extended))) || !AssignProcessToJobObject(job, GetCurrentProcess())) return 125;
     var start = new ProcessStartInfo(executable, arguments); start.WorkingDirectory = cwd; start.UseShellExecute = false; start.CreateNoWindow = true; start.RedirectStandardOutput = true; start.RedirectStandardError = true; start.RedirectStandardInput = true;
     using (var child = Process.Start(start)) {
-      Console.OpenStandardInput().CopyToAsync(child.StandardInput.BaseStream).ContinueWith(task => { try { child.StandardInput.Close(); } catch {} });
+      PumpInput(Console.OpenStandardInput(),child.StandardInput.BaseStream).ContinueWith(task => { try { child.StandardInput.Close(); } catch {} });
       Task output = child.StandardOutput.BaseStream.CopyToAsync(Console.OpenStandardOutput());
       Task error = child.StandardError.BaseStream.CopyToAsync(Console.OpenStandardError());
       child.WaitForExit(); int exit = child.ExitCode;
@@ -101,7 +107,13 @@ export function runBoundedProcess(command,args,options={}){return boundedProcess
 // Five-minute checks plus 30s candidate acquisition, 1s guard settlement and
 // 14s helper startup/transport margin. JSON output can expand to 12 MiB.
 export function runBoundedTaskProcess(command,args,options={}){return boundedProcess(command,args,options,345_000,13*1024*1024);}
-function boundedProcess(command, args, { cwd, env = process.env, timeoutMs = 10_000, maxBytes = 65_536, input = "", signal: abortSignal } = {}, timeoutLimit,outputLimit) {
+// Private three-frame native custody conversation. Each asynchronous handler
+// settles before the next frame is accepted, including after cancellation.
+export function runBoundedTaskConversation(command,args,options,onFrame){
+ if(typeof onFrame!=='function')refuse('invalid-command-conversation');
+ return boundedProcess(command,args,options,555_000,13*1024*1024,onFrame);
+}
+function boundedProcess(command, args, { cwd, env = process.env, timeoutMs = 10_000, maxBytes = 65_536, input = "", signal: abortSignal } = {}, timeoutLimit,outputLimit,onFrame) {
   if(abortSignal!==undefined&&!(abortSignal instanceof AbortSignal))refuse('invalid-command-signal');
   if(abortSignal?.aborted)return Promise.resolve({exit:null,signal:null,stdout:'',stderr:'',reason:'git-cancelled',timedOut:false,outputBytes:0,outputComplete:false,cleanupComplete:true});
   if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > timeoutLimit || !Number.isInteger(maxBytes) || maxBytes < 1 || maxBytes > outputLimit) refuse("invalid-command-bounds");
@@ -114,6 +126,8 @@ function boundedProcess(command, args, { cwd, env = process.env, timeoutMs = 10_
     const child = spawn(launch.command, launch.args, { cwd, env, shell: false, windowsHide: true, detached: process.platform !== "win32", stdio: ["pipe", "pipe", "pipe"] });
     const stdout = [], stderr = [];
     let bytes = 0, reason = null, finished = false, fallback, timer;
+    let exchange=Promise.resolve(),frameBuffer=Buffer.alloc(0),frameCount=0,awaitingReply=false,conversationEnded=false,callbackCleanupComplete=true;
+    const conversationAbort=new AbortController();
     const killTree = () => {
       if (!child.pid) return;
       if (process.platform === "win32") child.kill("SIGKILL");
@@ -124,11 +138,15 @@ function boundedProcess(command, args, { cwd, env = process.env, timeoutMs = 10_
       finished = true;
       clearTimeout(timer); clearTimeout(fallback);
       abortSignal?.removeEventListener('abort',onAbort);
-      resolve({ exit: reason ? null : exit, signal, stdout: Buffer.concat(stdout).toString("utf8"), stderr: Buffer.concat(stderr).toString("utf8"), reason, timedOut: reason === "git-time-limit", outputBytes: bytes, outputComplete: !reason, cleanupComplete });
+      if(onFrame&&(frameBuffer.length||frameCount!==3||!conversationEnded))reason??='native-conversation-incomplete';
+      conversationAbort.abort();
+      // Never report settlement while a retention write is still in flight.
+      exchange.finally(()=>resolve({ exit: reason ? null : exit, signal, stdout: Buffer.concat(stdout).toString("utf8"), stderr: Buffer.concat(stderr).toString("utf8"), reason, timedOut: reason === "git-time-limit", outputBytes: bytes, outputComplete: !reason, cleanupComplete:cleanupComplete&&callbackCleanupComplete }));
     };
     const stop = (failure) => {
       if (reason || finished) return;
       reason = failure;
+      conversationAbort.abort();
       killTree();
       fallback = setTimeout(() => { child.stdout.destroy(); child.stderr.destroy(); finish(null, null, false); }, 1_500);
     };
@@ -141,7 +159,24 @@ function boundedProcess(command, args, { cwd, env = process.env, timeoutMs = 10_
     };
     const onAbort=()=>stop('git-cancelled');
     timer = setTimeout(() => stop("git-time-limit"), timeoutMs);
-    child.stdout.on("data", (chunk) => collect(chunk, stdout));
+    child.stdout.on("data", (chunk) => {
+      collect(chunk,stdout);if(!onFrame||reason||finished)return;
+      frameBuffer=Buffer.concat([frameBuffer,chunk]);
+      const newline=frameBuffer.indexOf(10);if(newline<0)return;
+      // Native must wait for our reply. Pipelined/extra frames are not allowed.
+      if(awaitingReply||conversationEnded||frameCount>=3||newline!==frameBuffer.length-1){stop('native-conversation-order');return;}
+      const frame=frameBuffer.subarray(0,newline);frameBuffer=Buffer.alloc(0);frameCount++;awaitingReply=true;
+      exchange=exchange.then(async()=>{
+        if(reason||finished)return;
+        const value=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(frame));
+        const reply=await onFrame(value,{signal:conversationAbort.signal});
+        if(reason||finished)return;
+        if(reply===null){conversationEnded=true;awaitingReply=false;child.stdin.end();return;}
+        const encoded=JSON.stringify(reply);
+        if(!encoded||Buffer.byteLength(encoded)>65536)throw Error('native-conversation-input');
+        awaitingReply=false;child.stdin.write(encoded+'\n');
+      }).catch(error=>{if(error?.cleanupComplete===false)callbackCleanupComplete=false;if(finished)reason??='native-conversation-handler';else stop('native-conversation-handler');});
+    });
     child.stderr.on("data", (chunk) => collect(chunk, stderr));
     child.once("error", () => {
       if(!child.pid){reason ??= 'git-process-unavailable';finish(null,null);return;}
@@ -154,8 +189,8 @@ function boundedProcess(command, args, { cwd, env = process.env, timeoutMs = 10_
       if (process.platform === "win32" && exit === 125 && !reason) reason = "git-process-containment-unavailable";
       finish(exit, signal);
     });
-    child.stdin.on("error", () => {});
-    child.stdin.end(input);
+    child.stdin.on("error", () => {if(onFrame&&!conversationEnded)stop('native-conversation-input');});
+    if(onFrame)child.stdin.write(input+'\n');else child.stdin.end(input);
     abortSignal?.addEventListener('abort',onAbort,{once:true});
     if(abortSignal?.aborted)onAbort();
   });
