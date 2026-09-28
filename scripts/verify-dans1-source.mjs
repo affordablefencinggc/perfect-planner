@@ -45,7 +45,8 @@ const files = entries.map(({ name, object }) => {
   // Explicit checkout policy: exact blob bytes, or CRLF expansion of an LF text
   // blob. No arbitrary clean/smudge filter is trusted to justify different data.
   const normalized = Buffer.from(bytes.toString('utf8').replace(/\r\n/g,'\n'),'utf8');
-  assert(bytes.equals(committed) || (!committed.includes(0) && !bytes.includes(0) && normalized.equals(committed)), `Working source differs from committed blob: ${name}`);
+  const losslessText = Buffer.from(bytes.toString('utf8'),'utf8').equals(bytes);
+  assert(bytes.equals(committed) || (losslessText && !committed.includes(0) && !bytes.includes(0) && normalized.equals(committed)), `Working source differs from committed blob: ${name}`);
   return { path: name, object, sha256: sha(bytes) };
 });
 assert.equal(offset,blobs.length,'Complete Git blob stream required');
