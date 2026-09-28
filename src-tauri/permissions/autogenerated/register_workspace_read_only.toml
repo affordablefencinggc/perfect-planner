@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-register-workspace-read-only"
+description = "Enables the register_workspace_read_only command without any pre-configured scope."
+commands.allow = ["register_workspace_read_only"]
+
+[[permission]]
+identifier = "deny-register-workspace-read-only"
+description = "Denies the register_workspace_read_only command without any pre-configured scope."
+commands.deny = ["register_workspace_read_only"]

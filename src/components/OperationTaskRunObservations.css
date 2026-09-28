@@ -1,0 +1,29 @@
+.retained-attempts { max-width: 1100px; padding: 8px 4px 24px; font-size: 14px; line-height: 1.55; }
+.retained-attempts-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.retained-attempts-heading h4 { margin: 0; font-size: 18px; }
+.retained-attempts-heading span { color: #586360; font-size: 13px; }
+.retained-attempts-heading button { padding: 9px 14px; border: 1px solid #a4afb3; border-radius: 8px; background: #fff; color: #29332f; cursor: pointer; font: inherit; }
+.retained-attempts-counts { display: flex; flex-wrap: wrap; gap: 12px; margin: 18px 0; }
+.retained-attempts-counts > div { flex: 1 1 150px; padding: 12px 16px; border: 1px solid #b7c0c4; border-radius: 9px; background: #f0f2f1; }
+.retained-attempts-counts dt { color: #46534d; font-size: 13px; }
+.retained-attempts-counts dd { margin: 2px 0 0; font-size: 24px; font-weight: 700; }
+.retained-attempts-counts [data-attention="true"] { background: #fbf0d9; border-color: #b38b47; }
+.retained-attempts > details { margin-top: 12px; background: #fff; border: 1px solid #a7b3b9; border-radius: 9px; box-shadow: 0 2px 5px #27352b10; overflow-wrap: anywhere; }
+.retained-attempts > details > summary { padding: 14px 16px; cursor: pointer; background: #edf0ef; border-radius: 9px; font-weight: 600; }
+.retained-attempts > details > p { margin: 12px 16px; }
+.retained-attempts > details[data-attempt-state="failure-observed"] { border-left: 4px solid #a85c43; }
+.retained-attempt-latest { display: inline-block; margin-right: 10px; padding: 1px 7px; border: 1px solid #98a5ab; border-radius: 5px; font-size: 12px; font-weight: 400; }
+.retained-attempts button:focus-visible,.retained-attempts summary:focus-visible { outline: 2px solid #385e9a; outline-offset: 3px; }
+.native-attempts { width:100%; max-width:1100px; }
+.native-attempts > details { padding:0; }
+.native-attempts > details > summary { display:flex; flex-wrap:wrap; justify-content:space-between; gap:8px 20px; }
+.native-attempts-label { font-size:13px; color:#654d21; }
+.native-attempts [data-attempt-state="failure-observed"] > summary .native-attempts-label { color:#923b2e; }
+.native-attempts-reference { margin:12px 16px; padding:0; border:0; }
+.native-attempts-reference > summary { font-size:13px; padding:6px 0; }
+.native-attempts-reference p { font-size:12px; overflow-wrap:anywhere; }
+.native-attempts-pages { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px; margin-top:20px; }
+.native-attempts-pages button { padding:9px 14px; background:#fff; border:1px solid #a4afb3; border-radius:8px; color:#29332f; cursor:pointer; font:inherit; }
+.native-attempts-pages button:disabled { opacity:.55; cursor:default; }
+.native-attempts-snapshot { font-size:13px; color:#586360; }
+.native-attempts-jump { padding:9px 14px; color:#923b2e; background:#fff; border:1px solid #b97866; border-radius:8px; cursor:pointer; font:inherit; }

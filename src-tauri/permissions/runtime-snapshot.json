@@ -1,0 +1,9 @@
+{
+  "$schema": "../gen/schemas/schema.json",
+  "identifier": "allow-runtime-snapshot",
+  "description": "Allows the main window to request the inert, versioned runtime identity snapshot. This command accepts no path, command, network target, secret, or mutation authority.",
+  "commands": {
+    "allow": ["runtime_snapshot"],
+    "deny": []
+  }
+}

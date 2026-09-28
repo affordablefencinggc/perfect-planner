@@ -1,0 +1,4 @@
+#!/bin/sh
+set -eu
+echo "Perfect Planner: checking staged files for credentials"
+npm run verify:secrets -- --staged

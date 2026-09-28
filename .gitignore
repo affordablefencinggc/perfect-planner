@@ -1,0 +1,8 @@
+node_modules/
+.local-preview-cache/
+dist/
+target/
+target-codex/
+.cache/
+.env
+.env.*

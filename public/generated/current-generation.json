@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "generationId": "1fb655b155584bc835030c07a4c0028e8afdbd94d763e3a5ae976e023690712d",
+  "generatedAt": "2026-09-04T07:54:23.154Z",
+  "directory": "generations/1fb655b155584bc835030c07a4c0028e8afdbd94d763e3a5ae976e023690712d",
+  "artifacts": [
+    {
+      "name": "truth-core-report.json",
+      "sha256": "7edcb1260a3d4f456ddf9e1304eab9b58b59fd020e0b0e1af8403458c613caaa",
+      "size": 47831
+    },
+    {
+      "name": "completion-report.json",
+      "sha256": "49d20e2ccdcdab67fe5a549dedf4e51b5ee4bccfd60cbd63821bfadf11612196",
+      "size": 3898
+    },
+    {
+      "name": "completion-report.md",
+      "sha256": "5e525a80b79269093571c395847b39d4cf3ce6825a467f02b735cef8fdc323b8",
+      "size": 608
+    },
+    {
+      "name": "evidence-bundle.html",
+      "sha256": "d9277d420a6fa2229131fc4ad7068dc151ee7cd09831f83b304375331757cf8c",
+      "size": 1463682
+    }
+  ]
+}

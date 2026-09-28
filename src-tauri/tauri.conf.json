@@ -1,0 +1,83 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "productName": "Perfect Planner",
+  "version": "0.1.0",
+  "identifier": "com.perfectplanner.desktop",
+  "build": {
+    "frontendDist": "../dist/client",
+    "devUrl": "http://127.0.0.1:4173",
+    "beforeDevCommand": "npm run dev:tauri",
+    "beforeBuildCommand": "npm run build:client"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Perfect Planner",
+        "width": 1440,
+        "height": 900,
+        "minWidth": 1024,
+        "minHeight": 720,
+        "center": true,
+        "resizable": true,
+        "fullscreen": false,
+        "zoomHotkeysEnabled": true
+      }
+    ],
+    "security": {
+      "capabilities": ["main-read-only", "main-collision-authority", "main-bundled-mcp", "main-git-inventory", "main-native-drafts", "main-agent-observation", "main-check-setup", "main-task-results"],
+      "csp": {
+        "default-src": ["'self'", "customprotocol:", "asset:"],
+        "connect-src": ["ipc:", "http://ipc.localhost"],
+        "font-src": ["'self'"],
+        "img-src": ["'self'", "asset:", "data:"],
+        "style-src": ["'self'", "'unsafe-inline'"],
+        "script-src": ["'self'"],
+        "object-src": ["'none'"],
+        "base-uri": ["'none'"],
+        "form-action": ["'none'"],
+        "frame-src": ["'none'"],
+        "worker-src": ["'none'"]
+      },
+      "devCsp": {
+        "default-src": ["'self'"],
+        "connect-src": ["ipc:", "http://ipc.localhost", "ws://127.0.0.1:4173", "http://127.0.0.1:4173"],
+        "font-src": ["'self'"],
+        "img-src": ["'self'", "data:", "blob:"],
+        "style-src": ["'self'", "'unsafe-inline'"],
+        "script-src": ["'self'"],
+        "object-src": ["'none'"],
+        "base-uri": ["'none'"],
+        "form-action": ["'none'"],
+        "frame-src": ["'none'"],
+        "worker-src": ["'none'"]
+      },
+      "freezePrototype": true,
+      "dangerousDisableAssetCspModification": false,
+      "assetProtocol": {
+        "enable": false,
+        "scope": []
+      },
+      "headers": {
+        "X-Content-Type-Options": "nosniff",
+        "Cross-Origin-Opener-Policy": "same-origin",
+        "Cross-Origin-Resource-Policy": "same-origin",
+        "Permissions-Policy": "camera=(), microphone=(), geolocation=(), usb=(), payment=()"
+      }
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["msi", "nsis"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "android": {
+      "debugApplicationIdSuffix": ".debug"
+    }
+  }
+}

@@ -1,0 +1,514 @@
+{
+  "pack": {
+    "name": "Main 5 LLM Icons \u2014 Three Modes",
+    "version": "2026.09.02",
+    "research_cutoff": "2026-09-02",
+    "mode_count": 3,
+    "deliverable_variants": [
+      "waiting",
+      "running-left",
+      "running-right",
+      "dead-still"
+    ],
+    "icon_count": 5,
+    "background": "transparent",
+    "source_collection": "Lobe Icons 1.94.0"
+  },
+  "icons": [
+    {
+      "slug": "openai-gpt",
+      "name": "GPT",
+      "provider": "OpenAI",
+      "source_svg": "openai.svg",
+      "official_reference": "https://openai.com/brand/",
+      "modes": {
+        "waiting": {
+          "animated": true,
+          "files": {
+            "svg": "modes/waiting/svg/openai-gpt.svg",
+            "static_png": {
+              "32": "modes/waiting/png/static/32/openai-gpt.png",
+              "64": "modes/waiting/png/static/64/openai-gpt.png",
+              "128": "modes/waiting/png/static/128/openai-gpt.png",
+              "256": "modes/waiting/png/static/256/openai-gpt.png"
+            },
+            "animated_png_128": "modes/waiting/png/animated/128/openai-gpt.png"
+          },
+          "sha256": {
+            "svg": "78db8861f9fad2ae92cce1b73c9fdbf0f842a2accb94f892751c893f4fbaa9bd",
+            "static_png": {
+              "32": "c7c63ad73a385c1cdcf4a35b87f8875a98f1e32fe42db725df9e1f6a59a17ff6",
+              "64": "142d72e83b5777c6501eac5bcce7dd1a6e23999fb2b13ab34fb7111a74eb2275",
+              "128": "1ca2e1d89a7bedb53b8696e44ad11f4b705dabbf6e3c36dda67463f16fab7b79",
+              "256": "76bc02b18dba538c073f4c69c0f595f2cee95af2b0e84a5a20a7840e7ccbb54d"
+            },
+            "animated_png_128": "f8a7da678479f129d972b2c253ae29f57a4180817ae24bbadcf8a4904110b58f"
+          }
+        },
+        "running-left": {
+          "animated": true,
+          "files": {
+            "svg": "modes/running/left/svg/openai-gpt.svg",
+            "static_png": {
+              "32": "modes/running/left/png/static/32/openai-gpt.png",
+              "64": "modes/running/left/png/static/64/openai-gpt.png",
+              "128": "modes/running/left/png/static/128/openai-gpt.png",
+              "256": "modes/running/left/png/static/256/openai-gpt.png"
+            },
+            "animated_png_128": "modes/running/left/png/animated/128/openai-gpt.png"
+          },
+          "sha256": {
+            "svg": "24cfef031b470a2a27418038f77d96f93abac6076d3754f4b7f92e4abf687f35",
+            "static_png": {
+              "32": "582be5d745924f87f376923e1a4dd64761e29732250bf6023ea90084ddb7c4aa",
+              "64": "da6ae61cdc677dce145945ba5d814d0e315332998afa7357c1c2683657e42555",
+              "128": "78a966ac2d5d51797930be66e63491c3b8ba9b1431bcbd1bbd3166004dacabb1",
+              "256": "9a0fbcb87a1adc605398d3e074240ea8ee1fd9bf8fad5a872a1ef216c26e6fd5"
+            },
+            "animated_png_128": "a609a570b0e809d9bee02d80cfd2e63ad3c3712b2fd45bc213e05a7776487732"
+          }
+        },
+        "running-right": {
+          "animated": true,
+          "files": {
+            "svg": "modes/running/right/svg/openai-gpt.svg",
+            "static_png": {
+              "32": "modes/running/right/png/static/32/openai-gpt.png",
+              "64": "modes/running/right/png/static/64/openai-gpt.png",
+              "128": "modes/running/right/png/static/128/openai-gpt.png",
+              "256": "modes/running/right/png/static/256/openai-gpt.png"
+            },
+            "animated_png_128": "modes/running/right/png/animated/128/openai-gpt.png"
+          },
+          "sha256": {
+            "svg": "3871605024b864e1422ba571c7b3c84a6a9a1c6cc6b782efd047523bc832236a",
+            "static_png": {
+              "32": "eba33088f672b57960b3f3aa5c3e21cbea8c10a66c2a3ff7287d71a25e5ea040",
+              "64": "650e1441f2d4117e8b2e5dd7e51ce003fed751009fb1847b7bd6a61319cac991",
+              "128": "499134c3b12f83657ee4cc2af2bc83e453e526815186d1ab6a558023dc046bec",
+              "256": "6e343df19da487a1427c5fd0c399ab56c3768ec5419c5184a49944f779dae084"
+            },
+            "animated_png_128": "75c9ec5fbc3c612266aed3dcbc24a7b97973b08cb165365b361fccc85448ad39"
+          }
+        },
+        "dead-still": {
+          "animated": false,
+          "files": {
+            "svg": "modes/dead-still/svg/openai-gpt.svg",
+            "static_png": {
+              "32": "modes/dead-still/png/static/32/openai-gpt.png",
+              "64": "modes/dead-still/png/static/64/openai-gpt.png",
+              "128": "modes/dead-still/png/static/128/openai-gpt.png",
+              "256": "modes/dead-still/png/static/256/openai-gpt.png"
+            }
+          },
+          "sha256": {
+            "svg": "a79ae0014d5f71cb5ffefad93e4d63fd8dcf074691fac849347dafd71b4df3a5",
+            "static_png": {
+              "32": "e6c734b10b31752eb7effc9982698d886779b6d35309b38c25e3395677b815c9",
+              "64": "70107e29522358382295f9aca14a2b23f7182a747c686ab3a3ff7f7f4f2bcbdd",
+              "128": "c679be43daf88d0042fba451105ce0802e2d3a804097539af55df01667666e68",
+              "256": "7fbdec055f9d9a63a09119c3aa8383030fbcaf0a7de230a9366f06d9c7a77667"
+            }
+          }
+        }
+      }
+    },
+    {
+      "slug": "anthropic-claude",
+      "name": "Claude",
+      "provider": "Anthropic",
+      "source_svg": "claude-color.svg",
+      "official_reference": "https://www.anthropic.com/news",
+      "modes": {
+        "waiting": {
+          "animated": true,
+          "files": {
+            "svg": "modes/waiting/svg/anthropic-claude.svg",
+            "static_png": {
+              "32": "modes/waiting/png/static/32/anthropic-claude.png",
+              "64": "modes/waiting/png/static/64/anthropic-claude.png",
+              "128": "modes/waiting/png/static/128/anthropic-claude.png",
+              "256": "modes/waiting/png/static/256/anthropic-claude.png"
+            },
+            "animated_png_128": "modes/waiting/png/animated/128/anthropic-claude.png"
+          },
+          "sha256": {
+            "svg": "3690622e7e67cad1ce39f7f8ca439054914c220baee9412264800c77609a7436",
+            "static_png": {
+              "32": "fa478ff8eae809e43040698e2bcbcd0e78ec27acbfcc1a5d9fb68217bd2f676a",
+              "64": "46aa98ed69fdd92504e8e0e313254211a5e91aea7f92e17a62fe70914ce725ec",
+              "128": "aa2a0dce9d3e3e495907203bf06ab2d9fc85ed45f965d4d699bf88700918abd2",
+              "256": "f827d85812c90c0e402ad0a1c2b023076ea620fd8ef5118e6b9630eecdc8123c"
+            },
+            "animated_png_128": "528a5efc31b65ad19d1c96a7369375a53344b9cc427f07dd69c9af939545916f"
+          }
+        },
+        "running-left": {
+          "animated": true,
+          "files": {
+            "svg": "modes/running/left/svg/anthropic-claude.svg",
+            "static_png": {
+              "32": "modes/running/left/png/static/32/anthropic-claude.png",
+              "64": "modes/running/left/png/static/64/anthropic-claude.png",
+              "128": "modes/running/left/png/static/128/anthropic-claude.png",
+              "256": "modes/running/left/png/static/256/anthropic-claude.png"
+            },
+            "animated_png_128": "modes/running/left/png/animated/128/anthropic-claude.png"
+          },
+          "sha256": {
+            "svg": "12b42e58dd50dbcbaf6685f677bf192aef85482a74c21f6224d1f5d0b2425f47",
+            "static_png": {
+              "32": "242ff7a58a8ce64033c569a6b678c55f77d8433fc22f0a96fa45fe79d2eaad11",
+              "64": "8fb7795818ec36952c6619e2fcd40182b642ca87e105f4290b089d02b0848e81",
+              "128": "47db6c79da1db54994e26fae01ec3d31b1a4f98ae20beb83c97b6c43de463be5",
+              "256": "b52fd06766cf8903638a898f43960e63a2a2d2df856613a42fe0daed96571e3a"
+            },
+            "animated_png_128": "64fa1ea666629aaf7693e9b29854f3bbc4a48bca66ba84e4866120700175ddc6"
+          }
+        },
+        "running-right": {
+          "animated": true,
+          "files": {
+            "svg": "modes/running/right/svg/anthropic-claude.svg",
+            "static_png": {
+              "32": "modes/running/right/png/static/32/anthropic-claude.png",
+              "64": "modes/running/right/png/static/64/anthropic-claude.png",
+              "128": "modes/running/right/png/static/128/anthropic-claude.png",
+              "256": "modes/running/right/png/static/256/anthropic-claude.png"
+            },
+            "animated_png_128": "modes/running/right/png/animated/128/anthropic-claude.png"
+          },
+          "sha256": {
+            "svg": "740c9522a5f5444e66f9c83f4bd6a481b5841c4591009d116e168dc73e04b308",
+            "static_png": {
+              "32": "f91a8473d8959af5a21d5636d1fc784e39890de8a45936e243c818db1464b2f5",
+              "64": "354872e6698eb1c7bbb012c9c63ef33bd1b3975c615ec75b2b26accdd4f411ad",
+              "128": "c57ec8002991eb21c07f707b15fc54fe425af39c76ac5f4e5d6a20cf023358d8",
+              "256": "b96c1a60321b77157a9f83b9e21c5a70aea5a7614e4b731eb9de0211c562b848"
+            },
+            "animated_png_128": "18d40e33b9531947624647ad8497a86defd289c095049bbc5b894465231b2391"
+          }
+        },
+        "dead-still": {
+          "animated": false,
+          "files": {
+            "svg": "modes/dead-still/svg/anthropic-claude.svg",
+            "static_png": {
+              "32": "modes/dead-still/png/static/32/anthropic-claude.png",
+              "64": "modes/dead-still/png/static/64/anthropic-claude.png",
+              "128": "modes/dead-still/png/static/128/anthropic-claude.png",
+              "256": "modes/dead-still/png/static/256/anthropic-claude.png"
+            }
+          },
+          "sha256": {
+            "svg": "9b656cadafbdb53c73f4a7761f4638b87e68e6f3831f496cc06f4dae495ff136",
+            "static_png": {
+              "32": "2fc4d99f14be67b82a9b11ae8104c1abf938a5c7d845df2d02fb1ffdb2623f5b",
+              "64": "2592a50b7d1e0476ab0a58a1d830f50f173144a75552db7c8b1fc026f0d38f9a",
+              "128": "04dc2de1fa6b1f937ea2770293ac0b9b6fa9f79bb24de57c270ad4b150aec8aa",
+              "256": "3df099c53b1081bdb3b001901f3742c59d6fb48daeb2657dd5e47157d9819c0d"
+            }
+          }
+        }
+      }
+    },
+    {
+      "slug": "google-gemini",
+      "name": "Gemini",
+      "provider": "Google",
+      "source_svg": "gemini-color.svg",
+      "official_reference": "https://ai.google.dev/gemini-api/docs/models",
+      "modes": {
+        "waiting": {
+          "animated": true,
+          "files": {
+            "svg": "modes/waiting/svg/google-gemini.svg",
+            "static_png": {
+              "32": "modes/waiting/png/static/32/google-gemini.png",
+              "64": "modes/waiting/png/static/64/google-gemini.png",
+              "128": "modes/waiting/png/static/128/google-gemini.png",
+              "256": "modes/waiting/png/static/256/google-gemini.png"
+            },
+            "animated_png_128": "modes/waiting/png/animated/128/google-gemini.png"
+          },
+          "sha256": {
+            "svg": "b395ee9ee1bf1b48508707fc5bfafdf38d6daf0eb15b978f53865a1bdf7721a0",
+            "static_png": {
+              "32": "f89f53b1395b248db64178681e50c3eb1096492cf6dbf6bb5411b5d011c23d1d",
+              "64": "391101c82c1c00c73da79a176bd85b835990b34ccf5d78ab6aa4c3d566f5f6b3",
+              "128": "a3a9a8f32c1561fc020793ed7df011c3b95377f23d495df962bb857399ec8a7c",
+              "256": "2a44f781a7500121c0408d3bc90bde88b1c0ec4e1e6cf7bc2167d36e04b85365"
+            },
+            "animated_png_128": "8f7ff32677480adab5f765bdb49fcbdbe805645d2b03f0434e427b5ad1f3750d"
+          }
+        },
+        "running-left": {
+          "animated": true,
+          "files": {
+            "svg": "modes/running/left/svg/google-gemini.svg",
+            "static_png": {
+              "32": "modes/running/left/png/static/32/google-gemini.png",
+              "64": "modes/running/left/png/static/64/google-gemini.png",
+              "128": "modes/running/left/png/static/128/google-gemini.png",
+              "256": "modes/running/left/png/static/256/google-gemini.png"
+            },
+            "animated_png_128": "modes/running/left/png/animated/128/google-gemini.png"
+          },
+          "sha256": {
+            "svg": "b1e9ea455582612c6f3425d71a0bcb8593c1dbf27660bb9160f74d90c05dc53f",
+            "static_png": {
+              "32": "3c2e55c5c3bee3686c81543df79588dc5790e08fa2ac2ef4843c5a73e517becf",
+              "64": "abb07a3266f7e2c3696b540372c2aec97c5dcef96a3e10e32189a5663342e3e8",
+              "128": "1478031d127924ac9af840fa13864c17787897b4dc45e8e31708c931d64b412b",
+              "256": "d6211daaa19c6121c84ce2747ab2a9b018350dbd74b14bc181805921917de67e"
+            },
+            "animated_png_128": "91fe606c9f00775daa620359cd297b5074caf310713763b392c86694c78253d4"
+          }
+        },
+        "running-right": {
+          "animated": true,
+          "files": {
+            "svg": "modes/running/right/svg/google-gemini.svg",
+            "static_png": {
+              "32": "modes/running/right/png/static/32/google-gemini.png",
+              "64": "modes/running/right/png/static/64/google-gemini.png",
+              "128": "modes/running/right/png/static/128/google-gemini.png",
+              "256": "modes/running/right/png/static/256/google-gemini.png"
+            },
+            "animated_png_128": "modes/running/right/png/animated/128/google-gemini.png"
+          },
+          "sha256": {
+            "svg": "fd8f5011d6241f55f490d3e01b04698ef703f38556a7902fd63ccc24eb1ef29f",
+            "static_png": {
+              "32": "6e14f528c448a7143d2b123fadc61fc5c8b7ab6cce03912bc0f7838107f30b96",
+              "64": "a9b57d9054eefc733bd747bd4fa509b73d14561494dbb17abcc5e774d8b41b4f",
+              "128": "764d8767264fd860dd60759549046cfae38832b4c8bebf2b3da135b73a72f260",
+              "256": "11a64fcdf6f23cbf0273802c83f52e29afd588475cd39026b27aae8c0ffe18e0"
+            },
+            "animated_png_128": "7f2e474e285cad72ececd59c8a89eb2565c2f01bf55809d40cfe73a051c490b6"
+          }
+        },
+        "dead-still": {
+          "animated": false,
+          "files": {
+            "svg": "modes/dead-still/svg/google-gemini.svg",
+            "static_png": {
+              "32": "modes/dead-still/png/static/32/google-gemini.png",
+              "64": "modes/dead-still/png/static/64/google-gemini.png",
+              "128": "modes/dead-still/png/static/128/google-gemini.png",
+              "256": "modes/dead-still/png/static/256/google-gemini.png"
+            }
+          },
+          "sha256": {
+            "svg": "a1d077f7111ed60a15899c9ec71d30d2f9bd03fae9b05e067710ffb08c2d13c5",
+            "static_png": {
+              "32": "376bd62eddbdc0135f97122a1cda7e360706fecee2bf3a355512eea8a35c77dc",
+              "64": "9db3b0cbe186dd91ec461327149e2ffce87f258eedb756227f754b9707b3dfb2",
+              "128": "9c63a7a9a8e8c4e3342d985870416cf7f6de811ef69ef03623f604b3e0586dcb",
+              "256": "b57ee96db385d13634f0b014a4d0783c81a5259db4cb3ad3b44ab01557e9839d"
+            }
+          }
+        }
+      }
+    },
+    {
+      "slug": "meta-llama",
+      "name": "Llama",
+      "provider": "Meta",
+      "source_svg": "meta-color.svg",
+      "official_reference": "https://ai.meta.com/llama/get-started/",
+      "modes": {
+        "waiting": {
+          "animated": true,
+          "files": {
+            "svg": "modes/waiting/svg/meta-llama.svg",
+            "static_png": {
+              "32": "modes/waiting/png/static/32/meta-llama.png",
+              "64": "modes/waiting/png/static/64/meta-llama.png",
+              "128": "modes/waiting/png/static/128/meta-llama.png",
+              "256": "modes/waiting/png/static/256/meta-llama.png"
+            },
+            "animated_png_128": "modes/waiting/png/animated/128/meta-llama.png"
+          },
+          "sha256": {
+            "svg": "b11cb0d6edd9d675309bd418506dc2e48d67975fbf1b4601f291e133acea6f87",
+            "static_png": {
+              "32": "b20f48f1dad1f08b6a2e5627dc0e0569848527df7f4ed6e7e54eaaac39e274a2",
+              "64": "e637bf603aff04bcb994d1adb00bf46280b194d1456ad6bce541ea2afe9d389c",
+              "128": "0d33dfecf3438cccce6401d853dff1ff873e666be06c8914ad693a2c81820032",
+              "256": "8ce878210ae0d83be35c48bf27ef2125b8fd491f50e876b215931cf55befd8fa"
+            },
+            "animated_png_128": "c4651f3b708b68a0e680eb296994c4e8ea55f10adf2e79ab9bb1c856c9e1027c"
+          }
+        },
+        "running-left": {
+          "animated": true,
+          "files": {
+            "svg": "modes/running/left/svg/meta-llama.svg",
+            "static_png": {
+              "32": "modes/running/left/png/static/32/meta-llama.png",
+              "64": "modes/running/left/png/static/64/meta-llama.png",
+              "128": "modes/running/left/png/static/128/meta-llama.png",
+              "256": "modes/running/left/png/static/256/meta-llama.png"
+            },
+            "animated_png_128": "modes/running/left/png/animated/128/meta-llama.png"
+          },
+          "sha256": {
+            "svg": "f6d6f14a1366631726cee1528260bdc6e65600245c9f8f2c48852f6a3ea7635c",
+            "static_png": {
+              "32": "1dbb263de0d75cefed488fc73b99f1fac7f7319b7b04008d41727420514157b6",
+              "64": "2f11107566acde577774c5ee0ba0b847cd911a6b16adaa3ff7c279f8d7a2d31c",
+              "128": "49c94c160e0b54e9bad53cb1c813d38fdc95e4ecb6741e39e6818433288fc7b3",
+              "256": "df319d445d0cf402ee71500869250dd1dce9244792e9fd7c0c5eecb7d6c5e2a4"
+            },
+            "animated_png_128": "f3869b7cfcd93f608a410a50d6ba9865d5e6b37a54fd93667a1824c9eabc7775"
+          }
+        },
+        "running-right": {
+          "animated": true,
+          "files": {
+            "svg": "modes/running/right/svg/meta-llama.svg",
+            "static_png": {
+              "32": "modes/running/right/png/static/32/meta-llama.png",
+              "64": "modes/running/right/png/static/64/meta-llama.png",
+              "128": "modes/running/right/png/static/128/meta-llama.png",
+              "256": "modes/running/right/png/static/256/meta-llama.png"
+            },
+            "animated_png_128": "modes/running/right/png/animated/128/meta-llama.png"
+          },
+          "sha256": {
+            "svg": "ef8b7381284b752f194aea12f95b621cf2600a8fe527035b64a80b23ef03be9a",
+            "static_png": {
+              "32": "8c22b12d1304d93a680ed90b6abe446b560ea1a84072694505142f3a9b83e030",
+              "64": "74ea14ec9764f292b420d7f13b5c146aca26840f0179d15d3403e049f40b8d81",
+              "128": "dde954d5dff49269b1f399649c2aa73fe2563e9b102109402bf81ba127cf8f90",
+              "256": "6ac46d146c522810700d3e3bd36ac572af667342de4845ccf6d7cf03e7ee9958"
+            },
+            "animated_png_128": "d8a6f57658822be2182cf9d56481a85d6397a18e0bc71fbf8e7a59c91e7282ca"
+          }
+        },
+        "dead-still": {
+          "animated": false,
+          "files": {
+            "svg": "modes/dead-still/svg/meta-llama.svg",
+            "static_png": {
+              "32": "modes/dead-still/png/static/32/meta-llama.png",
+              "64": "modes/dead-still/png/static/64/meta-llama.png",
+              "128": "modes/dead-still/png/static/128/meta-llama.png",
+              "256": "modes/dead-still/png/static/256/meta-llama.png"
+            }
+          },
+          "sha256": {
+            "svg": "c1ea5c61f45f635ffff80d2d3ac43af5969c2f70632a5ea146a3927f9dc23273",
+            "static_png": {
+              "32": "19bd1ff48fd4ef3810f723884a2fe93a01508448b7c51afe6d1c1cafb909aef9",
+              "64": "73fa40a4173eca593b5fbabe9e8a6a5ed292f623132e06647bd6d710c8522799",
+              "128": "fabd7d49f909ea4332c38494883a583819da2181dcc0acc58ae6cd7185b8f89c",
+              "256": "cd02723c3ea50c4c5814ca36a39d47bbe590cab984014d14b6c1c4b93794b281"
+            }
+          }
+        }
+      }
+    },
+    {
+      "slug": "xai-grok",
+      "name": "Grok",
+      "provider": "xAI",
+      "source_svg": "grok.svg",
+      "official_reference": "https://docs.x.ai/developers/models",
+      "modes": {
+        "waiting": {
+          "animated": true,
+          "files": {
+            "svg": "modes/waiting/svg/xai-grok.svg",
+            "static_png": {
+              "32": "modes/waiting/png/static/32/xai-grok.png",
+              "64": "modes/waiting/png/static/64/xai-grok.png",
+              "128": "modes/waiting/png/static/128/xai-grok.png",
+              "256": "modes/waiting/png/static/256/xai-grok.png"
+            },
+            "animated_png_128": "modes/waiting/png/animated/128/xai-grok.png"
+          },
+          "sha256": {
+            "svg": "9ee7bc9bc6a348feaf46c1963784fdab97215983a81ea63425f1dc475dac5db9",
+            "static_png": {
+              "32": "313af6a6dc39dfac02ea1875636a4658e346de5da3ae20223664f4884b17629d",
+              "64": "6cb1123e672b1d1d5822007510b2ad43e3bda86a15e931fdc6fcc27be4378885",
+              "128": "e3c99bd2c2940e4b76cff4f77408e14bc6ce72b7889ea003005a1bea90ac6ce5",
+              "256": "3b6a7f362d5b3d3a09ce274006165d7da20984ef2ae2dcb84615ce8a482e00d6"
+            },
+            "animated_png_128": "8727cb1827eee5f940ab6d6a3984c3f8cf7fd3441582dc62780059cfb40f72df"
+          }
+        },
+        "running-left": {
+          "animated": true,
+          "files": {
+            "svg": "modes/running/left/svg/xai-grok.svg",
+            "static_png": {
+              "32": "modes/running/left/png/static/32/xai-grok.png",
+              "64": "modes/running/left/png/static/64/xai-grok.png",
+              "128": "modes/running/left/png/static/128/xai-grok.png",
+              "256": "modes/running/left/png/static/256/xai-grok.png"
+            },
+            "animated_png_128": "modes/running/left/png/animated/128/xai-grok.png"
+          },
+          "sha256": {
+            "svg": "78469a6eb4ff92c37c975924957c765444c79490d3e252ffb8ab26b425faaa32",
+            "static_png": {
+              "32": "0ad1b63c4353d2a394780ea4e599aa184002e077925911988e857595d2be2dcb",
+              "64": "202ab32a49392872aca5e298b0a37c5aba16f5bbb4e6d4e6a47b72fad33a64fe",
+              "128": "be24f3ccb9137236fb794a5cd36a6bb26fa0776bedb274d6ba87a609302aa186",
+              "256": "b14350e7dfc342696fdc28177739b5520dbaa0371422f0b67a121d1554520fb2"
+            },
+            "animated_png_128": "b2c77a49d3f43a023bed090bf54c7a37d3afe329c84d8c9ad064801ed52fe92f"
+          }
+        },
+        "running-right": {
+          "animated": true,
+          "files": {
+            "svg": "modes/running/right/svg/xai-grok.svg",
+            "static_png": {
+              "32": "modes/running/right/png/static/32/xai-grok.png",
+              "64": "modes/running/right/png/static/64/xai-grok.png",
+              "128": "modes/running/right/png/static/128/xai-grok.png",
+              "256": "modes/running/right/png/static/256/xai-grok.png"
+            },
+            "animated_png_128": "modes/running/right/png/animated/128/xai-grok.png"
+          },
+          "sha256": {
+            "svg": "ba9111a9487beb6762429cd539c636c1d2c560dbffd5678ac331f97f4ced1b94",
+            "static_png": {
+              "32": "f8f78ecb2c09f2351f87629f423de0390f9ffc369cbc45e9b2b17e95b4c2c2e5",
+              "64": "d78ad1218aba7f13c5535c471f8aafd5f99c6853751d7ec7914ac38a3d7a89ef",
+              "128": "5a3c7a8a89797eb7acf808b3aa5bf94e17db0597752deb68730babe46e4f66a0",
+              "256": "59c965ffe43dbbaa6d287301a0754cab0a118b87f1acd8413bc88add4c5bf612"
+            },
+            "animated_png_128": "1c16ba951c0233ca8435491ad20d43c68fbd605a9894f7ac67618b41ba396717"
+          }
+        },
+        "dead-still": {
+          "animated": false,
+          "files": {
+            "svg": "modes/dead-still/svg/xai-grok.svg",
+            "static_png": {
+              "32": "modes/dead-still/png/static/32/xai-grok.png",
+              "64": "modes/dead-still/png/static/64/xai-grok.png",
+              "128": "modes/dead-still/png/static/128/xai-grok.png",
+              "256": "modes/dead-still/png/static/256/xai-grok.png"
+            }
+          },
+          "sha256": {
+            "svg": "c8e701e1f062c8674137ccb42bf928aa5978002828a837f258c17837db0aec53",
+            "static_png": {
+              "32": "c60e1f5dd33b01aec2f2075be5854f347a12d4eb710d62d07234492d87e1c452",
+              "64": "befb7b257fe9be5f3491be3f71e0dea6d1174936eb68b8812188b7761f28f5f7",
+              "128": "be039b43d527307197c3ba1c1d709d48e79cb2da75815a635c2d0ec5d18795dc",
+              "256": "6aaab8dcc88445c691bfe89d87296679ef1985317d64d1cbbf973bcb48a63b6c"
+            }
+          }
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,8 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main-bundled-mcp",
+  "description": "Main window may check the fixed bundled registration-metadata MCP service. No shell, arbitrary executable, network, computer use, project content or mutation capability is granted.",
+  "windows": ["main"],
+  "platforms": ["windows"],
+  "permissions": ["allow-check-bundled-mcp-connection"]
+}

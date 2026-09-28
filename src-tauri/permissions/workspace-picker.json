@@ -1,0 +1,9 @@
+{
+  "$schema": "../gen/schemas/schema.json",
+  "identifier": "allow-select-workspace-folder",
+  "description": "Allows one user-triggered native folder selection dialog. It returns only the selected directory path, grants no general filesystem scope, and does not read or mutate the directory.",
+  "commands": {
+    "allow": ["select_workspace_folder"],
+    "deny": []
+  }
+}

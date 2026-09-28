@@ -1,0 +1,1189 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-09-03T14:38:19.923Z",
+  "root": "C:\\repos\\perfect-planner-cleanroom",
+  "census": {
+    "fileCount": 234,
+    "summary": {
+      "configuration": 11,
+      "document": 64,
+      "interface": 6,
+      "source": 92,
+      "test": 61
+    },
+    "skipped": 0,
+    "digest": "ec8754ef6a46e32278b6613d615e3eb7149bc2848e9661f2f73c2828748ac3d5"
+  },
+  "componentCatalog": {
+    "ready": true,
+    "verdict": "READY FOR APPROVAL",
+    "blockerCount": 0,
+    "coverage": {
+      "required": 27,
+      "complete": 27,
+      "percentage": 100,
+      "interfaces": 107,
+      "fileClaims": 103
+    }
+  },
+  "collisionPlan": {
+    "valid": true,
+    "collisionCount": 3,
+    "hardStops": 1,
+    "manifestErrors": []
+  },
+  "documentRegistry": {
+    "valid": true,
+    "generation": 2,
+    "active": 234,
+    "deleted": 0,
+    "initialAdded": 234,
+    "duplicateAdds": 0,
+    "refused": 0,
+    "watcherEngineAvailable": true,
+    "continuouslyRunning": false
+  },
+  "journal": {
+    "entries": 25,
+    "contentionEntries": 24,
+    "valid": true,
+    "brokenAt": null,
+    "concurrentWriters": 4
+  },
+  "proofRunner": {
+    "proven": true,
+    "exit": 0,
+    "timedOut": false,
+    "artifact": "PP-TRUTH-RUNNER-1-13c699c4.proof.json",
+    "sha256": "c4941d21f94f4cb5ec056be892e444a6a1bb70553d26389f880a5728d161a870",
+    "durationMs": 48
+  },
+  "sessionRegistry": {
+    "valid": true,
+    "durableSessionCount": 1,
+    "released": 1,
+    "tokenRedacted": true
+  },
+  "ciDerivation": {
+    "state": "derived",
+    "reason": "local candidates derived; required-status and merged-state execution remain unverified",
+    "workflowCount": 1,
+    "gateCount": 1,
+    "tier3": "grey",
+    "exactMergedTruth": false,
+    "localMergedState": {
+      "schemaVersion": 1,
+      "state": "grey",
+      "reason": "exact target/source refs and an approved rehearsal base were not supplied",
+      "evidence": [],
+      "cleanup": null
+    },
+    "remoteStatus": {
+      "schemaVersion": 1,
+      "state": "grey",
+      "reason": "bounded remote CI status boundary was not configured",
+      "checks": []
+    }
+  },
+  "confirmationStore": {
+    "failClosed": true,
+    "state": "waiting",
+    "forgedWatcherRefused": true,
+    "humanDecisionRecorded": false
+  },
+  "blueprintGate": {
+    "verdict": "BLOCKED",
+    "score": 37,
+    "blockers": [],
+    "requiredQuestions": [
+      "unitEconomics",
+      "accessibilityTarget",
+      "privacyBasis",
+      "abuseModel",
+      "collisionPolicy",
+      "proofPolicy",
+      "rollbackPolicy",
+      "capabilityPolicy",
+      "humanStopPolicy"
+    ]
+  },
+  "rulebookGate": {
+    "verdict": "BLOCKED",
+    "templateCount": 10,
+    "selectedTemplate": {
+      "id": "ai-autopilot-control-plane",
+      "title": "Guarded AI autopilot control plane",
+      "version": 1,
+      "platform": "tauri"
+    },
+    "blockerCount": 0,
+    "blockers": [],
+    "requiredQuestionCount": 22,
+    "requiredQuestions": [
+      "ai-autopilot:rollbackPolicy",
+      "ai-autopilot:humanStopPolicy",
+      "ai-autopilot:costCeiling",
+      "desktop-distribution:osTargets",
+      "desktop-distribution:updateSigning",
+      "desktop-distribution:rollbackChannel",
+      "bounded-capability:native-process:mitigation-and-proof",
+      "scenario:security-breach",
+      "scenario:data-loss",
+      "scenario:critical-dependency-failure",
+      "scenario:vendor-exit",
+      "decision:platform",
+      "decision:data",
+      "decision:identity-auth",
+      "decision:state-sync",
+      "decision:deployment-distribution",
+      "nonFunctional:performanceBudget",
+      "nonFunctional:securityTarget",
+      "nonFunctional:accessibilityTarget",
+      "nonFunctional:operatingCostCeiling",
+      "nonFunctional:recoveryTarget",
+      "nonFunctional:observabilityProof"
+    ],
+    "scenarioCoverage": {
+      "required": 4,
+      "present": 0
+    },
+    "decisionCoverage": {
+      "required": 5,
+      "present": 0
+    },
+    "capabilityAssessment": [
+      {
+        "id": "native-process",
+        "necessity": "mandatory",
+        "support": "bounded"
+      }
+    ],
+    "executionMap": {
+      "direction": "top-down",
+      "template": "ai-autopilot-control-plane@1",
+      "nodes": [
+        {
+          "id": "S01",
+          "stage": "brief",
+          "order": 1
+        },
+        {
+          "id": "S02",
+          "stage": "trust-capabilities",
+          "order": 2
+        },
+        {
+          "id": "S03",
+          "stage": "plans-collisions",
+          "order": 3
+        },
+        {
+          "id": "S04",
+          "stage": "execution-proof",
+          "order": 4
+        },
+        {
+          "id": "S05",
+          "stage": "human-review",
+          "order": 5
+        },
+        {
+          "id": "S06",
+          "stage": "ci-merge",
+          "order": 6
+        },
+        {
+          "id": "S07",
+          "stage": "release-handover",
+          "order": 7
+        }
+      ],
+      "edges": [
+        {
+          "from": "S01",
+          "to": "S02"
+        },
+        {
+          "from": "S02",
+          "to": "S03"
+        },
+        {
+          "from": "S03",
+          "to": "S04"
+        },
+        {
+          "from": "S04",
+          "to": "S05"
+        },
+        {
+          "from": "S05",
+          "to": "S06"
+        },
+        {
+          "from": "S06",
+          "to": "S07"
+        }
+      ]
+    }
+  },
+  "architectureContractGate": {
+    "valid": true,
+    "policyVersion": "2026.09.1",
+    "digest": "8603477d64635377de56e702b35d4b09685dd32128192474ce11394bd64b8461",
+    "template": {
+      "id": "ai-autopilot-control-plane",
+      "platform": "tauri",
+      "title": "Guarded AI autopilot control plane",
+      "version": 1
+    },
+    "stages": 7,
+    "tamperRefused": true
+  },
+  "architectureRegistry": {
+    "valid": true,
+    "planId": "PP-TRUTH",
+    "revisions": 2,
+    "head": {
+      "revision": 2,
+      "registeredAt": "2026-09-03T14:38:20.923Z",
+      "registeredBy": "truth-report",
+      "contractDigest": "ed2d18cc04f2097c099d52114734661c02cf32dcb6f82cdf40471d85b7262083",
+      "supersedes": "8603477d64635377de56e702b35d4b09685dd32128192474ce11394bd64b8461",
+      "policyVersion": "2026.09.1",
+      "template": {
+        "id": "ai-autopilot-control-plane",
+        "platform": "tauri",
+        "title": "Guarded AI autopilot control plane",
+        "version": 1
+      },
+      "stages": 7,
+      "recordHash": "de182c6e459d58afa95822c83663a2dc9bd16e5b5a6c066363324c819017ae54"
+    },
+    "firstDigest": "8603477d64635377de56e702b35d4b09685dd32128192474ce11394bd64b8461",
+    "duplicateOrForkAllowed": false
+  },
+  "viabilityGate": {
+    "verdict": "BLOCKED",
+    "blockerCount": 20,
+    "warningCount": 0,
+    "evidence": {
+      "required": 6,
+      "present": 0,
+      "competitors": 0,
+      "benchmarks": 0,
+      "assumptions": 0
+    },
+    "economics": {
+      "buildP50": null,
+      "buildP80": null,
+      "monthlyCostP50": null,
+      "monthlyCostP80": null,
+      "monthlyRevenueP50": 0,
+      "monthlyRevenueP80Downside": 0,
+      "marginP50": null,
+      "marginP80Downside": null,
+      "runwayMonthsP80": null
+    },
+    "delivery": {
+      "developers": null,
+      "totalHours": 0,
+      "dailyCapacity": null,
+      "calendarDaysP50": null,
+      "calendarDaysP80": null
+    }
+  },
+  "debtGate": {
+    "verdict": "WITHIN_BUDGET",
+    "scanId": "DEBT-SCAN-8F7DF1F6FDA4F490",
+    "blockerCount": 0,
+    "blockers": [],
+    "coverage": {
+      "required": 4,
+      "covered": 4,
+      "missing": []
+    },
+    "counts": {
+      "critical": 0,
+      "high": 0,
+      "medium": 2,
+      "low": 0
+    },
+    "weightedOpen": 10,
+    "delta": {
+      "added": [
+        "DEBT-68E2AFB7C7054B35",
+        "DEBT-7D3E90CA87836A1D"
+      ],
+      "resolved": [],
+      "regressed": [],
+      "removedWithoutResolution": []
+    },
+    "analyzerEvidence": [
+      {
+        "surface": "ui",
+        "state": "COVERED",
+        "analyzer": {
+          "state": "PASSED",
+          "name": "perfect-planner-static-debt-v1",
+          "coveredFiles": [
+            "src/PerfectPlannerShell.jsx",
+            "src/components/BlueprintWorkspace.css",
+            "src/components/BlueprintWorkspace.jsx",
+            "src/components/CollisionWorkspace.jsx",
+            "src/components/ComponentPlansWorkspace.css",
+            "src/components/ComponentPlansWorkspace.jsx",
+            "src/components/ScreenshotViewingPanel.css",
+            "src/components/ScreenshotViewingPanel.jsx",
+            "src/components/StructureWorkspace.css",
+            "src/components/StructureWorkspace.jsx",
+            "src/main.jsx",
+            "src/styles.css"
+          ],
+          "limitations": [
+            "pattern-based static analysis",
+            "does not replace compiler, dependency, runtime, accessibility, or native security tooling"
+          ]
+        },
+        "fileCount": 12,
+        "bytes": 295965,
+        "digest": "d1e5cd9efbe9b9bb58df0460458cdfead005237f3ed367c7d6e437a4870685dc"
+      },
+      {
+        "surface": "engine",
+        "state": "COVERED",
+        "analyzer": {
+          "state": "PASSED",
+          "name": "perfect-planner-static-debt-v1",
+          "coveredFiles": [
+            "src/engine/appMapRegistry.js",
+            "src/engine/architectureContractVerification.js",
+            "src/engine/blueprintEngine.js",
+            "src/engine/blueprintWorkspaceModel.js",
+            "src/engine/clamShieldContract.js",
+            "src/engine/collisionAuthorityClient.js",
+            "src/engine/collisionEngine.js",
+            "src/engine/collisionSeed.js",
+            "src/engine/componentPlanEngine.js",
+            "src/engine/componentPlanSeed.js",
+            "src/engine/componentPlans/localAuthorityDossiers.js",
+            "src/engine/componentPlans/repositoryPlanningDossiers.js",
+            "src/engine/componentPlans/runtimeReleaseDossiers.js",
+            "src/engine/conveyorEngine.js",
+            "src/engine/debtEngine.js",
+            "src/engine/editScopeEngine.js",
+            "src/engine/executionEngine.js",
+            "src/engine/folderContractEngine.js",
+            "src/engine/folderContractSeed.js",
+            "src/engine/folderDependencyContract.js",
+            "src/engine/guaranteeSeed.js",
+            "src/engine/mapCoverageEngine.js",
+            "src/engine/mutationEngine.js",
+            "src/engine/nativeCapabilityPolicy.js",
+            "src/engine/proofEngine.js",
+            "src/engine/rulebookEngine.js",
+            "src/engine/sonarEngine.js",
+            "src/engine/truthGuaranteeMatrix.js",
+            "src/engine/viabilityEngine.js",
+            "src/engine/workspaceDiscoveryEngine.js",
+            "src/engine/workspaceIntakeEngine.js"
+          ],
+          "limitations": [
+            "pattern-based static analysis",
+            "does not replace compiler, dependency, runtime, accessibility, or native security tooling"
+          ]
+        },
+        "fileCount": 31,
+        "bytes": 370316,
+        "digest": "5b695d50abe3d55f3b0ecd1d60aa48ade8f011ca975d5d7f77e43183a5332ebd"
+      },
+      {
+        "surface": "storage",
+        "state": "COVERED",
+        "analyzer": {
+          "state": "PASSED",
+          "name": "perfect-planner-static-debt-v1",
+          "coveredFiles": [
+            "src/node/architectureContractStore.mjs",
+            "src/node/ciDerivation.mjs",
+            "src/node/collisionAuthorityHttp.mjs",
+            "src/node/collisionAuthorityStore.mjs",
+            "src/node/completionReport.mjs",
+            "src/node/componentPlanHttp.mjs",
+            "src/node/componentPlanStore.mjs",
+            "src/node/componentSourceIndex.mjs",
+            "src/node/confirmationStore.mjs",
+            "src/node/conveyorGitAdapter.mjs",
+            "src/node/debtBoundedStaticAnalyzer.mjs",
+            "src/node/documentRegistry.mjs",
+            "src/node/draftMailbox.mjs",
+            "src/node/evidenceBundle.mjs",
+            "src/node/folderContractHttp.mjs",
+            "src/node/folderContractMaterializer.mjs",
+            "src/node/folderContractStore.mjs",
+            "src/node/folderOrganizationExecutor.mjs",
+            "src/node/identityVault.mjs",
+            "src/node/journalStore.mjs",
+            "src/node/localHandoff.mjs",
+            "src/node/localIdentity.mjs",
+            "src/node/mergedStateRunner.mjs",
+            "src/node/planLock.mjs",
+            "src/node/planLockRecovery.mjs",
+            "src/node/proofRunner.mjs",
+            "src/node/providerReview.mjs",
+            "src/node/providerReviewGateway.mjs",
+            "src/node/readOnlyResearchAdapter.mjs",
+            "src/node/repositoryCensus.mjs",
+            "src/node/screenshotEvidence.mjs",
+            "src/node/sessionRegistry.mjs",
+            "src/node/sourceMutationCampaign.mjs",
+            "src/node/tauriTechnicalDebtAnalyzer.mjs",
+            "src/node/windowsDpapiSecretCustody.mjs"
+          ],
+          "limitations": [
+            "pattern-based static analysis",
+            "does not replace compiler, dependency, runtime, accessibility, or native security tooling"
+          ]
+        },
+        "fileCount": 35,
+        "bytes": 270279,
+        "digest": "01439717c456557ef2d6d10365d2a59d7eaeaa24c1d86026a05a187abc169c02"
+      },
+      {
+        "surface": "native",
+        "state": "COVERED",
+        "analyzer": {
+          "state": "PASSED",
+          "name": "perfect-planner-tauri-security-clippy-v1",
+          "coveredFiles": [
+            "src-tauri/Cargo.lock",
+            "src-tauri/Cargo.toml",
+            "src-tauri/build.rs",
+            "src-tauri/capabilities/main-read-only.json",
+            "src-tauri/permissions/runtime-snapshot.json",
+            "src-tauri/permissions/workspace-picker.json",
+            "src-tauri/src/lib.rs",
+            "src-tauri/src/main.rs",
+            "src-tauri/src/workspace_census.rs",
+            "src-tauri/src/workspace_picker.rs",
+            "src-tauri/tauri.conf.json",
+            "src/native/clamShieldAgent.js",
+            "src/native/runtimeSnapshot.js",
+            "src/native/workspaceCensus.js"
+          ],
+          "exitCode": 0,
+          "signal": null,
+          "timedOut": false,
+          "outputHash": "d95ad1024de6f220b90fe69dedfed2eff3270c1694b4d4d378b2ccb1455e61df",
+          "outputBytes": 603,
+          "shell": false,
+          "limitations": [
+            "external analyzer coverage is bounded to the configured target set"
+          ]
+        },
+        "fileCount": 14,
+        "bytes": 178259,
+        "digest": "3dab9f78b31bcd6184efa7af3a90cd029635551c43522a7d6c04e5d11b67c846"
+      }
+    ],
+    "findings": [
+      {
+        "id": "DEBT-68E2AFB7C7054B35",
+        "severity": "medium",
+        "surface": "ui",
+        "category": "maintainability",
+        "introducedAt": "2026-09-03T14:38:19.923Z",
+        "lastObservedAt": "2026-09-03T14:38:19.923Z",
+        "status": "open",
+        "owner": "UI owner",
+        "evidence": "src/PerfectPlannerShell.jsx:1#d9bbce170998",
+        "ruleId": "large-module",
+        "message": "Module contains 1234 lines; split and ownership review are required."
+      },
+      {
+        "id": "DEBT-7D3E90CA87836A1D",
+        "severity": "medium",
+        "surface": "ui",
+        "category": "maintainability",
+        "introducedAt": "2026-09-03T14:38:19.923Z",
+        "lastObservedAt": "2026-09-03T14:38:19.923Z",
+        "status": "open",
+        "owner": "UI owner",
+        "evidence": "src/styles.css:1#26800e90fadf",
+        "ruleId": "large-module",
+        "message": "Module contains 1188 lines; split and ownership review are required."
+      }
+    ],
+    "refused": [
+      {
+        "path": "artifacts/design-comparison.png",
+        "reason": "file-too-large",
+        "size": 2182301
+      },
+      {
+        "path": "public/assets/evidence/comparison-source.png",
+        "reason": "file-too-large",
+        "size": 1385851
+      },
+      {
+        "path": "public/assets/evidence/selected-spine-canvas.png",
+        "reason": "file-too-large",
+        "size": 1508263
+      },
+      {
+        "path": "public/generated/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1423675
+      },
+      {
+        "path": "public/generated/generations/04893e0313a1bb13bde9cd66d98a3c8f68fec26fb95002d83513b1849cdbc87a/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1426017
+      },
+      {
+        "path": "public/generated/generations/0523ffb6121eceb7a4bee4536cdcb37ed3f958b85df031c2625553a079656f03/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1440081
+      },
+      {
+        "path": "public/generated/generations/07976d61ad41c1471ec19fff82cf38ac7752304b9b879afc0dae289b34785bdf/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1436688
+      },
+      {
+        "path": "public/generated/generations/0916b2d75a0182280459be1e370bcca0c610d7369cfa7f81c23fd6cfc1861083/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1439037
+      },
+      {
+        "path": "public/generated/generations/0ac75f6d2b12f0172672d5053b264529dfa7506a27646dd75d53f09d10800485/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1444779
+      },
+      {
+        "path": "public/generated/generations/10bbfd73d5f5586356340bf1b92ef7767018a56228c10e7a2b02cdfd17f43a05/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1447135
+      },
+      {
+        "path": "public/generated/generations/176aed5d4ae22352da9f88d150638041764667b47dc9d649c023f9bdd0dc6ed0/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1451129
+      },
+      {
+        "path": "public/generated/generations/1a8f259ee2730d17ce7649a88920e0083ae209d884b42e44c53dbf5ae8e9b4ab/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1443213
+      },
+      {
+        "path": "public/generated/generations/1b6191802c9867c6d675d1b05fbc95e66844755bbcda2036238e18391db0d1a0/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1450085
+      },
+      {
+        "path": "public/generated/generations/1e176275db0a94f4b61d6feaf353879349a2dd3c685ae354202ed08bc4f72e63/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1443474
+      },
+      {
+        "path": "public/generated/generations/245fe85eaaf9d764386e72deeb4646d522d2ae001b3106f03a8f8c03a51aa15d/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1424243
+      },
+      {
+        "path": "public/generated/generations/263392e24fa9b2586700c1190a8c6ca5fb8e36eea78843b992c57d57e21c6376/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1449956
+      },
+      {
+        "path": "public/generated/generations/2de81a49a3e797b49f75eede4f3bc2b13cd339ba94aa1bdb203c4eede1477b04/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1445823
+      },
+      {
+        "path": "public/generated/generations/33e159b1198c5084c09ffae41fa5064c15e132b58ca41e03619f7694223e2361/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1440864
+      },
+      {
+        "path": "public/generated/generations/34af42af09c70b8e000520f5351a17952803281a1bd470213a433920654292e8/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1445040
+      },
+      {
+        "path": "public/generated/generations/40376cc1cef3bcb99e54d81ed4d99095d6d7bddd00e16d046c275d658fefee2a/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1450607
+      },
+      {
+        "path": "public/generated/generations/41e00c4ceb9fc2dc00142936fcee1304a61f122b702b3b9ddc025c853ee56d0d/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1442691
+      },
+      {
+        "path": "public/generated/generations/41f8372120eb3311a3f303635ff5d8a8e221f1c1fe3620ec1edbd0474a8f3d54/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1446606
+      },
+      {
+        "path": "public/generated/generations/45b9da2d35e17f429462eb34b3ab98dee37434999933ec5fe0c1b02980e6ff09/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1436166
+      },
+      {
+        "path": "public/generated/generations/4773152cc0cc63d26eefb67acbdb07f58b43f5dcc15a662f5eb73be81d349de7/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1439559
+      },
+      {
+        "path": "public/generated/generations/48bc22d19914c5b8cc26283bf13801ebadd68fc29ef6caccd865cba8303b8780/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1448258
+      },
+      {
+        "path": "public/generated/generations/49ffe6901e8689f81794ac9c866e4b3fb288068db97d8dc35edd44793012def6/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1438515
+      },
+      {
+        "path": "public/generated/generations/4a1efbe63bb84f01711081e572a8409e048c2c36bec310d752d2ddac98ed479f/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1442169
+      },
+      {
+        "path": "public/generated/generations/4a5aba202d24e9725b8d68c6ceb4206a579f37d2df9c9e733a7c1fda33feb31a/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1437993
+      },
+      {
+        "path": "public/generated/generations/54921f3accdc843b2730da58ae9762f86fbb7a83f8831dddab13d8fd52083fdb/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1443735
+      },
+      {
+        "path": "public/generated/generations/5a37ce7dc624e5b535e27d5853149e7649990bb69d34c304be53c34f2d905641/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1445301
+      },
+      {
+        "path": "public/generated/generations/5b0a2385bead23ab27e85eee21f694f3ab236205aeb00818dc63160519e5e7c3/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1442430
+      },
+      {
+        "path": "public/generated/generations/5ef27e2625489cb1fd697b081b54f67cb2a88fdba6592dfcda01fa0540d93c88/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1435122
+      },
+      {
+        "path": "public/generated/generations/5fd8a64064e6d6f5c55373f956613f208843343312ead24ee04e2c382b0d0a64/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1439298
+      },
+      {
+        "path": "public/generated/generations/60cddb99d2a71c2a4a2f39846369878704ea2a6ae6d3860e69a0c2bb51c280ff/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1426278
+      },
+      {
+        "path": "public/generated/generations/6288fb9df5b9db2a7db0f5ecc60fe9dc7c63c0b4a2c7d117e7bb31a6447680dd/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1431769
+      },
+      {
+        "path": "public/generated/generations/63c4ee66f0d0cb2974bbec4a9ea9baddb60de13b3779954d5ecd79acacb16f06/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1424504
+      },
+      {
+        "path": "public/generated/generations/667f10928e8b6bd66b4004515e8cd0e3ef916ba885e1ba8ba3318ac6421d4fb4/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1450346
+      },
+      {
+        "path": "public/generated/generations/676a6cc1037893f3031b28ef29b6f059404262db3eb8ae782c5262ebc4a2a6ca/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1441386
+      },
+      {
+        "path": "public/generated/generations/740f2fe861c5f31c7c3a715e034fb4e5239e979bfe510cb260a1fb90ed5d62ad/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1449695
+      },
+      {
+        "path": "public/generated/generations/743aa07810cf05d76b953cfb50591f14df185f55a794af9d72abcff4c5e083bb/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1441647
+      },
+      {
+        "path": "public/generated/generations/74562f3b50310eb4fbc308559ed6af084e5a7a47f1db666ef911b4c2b44c55db/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1446084
+      },
+      {
+        "path": "public/generated/generations/78d08d792e52df19135bcf158fb9dd2506e6806ee4e5abe61d4dab4c32743654/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1442952
+      },
+      {
+        "path": "public/generated/generations/79bcefebd8b785bf4cc813959ffe07b8f220256d470ef04e171f50109e98b468/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1424875
+      },
+      {
+        "path": "public/generated/generations/7a6f4ab845f3a6481cee82fc2a28fc775e482ce4eb585424344aa2c2544fc9b9/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1436949
+      },
+      {
+        "path": "public/generated/generations/7f5b7031a5e0ba2f123c895c6bbfafd023bc5f516fd8136b73e8a695063243fe/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1435905
+      },
+      {
+        "path": "public/generated/generations/83a182cad7455fcbc67837fcd8afac7c904401558974bf15f5c65520832a56f6/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1440342
+      },
+      {
+        "path": "public/generated/generations/85154415665cb53515018a959aa249a9086ddde45f21d86285ec8ac84b14707f/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1437210
+      },
+      {
+        "path": "public/generated/generations/855cc4fde00f0bd78ae543a80de72c007f8f7f061bab1ab4b25c218493f2b3f2/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1452187
+      },
+      {
+        "path": "public/generated/generations/931418bbe2838b6e0ab50c4c3f4587b517d8d1dd653c27d22f85fc18a982b4a7/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1446345
+      },
+      {
+        "path": "public/generated/generations/9d84181950a3c1c816f558380da8cce6515b357aa2ffa9cd2f764d7ff0d84f38/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1449448
+      },
+      {
+        "path": "public/generated/generations/9eb9809f9c32a82287983c2e52e07410e9834dbefb2b6f82625c1390273cd22d/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1453860
+      },
+      {
+        "path": "public/generated/generations/a169c093646b277bd3520a06d33d9c290bf799c8bcb72ae0c80380939073a148/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1438776
+      },
+      {
+        "path": "public/generated/generations/a3be7a93c2464c13f4f254f9e5bcab4c7c72676bca11ca0379badb312bdb129d/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1447612
+      },
+      {
+        "path": "public/generated/generations/a64c00dd45f770322a421b13b4fa10f7f53813ddd549cfc8c210b7eec3ecc35e/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1432291
+      },
+      {
+        "path": "public/generated/generations/a6f54eae2c6d40886338a9830136fb7f7890b7b60fc9f967786023383bf23c5e/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1444257
+      },
+      {
+        "path": "public/generated/generations/a7eaed3da3d31041ba6f1487ff42aaf2b86dca79f62d80008f9092a489e6cd28/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1451453
+      },
+      {
+        "path": "public/generated/generations/a853f1e238179f722e31312f3215a5025922ac44d8bf4d907c2d0db328934c9a/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1441125
+      },
+      {
+        "path": "public/generated/generations/ab1f50699c0e337a0d2598f187b14a843398b58c385c746f88a0a9e4570c635e/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1446867
+      },
+      {
+        "path": "public/generated/generations/b026e6eda497b4445eb7f453d800633cc5735a79cab107044d8313dd2e842cfe/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1439820
+      },
+      {
+        "path": "public/generated/generations/b05d8a765f68d071e5719e353be405ead93161e6469ef41ff652bc6d8107efe1/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1440603
+      },
+      {
+        "path": "public/generated/generations/b16d7b7ae0ca53a200bad9bdb1dd0eaf4c34541b3d44bc64cf19846379589bcd/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1437471
+      },
+      {
+        "path": "public/generated/generations/b2b8b157cd44c500321371ded4011b83e37a50d22e850c6889334153c37e9890/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1443996
+      },
+      {
+        "path": "public/generated/generations/b94dbe4d8494d7febe96c95c2c7e3911b7b7531dac75a459173d96b58151b25d/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1432813
+      },
+      {
+        "path": "public/generated/generations/bb025b4c1c1593a86ea83eaa8c03df370d9da0ba38ae63a4b8cc839a58aa66f4/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1437732
+      },
+      {
+        "path": "public/generated/generations/bd5f07d3a21518a5e14bf9920a2246e342738e220d7c8587255d6eba30aaedd8/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1441908
+      },
+      {
+        "path": "public/generated/generations/c336bab12a59bf585e5db32f70418767bc365df2cb1a97b00f0a8f8374c68c33/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1434600
+      },
+      {
+        "path": "public/generated/generations/c3a83978fb14de1c7146f18b3e27bc6d273b65f391d1a328ea7aa57c87124088/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1435383
+      },
+      {
+        "path": "public/generated/generations/c451c4acdbaef6222879562f092c3055e54d8b28e84f60ead3e2df0e8fd68fff/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1425756
+      },
+      {
+        "path": "public/generated/generations/caf16660d2b2fd5e5b2df5836457b8c20c6dbeb79628fb998b109fcebfbbd34d/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1431508
+      },
+      {
+        "path": "public/generated/generations/cc579bfac05a2d8a64c873724c8e181615035cb590b5d6a563332af8eb21e232/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1451926
+      },
+      {
+        "path": "public/generated/generations/d504aae4d97d157bf6c4171813912c36e612f9664cd2f30b56c02b1b70417247/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1434861
+      },
+      {
+        "path": "public/generated/generations/d5f38fd711ba39212f9e2a37bd2a19ef7e961fea3b6db8b3a379578b2e6cabfb/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1438254
+      },
+      {
+        "path": "public/generated/generations/dc16358d8b88ee87dfa0aa4372e4b5df6163adf2f138b9eafe5a8308c5905171/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1432030
+      },
+      {
+        "path": "public/generated/generations/dd047e7fc239b68dbd7acbb2dc2b7efd62143d421ff470ae96150b32cf95babc/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1450868
+      },
+      {
+        "path": "public/generated/generations/e1ab198208cc5d1d5f787e888e6d5282e5f155b8ac778c05f99bf5a9b0f6e8b0/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1452577
+      },
+      {
+        "path": "public/generated/generations/e319e688368f3cc0d54296c5f4a5d772577e83718bf070d53e13431775387daa/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1436427
+      },
+      {
+        "path": "public/generated/generations/e49cc29035a657dd0a9e8914ccc6bb03bcf8613ed33db05e91e88234ad502b6f/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1435644
+      },
+      {
+        "path": "public/generated/generations/e74aba973d5cf4a37533484cbd68ac47e27c021739e62ff7a4850f2dca09ef92/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1432552
+      },
+      {
+        "path": "public/generated/generations/ea1e5953e26c696b670fe5b3ff3142c3d554ef89ea4f31e77b9ecb8be562e6a0/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1453164
+      },
+      {
+        "path": "public/generated/generations/ed57f7e21713aed5cde675869c05492e0ef29a9f74d9efdff6788f7e1552d5c4/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1452838
+      },
+      {
+        "path": "public/generated/generations/ee3ea65ab5b6e43a73523cf51948fc650c4bb61e9a190995f3c14cb4a862026e/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1447351
+      },
+      {
+        "path": "public/generated/generations/f2c3c0c2f34ff90f099f5fa96f40e642eef60b16ab9fee84f059441936fd9298/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1444518
+      },
+      {
+        "path": "public/generated/generations/f315da28f13a7f315d207f007f3bc8862fbef414ee8712c1567cce204bfff3fe/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1445562
+      },
+      {
+        "path": "public/generated/generations/f3871447360fffa13e8281ba40251837856b3cc2584ae3cf9028d07bd9c18c3b/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1453599
+      },
+      {
+        "path": "public/generated/generations/f42e4199cb48fd82de31316deedecd531ca393ebb2549c77f25926bef16046aa/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1426539
+      },
+      {
+        "path": "public/generated/generations/f72fde3632904b1e4ce53f1817811551bf0d4107407b86e5df2199910675e4ce/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1449709
+      }
+    ]
+  },
+  "conveyorGate": {
+    "valid": true,
+    "stations": [
+      "READY",
+      "CLAIMED",
+      "BUILDING",
+      "PROOF",
+      "REVIEW",
+      "CI",
+      "MERGE_QUEUE",
+      "MERGED"
+    ],
+    "branch": "pp/pp-014/b07-collision-engine",
+    "worktree": "pp-worktrees/pp-014/b07",
+    "claimAllowed": true
+  },
+  "localHandoff": {
+    "valid": true,
+    "senderSigningFingerprint": "3b9ab3c75cce5bf1367a1b35790e4275283233481e377223b2346354475c6018",
+    "recipientEncryptionFingerprint": "a185bf94d5f03160c8c1603e5e31e9a55a0058fcb7e434f9a7e72551dc7dfd82",
+    "plaintextExposed": false
+  },
+  "peerReviewGate": {
+    "vaultValid": true,
+    "vault": {
+      "schemaVersion": 1,
+      "custody": "PORTABLE_FALLBACK_NOT_OS_BACKED",
+      "providerIds": [
+        "review-a",
+        "review-b"
+      ],
+      "kdf": "scrypt-N16384-r8-p1",
+      "cipher": "aes-256-gcm",
+      "vaultFingerprint": "1ccaba5d11972b68f835b41b0498e79a8b6b8565d5d30e60ea4321274a636b22",
+      "secrets": "REDACTED"
+    },
+    "verdict": "BLOCKED",
+    "providerCount": 1,
+    "requiredQuorum": 2,
+    "blockers": [
+      "Independent review quorum is incomplete: 1/2."
+    ]
+  },
+  "providerReviewGateway": {
+    "valid": true,
+    "requestHash": "03e4f1ae5a0bbe3419334049fbad8d10c7ecb37f0c51ef81df8744710f47f8e7",
+    "promptHash": "6a959f4247091cd49ab3b6e854a2a30743d8a2e7b2c912ff08d0095805baf17a",
+    "artifactHash": "d74493bd01e4e537678b5e0371e7502d3d8bc0bd26f280b6aabeca810158141c",
+    "redactionCount": 1,
+    "reservedCostUsd": 0.000679,
+    "usageStatus": "RECORDED",
+    "overruns": 0,
+    "liveProviderCalled": false
+  },
+  "screenshotEvidence": {
+    "engineValid": true,
+    "validatedExistingArtifact": "public/assets/evidence/whole-plan-map.png",
+    "captureAdapter": null,
+    "artifactHash": "973ca972015358e336ac3a84933cd0ab23a5422ee2374a636edc51d557b2ae27",
+    "width": 1420,
+    "height": 1308,
+    "blank": false,
+    "capturePerformedThisRun": false,
+    "viewingAttestedThisRun": false,
+    "proofAccepted": false
+  },
+  "sonarGate": {
+    "repositoryVerdict": "BLOCKED",
+    "candidateCount": 0,
+    "autoImportAllowed": false,
+    "nameCount": 6,
+    "verifiedNameCount": 0,
+    "generatedNameStatus": "UNVERIFIED"
+  },
+  "mutationGate": {
+    "verdict": "CERTIFIED",
+    "totals": {
+      "total": 22,
+      "killed": 22,
+      "survived": 0,
+      "errors": 0
+    },
+    "coverage": {
+      "required": 22,
+      "covered": 22,
+      "missing": []
+    },
+    "results": [
+      {
+        "id": "M-BOUNDED-CENSUS",
+        "guarantee": "bounded-census",
+        "state": "KILLED"
+      },
+      {
+        "id": "M-STABLE-DOCUMENT-REGISTRY",
+        "guarantee": "stable-document-registry",
+        "state": "KILLED"
+      },
+      {
+        "id": "M-JOURNAL-INTEGRITY",
+        "guarantee": "journal-integrity",
+        "state": "KILLED"
+      },
+      {
+        "id": "M-MACHINE-PROOF",
+        "guarantee": "machine-proof",
+        "state": "KILLED"
+      },
+      {
+        "id": "M-DURABLE-SESSION",
+        "guarantee": "durable-session",
+        "state": "KILLED"
+      },
+      {
+        "id": "M-CI-HONESTY",
+        "guarantee": "ci-honesty",
+        "state": "KILLED"
+      },
+      {
+        "id": "M-CONFIRMATION-FAIL-CLOSED",
+        "guarantee": "confirmation-fail-closed",
+        "state": "KILLED"
+      },
+      {
+        "id": "M-BLUEPRINT-FAIL-CLOSED",
+        "guarantee": "blueprint-fail-closed",
+        "state": "KILLED"
+      },
+      {
+        "id": "M-RULEBOOK-FAIL-CLOSED",
+        "guarantee": "rulebook-fail-closed",
+        "state": "KILLED"
+      },
+      {
+        "id": "M-ARCHITECTURE-CONTRACT-TAMPER-REFUSED",
+        "guarantee": "architecture-contract-tamper-refused",
+        "state": "KILLED"
+      },
+      {
+        "id": "M-ARCHITECTURE-REGISTRY-LINEAR-HISTORY",
+        "guarantee": "architecture-registry-linear-history",
+        "state": "KILLED"
+      },
+      {
+        "id": "M-VIABILITY-FAIL-CLOSED",
+        "guarantee": "viability-fail-closed",
+        "state": "KILLED"
+      },
+      {
+        "id": "M-DEBT-COVERAGE-HONEST",
+        "guarantee": "debt-coverage-honest",
+        "state": "KILLED"
+      },
+      {
+        "id": "M-CONVEYOR-CLAIM-GUARD",
+        "guarantee": "conveyor-claim-guard",
+        "state": "KILLED"
+      },
+      {
+        "id": "M-HANDOFF-CONFIDENTIALITY",
+        "guarantee": "handoff-confidentiality",
+        "state": "KILLED"
+      },
+      {
+        "id": "M-MAILBOX-ONE-TIME-ACCEPTANCE",
+        "guarantee": "mailbox-one-time-acceptance",
+        "state": "KILLED"
+      },
+      {
+        "id": "M-PEER-QUORUM-FAIL-CLOSED",
+        "guarantee": "peer-quorum-fail-closed",
+        "state": "KILLED"
+      },
+      {
+        "id": "M-PROVIDER-BUDGET-REDACTION",
+        "guarantee": "provider-budget-redaction",
+        "state": "KILLED"
+      },
+      {
+        "id": "M-SCREENSHOT-UNPROVEN-WITHOUT-VIEWING",
+        "guarantee": "screenshot-unproven-without-viewing",
+        "state": "KILLED"
+      },
+      {
+        "id": "M-SONAR-NO-AUTO-IMPORT",
+        "guarantee": "sonar-no-auto-import",
+        "state": "KILLED"
+      },
+      {
+        "id": "M-AUTOPILOT-DEVICE-DENIAL",
+        "guarantee": "autopilot-device-denial",
+        "state": "KILLED"
+      },
+      {
+        "id": "M-IDENTITY-PRIVATE-KEY-REDACTION",
+        "guarantee": "identity-private-key-redaction",
+        "state": "KILLED"
+      }
+    ]
+  },
+  "nativeCapabilityGate": {
+    "valid": true,
+    "policyHash": "b5a1e458ccac32260004564e14b78eb8a37291d39c1b1c6d38a381ccca2b8699",
+    "mode": "autopilot",
+    "defaultDecision": "deny",
+    "boundedReadAllowed": true,
+    "deviceControlAllowed": false,
+    "deviceControlReason": "device.control is forbidden during autopilot, even when configured."
+  },
+  "identityVault": {
+    "valid": true,
+    "vaultFingerprint": "b451bb4ce5479a1fac870c4e97a1a75b301abad19d8254fd03e8873384df7aaa",
+    "identityCount": 2,
+    "kdf": "scrypt-N32768-r8-p1",
+    "cipher": "aes-256-gcm",
+    "privateKeys": "REDACTED",
+    "osBacked": false
+  },
+  "localDraftMailbox": {
+    "valid": true,
+    "inboxCount": 1,
+    "listedContent": "ENCRYPTED",
+    "envelopeHash": "8d77fe0bbffbf033e3edfd7e3fbabb389e984547f48534f16298dd324ced60bc",
+    "acceptedOnce": true,
+    "receiptDraft": "REDACTED",
+    "loginUiAvailable": false
+  },
+  "guarantees": [
+    "read-only bounded census",
+    "stable document source identities",
+    "document revisions and deletion history persist",
+    "symbolic links refused",
+    "active locks are never stolen",
+    "concurrent appends serialize",
+    "tampering blocks the next append",
+    "proof commands run without a shell",
+    "unapproved commands are refused",
+    "session claims survive restart",
+    "ownership tokens stay private"
+  ]
+}

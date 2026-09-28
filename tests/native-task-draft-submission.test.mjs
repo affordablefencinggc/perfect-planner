@@ -1,0 +1,55 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {mkdtemp} from 'node:fs/promises';
+import path from 'node:path';
+import os from 'node:os';
+import {createNativeTaskDraftSubmission} from '../src/node/nativeTaskDraftSubmission.mjs';
+import {createTaskLedgerAuthorityStore} from '../src/node/taskLedgerAuthorityStore.mjs';
+import {createNativeReviewHostProtocol} from '../src/node/nativeReviewHostProtocol.mjs';
+import {createNativeReviewHostStream} from '../src/node/nativeReviewHostStream.mjs';
+import {PassThrough,Writable} from 'node:stream';
+import {emptyTaskDraftLedger,updateTaskDraft} from '../src/project/taskDraftLedger.js';
+async function fixture(){const root=await mkdtemp(path.join(os.tmpdir(),'pp-draft-submit-'));const binding={projectId:'pp_submission_fixture',rootIdentity:'a'.repeat(64),censusDigest:'b'.repeat(64)};const proposalConfig={journalPath:path.join(root,'proposals.jsonl'),projectId:binding.projectId,rootIdentity:binding.rootIdentity};const ledger=updateTaskDraft(emptyTaskDraftLedger(binding),{title:'Preserve all work',description:'Exact task',owner:'Display only',acceptance:'Verified receipt',recovery:'Retain original',claims:[],dependsOn:[],archived:false});const request={requestId:'first',expectedRevision:0,expectedHeadDigest:'GENESIS'};return {binding,proposalConfig,ledger,request,store:createTaskLedgerAuthorityStore(proposalConfig)};}
+const wire=(f,request=f.request)=>JSON.stringify({version:1,ledger:f.ledger,request});
+test('lost transport reply is recovered by the same submission ID after host reconstruction',async()=>{
+ const f=await fixture(),submission=createNativeTaskDraftSubmission({...f,registeredBinding:async()=>f.binding});
+ const flow=Object.fromEntries(['inspectRecoveryState','reviewProposal','recoverFailedPresentation','recoverInterruptedRequest','cancelActiveReview'].map(key=>[key,async()=>{throw Error('Unexpected review');}]));
+ const protocol=createNativeReviewHostProtocol({flow,submission}),input=new PassThrough();
+ const output=new Writable({write(_chunk,_encoding,callback){callback(Error('simulated lost reply'));}});
+ const stream=createNativeReviewHostStream({input,output,protocol,shutdown:async()=>({cleanupComplete:true})});
+ const done=stream.start();input.write(JSON.stringify({version:1,requestId:'transport-lost',command:'submit-draft',payload:{ledger:f.ledger,request:f.request}})+'\n');
+ const stopped=await done;assert.equal(stopped.transportStopped,true);assert.equal(stopped.outputSettled,false);
+ const restarted=createNativeTaskDraftSubmission({...f,registeredBinding:async()=>f.binding});
+ const recovered=await restarted.submitDraft({ledger:f.ledger,request:f.request});
+ assert.equal(recovered.idempotent,true);assert.equal(recovered.submitted.hostRevision,1);assert.equal((await f.store.inspect()).proposals.length,1);
+ await assert.rejects(restarted.submitDraft({ledger:f.ledger,request:{...f.request,requestId:'incorrect-new-id'}}),/STALE_HEAD/);
+});
+test('disconnect during admitted registration read reports unsettled, then retry finds one saved proposal',async()=>{
+ const f=await fixture();let entered,release,completed;
+ const started=new Promise(r=>entered=r),gate=new Promise(r=>release=r),finished=new Promise(r=>completed=r);
+ let calls=0;const actual=createNativeTaskDraftSubmission({...f,registeredBinding:async()=>{if(++calls===1){entered();await gate;}return f.binding;}});
+ const submission={inspectHead:actual.inspectHead,submitDraft:async payload=>{try{return await actual.submitDraft(payload);}finally{completed();}}};
+ const flow=Object.fromEntries(['inspectRecoveryState','reviewProposal','recoverFailedPresentation','recoverInterruptedRequest','cancelActiveReview'].map(key=>[key,async()=>{throw Error('Unexpected review');}]));
+ const input=new PassThrough(),output=new PassThrough();output.resume();
+ const stream=createNativeReviewHostStream({input,output,protocol:createNativeReviewHostProtocol({flow,submission}),shutdown:async()=>({cleanupComplete:true}),settleMs:20});
+ const done=stream.start();input.write(JSON.stringify({version:1,requestId:'transport-interrupted',command:'submit-draft',payload:{ledger:f.ledger,request:f.request}})+'\n');await started;
+ input.destroy();const stopped=await done;assert.equal(stopped.dispatchesSettled,false);assert.equal(stopped.cleanupComplete,false);
+ release();await finished;
+ const restarted=createNativeTaskDraftSubmission({...f,registeredBinding:async()=>f.binding});const result=await restarted.submitDraft({ledger:f.ledger,request:f.request});assert.equal(result.idempotent,true);assert.equal((await f.store.inspect()).proposals.length,1);
+});
+test('private protocol submits actual draft and returns retained host head without review',async()=>{
+ const f=await fixture(),submission=createNativeTaskDraftSubmission({...f,registeredBinding:async()=>f.binding});let reviewCalls=0;
+ const flow=Object.fromEntries(['inspectRecoveryState','reviewProposal','recoverFailedPresentation','recoverInterruptedRequest','cancelActiveReview'].map(key=>[key,async()=>{reviewCalls++;throw Error('Review not requested');}]));
+ const protocol=createNativeReviewHostProtocol({flow,submission});
+ const result=JSON.parse(await protocol.dispatchLine(JSON.stringify({version:1,requestId:'transport-1',command:'submit-draft',payload:{ledger:f.ledger,request:f.request}})));
+ assert.equal(result.ok,true);assert.equal(result.result.submissionPersisted,true);assert.equal(result.result.approvalState,'unapproved-proposal');assert.equal(reviewCalls,0);assert.equal((await f.store.inspect()).headDigest,result.result.submitted.headDigest);
+ const inspected=JSON.parse(await protocol.dispatchLine(JSON.stringify({version:1,requestId:'transport-2',command:'inspect-proposal',payload:{}})));assert.deepEqual(inspected.result.observedHead,result.result.observedHead);
+});
+test('actual proposal append is bound and explicitly not approval',async()=>{const f=await fixture();const submit=createNativeTaskDraftSubmission({...f,registeredBinding:async()=>f.binding});const result=await submit.submit(wire(f));assert.equal(result.submissionPersisted,true);assert.equal(result.registrationCurrent,true);assert.equal(result.submittedMatchesObservedHead,true);assert.equal(result.executionAuthorized,false);assert.equal(result.registrationLeaseHeld,false);assert.equal(result.approvalState,'unapproved-proposal');assert.deepEqual((await f.store.inspect()).proposals[0].ledger,f.ledger);});
+test('duplicate old submission stays historical after newer head and preserves both revisions',async()=>{const f=await fixture();const submit=createNativeTaskDraftSubmission({...f,registeredBinding:async()=>f.binding});const first=await submit.submit(wire(f));await submit.submit(wire(f,{requestId:'second',expectedRevision:1,expectedHeadDigest:first.submitted.headDigest}));const retry=await submit.submit(wire(f));assert.equal(retry.idempotent,true);assert.equal(retry.submitted.hostRevision,1);assert.equal(retry.observedHead.hostRevision,2);assert.equal(retry.submittedMatchesObservedHead,false);assert.equal((await f.store.inspect()).proposals.length,2);});
+test('concurrent CAS submissions allow exactly one append and retain winning history',async()=>{const f=await fixture();const submit=createNativeTaskDraftSubmission({...f,registeredBinding:async()=>f.binding});const results=await Promise.allSettled([submit.submit(wire(f)),submit.submit(wire(f,{...f.request,requestId:'other'}))]);assert.equal(results.filter(r=>r.status==='fulfilled').length,1);assert.equal((await f.store.inspect()).proposals.length,1);});
+test('revoked or foreign registration cannot append',async()=>{for(const replacement of [null,{projectId:'pp_other',rootIdentity:'a'.repeat(64),censusDigest:'b'.repeat(64)},{projectId:'pp_submission_fixture',rootIdentity:'c'.repeat(64),censusDigest:'b'.repeat(64)},{projectId:'pp_submission_fixture',rootIdentity:'a'.repeat(64),censusDigest:'c'.repeat(64)}]){const f=await fixture();const submit=createNativeTaskDraftSubmission({...f,registeredBinding:async()=>replacement});await assert.rejects(submit.submit(wire(f)));assert.equal((await f.store.inspect()).proposals.length,0);}});
+test('revocation observed after append is reported without losing persisted submission',async()=>{const f=await fixture();let calls=0;const submit=createNativeTaskDraftSubmission({...f,registeredBinding:async()=>++calls===1?f.binding:null});const result=await submit.submit(wire(f));assert.equal(result.submissionPersisted,true);assert.equal(result.registrationCurrent,false);assert.equal(result.executionAuthorized,false);assert.equal((await f.store.inspect()).proposals.length,1);});
+test('wire rejects authority fields and size violations before observing registration',async()=>{const f=await fixture();let calls=0;const submit=createNativeTaskDraftSubmission({...f,registeredBinding:async()=>{calls++;return f.binding;}});for(const input of ['x'.repeat(1024*1024+4097),JSON.stringify({version:1,ledger:f.ledger,request:f.request,actor:'spoof'}),JSON.stringify({version:1,ledger:f.ledger,request:{...f.request,executable:'node'}}),JSON.stringify({version:1,ledger:f.ledger,request:{...f.request,expectedHeadDigest:'a'.repeat(64)}})])await assert.rejects(submit.submit(input));assert.equal(calls,0);});
+test('configuration mutation cannot redirect persistence',async()=>{const f=await fixture();const submit=createNativeTaskDraftSubmission({...f,registeredBinding:async()=>f.binding});f.proposalConfig.journalPath=path.join(path.dirname(f.proposalConfig.journalPath),'other.jsonl');await submit.submit(wire(f));assert.equal((await f.store.inspect()).proposals.length,1);});
+test('transport methods expose observed head and submit exact draft envelope',async()=>{const f=await fixture();const submit=createNativeTaskDraftSubmission({...f,registeredBinding:async()=>f.binding});assert.deepEqual((await submit.inspectHead()).observedHead,{hostRevision:0,headDigest:'GENESIS'});const result=await submit.submitDraft({ledger:f.ledger,request:f.request});assert.deepEqual((await submit.inspectHead()).observedHead,result.submitted&&{hostRevision:result.submitted.hostRevision,headDigest:result.submitted.headDigest});await assert.rejects(submit.submit(wire(f).replace('"version":1','"version":2,"version":1')));await assert.rejects(submit.submitDraft({ledger:f.ledger,request:f.request,actor:'spoof'}));});

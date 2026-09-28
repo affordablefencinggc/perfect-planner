@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-labelledby="title desc">
+  <title id="title">Gemini — Dead Still</title>
+  <desc id="desc">Recognizable Google mark identifying Gemini, collapsed on its side in a completely motionless pose with no animation. Beige cartoon legs and sneakers are original pack artwork. Trademark belongs to its owner.</desc>
+  <defs><filter id="mark-shadow" x="-25%" y="-25%" width="150%" height="160%"><feDropShadow dx="0" dy="5" stdDeviation="4" flood-color="#000" flood-opacity=".2"/></filter></defs>
+  <style></style>
+  
+  <g transform="rotate(90 128 128)">
+  <g transform="rotate(0.000 91 158)">
+    
+    <path d="M91 154C91 174 88 195 86 216" fill="none" stroke="#2C211B" stroke-width="24" stroke-linecap="round"/>
+    <path d="M91 154C91 174 88 195 86 216" fill="none" stroke="#E8C39E" stroke-width="16" stroke-linecap="round"/>
+    <path d="M86 207C76 210 62 218 61 228C60 237 70 242 83 242H106C113 242 116 237 113 230C110 223 100 217 91 213Z" fill="#252A32" stroke="#2C211B" stroke-width="5" stroke-linejoin="round"/>
+    <path d="M63 232C72 236 94 236 113 232" fill="none" stroke="#F8F4ED" stroke-width="7" stroke-linecap="round"/>
+    <path d="M80 219l15 5M76 224l16 5" fill="none" stroke="#F8F4ED" stroke-width="3" stroke-linecap="round"/>
+    
+  </g>
+  <g transform="rotate(0.000 165 158)">
+    
+    <path d="M165 154C165 174 168 195 170 216" fill="none" stroke="#2C211B" stroke-width="24" stroke-linecap="round"/>
+    <path d="M165 154C165 174 168 195 170 216" fill="none" stroke="#E8C39E" stroke-width="16" stroke-linecap="round"/>
+    <path d="M170 207C180 210 194 218 195 228C196 237 186 242 173 242H150C143 242 140 237 143 230C146 223 156 217 165 213Z" fill="#252A32" stroke="#2C211B" stroke-width="5" stroke-linejoin="round"/>
+    <path d="M193 232C184 236 162 236 143 232" fill="none" stroke="#F8F4ED" stroke-width="7" stroke-linecap="round"/>
+    <path d="M176 219l-15 5M180 224l-16 5" fill="none" stroke="#F8F4ED" stroke-width="3" stroke-linecap="round"/>
+    
+  </g>
+  <g transform="translate(0.000 0.000) rotate(0.000 128 104)" filter="url(#mark-shadow)" color="#111827"><g transform="translate(36 4) scale(7.666667)"><path d="M20.616 10.835a14.147 14.147 0 01-4.45-3.001 14.111 14.111 0 01-3.678-6.452.503.503 0 00-.975 0 14.134 14.134 0 01-3.679 6.452 14.155 14.155 0 01-4.45 3.001c-.65.28-1.318.505-2.002.678a.502.502 0 000 .975c.684.172 1.35.397 2.002.677a14.147 14.147 0 014.45 3.001 14.112 14.112 0 013.679 6.453.502.502 0 00.975 0c.172-.685.397-1.351.677-2.003a14.145 14.145 0 013.001-4.45 14.113 14.113 0 016.453-3.678.503.503 0 000-.975 13.245 13.245 0 01-2.003-.678z" fill="#3186FF"></path><path d="M20.616 10.835a14.147 14.147 0 01-4.45-3.001 14.111 14.111 0 01-3.678-6.452.503.503 0 00-.975 0 14.134 14.134 0 01-3.679 6.452 14.155 14.155 0 01-4.45 3.001c-.65.28-1.318.505-2.002.678a.502.502 0 000 .975c.684.172 1.35.397 2.002.677a14.147 14.147 0 014.45 3.001 14.112 14.112 0 013.679 6.453.502.502 0 00.975 0c.172-.685.397-1.351.677-2.003a14.145 14.145 0 013.001-4.45 14.113 14.113 0 016.453-3.678.503.503 0 000-.975 13.245 13.245 0 01-2.003-.678z" fill="url(#lobe-icons-gemini-0-_R_0_)"></path><path d="M20.616 10.835a14.147 14.147 0 01-4.45-3.001 14.111 14.111 0 01-3.678-6.452.503.503 0 00-.975 0 14.134 14.134 0 01-3.679 6.452 14.155 14.155 0 01-4.45 3.001c-.65.28-1.318.505-2.002.678a.502.502 0 000 .975c.684.172 1.35.397 2.002.677a14.147 14.147 0 014.45 3.001 14.112 14.112 0 013.679 6.453.502.502 0 00.975 0c.172-.685.397-1.351.677-2.003a14.145 14.145 0 013.001-4.45 14.113 14.113 0 016.453-3.678.503.503 0 000-.975 13.245 13.245 0 01-2.003-.678z" fill="url(#lobe-icons-gemini-1-_R_0_)"></path><path d="M20.616 10.835a14.147 14.147 0 01-4.45-3.001 14.111 14.111 0 01-3.678-6.452.503.503 0 00-.975 0 14.134 14.134 0 01-3.679 6.452 14.155 14.155 0 01-4.45 3.001c-.65.28-1.318.505-2.002.678a.502.502 0 000 .975c.684.172 1.35.397 2.002.677a14.147 14.147 0 014.45 3.001 14.112 14.112 0 013.679 6.453.502.502 0 00.975 0c.172-.685.397-1.351.677-2.003a14.145 14.145 0 013.001-4.45 14.113 14.113 0 016.453-3.678.503.503 0 000-.975 13.245 13.245 0 01-2.003-.678z" fill="url(#lobe-icons-gemini-2-_R_0_)"></path><defs><linearGradient gradientUnits="userSpaceOnUse" id="lobe-icons-gemini-0-_R_0_" x1="7" x2="11" y1="15.5" y2="12"><stop stop-color="#08B962"></stop><stop offset="1" stop-color="#08B962" stop-opacity="0"></stop></linearGradient><linearGradient gradientUnits="userSpaceOnUse" id="lobe-icons-gemini-1-_R_0_" x1="8" x2="11.5" y1="5.5" y2="11"><stop stop-color="#F94543"></stop><stop offset="1" stop-color="#F94543" stop-opacity="0"></stop></linearGradient><linearGradient gradientUnits="userSpaceOnUse" id="lobe-icons-gemini-2-_R_0_" x1="3.5" x2="17.5" y1="13.5" y2="12"><stop stop-color="#FABC12"></stop><stop offset=".46" stop-color="#FABC12" stop-opacity="0"></stop></linearGradient></defs></g></g>
+  </g>
+</svg>

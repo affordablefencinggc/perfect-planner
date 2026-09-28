@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-choose-native-check-setup"
+description = "Enables the choose_native_check_setup command without any pre-configured scope."
+commands.allow = ["choose_native_check_setup"]
+
+[[permission]]
+identifier = "deny-choose-native-check-setup"
+description = "Denies the choose_native_check_setup command without any pre-configured scope."
+commands.deny = ["choose_native_check_setup"]

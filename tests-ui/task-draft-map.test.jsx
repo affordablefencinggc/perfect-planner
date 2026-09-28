@@ -1,0 +1,51 @@
+import React from 'react';
+import { afterEach, expect, test, vi } from 'vitest';
+vi.mock('../src/project/taskFormRecovery.js',async importOriginal=>{const actual=await importOriginal(),{createMemoryTaskFormRecovery}=await import('./fixtures/memoryTaskFormRecovery.js');return {...actual,createTaskFormRecovery:()=>createMemoryTaskFormRecovery(actual.appendTaskFormHistory)};});
+import {withMemoryTaskSaveIntents} from './fixtures/memoryTaskSaveIntents.js';
+import { cleanup, fireEvent, render, screen, waitFor, act } from '@testing-library/react';
+import { TaskDraftMap } from '../src/components/TaskDraftMap.jsx';
+import { TaskDraftLedger } from '../src/components/TaskDraftLedger.jsx';
+import { emptyTaskDraftLedger, updateTaskDraft, taskDraftBinding } from '../src/project/taskDraftLedger.js';
+import { taskDraftLink } from '../src/project/taskDraftMap.js';
+const project={projectId:'pp_draft_map_ui',name:'My imported app',state:'observed',registration:{rootIdentity:'a'.repeat(64)},census:{digest:'b'.repeat(64)}};
+const binding=taskDraftBinding(project);
+const task={id:null,title:'Keep local changes',description:'Preserve every changed file before the merge.',owner:'Local owner',acceptance:'Compare exact files',recovery:'Retain both copies',claims:[],dependsOn:[],archived:false};
+afterEach(()=>{cleanup();window.history.replaceState(null,'','/');});
+test('map opens the exact Ledger record using a project and census bound link',async()=>{
+ const ledger=updateTaskDraft(emptyTaskDraftLedger(binding),task),store={read:async()=>ledger};const navigate=vi.fn();
+ const view=render(<TaskDraftMap project={project} store={withMemoryTaskSaveIntents(store)} onWorkspace={navigate}/>);
+ const explanation=screen.getByText('How to read this map').closest('details');expect(explanation.open).toBe(false);
+ expect(screen.getByRole('status').textContent).toContain('Reading the saved draft');
+ fireEvent.click(await screen.findByRole('button',{name:'Open T0001: Keep local changes in Ledger'}));expect(navigate).toHaveBeenCalledWith('ledger');
+ view.unmount();render(<TaskDraftLedger project={project} store={withMemoryTaskSaveIntents(store)}/>);
+ await screen.findByRole('button',{name:'Edit T0001'});await waitFor(()=>expect(document.activeElement.id).toBe('draft-task-T0001'));
+ expect(document.querySelector('#draft-task-T0001 details').open).toBe(true);expect(screen.getByText(task.description)).toBeTruthy();
+});
+test('save notification reloads the saved projection and failed refresh does not label old data current',async()=>{
+ let ledger=emptyTaskDraftLedger(binding),notify;const store={read:vi.fn(async()=>ledger),subscribe:(_b,fn)=>{notify=fn;return()=>{notify=null;}}};
+ render(<TaskDraftMap project={project} store={withMemoryTaskSaveIntents(store)}/>);await screen.findByText('No active task drafts yet.');
+ ledger=updateTaskDraft(ledger,task);await act(async()=>notify());await screen.findByRole('button',{name:'Open T0001: Keep local changes in Ledger'});
+ store.read.mockRejectedValueOnce(new Error('Storage unavailable'));fireEvent.click(screen.getByRole('button',{name:'Refresh map'}));
+ await screen.findByRole('alert');expect(screen.getByRole('status').textContent).toContain('last loaded revision');
+ expect(screen.getByRole('button',{name:'Open T0001: Keep local changes in Ledger'})).toBeTruthy();
+});
+test('wrong-census task links cannot select a task and saved forms are not replaced by navigation',async()=>{
+ const ledger=updateTaskDraft(emptyTaskDraftLedger(binding),task),store={read:async()=>ledger};
+ window.history.replaceState(null,'',taskDraftLink('/',{...binding,censusDigest:'c'.repeat(64)},'T0001'));
+ render(<TaskDraftLedger project={project} store={withMemoryTaskSaveIntents(store)}/>);await screen.findByRole('button',{name:'Edit T0001'});expect(document.querySelector('[data-linked=true]')).toBeNull();
+ fireEvent.change(screen.getByLabelText('Task title'),{target:{value:'Unsaved obligation'}});
+ window.history.replaceState(null,'',taskDraftLink('/',binding,'T0001'));fireEvent(window,new Event('hashchange'));
+ await waitFor(()=>expect(document.activeElement.id).toBe('draft-task-T0001'));expect(screen.getByLabelText('Task title').value).toBe('Unsaved obligation');
+ fireEvent.click(screen.getByRole('button',{name:'Discard unsaved edits'}));
+});
+test('an earlier census form remains readable and exportable without rebinding it',async()=>{
+ const ledger=emptyTaskDraftLedger(binding),store={read:async()=>ledger};
+ const view=render(<TaskDraftLedger project={project} store={withMemoryTaskSaveIntents(store)}/>);await screen.findByText('No task drafts yet. Add the first task using the form.');
+ fireEvent.change(screen.getByLabelText('Task title'),{target:{value:'Keep this earlier obligation'}});
+ view.rerender(<TaskDraftLedger project={{...project,census:{digest:'c'.repeat(64)}}} store={withMemoryTaskSaveIntents(store)}/>);
+ const recovery=await screen.findByRole('region',{name:'Recover earlier unsaved forms'});
+ expect(recovery.textContent).toContain('Keep this earlier obligation');expect(recovery.textContent).toContain('not been rebound or discarded');
+ expect(screen.getByLabelText('Task title').value).toBe('');expect(screen.getByRole('button',{name:'Export this unsaved form',hidden:true})).toBeTruthy();
+ view.rerender(<TaskDraftLedger project={project} store={withMemoryTaskSaveIntents(store)}/>);await waitFor(()=>expect(screen.getByLabelText('Task title').value).toBe('Keep this earlier obligation'));
+ fireEvent.click(screen.getByRole('button',{name:'Discard unsaved edits'}));
+});

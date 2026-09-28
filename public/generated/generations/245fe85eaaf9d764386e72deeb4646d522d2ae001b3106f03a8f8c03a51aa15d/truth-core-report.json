@@ -1,0 +1,619 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-09-02T09:47:12.544Z",
+  "root": "C:\\repos\\perfect-planner-cleanroom",
+  "census": {
+    "fileCount": 149,
+    "summary": {
+      "configuration": 6,
+      "document": 24,
+      "interface": 5,
+      "source": 67,
+      "test": 47
+    },
+    "skipped": 0,
+    "digest": "25e13e62d18b042b2843ec67ad9b7d4b6f84a2f7fd347bbe909f6ea5211a6445"
+  },
+  "componentCatalog": {
+    "ready": false,
+    "verdict": "BLOCKED",
+    "blockerCount": 32,
+    "coverage": {
+      "required": 26,
+      "complete": 26,
+      "percentage": 100,
+      "interfaces": 86,
+      "fileClaims": 65
+    }
+  },
+  "collisionPlan": {
+    "valid": true,
+    "collisionCount": 3,
+    "hardStops": 1,
+    "manifestErrors": []
+  },
+  "documentRegistry": {
+    "valid": true,
+    "generation": 2,
+    "active": 149,
+    "deleted": 0,
+    "initialAdded": 149,
+    "duplicateAdds": 0,
+    "refused": 0,
+    "watcherEngineAvailable": true,
+    "continuouslyRunning": false
+  },
+  "journal": {
+    "entries": 25,
+    "contentionEntries": 24,
+    "valid": true,
+    "brokenAt": null,
+    "concurrentWriters": 4
+  },
+  "proofRunner": {
+    "proven": true,
+    "exit": 0,
+    "timedOut": false,
+    "artifact": "PP-TRUTH-RUNNER-1-07f1cd2e.proof.json",
+    "sha256": "9c679d5dfb60a0787bb6021f7692f4bb6bf787626d79ec05416110027260f3cd",
+    "durationMs": 60
+  },
+  "sessionRegistry": {
+    "valid": true,
+    "durableSessionCount": 1,
+    "released": 1,
+    "tokenRedacted": true
+  },
+  "ciDerivation": {
+    "state": "derived",
+    "reason": "local candidates derived; required-status and merged-state execution remain unverified",
+    "workflowCount": 1,
+    "gateCount": 1
+  },
+  "confirmationStore": {
+    "failClosed": true,
+    "state": "waiting",
+    "forgedWatcherRefused": true,
+    "humanDecisionRecorded": false
+  },
+  "blueprintGate": {
+    "verdict": "BLOCKED",
+    "score": 37,
+    "blockers": [],
+    "requiredQuestions": [
+      "unitEconomics",
+      "accessibilityTarget",
+      "privacyBasis",
+      "abuseModel",
+      "collisionPolicy",
+      "proofPolicy",
+      "rollbackPolicy",
+      "capabilityPolicy",
+      "humanStopPolicy"
+    ]
+  },
+  "rulebookGate": {
+    "verdict": "BLOCKED",
+    "templateCount": 10,
+    "selectedTemplate": {
+      "id": "ai-autopilot-control-plane",
+      "title": "Guarded AI autopilot control plane",
+      "version": 1,
+      "platform": "tauri"
+    },
+    "blockerCount": 0,
+    "blockers": [],
+    "requiredQuestionCount": 22,
+    "requiredQuestions": [
+      "ai-autopilot:rollbackPolicy",
+      "ai-autopilot:humanStopPolicy",
+      "ai-autopilot:costCeiling",
+      "desktop-distribution:osTargets",
+      "desktop-distribution:updateSigning",
+      "desktop-distribution:rollbackChannel",
+      "bounded-capability:native-process:mitigation-and-proof",
+      "scenario:security-breach",
+      "scenario:data-loss",
+      "scenario:critical-dependency-failure",
+      "scenario:vendor-exit",
+      "decision:platform",
+      "decision:data",
+      "decision:identity-auth",
+      "decision:state-sync",
+      "decision:deployment-distribution",
+      "nonFunctional:performanceBudget",
+      "nonFunctional:securityTarget",
+      "nonFunctional:accessibilityTarget",
+      "nonFunctional:operatingCostCeiling",
+      "nonFunctional:recoveryTarget",
+      "nonFunctional:observabilityProof"
+    ],
+    "scenarioCoverage": {
+      "required": 4,
+      "present": 0
+    },
+    "decisionCoverage": {
+      "required": 5,
+      "present": 0
+    },
+    "capabilityAssessment": [
+      {
+        "id": "native-process",
+        "necessity": "mandatory",
+        "support": "bounded"
+      }
+    ],
+    "executionMap": {
+      "direction": "top-down",
+      "template": "ai-autopilot-control-plane@1",
+      "nodes": [
+        {
+          "id": "S01",
+          "stage": "brief",
+          "order": 1
+        },
+        {
+          "id": "S02",
+          "stage": "trust-capabilities",
+          "order": 2
+        },
+        {
+          "id": "S03",
+          "stage": "plans-collisions",
+          "order": 3
+        },
+        {
+          "id": "S04",
+          "stage": "execution-proof",
+          "order": 4
+        },
+        {
+          "id": "S05",
+          "stage": "human-review",
+          "order": 5
+        },
+        {
+          "id": "S06",
+          "stage": "ci-merge",
+          "order": 6
+        },
+        {
+          "id": "S07",
+          "stage": "release-handover",
+          "order": 7
+        }
+      ],
+      "edges": [
+        {
+          "from": "S01",
+          "to": "S02"
+        },
+        {
+          "from": "S02",
+          "to": "S03"
+        },
+        {
+          "from": "S03",
+          "to": "S04"
+        },
+        {
+          "from": "S04",
+          "to": "S05"
+        },
+        {
+          "from": "S05",
+          "to": "S06"
+        },
+        {
+          "from": "S06",
+          "to": "S07"
+        }
+      ]
+    }
+  },
+  "architectureContractGate": {
+    "valid": true,
+    "policyVersion": "2026.09.1",
+    "digest": "968e45be396260f713867fa2900bc8241acc6f9afc8712924d1471d689edde61",
+    "template": {
+      "id": "ai-autopilot-control-plane",
+      "platform": "tauri",
+      "title": "Guarded AI autopilot control plane",
+      "version": 1
+    },
+    "stages": 7,
+    "tamperRefused": true
+  },
+  "architectureRegistry": {
+    "valid": true,
+    "planId": "PP-TRUTH",
+    "revisions": 2,
+    "head": {
+      "revision": 2,
+      "registeredAt": "2026-09-02T09:47:13.544Z",
+      "registeredBy": "truth-report",
+      "contractDigest": "2a44dbf8e388cb00cb47a8e9821229724482c7666cf2ac7de02b98cd47599e6d",
+      "supersedes": "968e45be396260f713867fa2900bc8241acc6f9afc8712924d1471d689edde61",
+      "policyVersion": "2026.09.1",
+      "template": {
+        "id": "ai-autopilot-control-plane",
+        "platform": "tauri",
+        "title": "Guarded AI autopilot control plane",
+        "version": 1
+      },
+      "stages": 7,
+      "recordHash": "72748059694217caa48e76055c4b5149798e9f94cd9427cc041b89f27b0edba2"
+    },
+    "firstDigest": "968e45be396260f713867fa2900bc8241acc6f9afc8712924d1471d689edde61",
+    "duplicateOrForkAllowed": false
+  },
+  "viabilityGate": {
+    "verdict": "BLOCKED",
+    "blockerCount": 20,
+    "warningCount": 0,
+    "evidence": {
+      "required": 6,
+      "present": 0,
+      "competitors": 0,
+      "benchmarks": 0,
+      "assumptions": 0
+    },
+    "economics": {
+      "buildP50": null,
+      "buildP80": null,
+      "monthlyCostP50": null,
+      "monthlyCostP80": null,
+      "monthlyRevenueP50": 0,
+      "monthlyRevenueP80Downside": 0,
+      "marginP50": null,
+      "marginP80Downside": null,
+      "runwayMonthsP80": null
+    },
+    "delivery": {
+      "developers": null,
+      "totalHours": 0,
+      "dailyCapacity": null,
+      "calendarDaysP50": null,
+      "calendarDaysP80": null
+    }
+  },
+  "debtGate": {
+    "verdict": "UNKNOWN",
+    "scanId": "DEBT-SCAN-664648E6DEDB1F69",
+    "blockerCount": 1,
+    "blockers": [
+      "Debt coverage is incomplete: native."
+    ],
+    "coverage": {
+      "required": 4,
+      "covered": 3,
+      "missing": [
+        "native"
+      ]
+    },
+    "counts": {
+      "critical": 0,
+      "high": 0,
+      "medium": 0,
+      "low": 0
+    },
+    "weightedOpen": 0,
+    "delta": {
+      "added": [],
+      "resolved": [],
+      "regressed": [],
+      "removedWithoutResolution": []
+    },
+    "analyzerEvidence": [
+      {
+        "surface": "ui",
+        "state": "COVERED",
+        "analyzer": "perfect-planner-static-debt-v1",
+        "fileCount": 10,
+        "bytes": 219335,
+        "digest": "7c17934b7664d7990fd2570672ea1f302c7d808412d1cd1fe78f24deff3b8c06",
+        "limitations": [
+          "pattern-based static analysis",
+          "does not replace compiler, dependency, runtime, accessibility, or native security tooling"
+        ]
+      },
+      {
+        "surface": "engine",
+        "state": "COVERED",
+        "analyzer": "perfect-planner-static-debt-v1",
+        "fileCount": 27,
+        "bytes": 301667,
+        "digest": "b931452260ba037eba5ff21cd3d752e3b27fb48bb32e1ccf10549927c401ea68",
+        "limitations": [
+          "pattern-based static analysis",
+          "does not replace compiler, dependency, runtime, accessibility, or native security tooling"
+        ]
+      },
+      {
+        "surface": "storage",
+        "state": "COVERED",
+        "analyzer": "perfect-planner-static-debt-v1",
+        "fileCount": 28,
+        "bytes": 154695,
+        "digest": "ebc0aed0d113c77e6e2644c2204b1f86b05d5582ec1003e966dca60d8fc73392",
+        "limitations": [
+          "pattern-based static analysis",
+          "does not replace compiler, dependency, runtime, accessibility, or native security tooling"
+        ]
+      },
+      {
+        "surface": "native",
+        "state": "MISSING_TARGETS",
+        "analyzer": "perfect-planner-static-debt-v1",
+        "fileCount": 0,
+        "bytes": 0,
+        "digest": null,
+        "limitations": [
+          "pattern-based static analysis",
+          "does not replace compiler, dependency, runtime, accessibility, or native security tooling"
+        ]
+      }
+    ],
+    "findings": [],
+    "refused": [
+      {
+        "path": "artifacts/design-comparison.png",
+        "reason": "file-too-large",
+        "size": 2182301
+      },
+      {
+        "path": "public/assets/evidence/comparison-source.png",
+        "reason": "file-too-large",
+        "size": 1385851
+      },
+      {
+        "path": "public/assets/evidence/selected-spine-canvas.png",
+        "reason": "file-too-large",
+        "size": 1508263
+      },
+      {
+        "path": "public/generated/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1423675
+      }
+    ]
+  },
+  "conveyorGate": {
+    "valid": true,
+    "stations": [
+      "READY",
+      "CLAIMED",
+      "BUILDING",
+      "PROOF",
+      "REVIEW",
+      "CI",
+      "MERGE_QUEUE",
+      "MERGED"
+    ],
+    "branch": "pp/pp-014/b07-collision-engine",
+    "worktree": "pp-worktrees/pp-014/b07",
+    "claimAllowed": true
+  },
+  "localHandoff": {
+    "valid": true,
+    "senderSigningFingerprint": "d58d6c884c6c4658dd5f59dcd2ca8a0990fed9b7d0e5bfeba0e5a5c0a82d3880",
+    "recipientEncryptionFingerprint": "db086700da3fcac8d00e366d392135345ab1a90e4a8207bcc9e2a1e23134f570",
+    "plaintextExposed": false
+  },
+  "peerReviewGate": {
+    "vaultValid": true,
+    "vault": {
+      "schemaVersion": 1,
+      "providerIds": [
+        "review-a",
+        "review-b"
+      ],
+      "kdf": "scrypt-N16384-r8-p1",
+      "cipher": "aes-256-gcm",
+      "vaultFingerprint": "a165ccce4c4c19d63835d90e6c7b79526f41bc9524b688c8f8d621eae0338ee3",
+      "secrets": "REDACTED"
+    },
+    "verdict": "BLOCKED",
+    "providerCount": 1,
+    "requiredQuorum": 2,
+    "blockers": [
+      "Independent review quorum is incomplete: 1/2."
+    ]
+  },
+  "providerReviewGateway": {
+    "valid": true,
+    "requestHash": "f78c2dbb55d07128ee353988d34136f2d6e65a90e72f45efebf42c0b7d55d1d2",
+    "promptHash": "6a959f4247091cd49ab3b6e854a2a30743d8a2e7b2c912ff08d0095805baf17a",
+    "artifactHash": "d74493bd01e4e537678b5e0371e7502d3d8bc0bd26f280b6aabeca810158141c",
+    "redactionCount": 1,
+    "reservedCostUsd": 0.000679,
+    "usageStatus": "RECORDED",
+    "overruns": 0,
+    "liveProviderCalled": false
+  },
+  "screenshotEvidence": {
+    "engineValid": true,
+    "validatedExistingArtifact": "public/assets/evidence/whole-plan-map.png",
+    "artifactHash": "973ca972015358e336ac3a84933cd0ab23a5422ee2374a636edc51d557b2ae27",
+    "width": 1420,
+    "height": 1308,
+    "blank": false,
+    "capturePerformedThisRun": false,
+    "viewingAttestedThisRun": false,
+    "proofAccepted": false
+  },
+  "sonarGate": {
+    "repositoryVerdict": "BLOCKED",
+    "candidateCount": 0,
+    "autoImportAllowed": false,
+    "nameCount": 6,
+    "verifiedNameCount": 0,
+    "generatedNameStatus": "UNVERIFIED"
+  },
+  "mutationGate": {
+    "verdict": "CERTIFIED",
+    "totals": {
+      "total": 22,
+      "killed": 22,
+      "survived": 0,
+      "errors": 0
+    },
+    "coverage": {
+      "required": 22,
+      "covered": 22,
+      "missing": []
+    },
+    "results": [
+      {
+        "id": "M-BOUNDED-CENSUS",
+        "guarantee": "bounded-census",
+        "state": "KILLED"
+      },
+      {
+        "id": "M-STABLE-DOCUMENT-REGISTRY",
+        "guarantee": "stable-document-registry",
+        "state": "KILLED"
+      },
+      {
+        "id": "M-JOURNAL-INTEGRITY",
+        "guarantee": "journal-integrity",
+        "state": "KILLED"
+      },
+      {
+        "id": "M-MACHINE-PROOF",
+        "guarantee": "machine-proof",
+        "state": "KILLED"
+      },
+      {
+        "id": "M-DURABLE-SESSION",
+        "guarantee": "durable-session",
+        "state": "KILLED"
+      },
+      {
+        "id": "M-CI-HONESTY",
+        "guarantee": "ci-honesty",
+        "state": "KILLED"
+      },
+      {
+        "id": "M-CONFIRMATION-FAIL-CLOSED",
+        "guarantee": "confirmation-fail-closed",
+        "state": "KILLED"
+      },
+      {
+        "id": "M-BLUEPRINT-FAIL-CLOSED",
+        "guarantee": "blueprint-fail-closed",
+        "state": "KILLED"
+      },
+      {
+        "id": "M-RULEBOOK-FAIL-CLOSED",
+        "guarantee": "rulebook-fail-closed",
+        "state": "KILLED"
+      },
+      {
+        "id": "M-ARCHITECTURE-CONTRACT-TAMPER-REFUSED",
+        "guarantee": "architecture-contract-tamper-refused",
+        "state": "KILLED"
+      },
+      {
+        "id": "M-ARCHITECTURE-REGISTRY-LINEAR-HISTORY",
+        "guarantee": "architecture-registry-linear-history",
+        "state": "KILLED"
+      },
+      {
+        "id": "M-VIABILITY-FAIL-CLOSED",
+        "guarantee": "viability-fail-closed",
+        "state": "KILLED"
+      },
+      {
+        "id": "M-DEBT-UNKNOWN-NOT-GREEN",
+        "guarantee": "debt-unknown-not-green",
+        "state": "KILLED"
+      },
+      {
+        "id": "M-CONVEYOR-CLAIM-GUARD",
+        "guarantee": "conveyor-claim-guard",
+        "state": "KILLED"
+      },
+      {
+        "id": "M-HANDOFF-CONFIDENTIALITY",
+        "guarantee": "handoff-confidentiality",
+        "state": "KILLED"
+      },
+      {
+        "id": "M-MAILBOX-ONE-TIME-ACCEPTANCE",
+        "guarantee": "mailbox-one-time-acceptance",
+        "state": "KILLED"
+      },
+      {
+        "id": "M-PEER-QUORUM-FAIL-CLOSED",
+        "guarantee": "peer-quorum-fail-closed",
+        "state": "KILLED"
+      },
+      {
+        "id": "M-PROVIDER-BUDGET-REDACTION",
+        "guarantee": "provider-budget-redaction",
+        "state": "KILLED"
+      },
+      {
+        "id": "M-SCREENSHOT-UNPROVEN-WITHOUT-VIEWING",
+        "guarantee": "screenshot-unproven-without-viewing",
+        "state": "KILLED"
+      },
+      {
+        "id": "M-SONAR-NO-AUTO-IMPORT",
+        "guarantee": "sonar-no-auto-import",
+        "state": "KILLED"
+      },
+      {
+        "id": "M-AUTOPILOT-DEVICE-DENIAL",
+        "guarantee": "autopilot-device-denial",
+        "state": "KILLED"
+      },
+      {
+        "id": "M-IDENTITY-PRIVATE-KEY-REDACTION",
+        "guarantee": "identity-private-key-redaction",
+        "state": "KILLED"
+      }
+    ]
+  },
+  "nativeCapabilityGate": {
+    "valid": true,
+    "policyHash": "b5a1e458ccac32260004564e14b78eb8a37291d39c1b1c6d38a381ccca2b8699",
+    "mode": "autopilot",
+    "defaultDecision": "deny",
+    "boundedReadAllowed": true,
+    "deviceControlAllowed": false,
+    "deviceControlReason": "device.control is forbidden during autopilot, even when configured."
+  },
+  "identityVault": {
+    "valid": true,
+    "vaultFingerprint": "02deef6986caeb3e84f33cf32201b326d974b4322ed8ae9442fcb4694d3d5ba1",
+    "identityCount": 2,
+    "kdf": "scrypt-N32768-r8-p1",
+    "cipher": "aes-256-gcm",
+    "privateKeys": "REDACTED",
+    "osBacked": false
+  },
+  "localDraftMailbox": {
+    "valid": true,
+    "inboxCount": 1,
+    "listedContent": "ENCRYPTED",
+    "envelopeHash": "cbae0b8aedce63a81487ad21c1abb81d804ef5a7047174154e565fbfd5c2ea1f",
+    "acceptedOnce": true,
+    "receiptDraft": "REDACTED",
+    "loginUiAvailable": false
+  },
+  "guarantees": [
+    "read-only bounded census",
+    "stable document source identities",
+    "document revisions and deletion history persist",
+    "symbolic links refused",
+    "active locks are never stolen",
+    "concurrent appends serialize",
+    "tampering blocks the next append",
+    "proof commands run without a shell",
+    "unapproved commands are refused",
+    "session claims survive restart",
+    "ownership tokens stay private"
+  ]
+}

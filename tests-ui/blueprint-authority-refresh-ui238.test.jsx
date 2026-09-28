@@ -1,0 +1,12 @@
+import React from 'react';
+import {afterEach,expect,test,vi} from 'vitest';
+import {act,cleanup,fireEvent,render,screen} from '@testing-library/react';
+import {BlueprintWorkspace} from '../src/components/BlueprintWorkspace.jsx';
+import {ProjectContext} from '../src/project/ProjectProvider.jsx';
+import {inspectArchitecture} from '../src/runtime/architectureClient.js';
+vi.mock('../src/runtime/architectureClient.js',()=>({inspectArchitecture:vi.fn()}));
+vi.mock('../src/components/ArchitectureDraftPanel.jsx',()=>({ArchitectureDraftPanel:({onPublished})=><button onClick={()=>onPublished({head:{revision:2,contractDigest:'b'.repeat(64)}})}>Fixture publish</button>}));
+const project={projectId:'pp_blueprint',kind:'imported',name:'Blueprint fixture',state:'imported',registration:null,census:null,discovery:null,authorities:{architecture:null,folder:null,component:null,plan:null}};
+afterEach(()=>{cleanup();vi.clearAllMocks();});
+test('standalone older inspect cannot overwrite newly published receipt',async()=>{let resolve;inspectArchitecture.mockReturnValue(new Promise(r=>resolve=r));render(<BlueprintWorkspace activeProject={project}/>);fireEvent.click(screen.getByText('Fixture publish'));expect(screen.getByText('Architecture authority revision 2 is recorded.')).toBeTruthy();await act(async()=>resolve({head:{revision:1,contractDigest:'a'.repeat(64)}}));expect(screen.getByText('Architecture authority revision 2 is recorded.')).toBeTruthy();});
+test.each(['stale','unavailable'])('provider %s authority remains last-known and skips independent fetch',state=>{const current={...project,authorities:{...project.authorities,architecture:{state,revision:3,digest:'c'.repeat(64)}}};const refreshArchitecture=vi.fn();render(<ProjectContext.Provider value={{projects:[current],activeProject:current,refreshArchitecture}}><BlueprintWorkspace activeProject={project}/></ProjectContext.Provider>);expect(screen.getByText('Last known architecture revision 3; current approval has not been confirmed.')).toBeTruthy();expect(screen.queryByText('AUTHORITY RECORDED')).toBe(null);expect(inspectArchitecture).not.toHaveBeenCalled();fireEvent.click(screen.getByText('Fixture publish'));expect(refreshArchitecture).toHaveBeenCalledWith(project.projectId);expect(screen.getByText('Last known architecture revision 3; current approval has not been confirmed.')).toBeTruthy();});

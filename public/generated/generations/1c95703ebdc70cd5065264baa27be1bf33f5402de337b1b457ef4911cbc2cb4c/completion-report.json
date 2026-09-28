@@ -1,0 +1,180 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-09-03T17:46:53.314Z",
+  "planId": "PP-CLEANROOM",
+  "title": "Perfect Planner clean-room guarantee build",
+  "verdict": "NO-GO",
+  "ready": false,
+  "counts": {
+    "total": 16,
+    "built": 16,
+    "tested": 16,
+    "proven": 13
+  },
+  "blockers": [
+    "plan approval is missing",
+    "merged-state Tier 3 CI is not green",
+    "completeness review is missing",
+    "3 item(s) remain unproven"
+  ],
+  "notProven": [
+    {
+      "id": "SCREENSHOT",
+      "title": "Isolated nonblank screenshot and viewing proof",
+      "missing": [
+        "proof not accepted"
+      ]
+    },
+    {
+      "id": "CI",
+      "title": "Repository-derived CI",
+      "missing": [
+        "proof not accepted"
+      ]
+    },
+    {
+      "id": "HUMAN",
+      "title": "Human confirmation",
+      "missing": [
+        "proof not accepted"
+      ]
+    }
+  ],
+  "items": [
+    {
+      "id": "CENSUS",
+      "title": "Bounded repository census",
+      "built": true,
+      "tested": true,
+      "proven": true,
+      "missing": []
+    },
+    {
+      "id": "DOCREG",
+      "title": "Durable document reconciliation",
+      "built": true,
+      "tested": true,
+      "proven": true,
+      "missing": []
+    },
+    {
+      "id": "NATIVEPOLICY",
+      "title": "Deny-by-default native capability policy",
+      "built": true,
+      "tested": true,
+      "proven": true,
+      "missing": []
+    },
+    {
+      "id": "IDENTITYVAULT",
+      "title": "Encrypted durable local identity vault",
+      "built": true,
+      "tested": true,
+      "proven": true,
+      "missing": []
+    },
+    {
+      "id": "MAILBOX",
+      "title": "Encrypted local draft inbox and receipt",
+      "built": true,
+      "tested": true,
+      "proven": true,
+      "missing": []
+    },
+    {
+      "id": "REVIEWGATEWAY",
+      "title": "Redacted budget-capped provider review gateway",
+      "built": true,
+      "tested": true,
+      "proven": true,
+      "missing": []
+    },
+    {
+      "id": "SCREENSHOT",
+      "title": "Isolated nonblank screenshot and viewing proof",
+      "built": true,
+      "tested": true,
+      "proven": false,
+      "missing": [
+        "proof not accepted"
+      ]
+    },
+    {
+      "id": "DEBTSCAN",
+      "title": "Bounded analyzer-backed debt coverage",
+      "built": true,
+      "tested": true,
+      "proven": true,
+      "missing": []
+    },
+    {
+      "id": "RULEBOOK",
+      "title": "Versioned compatibility, scenario, and use-case rulebook",
+      "built": true,
+      "tested": true,
+      "proven": true,
+      "missing": []
+    },
+    {
+      "id": "ARCHCONTRACT",
+      "title": "Tamper-evident frozen architecture contract",
+      "built": true,
+      "tested": true,
+      "proven": true,
+      "missing": []
+    },
+    {
+      "id": "ARCHREGISTRY",
+      "title": "Immutable linear architecture contract registry",
+      "built": true,
+      "tested": true,
+      "proven": true,
+      "missing": []
+    },
+    {
+      "id": "JOURNAL",
+      "title": "Atomic journal",
+      "built": true,
+      "tested": true,
+      "proven": true,
+      "missing": []
+    },
+    {
+      "id": "PROOF",
+      "title": "Guarded proof runner",
+      "built": true,
+      "tested": true,
+      "proven": true,
+      "missing": []
+    },
+    {
+      "id": "SESSION",
+      "title": "Durable session registry",
+      "built": true,
+      "tested": true,
+      "proven": true,
+      "missing": []
+    },
+    {
+      "id": "CI",
+      "title": "Repository-derived CI",
+      "built": true,
+      "tested": true,
+      "proven": false,
+      "missing": [
+        "proof not accepted"
+      ]
+    },
+    {
+      "id": "HUMAN",
+      "title": "Human confirmation",
+      "built": true,
+      "tested": true,
+      "proven": false,
+      "missing": [
+        "proof not accepted"
+      ]
+    }
+  ],
+  "digest": "0a76ddf2e523d37021f1bb7e9d040f6561cf189f1a5f36f76cc5e6fe87265ed7"
+}

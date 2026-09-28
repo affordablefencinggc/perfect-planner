@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-labelledby="title desc">
+  <title id="title">GPT — Running Right</title>
+  <desc id="desc">Recognizable OpenAI mark identifying GPT, running toward the right with a fast stride and trailing speed lines. Beige cartoon legs and sneakers are original pack artwork. Trademark belongs to its owner.</desc>
+  <defs><filter id="mark-shadow" x="-25%" y="-25%" width="150%" height="160%"><feDropShadow dx="0" dy="5" stdDeviation="4" flood-color="#000" flood-opacity=".2"/></filter></defs>
+  <style>
+          .left-leg,.right-leg { transform-box:view-box; }
+          .left-leg { transform-origin:91px 158px; animation:left-step .34s ease-in-out infinite; }
+          .right-leg { transform-origin:165px 158px; animation:right-step .34s ease-in-out infinite; }
+          .body-motion { transform-origin:128px 104px; animation:body-motion .34s ease-in-out infinite alternate; }
+          .speed-lines { animation:speed-lines .34s linear infinite; }
+          @keyframes left-step { 0%,100% { transform:rotate(29deg) } 50% { transform:rotate(-29deg) } }
+          @keyframes right-step { 0%,100% { transform:rotate(-29deg) } 50% { transform:rotate(29deg) } }
+          @keyframes body-motion { from { transform:translate(3px,0) rotate(8deg) } to { transform:translate(6px,-6px) rotate(8deg) } }
+          @keyframes speed-lines { to { stroke-dashoffset:-34 } }
+          @media (prefers-reduced-motion:reduce) { .left-leg,.right-leg,.body-motion,.speed-lines { animation:none!important; } }
+        </style>
+  <g class="speed-lines" fill="none" stroke="#10A37F" stroke-width="6" stroke-linecap="round" stroke-dasharray="24 10" stroke-dashoffset="-0.00" opacity=".72"><path d="M11 82h49M4 111h42M18 140h47"/></g>
+  
+  <g class="left-leg">
+    <g transform="translate(182 0) scale(-1 1)">
+    <path d="M91 154C91 174 88 195 86 216" fill="none" stroke="#2C211B" stroke-width="24" stroke-linecap="round"/>
+    <path d="M91 154C91 174 88 195 86 216" fill="none" stroke="#E8C39E" stroke-width="16" stroke-linecap="round"/>
+    <path d="M86 207C76 210 62 218 61 228C60 237 70 242 83 242H106C113 242 116 237 113 230C110 223 100 217 91 213Z" fill="#252A32" stroke="#2C211B" stroke-width="5" stroke-linejoin="round"/>
+    <path d="M63 232C72 236 94 236 113 232" fill="none" stroke="#F8F4ED" stroke-width="7" stroke-linecap="round"/>
+    <path d="M80 219l15 5M76 224l16 5" fill="none" stroke="#F8F4ED" stroke-width="3" stroke-linecap="round"/>
+    </g>
+  </g>
+  <g class="right-leg">
+    
+    <path d="M165 154C165 174 168 195 170 216" fill="none" stroke="#2C211B" stroke-width="24" stroke-linecap="round"/>
+    <path d="M165 154C165 174 168 195 170 216" fill="none" stroke="#E8C39E" stroke-width="16" stroke-linecap="round"/>
+    <path d="M170 207C180 210 194 218 195 228C196 237 186 242 173 242H150C143 242 140 237 143 230C146 223 156 217 165 213Z" fill="#252A32" stroke="#2C211B" stroke-width="5" stroke-linejoin="round"/>
+    <path d="M193 232C184 236 162 236 143 232" fill="none" stroke="#F8F4ED" stroke-width="7" stroke-linecap="round"/>
+    <path d="M176 219l-15 5M180 224l-16 5" fill="none" stroke="#F8F4ED" stroke-width="3" stroke-linecap="round"/>
+    
+  </g>
+  <g class="body-motion" filter="url(#mark-shadow)" color="#111827"><g transform="translate(36 4) scale(7.666667)"><path d="M9.205 8.658v-2.26c0-.19.072-.333.238-.428l4.543-2.616c.619-.357 1.356-.523 2.117-.523 2.854 0 4.662 2.212 4.662 4.566 0 .167 0 .357-.024.547l-4.71-2.759a.797.797 0 00-.856 0l-5.97 3.473zm10.609 8.8V12.06c0-.333-.143-.57-.429-.737l-5.97-3.473 1.95-1.118a.433.433 0 01.476 0l4.543 2.617c1.309.76 2.189 2.378 2.189 3.948 0 1.808-1.07 3.473-2.76 4.163zM7.802 12.703l-1.95-1.142c-.167-.095-.239-.238-.239-.428V5.899c0-2.545 1.95-4.472 4.591-4.472 1 0 1.927.333 2.712.928L8.23 5.067c-.285.166-.428.404-.428.737v6.898zM12 15.128l-2.795-1.57v-3.33L12 8.658l2.795 1.57v3.33L12 15.128zm1.796 7.23c-1 0-1.927-.332-2.712-.927l4.686-2.712c.285-.166.428-.404.428-.737v-6.898l1.974 1.142c.167.095.238.238.238.428v5.233c0 2.545-1.974 4.472-4.614 4.472zm-5.637-5.303l-4.544-2.617c-1.308-.761-2.188-2.378-2.188-3.948A4.482 4.482 0 014.21 6.327v5.423c0 .333.143.571.428.738l5.947 3.449-1.95 1.118a.432.432 0 01-.476 0zm-.262 3.9c-2.688 0-4.662-2.021-4.662-4.519 0-.19.024-.38.047-.57l4.686 2.71c.286.167.571.167.856 0l5.97-3.448v2.26c0 .19-.07.333-.237.428l-4.543 2.616c-.619.357-1.356.523-2.117.523zm5.899 2.83a5.947 5.947 0 005.827-4.756C22.287 18.339 24 15.84 24 13.296c0-1.665-.713-3.282-1.998-4.448.119-.5.19-.999.19-1.498 0-3.401-2.759-5.947-5.946-5.947-.642 0-1.26.095-1.88.31A5.962 5.962 0 0010.205 0a5.947 5.947 0 00-5.827 4.757C1.713 5.447 0 7.945 0 10.49c0 1.666.713 3.283 1.998 4.448-.119.5-.19 1-.19 1.499 0 3.401 2.759 5.946 5.946 5.946.642 0 1.26-.095 1.88-.309a5.96 5.96 0 004.162 1.713z"></path></g></g>
+  
+</svg>

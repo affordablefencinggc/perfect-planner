@@ -1,0 +1,18 @@
+.indexing-activity{display:flex;align-items:center;gap:20px;padding:18px 22px;margin:18px 0;border:1px solid #9ba5a9;border-radius:14px;background:#f4f5f3;box-shadow:0 4px 14px #26333312;animation:indexing-enter 300ms cubic-bezier(.2,0,0,1) both}
+.indexing-orbit{flex:0 0 160px;border-radius:18px;background:radial-gradient(ellipse,#dce3e3,transparent 70%);animation:indexing-ambient 3s ease-in-out infinite}
+.indexing-orbit svg{display:block;width:160px;height:80px;overflow:visible}
+.scan-route{fill:none;stroke:#9ca8aa;stroke-width:1.5}.scan-folders{fill:#fff;stroke:#586666;stroke-width:1.5}.scan-folders path{transform-origin:28px 45px;animation:indexing-folder 3s ease-in-out infinite}
+.scan-ball{fill:#cc7543;stroke:#f8e1cc;stroke-width:.7;transform:translate(45px,40px);animation-duration:3s;animation-timing-function:cubic-bezier(.4,0,.2,1);animation-iteration-count:infinite}
+.scan-ball-top{animation-name:indexing-branch-top}.scan-ball-bottom{animation-name:indexing-branch-bottom}.scan-ball-middle{animation-name:indexing-branch-middle;fill:#e3a265}
+.indexing-copy{display:grid;gap:5px;flex:1;min-width:0}.indexing-copy strong{font-size:17px;color:#263333}.indexing-copy span{font-size:14px;color:#536060}.indexing-copy small{font-size:12px;color:#536060;line-height:1.5}.indexing-activity button{flex-shrink:0}
+/* Three-second cycle: pair depart at 0ms; centre at300ms.
+   Centre arrives home at2100ms; pair at2400ms. Corners follow the drawn routes. */
+@keyframes indexing-branch-top{0%,80%,100%{transform:translate(45px,40px)}10%,75%{transform:translate(65px,40px)}20%,70%{transform:translate(65px,18px)}40%,50%{transform:translate(126px,18px)}}
+@keyframes indexing-branch-bottom{0%,80%,100%{transform:translate(45px,40px)}10%,75%{transform:translate(65px,40px)}20%,70%{transform:translate(65px,62px)}40%,50%{transform:translate(126px,62px)}}
+@keyframes indexing-branch-middle{0%,10%,70%,100%{transform:translate(45px,40px)}40%{transform:translate(126px,40px)}}
+@keyframes indexing-folder{0%,65%,100%{transform:translateY(0)}80%{transform:translateY(-3px)}}
+@keyframes indexing-ambient{0%,100%{box-shadow:0 0 0 0 #85999a00}50%{box-shadow:0 0 16px 2px #85999a18}}
+@keyframes indexing-enter{from{transform:translateY(6px);opacity:0}to{transform:translateY(0);opacity:1}}
+.indexing-activity.motion-paused,.indexing-activity.motion-paused *{animation-play-state:paused!important}
+@media(prefers-reduced-motion:reduce){.indexing-activity,.indexing-activity *{animation:none!important}}
+@media(max-width:700px){.indexing-activity{flex-wrap:wrap;gap:12px}.indexing-orbit{flex-basis:100px}.indexing-orbit svg{width:100px;height:60px}.indexing-copy{flex-basis:60%}}

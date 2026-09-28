@@ -1,0 +1,6 @@
+{
+  "$schema": "../gen/schemas/schema.json",
+  "identifier": "allow-check-bundled-mcp-connection",
+  "description": "Allows a bounded one-shot check of the fixed bundled metadata-only MCP helper. It accepts workspace identity binding only, never executable, registry, root, command, arguments or environment paths. No arbitrary process or computer-use permission.",
+  "commands": { "allow": ["check_bundled_mcp_connection"], "deny": [] }
+}

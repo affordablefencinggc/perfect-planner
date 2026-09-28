@@ -1,0 +1,26 @@
+import React,{StrictMode} from 'react';
+import {afterEach,beforeEach,test,expect,vi} from 'vitest';
+import {render,cleanup,screen,waitFor,act} from '@testing-library/react';
+import {ProjectProvider,useProject} from '../src/project/ProjectProvider.jsx';
+import {createProjectRegistry,createMemoryStorage} from '../src/project/projectRegistry.js';
+import {createProjectSession} from '../src/project/projectSession.js';
+import {PerfectPlannerShell} from '../src/PerfectPlannerShell.jsx';
+beforeEach(()=>vi.stubGlobal('fetch',vi.fn(async()=>({ok:false,status:503,json:async()=>({})}))));
+afterEach(()=>{cleanup();vi.restoreAllMocks();vi.unstubAllGlobals();window.history.replaceState({},'','/');});
+function setup(){
+ const registry=createProjectRegistry({storage:createMemoryStorage()});
+ const project=(name,token)=>createProjectSession({name,kind:'imported',state:'imported',registration:{access:'metadata-read-only',adapter:'browser',persistence:'session-only',registryRevision:1,rootIdentity:token.repeat(64),rootLabel:name,workspaceId:`startup_${token}`}});
+ const a=project('Startup A','a'),b=project('Startup B','b');
+ registry.upsert(a);registry.upsert(b);registry.setActive(a.projectId);return {registry,a,b};
+}
+function Probe(){const value=useProject();return <output data-testid="selection">{JSON.stringify({id:value.activeProjectId,ready:value.selectionInitialized,view:value.activeProject?.view})}</output>;}
+test.each([false,true])('known project deep link beats active registry before any history replacement Strict=%s',async strict=>{
+ const {registry,a,b}=setup();window.history.replaceState({},'',`/?project=${b.projectId}&workspace=plan&phase=P2`);const replace=vi.spyOn(window.history,'replaceState');const tree=<ProjectProvider registry={registry}><Probe/><PerfectPlannerShell/></ProjectProvider>;render(strict?<StrictMode>{tree}</StrictMode>:tree);
+ await waitFor(()=>expect(JSON.parse(screen.getByTestId('selection').textContent).id).toBe(b.projectId));const selected=JSON.parse(screen.getByTestId('selection').textContent);expect(selected.ready).toBe(true);expect(selected.view.workspace).toBe('plan');expect(selected.view.phase).toBe('P2');expect(new URL(window.location.href).searchParams.get('project')).toBe(b.projectId);
+ for(const call of replace.mock.calls){expect(new URL(String(call[2]),window.location.href).searchParams.get('project')).not.toBe(a.projectId);}expect(new URL(window.location.href).searchParams.get('workspace')).toBe('plan');expect(new URL(window.location.href).searchParams.get('phase')).toBe('P2');
+});
+test('unknown project retains registry fallback without losing requested workspace',async()=>{const {registry,a}=setup();window.history.replaceState({},'','/?project=pp_unknown_route&workspace=ledger');render(<ProjectProvider registry={registry}><Probe/><PerfectPlannerShell/></ProjectProvider>);await waitFor(()=>expect(JSON.parse(screen.getByTestId('selection').textContent).ready).toBe(true));expect(registry.getSnapshot().activeProjectId).toBe(a.projectId);expect(new URL(window.location.href).searchParams.get('workspace')).toBe('ledger');});
+test('history project selection still changes projects after startup',async()=>{const {registry,a,b}=setup();window.history.replaceState({},'',`/?project=${b.projectId}&workspace=home`);render(<ProjectProvider registry={registry}><Probe/><PerfectPlannerShell/></ProjectProvider>);await waitFor(()=>expect(registry.getSnapshot().activeProjectId).toBe(b.projectId));await act(async()=>{window.history.pushState({},'',`/?project=${a.projectId}&workspace=ledger`);window.dispatchEvent(new PopStateEvent('popstate'));});await waitFor(()=>expect(registry.getSnapshot().activeProjectId).toBe(a.projectId));expect(new URL(window.location.href).searchParams.get('workspace')).toBe('ledger');});
+test('supplied initialUrl retains its workspace rather than ambient Shell workspace',async()=>{const {registry,b}=setup();window.history.replaceState({},'','/?workspace=home');render(<ProjectProvider registry={registry} initialUrl={`/?project=${b.projectId}&workspace=plan&phase=P3`}><Probe/><PerfectPlannerShell/></ProjectProvider>);await waitFor(()=>expect(new URL(window.location.href).searchParams.get('phase')).toBe('P3'));expect(new URL(window.location.href).searchParams.get('workspace')).toBe('plan');});
+test('missing workspace uses selected project saved view',async()=>{const {registry,b}=setup();registry.updateView(b.projectId,{workspace:'ledger',phase:null});window.history.replaceState({},'',`/?project=${b.projectId}`);render(<ProjectProvider registry={registry}><Probe/><PerfectPlannerShell/></ProjectProvider>);await waitFor(()=>expect(new URL(window.location.href).searchParams.get('workspace')).toBe('ledger'));});
+test('disabled history sync causes no startup Shell replacement',async()=>{const {registry,b}=setup();window.history.replaceState({},'','/?workspace=home');const replace=vi.spyOn(window.history,'replaceState');render(<ProjectProvider registry={registry} initialUrl={`/?project=${b.projectId}&workspace=ledger`} syncHistory={false}><Probe/><PerfectPlannerShell/></ProjectProvider>);await waitFor(()=>expect(JSON.parse(screen.getByTestId('selection').textContent).ready).toBe(true));expect(registry.getSnapshot().activeProjectId).toBe(b.projectId);expect(replace).not.toHaveBeenCalled();});

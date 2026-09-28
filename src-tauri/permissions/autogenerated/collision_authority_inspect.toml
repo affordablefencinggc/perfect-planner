@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-collision-authority-inspect"
+description = "Enables the collision_authority_inspect command without any pre-configured scope."
+commands.allow = ["collision_authority_inspect"]
+
+[[permission]]
+identifier = "deny-collision-authority-inspect"
+description = "Denies the collision_authority_inspect command without any pre-configured scope."
+commands.deny = ["collision_authority_inspect"]

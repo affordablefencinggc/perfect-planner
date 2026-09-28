@@ -1,0 +1,8 @@
+.screenshot-viewing-panel { display:grid; gap:.75rem; padding:1rem; border:1px solid var(--line, #d8d8d8); border-radius:.75rem; background:var(--surface, #fff); }
+.screenshot-viewing-panel header { display:flex; justify-content:space-between; gap:1rem; }
+.screenshot-viewing-panel header span { font-size:.75rem; letter-spacing:.08em; }
+.screenshot-viewing-panel label { display:grid; gap:.35rem; }
+.screenshot-viewing-panel input,.screenshot-viewing-panel textarea { font:inherit; padding:.6rem; border:1px solid var(--line, #aaa); border-radius:.4rem; }
+.screenshot-viewing-panel textarea { min-height:5rem; resize:vertical; }
+.screenshot-viewing-panel .screenshot-viewing-confirm { grid-template-columns:auto 1fr; align-items:start; }
+.screenshot-viewing-panel button { justify-self:start; padding:.6rem .9rem; }

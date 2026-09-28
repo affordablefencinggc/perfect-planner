@@ -1,0 +1,48 @@
+name: Perfect Planner Guardrail CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: perfect-planner-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  web-and-contracts:
+    name: Web, contracts, MCP, and Sites
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run verify:secrets
+      - run: npm run build
+      - run: npm run verify:performance
+      - run: npm test
+      - run: npm run test:ui
+      - run: npm run verify:mcp -- --fixture
+      - run: npm run test:sites
+
+  windows-native:
+    name: Windows native compile and tests
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - run: npm ci
+      - run: npm run test:native
+      - run: npm run tauri:build -- --no-bundle

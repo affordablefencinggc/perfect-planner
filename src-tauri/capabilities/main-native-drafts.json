@@ -1,0 +1,8 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main-native-drafts",
+  "description": "Main Windows window may inspect and persist unapproved drafts for an exact native-registered folder census. No review, execution, shell, arbitrary process configuration or remote capability is granted.",
+  "windows": ["main"],
+  "platforms": ["windows"],
+  "permissions": ["allow-inspect-native-draft-proposal", "allow-read-native-draft-snapshot", "allow-submit-native-draft-proposal"]
+}

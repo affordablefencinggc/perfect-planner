@@ -1,0 +1,51 @@
+{
+  "name": "perfect-planner-cleanroom",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "dev:tauri": "vite --host 127.0.0.1 --port 4173 --strictPort",
+    "truth:report": "node scripts/generate-truth-report.mjs",
+    "verify:mcp": "node scripts/verify-perfect-planner-mcp.mjs",
+    "verify:native-mcp": "node scripts/verify-bundled-native-mcp.mjs",
+    "verify:secrets": "node scripts/verify-secrets.mjs",
+    "verify:push": "node scripts/verify-local-push.mjs",
+    "hooks:install": "node scripts/install-git-hooks.mjs",
+    "verify:performance": "node scripts/verify-performance-budget.mjs",
+    "verify:readiness": "node scripts/verify-release-readiness.mjs",
+    "build:client": "vite build && node scripts/generate-truth-report.mjs --release",
+    "build": "npm run build:client && node scripts/prepare-sites-build.mjs",
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build",
+    "test:native": "cargo test --manifest-path src-tauri/Cargo.toml",
+    "preview": "vite preview",
+    "test:sites": "node --test tests/sites-worker.test.mjs",
+    "test:mcp": "node --test tests/perfect-planner-mcp.test.mjs",
+    "test:engine": "node --test tests/collision-engine.test.mjs",
+    "test": "node --test tests/*.test.mjs",
+    "test:ui": "vitest run",
+    "test:all": "npm test && npm run test:ui",
+    "verify:release": "npm run verify:secrets && npm run build && npm run verify:performance && npm test && npm run test:ui && npm run verify:mcp && npm run test:sites && npm run test:native && npm run tauri:build -- --no-bundle && npm run verify:readiness"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@phosphor-icons/react": "^2.1.10",
+    "@tauri-apps/api": "^2.11.1",
+    "@vitejs/plugin-react": "5.0.4",
+    "react": "19.2.0",
+    "react-dom": "19.2.0",
+    "vite": "6.4.2",
+    "zod": "^4.5.4"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.11.4",
+    "@testing-library/react": "^16.3.3",
+    "@testing-library/user-event": "^14.6.7",
+    "agentation": "^3.0.2",
+    "axe-core": "^4.13.0",
+    "jsdom": "^30.0.1",
+    "vitest": "^4.1.11"
+  }
+}

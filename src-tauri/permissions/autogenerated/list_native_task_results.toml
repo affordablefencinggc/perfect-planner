@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-list-native-task-results"
+description = "Enables the list_native_task_results command without any pre-configured scope."
+commands.allow = ["list_native_task_results"]
+
+[[permission]]
+identifier = "deny-list-native-task-results"
+description = "Denies the list_native_task_results command without any pre-configured scope."
+commands.deny = ["list_native_task_results"]

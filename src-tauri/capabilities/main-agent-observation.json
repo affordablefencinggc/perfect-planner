@@ -1,0 +1,8 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main-agent-observation",
+  "description": "Main Windows view may inspect or stop its exact project broker. No pairing credentials, client methods, source writes, execution, network or computer control are exposed.",
+  "windows": ["main"],
+  "platforms": ["windows"],
+  "permissions": ["allow-inspect-agent-sessions", "allow-read-agent-exchange-notes", "allow-stop-project-agent-broker", "allow-prepare-agent-pairing", "allow-prepare-agent-plan-pairing", "allow-prepare-agent-proposal-pairing"]
+}

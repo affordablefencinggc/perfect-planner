@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-inspect-registered-git-inventory"
+description = "Enables the inspect_registered_git_inventory command without any pre-configured scope."
+commands.allow = ["inspect_registered_git_inventory"]
+
+[[permission]]
+identifier = "deny-inspect-registered-git-inventory"
+description = "Denies the inspect_registered_git_inventory command without any pre-configured scope."
+commands.deny = ["inspect_registered_git_inventory"]

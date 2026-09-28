@@ -1,0 +1,10 @@
+.plan-approval-panel{margin:24px 0;padding:22px;border:1px solid #a9b4ba;border-radius:10px;background:#fafaf8;max-width:1200px;color:#29312e}
+.plan-approval-panel>header{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;flex-wrap:wrap;margin-bottom:18px}
+.plan-approval-panel p{font-size:16px;line-height:1.55}.plan-approval-panel h4{font-size:17px;margin:12px 0}
+.plan-approval-panel details{padding:12px 0;border-bottom:1px solid #d4d8d5}.plan-approval-panel summary{cursor:pointer;font-size:15px;line-height:1.5}
+.plan-approval-panel pre,.plan-approval-panel dd{white-space:pre-wrap;overflow-wrap:anywhere;font-size:14px;max-height:360px;overflow:auto;margin:8px 0}
+.plan-approval-panel fieldset{margin:22px 0}.plan-approval-panel legend{font-size:18px;font-weight:600}.plan-approval-mapping{padding:14px;border:1px solid #c6cdca;border-radius:6px;background:#fff}.plan-approval-mapping>div{display:flex;gap:14px 24px;flex-wrap:wrap;margin-top:12px}
+.plan-approval-panel .plan-approval-mapping label,.plan-approval-panel .plan-approval-confirm{display:flex;align-items:flex-start;gap:10px;font-size:15px}.plan-approval-panel input[type=checkbox]{flex:none;width:18px;height:18px;margin-top:3px}
+.plan-approval-warning{padding:14px;border-left:3px solid #ad7c22;background:#fff7e6}.plan-approval-error{padding:14px;background:#fff0ef;color:#922f2d;border:1px solid #c16c65;border-radius:6px}.plan-approval-current{border-left:3px solid #448261;padding:12px;background:#edf5ef}
+.plan-approval-review{margin-top:18px;padding:18px;background:#fff;border:1px solid #a9b4ba;border-radius:8px}.plan-approval-confirm{margin:20px 0}.plan-approval-panel button{min-height:42px}.plan-approval-panel dt{font-weight:600;font-size:14px}
+@media(max-width:600px){.plan-approval-panel{padding:14px}.plan-approval-panel>header{display:block}.plan-approval-panel>header button{margin-top:10px}.plan-approval-mapping>div{display:grid}}

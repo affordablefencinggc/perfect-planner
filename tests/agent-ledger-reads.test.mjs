@@ -1,0 +1,18 @@
+import test from'node:test';import assert from'node:assert/strict';import os from'node:os';import path from'node:path';import{mkdtemp}from'node:fs/promises';
+import{createAgentLedgerReads}from'../mcp/agentLedgerReads.mjs';import{createAgentClientRouter}from'../mcp/agentClientRouter.mjs';import{createAgentSessionBroker}from'../mcp/agentSessionBroker.mjs';import{createNativeTaskDraftSubmission}from'../src/node/nativeTaskDraftSubmission.mjs';import{emptyTaskDraftLedger,updateTaskDraft}from'../src/project/taskDraftLedger.js';
+assert.equal(os.hostname().toLowerCase(),'dans1');
+test('scoped router reads paged real journal and refuses mixing revisions',async()=>{
+ const binding={projectId:'pp_agent_reads',rootIdentity:'a'.repeat(64),workspaceId:'reader',registryRevision:1},draftBinding={projectId:binding.projectId,rootIdentity:binding.rootIdentity,censusDigest:'b'.repeat(64)};
+ const dir=await mkdtemp(path.join(os.tmpdir(),'pp-agent-read-'));const submission=createNativeTaskDraftSubmission({proposalConfig:{journalPath:path.join(dir,'proposal.jsonl'),projectId:binding.projectId,rootIdentity:binding.rootIdentity},registeredBinding:async()=>draftBinding});
+ let ledger=emptyTaskDraftLedger(draftBinding);for(let i=0;i<12;i++)ledger=updateTaskDraft(ledger,{title:'Task '+i,description:'Full obligation retained',acceptance:'Evidence required',recovery:'Preserve',owner:'Worker',claims:[],dependsOn:[],archived:false});
+ await submission.submitDraft({ledger,request:{requestId:'first',expectedRevision:0,expectedHeadDigest:'GENESIS'}});
+ const broker=createAgentSessionBroker({resolveBinding:async()=>binding}),reads=createAgentLedgerReads({submission}),router=createAgentClientRouter({broker,binding,ledgerReads:reads});
+ const pair=await broker.issuePairing(binding),connected=await router.request({version:1,id:1,method:'client.connect',params:{pairingId:pair.pairingId,secret:pair.secret}});const credentials={sessionId:connected.result.sessionId,secret:connected.result.secret};
+ const first=await router.request({version:1,id:2,method:'client.readBrief',params:{...credentials,expectedSequence:1,input:{offset:0,expectedHeadDigest:null}}});assert.equal(first.ok,true);assert.equal(first.result.data.tasks.length,10);assert.equal(first.result.data.nextOffset,10);assert.equal(first.result.data.executionAuthorized,false);assert.equal(JSON.stringify(first.result).includes(credentials.secret),false);
+ const head=first.result.data.observedHead;const second=await router.request({version:1,id:3,method:'client.readBrief',params:{...credentials,expectedSequence:2,input:{offset:10,expectedHeadDigest:head.headDigest}}});assert.equal(second.result.data.tasks.length,2);assert.equal(second.result.data.nextOffset,null);
+ await submission.submitDraft({ledger,request:{requestId:'second',expectedRevision:1,expectedHeadDigest:head.headDigest}});
+ const stale=await router.request({version:1,id:4,method:'client.readBrief',params:{...credentials,expectedSequence:3,input:{offset:10,expectedHeadDigest:head.headDigest}}});assert.equal(stale.ok,true);assert.equal(stale.result.readError,'AGENT_LEDGER_READ_REFUSED');assert.equal(stale.result.data,null);assert.equal(stale.result.observation.sequence,4);
+ const recovered=await router.request({version:1,id:5,method:'client.readRequestResult',params:{...credentials,expectedSequence:4,input:{requestId:'first'}}});assert.equal(recovered.result.data.submittedMatchesObservedHead,false);
+ const other=createAgentClientRouter({broker,binding,ledgerReads:reads});await assert.rejects(other.request({version:1,id:1,method:'client.readBrief',params:{...credentials,expectedSequence:5,input:{offset:0,expectedHeadDigest:null}}}),/METHOD_REFUSED/);
+ await router.close();await other.close();broker.dispose();
+});

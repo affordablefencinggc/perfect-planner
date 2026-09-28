@@ -1,0 +1,240 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {mkdtemp,mkdir,readFile,writeFile} from 'node:fs/promises';
+import {spawnSync} from 'node:child_process';
+import {candidateSnapshot} from '../src/node/mergedStateRunner.mjs';
+import path from 'node:path';
+import os from 'node:os';
+import {createHash} from 'node:crypto';
+import {createSession,releaseSession} from '../src/node/sessionRegistry.mjs';
+import {createTaskEnrollmentStore} from '../src/node/taskEnrollmentStore.mjs';
+import {createTaskExecutionGrantStore} from '../src/node/taskExecutionGrantStore.mjs';
+import {createTaskLedgerAuthorityStore} from '../src/node/taskLedgerAuthorityStore.mjs';
+import {createTaskProposalReview} from '../src/node/taskProposalReview.mjs';
+import {bindTaskAttemptToLedger} from '../src/node/taskOutcomeBinding.mjs';
+import {createTaskCheckContract} from '../src/node/taskCheckContract.mjs';
+import {emptyTaskDraftLedger,updateTaskDraft} from '../src/project/taskDraftLedger.js';
+import {createTrustedUserGestureProducer,createTrustedUserGestureBoundary,inspectConfirmations} from '../src/node/confirmationStore.mjs';
+
+async function fixture(){
+ const root=await mkdtemp(path.join(os.tmpdir(),'pp-proposal-review-'));
+ const binding={projectId:'pp_review_fixture',rootIdentity:'a'.repeat(64),censusDigest:'b'.repeat(64)};
+ const proposalConfig={journalPath:path.join(root,'proposal.jsonl'),projectId:binding.projectId,rootIdentity:binding.rootIdentity};
+ const ledger=updateTaskDraft(emptyTaskDraftLedger(binding),{title:'Reviewed task',description:'Exact scope',owner:'Worker',acceptance:'Check it',recovery:'Retain work',claims:[],dependsOn:[],archived:false});
+ const store=createTaskLedgerAuthorityStore(proposalConfig),confirmationPath=path.join(root,'confirmations.json');
+ const first=await store.propose(ledger,{requestId:'first',expectedRevision:0,expectedHeadDigest:'GENESIS'});
+ const checkContract=createTaskCheckContract({schemaVersion:1,kind:'TASK_CHECK_CONTRACT',projectId:binding.projectId,rootIdentity:binding.rootIdentity,policyVersion:1,policyDigest:'c'.repeat(64),tasks:[{taskId:'T0001',checks:[{checkId:'unit',executablePath:process.execPath,executableDigest:'d'.repeat(64),args:['--version'],cwd:'.',timeoutMs:1000,outputLimits:{stdoutBytes:1000,stderrBytes:1000,combinedBytes:2000}}]}]});
+ return {root,store,ledger,proposalConfig,checkContract,confirmationPath,review:createTaskProposalReview({proposalConfig,confirmationPath,checkContract}),expected:{hostRevision:1,headDigest:first.proposal.recordHash}};
+}
+
+test('assigned preflight binds durable worker/session mapping and refuses revoked or foreign worker',async()=>{
+ const f=await fixture();const candidateRoot=path.join(f.root,'candidate');await mkdir(candidateRoot);
+ const init=spawnSync(process.platform==='win32'?'C:\\Program Files\\Git\\cmd\\git.exe':'git',['init','--quiet'],{cwd:candidateRoot,windowsHide:true,encoding:'utf8',timeout:10000});assert.equal(init.status,0,init.stderr);
+ const tool=path.join(candidateRoot,'assigned-tool.bin');await writeFile(tool,'fixed tool');
+ const inputFile=path.join(candidateRoot,'input.txt');await writeFile(inputFile,'reviewed input');
+ const {contractDigest,executionAuthorized,authorityVerified,...body}=structuredClone(f.checkContract);
+ body.tasks[0].checks[0].executablePath=tool;body.tasks[0].checks[0].executableDigest=createHash('sha256').update('fixed tool').digest('hex');
+ body.tasks[0].checks.push({...body.tasks[0].checks[0],checkId:'integration'});
+ const checkContract=createTaskCheckContract(body);
+ const sessionRegistryPath=path.join(f.root,'assigned-sessions.json');const credentials=await createSession(sessionRegistryPath,{actor:'stable-actor',claim:'display text is not authority'});
+ const enrollmentConfig={journalPath:path.join(f.root,'enrollments.jsonl'),projectId:body.projectId,rootIdentity:body.rootIdentity};
+ const enrollments=createTaskEnrollmentStore(enrollmentConfig);
+ const snapshot={hostRevision:1,proposalDigest:f.expected.headDigest,checkContractDigest:checkContract.contractDigest,policyVersion:body.policyVersion,policyDigest:body.policyDigest,assignments:[{taskId:'T0001',workerId:'worker-1',sessionId:credentials.id,actor:credentials.actor}]};
+ await enrollments.publish(snapshot,{expectedRevision:0,requestId:'assign-first'});
+ const current=await enrollments.inspect();const enrollmentHead={revision:current.revision,epoch:current.epoch,headDigest:current.headDigest};
+ const grantConfig={journalPath:path.join(f.root,'grants.jsonl'),projectId:body.projectId,rootIdentity:body.rootIdentity};
+ const review=createTaskProposalReview({...f,checkContract,preflightConfig:{registeredRoot:candidateRoot,sessionRegistryPath,enrollmentConfig,grantConfig}});
+ const {confirmation}=await review.request(f.expected,{requestedBy:'worker',question:'Approve assigned check'});
+ const producer=createTrustedUserGestureProducer({source:'controlled-host'});
+ await review.decide(f.expected,{id:confirmation.id,decision:'approved',decidedBy:'Danie',userGestureEvidence:producer.capture({isTrusted:true},'Danie',{request:confirmation,decision:'approved'})},{gestureBoundary:producer.boundary});
+ const input={taskId:'T0001',checkId:'unit',workerId:'worker-1',credentials};
+ const result=await review.inspectAssignedCheck(f.expected,confirmation.id,enrollmentHead,input);
+ assert.equal(result.assignmentVerified,true);assert.equal(result.workerId,'worker-1');assert.equal(result.executionAuthorized,false);assert.equal(result.candidateVerified,false);
+ // Real Git candidate observation; authority journals remain outside the tree.
+ // No worker process is launched and no exclusive candidate lease is claimed.
+ const candidate=await candidateSnapshot(candidateRoot);assert.equal(candidate.valid,true,JSON.stringify(candidate));
+ const grants=createTaskExecutionGrantStore(grantConfig);
+ const grantBinding={proposalRevision:1,proposalDigest:f.expected.headDigest,checkContractDigest:checkContract.contractDigest,enrollmentEpoch:current.epoch,taskId:'T0001',checkId:'unit',attemptId:'attempt-1',attemptNumber:1,workerId:'worker-1',sessionId:credentials.id,candidateSchemaVersion:2,candidateDigest:candidate.digest,policyVersion:body.policyVersion,policyDigest:body.policyDigest};
+ // This exercises many real Git snapshots, not expiry timing. Expiry refusal
+ // has deterministic clock tests in task-execution-grant-store.test.mjs.
+ const issueRequest={requestId:'issue-1',expectedRevision:0,ttlMs:300000};
+ const issueInput={...input,attemptId:'attempt-1',attemptNumber:1};
+ const issue=(overrides={},request=issueRequest)=>review.issueAssignedGrant(f.expected,confirmation.id,enrollmentHead,{...issueInput,...overrides},request);
+ await assert.rejects(issue({workerId:'foreign'}),/NOT_ASSIGNED/);
+ await assert.rejects(issue({credentials:{...credentials,token:'forged'}}),/authentication refused/);
+ await assert.rejects(issue({candidateDigest:'f'.repeat(64)}),/ISSUE_INPUT_INVALID/);
+ await assert.rejects(review.issueAssignedGrant(f.expected,'missing-review',enrollmentHead,issueInput,issueRequest),/APPROVAL_UNAVAILABLE/);
+ assert.equal((await grants.inspect()).revision,0);
+ const issued=await issue();assert.deepEqual(issued.grant.binding,grantBinding);assert.equal(issued.executionAuthorized,false);
+ assert.equal((await issue()).grant.grantId,issued.grant.grantId);assert.equal((await grants.inspect()).revision,1);
+ await writeFile(inputFile,'changed before issue retry');await assert.rejects(issue(),/CONFLICT/);await writeFile(inputFile,'reviewed input');
+ const consumeRequest={grantId:issued.grant.grantId,requestId:'consume-1',expectedRevision:1};
+ const attemptInput={...input,attemptId:'attempt-1',attemptNumber:1};
+ const cancelled=new AbortController();cancelled.abort();
+ await assert.rejects(review.consumeAssignedGrant(f.expected,confirmation.id,enrollmentHead,attemptInput,consumeRequest,{}, {signal:cancelled.signal}),/CANDIDATE_UNVERIFIED/);
+ assert.equal((await grants.inspect()).grants[0].state,'issued');
+ await writeFile(inputFile,'modified input');
+ await assert.rejects(review.consumeAssignedGrant(f.expected,confirmation.id,enrollmentHead,attemptInput,consumeRequest),/CONTEXT_MISMATCH/);
+ await writeFile(inputFile,'reviewed input');
+ await assert.rejects(review.consumeAssignedGrant(f.expected,confirmation.id,enrollmentHead,{...attemptInput,attemptNumber:2},consumeRequest),/CONTEXT_MISMATCH/);
+ assert.equal((await grants.inspect()).grants[0].state,'issued');
+ const sessionBytes=await readFile(sessionRegistryPath,'utf8');const staleRegistry=JSON.parse(sessionBytes);
+ const staleTime=Date.now()-600000;staleRegistry.sessions[0].heartbeat=new Date(staleTime).toISOString();staleRegistry.sessions[0].createdAt=staleRegistry.sessions[0].heartbeat;
+ await writeFile(sessionRegistryPath,JSON.stringify(staleRegistry));
+ await assert.rejects(review.consumeAssignedGrant(f.expected,confirmation.id,enrollmentHead,attemptInput,consumeRequest,{now:staleTime}),/authentication refused/);
+ assert.equal((await grants.inspect()).grants[0].state,'issued');
+ await writeFile(sessionRegistryPath,sessionBytes);
+ const consume=()=>review.consumeAssignedGrant(f.expected,confirmation.id,enrollmentHead,attemptInput,consumeRequest);
+ const consumed=await consume();assert.equal(consumed.launchAllowed,true);assert.equal(consumed.executionAuthorized,false);
+ assert.equal(consumed.consumptionReceipt.kind,'TASK_GRANT_CONSUMPTION_RECEIPT');
+ assert.equal(consumed.consumptionReceipt.projectId,body.projectId);
+ assert.equal(consumed.consumptionReceipt.rootIdentity,body.rootIdentity);
+ assert.equal(consumed.consumptionReceipt.grantId,issued.grant.grantId);
+ assert.equal(consumed.consumptionReceipt.requestId,consumeRequest.requestId);
+ assert.equal(consumed.consumptionReceipt.revision,2);
+ assert.deepEqual(consumed.consumptionReceipt.binding,grantBinding);
+ assert.equal(consumed.consumptionReceipt.recordDigest,(await grants.inspect()).history[1].recordHash);
+ assert.equal(Object.isFrozen(consumed.consumptionReceipt.binding),true);
+ assert.equal(consumed.outcomeContext.authorityVerified,false);
+ assert.equal(consumed.outcomeContext.checkId,'unit');
+ assert.equal(consumed.outcomeContext.attempt.binding.ledgerRevision,f.ledger.revision);
+ const storedLedger=await f.store.withCurrentProposal(f.expected,p=>p.ledger);
+ assert.deepEqual(bindTaskAttemptToLedger(JSON.stringify(consumed.outcomeContext.attempt),JSON.stringify(storedLedger),'unit'),consumed.outcomeContext);
+ assert.equal(consumed.outcomeContext.attempt.binding.candidateDigest,candidate.digest);
+ assert.equal(consumed.outcomeContext.attempt.grantId,issued.grant.grantId);
+ assert.equal(consumed.outcomeContext.attempt.producerId,'worker-1');
+ assert.equal(consumed.outcomeContext.attempt.sessionId,credentials.id);
+ assert.deepEqual(new Set(consumed.outcomeContext.attempt.requiredCheckIds),new Set(['unit','integration']));
+ assert.equal(Object.isFrozen(consumed.outcomeContext.attempt.binding),true);
+ const retry=await consume();assert.equal(retry.launchAllowed,false);assert.equal(retry.alreadyConsumed,true);
+ assert.deepEqual(retry.outcomeContext,consumed.outcomeContext);
+ assert.deepEqual(retry.consumptionReceipt,consumed.consumptionReceipt);
+ const intentRequest={grantId:issued.grant.grantId,requestId:'intent-1',expectedRevision:2};
+ await writeFile(inputFile,'changed before intent');
+ await assert.rejects(review.recordAssignedExecutionIntent(f.expected,confirmation.id,enrollmentHead,attemptInput,consumed.consumptionReceipt,intentRequest),/CONTEXT_MISMATCH/);
+ assert.equal((await grants.inspect()).revision,2);await writeFile(inputFile,'reviewed input');
+ await assert.rejects(review.recordAssignedExecutionIntent(f.expected,confirmation.id,enrollmentHead,{...attemptInput,workerId:'foreign'},consumed.consumptionReceipt,intentRequest),/NOT_ASSIGNED/);
+ const intent=await review.recordAssignedExecutionIntent(f.expected,confirmation.id,enrollmentHead,attemptInput,consumed.consumptionReceipt,intentRequest);
+ assert.equal(intent.firstIntent,true);assert.equal(intent.executionAuthorized,false);
+ const receiptInput={...attemptInput,grantId:issued.grant.grantId};
+ const beforeReceipt=await readFile(grantConfig.journalPath,'utf8');
+ await writeFile(inputFile,'task changed the candidate');await writeFile(tool,'task changed the executable');
+ const recovered=await review.inspectOwnGrantReceipt(receiptInput);
+ assert.equal(recovered.state,'intent-recorded');assert.equal(recovered.alreadyConsumed,true);assert.equal(recovered.launchAllowed,false);assert.equal(recovered.executionAuthorized,false);
+ assert.deepEqual(recovered.intentReceipt,intent.intentReceipt);
+ assert.deepEqual(recovered.consumptionReceipt,consumed.consumptionReceipt);
+ assert.deepEqual((await createTaskExecutionGrantStore(grantConfig).inspect()).grants[0].consumptionReceipt,consumed.consumptionReceipt);
+ assert.equal(JSON.stringify(recovered).includes(credentials.token),false);
+ assert.equal(await readFile(grantConfig.journalPath,'utf8'),beforeReceipt);
+ await assert.rejects(review.inspectOwnGrantReceipt({...receiptInput,workerId:'other'}),/RECEIPT_UNAVAILABLE/);
+ const differentSession=await createSession(sessionRegistryPath,{actor:'other-authenticated-worker',claim:'separate session'});
+ await assert.rejects(review.inspectOwnGrantReceipt({...receiptInput,credentials:differentSession}),/RECEIPT_UNAVAILABLE/);
+ for(const change of [{attemptNumber:2},{checkId:'other-check'}])await assert.rejects(review.inspectOwnGrantReceipt({...receiptInput,...change}),/RECEIPT_UNAVAILABLE/);
+ assert.equal('journalRevision' in recovered,false);assert.equal('headDigest' in recovered,false);
+ await assert.rejects(review.inspectOwnGrantReceipt({...receiptInput,credentials:{...credentials,token:'forged'}}),/authentication refused/);
+ await writeFile(inputFile,'reviewed input');await writeFile(tool,'fixed tool');
+ await assert.rejects(review.inspectAssignedCheck(f.expected,confirmation.id,enrollmentHead,{...input,workerId:'other'}),/NOT_ASSIGNED/);
+ await assert.rejects(review.inspectAssignedCheck(f.expected,confirmation.id,enrollmentHead,{...input,credentials:{...credentials,token:'forged'}}),/authentication refused/);
+ let entered,release;const started=new Promise(resolve=>{entered=resolve;});const gate=new Promise(resolve=>{release=resolve;});
+ const admission=review.withAssignedCheck(f.expected,confirmation.id,enrollmentHead,input,async context=>{assert.equal(context.proposal.recordHash,f.expected.headDigest);assert.equal(context.checkContract.contractDigest,checkContract.contractDigest);assert.ok(Object.isFrozen(context));entered();await gate;return 'admission-observed';});
+ await started;
+ const revocation=enrollments.publish({...snapshot,assignments:[]},{expectedRevision:current.revision,requestId:'revoke'});
+ release();assert.equal(await admission,'admission-observed');await revocation;
+ assert.equal((await review.inspectOwnGrantReceipt(receiptInput)).launchAllowed,false);
+ await assert.rejects(review.inspectAssignedCheck(f.expected,confirmation.id,enrollmentHead,input),/STALE/);
+ await assert.rejects(consume(),/STALE/);
+ const revoked=await enrollments.inspect();await assert.rejects(review.inspectAssignedCheck(f.expected,confirmation.id,{revision:revoked.revision,epoch:revoked.epoch,headDigest:revoked.headDigest},input),/NOT_ASSIGNED/);
+ await enrollments.publish({...snapshot,checkContractDigest:'f'.repeat(64)},{expectedRevision:revoked.revision,requestId:'different-contract'});
+ const changed=await enrollments.inspect();await assert.rejects(review.inspectAssignedCheck(f.expected,confirmation.id,{revision:changed.revision,epoch:changed.epoch,headDigest:changed.headDigest},input),/BINDING_MISMATCH/);
+ await releaseSession(sessionRegistryPath,credentials);
+ await assert.rejects(review.inspectOwnGrantReceipt(receiptInput),/authentication refused/);
+ await assert.rejects(issue());assert.equal((await grants.inspect()).revision,3);
+});
+
+test('connected preflight requires exact approval, authentic session and actual executable bytes without inventing assignment',async()=>{
+ const f=await fixture();const tool=path.join(f.root,'tool.bin');await writeFile(tool,'reviewed tool');
+ const {contractDigest,executionAuthorized,authorityVerified,...body}=structuredClone(f.checkContract);
+ body.tasks[0].checks[0].executablePath=tool;body.tasks[0].checks[0].executableDigest=createHash('sha256').update('reviewed tool').digest('hex');
+ const sessionRegistryPath=path.join(f.root,'sessions.json');const credentials=await createSession(sessionRegistryPath,{actor:'worker-identity',claim:'context-only'});
+ const preflightConfig={registeredRoot:f.root,sessionRegistryPath,expectedSession:{id:credentials.id,actor:credentials.actor}};
+ const review=createTaskProposalReview({...f,checkContract:createTaskCheckContract(body),preflightConfig});
+ preflightConfig.registeredRoot='changed';
+ const {confirmation}=await review.request(f.expected,{requestedBy:'worker',question:'Review executable'});
+ const input={taskId:'T0001',checkId:'unit',credentials};
+ await assert.rejects(review.inspectApprovedCheck(f.expected,confirmation.id,input),/APPROVAL_UNAVAILABLE/);
+ const producer=createTrustedUserGestureProducer({source:'controlled-host'});
+ await review.decide(f.expected,{id:confirmation.id,decision:'approved',decidedBy:'Danie',userGestureEvidence:producer.capture({isTrusted:true},'Danie',{request:confirmation,decision:'approved'})},{gestureBoundary:producer.boundary});
+ const result=await review.inspectApprovedCheck(f.expected,confirmation.id,input);
+ assert.equal(result.session.authenticated,true);assert.equal(result.session.actor,credentials.actor);assert.equal(result.files.executableDigest,body.tasks[0].checks[0].executableDigest);
+ assert.equal(result.assignmentVerified,false);assert.equal(result.candidateVerified,false);assert.equal(result.executionAuthorized,false);
+ assert.equal(JSON.stringify(result).includes(credentials.token),false);
+ await assert.rejects(review.inspectApprovedCheck(f.expected,confirmation.id,{...input,credentials:{...credentials,token:'forged'}}),/authentication refused/);
+ await writeFile(tool,'changed');await assert.rejects(review.inspectApprovedCheck(f.expected,confirmation.id,input),/FILES_UNVERIFIED/);
+ await releaseSession(sessionRegistryPath,credentials);await assert.rejects(review.inspectApprovedCheck(f.expected,confirmation.id,input),/authentication refused/);
+});
+
+test('approval binds fixed checks and refuses changed contracts or missing task coverage',async()=>{
+ const f=await fixture();
+ const {confirmation}=await f.review.request(f.expected,{requestedBy:'worker',question:'Approve exact checks'});
+ assert.equal(confirmation.subject.checkContractDigest,f.checkContract.contractDigest);
+ const producer=createTrustedUserGestureProducer({source:'controlled-host'});
+ const evidence=producer.capture({isTrusted:true},'Danie',{request:confirmation,decision:'approved'});
+ await f.review.decide(f.expected,{id:confirmation.id,decision:'approved',decidedBy:'Danie',userGestureEvidence:evidence},{gestureBoundary:producer.boundary});
+ let calls=0;
+ for(const change of [v=>v.tasks[0].checks[0].args.push('changed'),v=>v.policyVersion++,v=>v.projectId='pp_foreign_fixture',v=>v.tasks[0].taskId='T0002']){
+  const {contractDigest,executionAuthorized,authorityVerified,...body}=structuredClone(f.checkContract);change(body);
+  const review=createTaskProposalReview({...f,checkContract:createTaskCheckContract(body)});
+  await assert.rejects(review.withApprovedProposal(f.expected,confirmation.id,()=>calls++),/REVIEW_MISMATCH|COVERAGE_MISMATCH/);
+ }
+ assert.equal(calls,0);
+ await f.review.withApprovedProposal(f.expected,confirmation.id,value=>{assert.equal(value.checkContract.contractDigest,f.checkContract.contractDigest);assert.equal(Object.isFrozen(value.checkContract.tasks),true);});
+ assert.throws(()=>createTaskProposalReview({...f,checkContract:undefined}),/CONTRACT_INVALID/);
+});
+
+test('approved proposal consumption refuses pending, tampered and superseded reviews',async()=>{
+ const f=await fixture();
+ const {confirmation}=await f.review.request(f.expected,{requestedBy:'worker',question:'Review exact head'});
+ let calls=0;const consume=value=>{calls++;assert.equal(value.executionAuthorized,false);assert.ok(Object.isFrozen(value.confirmation.subject));return value.proposal.recordHash;};
+ await assert.rejects(f.review.withApprovedProposal(f.expected,confirmation.id,consume),/APPROVAL_UNAVAILABLE/);
+ assert.equal(calls,0);
+ const producer=createTrustedUserGestureProducer({source:'controlled-host'});
+ const evidence=producer.capture({isTrusted:true},'Danie',{request:confirmation,decision:'approved'});
+ await f.review.decide(f.expected,{id:confirmation.id,decision:'approved',decidedBy:'Danie',userGestureEvidence:evidence},{gestureBoundary:producer.boundary});
+ assert.equal(await f.review.withApprovedProposal(f.expected,confirmation.id,consume),f.expected.headDigest);
+ const valid=await readFile(f.confirmationPath,'utf8');
+ for(const mutation of [r=>r.decidedBy='Other',r=>r.subject.hostRevision=7,r=>r.gesture.binding.requestDigest='0'.repeat(64),r=>r.status='rejected']){
+  const changed=JSON.parse(valid);mutation(changed.requests[0]);await writeFile(f.confirmationPath,JSON.stringify(changed));
+  await assert.rejects(f.review.withApprovedProposal(f.expected,confirmation.id,consume),/APPROVAL_UNAVAILABLE/);
+ }
+ await writeFile(f.confirmationPath,valid);assert.equal(calls,1);
+ await f.store.propose(f.ledger,{requestId:'superseded',expectedRevision:1,expectedHeadDigest:f.expected.headDigest});
+ await assert.rejects(f.review.withApprovedProposal(f.expected,confirmation.id,consume),/STALE_HEAD/);assert.equal(calls,1);
+});
+
+test('review derives exact subject from host and refuses stale proposal decisions',async()=>{
+ const f=await fixture();
+ const {confirmation}=await f.review.request(f.expected,{requestedBy:'worker',question:'Approve this exact proposal?',subject:{fake:true}});
+ assert.equal(confirmation.subject.proposalDigest,f.expected.headDigest);
+ const producer=createTrustedUserGestureProducer({source:'controlled-host'});
+ const evidence=producer.capture({isTrusted:true},'Danie',{request:confirmation,decision:'approved'});
+ await f.store.propose(f.ledger,{requestId:'newer',expectedRevision:1,expectedHeadDigest:f.expected.headDigest});
+ await assert.rejects(f.review.decide(f.expected,{id:confirmation.id,decision:'approved',decidedBy:'Danie',userGestureEvidence:evidence},{gestureBoundary:producer.boundary}),/STALE_HEAD/);
+ const newer=await f.store.inspect();
+ await assert.rejects(f.review.decide({hostRevision:newer.hostRevision,headDigest:newer.headDigest},{id:confirmation.id,decision:'approved',decidedBy:'Danie',userGestureEvidence:evidence},{gestureBoundary:producer.boundary}),/REVIEW_MISMATCH/);
+ assert.equal((await inspectConfirmations(f.confirmationPath))[0].status,'pending');
+});
+
+test('current head remains locked through decision persistence while publication waits',async()=>{
+ const f=await fixture();
+ const {confirmation}=await f.review.request(f.expected,{requestedBy:'worker',question:'Approve proposal?'});
+ let release,entered;
+ const ready=new Promise(resolve=>{entered=resolve;});
+ const boundary=createTrustedUserGestureBoundary(async(evidence,binding)=>{entered();await new Promise(resolve=>{release=resolve;});return {trusted:true,binding,source:'controlled-host',eventId:'event-1',actor:'Danie',occurredAt:new Date().toISOString()};});
+ const decision=f.review.decide(f.expected,{id:confirmation.id,decision:'approved',decidedBy:'Danie',userGestureEvidence:'controlled'},{gestureBoundary:boundary});
+ await ready;
+ const successor=f.store.propose(f.ledger,{requestId:'successor',expectedRevision:1,expectedHeadDigest:f.expected.headDigest}).then(async value=>{assert.equal((await inspectConfirmations(f.confirmationPath))[0].status,'approved');return value;});
+ release();
+ const result=await decision;assert.equal(result.executionAuthorized,false);assert.equal(result.confirmation.subject.hostRevision,1);
+ assert.equal((await successor).proposal.hostRevision,2);
+ await assert.rejects(f.review.request(f.expected,{requestedBy:'worker',question:'Old again?'}),/STALE_HEAD/);
+});

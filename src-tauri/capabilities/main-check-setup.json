@@ -1,0 +1,20 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main-check-setup",
+  "description": "Main Windows window may select and prepare project-bound checks, request native approval, and submit or recover one exact approved check. Native custody owns paths, worker enrollment, single-use grants and execution; renderer requests cannot supply commands, credentials or approval decisions.",
+  "windows": [
+    "main"
+  ],
+  "platforms": [
+    "windows"
+  ],
+  "permissions": [
+    "allow-choose-native-check-setup",
+    "allow-prepare-native-checks",
+    "allow-inspect-native-checks",
+    "allow-review-native-checks",
+    "allow-recover-native-check-review",
+    "allow-execute-native-check",
+    "allow-recover-native-check-execution"
+  ]
+}

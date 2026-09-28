@@ -1,0 +1,11 @@
+.git-inventory-panel { padding: 1rem; font-size: 1rem; min-width: 0; user-select: text; }
+.git-inventory-actions { display: flex; align-items: center; flex-wrap: wrap; gap: .75rem; }
+.git-inventory-panel button { font: inherit; padding: .5rem .75rem; }
+.git-inventory-panel p { margin: .75rem 0; }
+.git-inventory-scroll { overflow-x: auto; }
+.git-inventory-panel table { width: 100%; border-collapse: collapse; text-align: left; }
+.git-inventory-panel caption { text-align: left; padding-block: .5rem; }
+.git-inventory-panel th, .git-inventory-panel td { padding: .75rem; border-bottom: 1px solid #a4acae; vertical-align: top; }
+.git-inventory-panel code { overflow-wrap: anywhere; white-space: normal; }
+.git-inventory-panel summary { cursor: pointer; padding-block: .5rem; }
+.git-inventory-panel :focus-visible { outline: 2px solid #275da8; outline-offset: 3px; }

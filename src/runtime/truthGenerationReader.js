@@ -1,0 +1,438 @@
+const POINTER_URL = "/generated/current-generation.json";
+const TRUTH_ARTIFACT_NAME = "truth-core-report.json";
+const EXPECTED_ARTIFACT_NAMES = Object.freeze([
+  TRUTH_ARTIFACT_NAME,
+  "completion-report.json",
+  "completion-report.md",
+  "evidence-bundle.html",
+]);
+const SHA256_PATTERN = /^[a-f0-9]{64}$/;
+const SAFE_DIRECTORY_PATTERN = /^generations\/[a-f0-9]{64}$/;
+
+export const DEFAULT_TRUTH_READER_LIMITS = Object.freeze({
+  maxPointerBytes: 32 * 1024,
+  maxArtifactBytes: 2 * 1024 * 1024,
+  maxPointerAgeMs: 24 * 60 * 60 * 1000,
+  maxFutureSkewMs: 5 * 60 * 1000,
+});
+
+const ERROR_COPY = Object.freeze({
+  "fetch-unavailable": [
+    "unavailable",
+    "Current truth cannot be loaded because the read-only transport is unavailable.",
+  ],
+  "crypto-unavailable": [
+    "unavailable",
+    "Current truth cannot be verified because SHA-256 is unavailable.",
+  ],
+  "pointer-unavailable": [
+    "unavailable",
+    "The current truth generation pointer is unavailable.",
+  ],
+  "artifact-unavailable": [
+    "unavailable",
+    "The current truth generation artifact is unavailable.",
+  ],
+  "pointer-malformed": [
+    "invalid",
+    "The current truth generation pointer is malformed.",
+  ],
+  "pointer-stale": [
+    "invalid",
+    "The current truth generation pointer is stale. Rebuild the truth report.",
+  ],
+  "pointer-future": [
+    "invalid",
+    "The current truth generation pointer has an invalid timestamp.",
+  ],
+  "pointer-oversized": [
+    "invalid",
+    "The current truth generation pointer exceeds its safe size limit.",
+  ],
+  "generation-identity-mismatch": [
+    "invalid",
+    "The current truth generation identity does not match its manifest.",
+  ],
+  "artifact-oversized": [
+    "invalid",
+    "The current truth report exceeds its safe size limit.",
+  ],
+  "artifact-size-mismatch": [
+    "invalid",
+    "The current truth report size does not match its manifest.",
+  ],
+  "artifact-hash-mismatch": [
+    "invalid",
+    "The current truth report failed its SHA-256 integrity check.",
+  ],
+  "artifact-malformed": ["invalid", "The current truth report is malformed."],
+  "generation-time-mismatch": [
+    "invalid",
+    "The current truth report does not belong to the pointed generation.",
+  ],
+  "response-invalid": [
+    "invalid",
+    "The current truth response failed validation.",
+  ],
+});
+
+export class TruthGenerationReadError extends Error {
+  constructor(code) {
+    const [state, message] = ERROR_COPY[code] ?? ERROR_COPY["response-invalid"];
+    super(message);
+    this.name = "TruthGenerationReadError";
+    this.code = code in ERROR_COPY ? code : "response-invalid";
+    this.state = state;
+  }
+}
+
+function fail(code) {
+  throw new TruthGenerationReadError(code);
+}
+
+function isPlainObject(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
+function hasExactKeys(value, keys) {
+  const actual = Object.keys(value).sort();
+  const expected = [...keys].sort();
+  return (
+    actual.length === expected.length &&
+    actual.every((key, index) => key === expected[index])
+  );
+}
+
+function parseStrictTimestamp(value, code) {
+  if (typeof value !== "string") fail(code);
+  const epochMs = Date.parse(value);
+  if (!Number.isFinite(epochMs) || new Date(epochMs).toISOString() !== value) {
+    fail(code);
+  }
+  return epochMs;
+}
+
+function validateLimits(options) {
+  const limits = {
+    maxPointerBytes:
+      options.maxPointerBytes ?? DEFAULT_TRUTH_READER_LIMITS.maxPointerBytes,
+    maxArtifactBytes:
+      options.maxArtifactBytes ?? DEFAULT_TRUTH_READER_LIMITS.maxArtifactBytes,
+    maxPointerAgeMs:
+      options.maxPointerAgeMs ?? DEFAULT_TRUTH_READER_LIMITS.maxPointerAgeMs,
+    maxFutureSkewMs:
+      options.maxFutureSkewMs ?? DEFAULT_TRUTH_READER_LIMITS.maxFutureSkewMs,
+  };
+  if (
+    !Number.isSafeInteger(limits.maxPointerBytes) ||
+    limits.maxPointerBytes < 1 ||
+    !Number.isSafeInteger(limits.maxArtifactBytes) ||
+    limits.maxArtifactBytes < 1 ||
+    !Number.isSafeInteger(limits.maxPointerAgeMs) ||
+    limits.maxPointerAgeMs < 0 ||
+    !Number.isSafeInteger(limits.maxFutureSkewMs) ||
+    limits.maxFutureSkewMs < 0
+  ) {
+    fail("response-invalid");
+  }
+  return limits;
+}
+
+function responseHeader(response, name) {
+  try {
+    return response?.headers?.get?.(name) ?? null;
+  } catch {
+    fail("response-invalid");
+  }
+}
+
+function validateJsonResponse(response, unavailableCode) {
+  if (!response || response.ok !== true || response.redirected === true) {
+    fail(unavailableCode);
+  }
+  const contentType = responseHeader(response, "content-type");
+  if (
+    contentType !== null &&
+    !/^application\/(?:[a-z0-9.+-]*\+)?json(?:\s*;|$)/i.test(contentType)
+  ) {
+    fail("response-invalid");
+  }
+}
+
+async function readBoundedBytes(response, maxBytes, oversizedCode) {
+  const declaredLength = responseHeader(response, "content-length");
+  if (declaredLength !== null) {
+    if (!/^(?:0|[1-9]\d*)$/.test(declaredLength)) fail("response-invalid");
+    const declaredBytes = Number(declaredLength);
+    if (!Number.isSafeInteger(declaredBytes)) fail("response-invalid");
+    if (declaredBytes > maxBytes) fail(oversizedCode);
+  }
+
+  const reader = response?.body?.getReader?.();
+  if (reader) {
+    const chunks = [];
+    let byteLength = 0;
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (!(value instanceof Uint8Array)) fail("response-invalid");
+        byteLength += value.byteLength;
+        if (byteLength > maxBytes) {
+          try {
+            await reader.cancel();
+          } catch {
+            // The size refusal remains authoritative even if cancellation fails.
+          }
+          fail(oversizedCode);
+        }
+        chunks.push(value);
+      }
+    } catch (error) {
+      if (error instanceof TruthGenerationReadError) throw error;
+      fail("response-invalid");
+    } finally {
+      try {
+        reader.releaseLock?.();
+      } catch {
+        // Releasing a consumed response lock is best effort only.
+      }
+    }
+    const bytes = new Uint8Array(byteLength);
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return bytes;
+  }
+
+  if (typeof response?.arrayBuffer !== "function") fail("response-invalid");
+  let buffer;
+  try {
+    buffer = await response.arrayBuffer();
+  } catch {
+    fail("response-invalid");
+  }
+  const bytes = new Uint8Array(buffer);
+  if (bytes.byteLength > maxBytes) fail(oversizedCode);
+  return bytes;
+}
+
+function parseJson(bytes, code) {
+  try {
+    const value = JSON.parse(
+      new TextDecoder("utf-8", { fatal: true }).decode(bytes),
+    );
+    if (!isPlainObject(value)) fail(code);
+    return value;
+  } catch (error) {
+    if (error instanceof TruthGenerationReadError) throw error;
+    fail(code);
+  }
+}
+
+async function sha256Hex(bytes, cryptoImpl) {
+  if (typeof cryptoImpl?.subtle?.digest !== "function") {
+    fail("crypto-unavailable");
+  }
+  let digest;
+  try {
+    digest = await cryptoImpl.subtle.digest("SHA-256", bytes);
+  } catch {
+    fail("crypto-unavailable");
+  }
+  return [...new Uint8Array(digest)]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+function validateArtifact(artifact, expectedName, maxArtifactBytes) {
+  if (
+    !isPlainObject(artifact) ||
+    !hasExactKeys(artifact, ["name", "sha256", "size"]) ||
+    artifact.name !== expectedName ||
+    !SHA256_PATTERN.test(artifact.sha256) ||
+    !Number.isSafeInteger(artifact.size) ||
+    artifact.size < 1
+  ) {
+    fail("pointer-malformed");
+  }
+  if (
+    artifact.size > maxArtifactBytes &&
+    artifact.name === TRUTH_ARTIFACT_NAME
+  ) {
+    fail("artifact-oversized");
+  }
+  return Object.freeze({ ...artifact });
+}
+
+async function validatePointer(pointer, options) {
+  const { limits, cryptoImpl, nowEpochMs } = options;
+  if (
+    !isPlainObject(pointer) ||
+    !hasExactKeys(pointer, [
+      "schemaVersion",
+      "generationId",
+      "generatedAt",
+      "directory",
+      "artifacts",
+    ]) ||
+    pointer.schemaVersion !== 1 ||
+    !SHA256_PATTERN.test(pointer.generationId ?? "") ||
+    !SAFE_DIRECTORY_PATTERN.test(pointer.directory ?? "") ||
+    pointer.directory !== `generations/${pointer.generationId}` ||
+    !Array.isArray(pointer.artifacts) ||
+    pointer.artifacts.length !== EXPECTED_ARTIFACT_NAMES.length
+  ) {
+    fail("pointer-malformed");
+  }
+
+  const generatedEpochMs = parseStrictTimestamp(
+    pointer.generatedAt,
+    "pointer-malformed",
+  );
+  if (generatedEpochMs - nowEpochMs > limits.maxFutureSkewMs) {
+    fail("pointer-future");
+  }
+  if (nowEpochMs - generatedEpochMs > limits.maxPointerAgeMs) {
+    fail("pointer-stale");
+  }
+
+  const artifacts = pointer.artifacts.map((artifact, index) =>
+    validateArtifact(
+      artifact,
+      EXPECTED_ARTIFACT_NAMES[index],
+      limits.maxArtifactBytes,
+    ),
+  );
+  const generationInput = new TextEncoder().encode(
+    artifacts
+      .map((artifact) => `${artifact.name}:${artifact.sha256}`)
+      .join("\n"),
+  );
+  if ((await sha256Hex(generationInput, cryptoImpl)) !== pointer.generationId) {
+    fail("generation-identity-mismatch");
+  }
+  return Object.freeze({ ...pointer, artifacts: Object.freeze(artifacts) });
+}
+
+function validateTruthReport(report, manifest) {
+  if (
+    report.schemaVersion !== 1 ||
+    typeof report.generatedAt !== "string" ||
+    !isPlainObject(report.census) ||
+    !Number.isSafeInteger(report.census.fileCount) ||
+    report.census.fileCount < 0 ||
+    !Number.isSafeInteger(report.census.skipped) ||
+    report.census.skipped < 0 ||
+    !SHA256_PATTERN.test(report.census.digest ?? "") ||
+    !isPlainObject(report.journal) ||
+    typeof report.journal.valid !== "boolean" ||
+    !Number.isSafeInteger(report.journal.entries) ||
+    report.journal.entries < 0 ||
+    !Number.isSafeInteger(report.journal.concurrentWriters) ||
+    report.journal.concurrentWriters < 0 ||
+    !isPlainObject(report.proofRunner) ||
+    typeof report.proofRunner.proven !== "boolean" ||
+    !isPlainObject(report.sessionRegistry) ||
+    typeof report.sessionRegistry.valid !== "boolean" ||
+    !isPlainObject(report.confirmationStore) ||
+    typeof report.confirmationStore.failClosed !== "boolean" ||
+    typeof report.confirmationStore.state !== "string"
+  ) {
+    fail("artifact-malformed");
+  }
+  if (report.generatedAt !== manifest.generatedAt) {
+    fail("generation-time-mismatch");
+  }
+  return Object.freeze(report);
+}
+
+async function fetchJsonBytes(fetchImpl, url, options, unavailableCode) {
+  let response;
+  try {
+    response = await fetchImpl(url, {
+      method: "GET",
+      cache: "no-store",
+      credentials: "same-origin",
+      redirect: "error",
+      headers: { accept: "application/json" },
+      signal: options.signal,
+    });
+  } catch {
+    fail(unavailableCode);
+  }
+  validateJsonResponse(response, unavailableCode);
+  return response;
+}
+
+export async function readCurrentTruthGeneration(options = {}) {
+  const fetchImpl = Object.hasOwn(options, "fetchImpl")
+    ? options.fetchImpl
+    : globalThis.fetch;
+  const cryptoImpl = Object.hasOwn(options, "cryptoImpl")
+    ? options.cryptoImpl
+    : globalThis.crypto;
+  if (typeof fetchImpl !== "function") fail("fetch-unavailable");
+  if (typeof cryptoImpl?.subtle?.digest !== "function") {
+    fail("crypto-unavailable");
+  }
+  const limits = validateLimits(options);
+  const nowEpochMs =
+    typeof options.now === "function"
+      ? options.now()
+      : (options.now ?? Date.now());
+  if (!Number.isFinite(nowEpochMs)) fail("response-invalid");
+
+  const pointerResponse = await fetchJsonBytes(
+    fetchImpl,
+    POINTER_URL,
+    options,
+    "pointer-unavailable",
+  );
+  const pointerBytes = await readBoundedBytes(
+    pointerResponse,
+    limits.maxPointerBytes,
+    "pointer-oversized",
+  );
+  const pointer = await validatePointer(
+    parseJson(pointerBytes, "pointer-malformed"),
+    { limits, cryptoImpl, nowEpochMs },
+  );
+  const artifact = pointer.artifacts[0];
+  const artifactUrl = `/generated/${pointer.directory}/${TRUTH_ARTIFACT_NAME}`;
+  const artifactResponse = await fetchJsonBytes(
+    fetchImpl,
+    artifactUrl,
+    options,
+    "artifact-unavailable",
+  );
+  const declaredLength = responseHeader(artifactResponse, "content-length");
+  if (declaredLength !== null && Number(declaredLength) !== artifact.size) {
+    fail("artifact-size-mismatch");
+  }
+  const artifactBytes = await readBoundedBytes(
+    artifactResponse,
+    Math.min(limits.maxArtifactBytes, artifact.size),
+    "artifact-oversized",
+  );
+  if (artifactBytes.byteLength !== artifact.size) {
+    fail("artifact-size-mismatch");
+  }
+  if ((await sha256Hex(artifactBytes, cryptoImpl)) !== artifact.sha256) {
+    fail("artifact-hash-mismatch");
+  }
+  const report = validateTruthReport(
+    parseJson(artifactBytes, "artifact-malformed"),
+    pointer,
+  );
+  return Object.freeze({
+    state: "verified",
+    generationId: pointer.generationId,
+    generatedAt: pointer.generatedAt,
+    report,
+  });
+}

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-prepare-agent-proposal-pairing"
+description = "Enables the prepare_agent_proposal_pairing command without any pre-configured scope."
+commands.allow = ["prepare_agent_proposal_pairing"]
+
+[[permission]]
+identifier = "deny-prepare-agent-proposal-pairing"
+description = "Denies the prepare_agent_proposal_pairing command without any pre-configured scope."
+commands.deny = ["prepare_agent_proposal_pairing"]

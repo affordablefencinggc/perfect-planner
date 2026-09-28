@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-inspect-native-draft-proposal"
+description = "Enables the inspect_native_draft_proposal command without any pre-configured scope."
+commands.allow = ["inspect_native_draft_proposal"]
+
+[[permission]]
+identifier = "deny-inspect-native-draft-proposal"
+description = "Denies the inspect_native_draft_proposal command without any pre-configured scope."
+commands.deny = ["inspect_native_draft_proposal"]

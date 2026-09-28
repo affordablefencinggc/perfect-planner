@@ -1,0 +1,6 @@
+{
+  "$schema": "../gen/schemas/schema.json",
+  "identifier": "allow-inspect-registered-git-inventory",
+  "description": "Read branch/worktree metadata through a fixed job-contained native helper for an exact registered workspace identity. No paths, arbitrary commands, network, project scripts, edits or cleanup authority.",
+  "commands": { "allow": ["inspect_registered_git_inventory"], "deny": [] }
+}

@@ -1,0 +1,13 @@
+import {beforeEach,expect,test,vi} from 'vitest';
+import {readComponentContext,publishComponentDraft} from '../src/runtime/componentClient.js';
+import {boundedFetch} from '../src/runtime/boundedFetch.js';
+vi.mock('../src/runtime/boundedFetch.js',()=>({boundedFetch:vi.fn()}));
+const context=()=>({schemaVersion:1,planId:'one',state:'ready',ready:true,architectureHead:{contractDigest:'a'.repeat(64),revision:1},folderHead:{contractDigest:'b'.repeat(64),revision:1,architectureContractDigest:'a'.repeat(64),architectureRevision:1},folderNodes:[],catalogHead:null,catalog:null,catalogState:'missing',publicationAuthorized:false,executionAuthorized:false});
+const response=body=>({ok:true,json:async()=>body});
+beforeEach(()=>vi.clearAllMocks());
+function setup(value){boundedFetch.mockResolvedValueOnce(response({actor:'owner',token:'session'})).mockResolvedValueOnce(response(value));}
+test('foreign context is refused',async()=>{setup({...context(),planId:'other'});await expect(readComponentContext('one')).rejects.toThrow('Invalid component authoring receipt');});
+test('ready context requires exact positive parent heads and folder linkage',async()=>{for(const change of [{architectureHead:null},{folderHead:{...context().folderHead,revision:0}},{folderHead:{...context().folderHead,architectureRevision:2}},{catalogHead:{revision:1,contractDigest:'c'.repeat(64)}}]){setup({...context(),...change});await expect(readComponentContext('one')).rejects.toThrow();}});
+test('missing parents are distinct from transport failure',async()=>{setup({...context(),ready:false,state:'architecture-missing',architectureHead:null,folderHead:null});expect((await readComponentContext('one')).state).toBe('architecture-missing');boundedFetch.mockRejectedValueOnce(Error('offline'));await expect(readComponentContext('one')).rejects.toThrow('offline');});
+test('approver change prevents publication',async()=>{boundedFetch.mockResolvedValueOnce(response({actor:'other',token:'session'}));await expect(publishComponentDraft('one',{planId:'one'},{actor:'owner',expectedRevision:0,expectedHeadDigest:'GENESIS'})).rejects.toThrow('Approver changed');expect(boundedFetch).toHaveBeenCalledTimes(1);});
+test('failed readback never returns publication success',async()=>{boundedFetch.mockResolvedValueOnce(response({actor:'owner',token:'session'})).mockResolvedValueOnce(response({revision:1,head:{contractDigest:'c'.repeat(64)}})).mockRejectedValueOnce(Error('readback offline'));await expect(publishComponentDraft('one',{planId:'one'},{actor:'owner',expectedRevision:0,expectedHeadDigest:'GENESIS'})).rejects.toThrow('readback offline');});

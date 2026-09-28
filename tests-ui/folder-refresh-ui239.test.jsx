@@ -1,0 +1,20 @@
+import { beforeEach, expect, test, vi } from 'vitest';
+import { createFolderRefresh } from '../src/project/folderRefresh.js';
+import { inspectArchitecture } from '../src/runtime/architectureClient.js';
+import { inspectFolder } from '../src/runtime/folderClient.js';
+vi.mock('../src/runtime/architectureClient.js',()=>({inspectArchitecture:vi.fn()}));
+vi.mock('../src/runtime/folderClient.js',()=>({inspectFolder:vi.fn()}));
+const parent={valid:true,planId:'pp_test',head:{contractDigest:'a',revision:1}};
+const folder={valid:true,planId:'pp_test',head:{contractDigest:'f',revision:1,architectureContractDigest:'a',architectureRevision:1}};
+const deferred=()=>{let resolve;const promise=new Promise(r=>resolve=r);return {promise,resolve};};
+function fixture(){let project={projectId:'pp_test',kind:'imported',registration:{rootIdentity:'root'}};const recordStatus=vi.fn();return {recordStatus,replace:p=>project=p,refresh:createFolderRefresh({registry:{get:()=>project},recordStatus})};}
+beforeEach(()=>{vi.clearAllMocks();inspectArchitecture.mockResolvedValue(parent);inspectFolder.mockResolvedValue(folder);});
+test('marks stale first and independently reads exact parent and folder',async()=>{const f=fixture();expect((await f.refresh.refresh('pp_test')).status).toBe('observed');expect(f.recordStatus.mock.calls[0][1].state).toBe('stale');expect(f.recordStatus.mock.calls[1][1]).toMatchObject({state:'observed',receipt:folder,architectureReceipt:parent});});
+test('parent supersession is stale rather than observed approval',async()=>{inspectArchitecture.mockResolvedValue({...parent,head:{contractDigest:'b',revision:2}});expect((await fixture().refresh.refresh('pp_test')).status).toBe('stale');});
+test('rebased registry mismatch remains stale despite matching fetched parents',async()=>{const f=fixture();f.recordStatus.mockReturnValue({project:{authorities:{folder:{state:'stale'}}}});expect((await f.refresh.refresh('pp_test')).status).toBe('stale');});
+test('absent folder is an observed absence not invented grant',async()=>{inspectFolder.mockResolvedValue({...folder,head:null});const result=await fixture().refresh.refresh('pp_test');expect(result.status).toBe('observed');expect(result.receipt.head).toBe(null);});
+test('offline preserves unavailable and never manufactures receipt',async()=>{inspectFolder.mockRejectedValue(Error('offline'));const f=fixture();expect((await f.refresh.refresh('pp_test')).status).toBe('unavailable');expect(f.recordStatus.mock.calls.at(-1)[1]).not.toHaveProperty('receipt');});
+test('root replacement and disposal discard pending result',async()=>{const pending=deferred();inspectArchitecture.mockReturnValue(pending.promise);const f=fixture(),work=f.refresh.refresh('pp_test');f.replace({kind:'imported',registration:{rootIdentity:'other'}});pending.resolve(parent);expect(await work).toBe(null);expect(inspectFolder).not.toHaveBeenCalled();f.refresh.dispose();expect(await f.refresh.refresh('pp_test')).toBe(null);});
+test('newer request wins over delayed folder response',async()=>{const pending=deferred();inspectFolder.mockReturnValueOnce(pending.promise).mockResolvedValueOnce(folder);const f=fixture(),first=f.refresh.refresh('pp_test');await Promise.resolve();await f.refresh.refresh('pp_test');pending.resolve(folder);expect(await first).toBe(null);expect(f.recordStatus.mock.calls.filter(([,v])=>v.state==='observed')).toHaveLength(1);});
+test('quota failure is distinct and stops inspection',async()=>{const f=fixture();f.recordStatus.mockReturnValue({persisted:false});expect((await f.refresh.refresh('pp_test')).status).toBe('local-cache-unavailable');expect(inspectArchitecture).not.toHaveBeenCalled();});
+test('wrong project receipt is unavailable',async()=>{inspectFolder.mockResolvedValue({...folder,planId:'wrong'});expect((await fixture().refresh.refresh('pp_test')).status).toBe('unavailable');});

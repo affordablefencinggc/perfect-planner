@@ -1,0 +1,12 @@
+.task-draft-delivery { margin:24px 0; padding:20px; min-width:0; border:1px solid #a9b4ba; border-radius:8px; background:#f8f7f3; box-shadow:0 3px 8px #323a3d12; }
+.task-draft-delivery-heading { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:16px; }
+.task-draft-delivery-heading > div { flex:1 1 320px; min-width:0; }
+.task-draft-ledger .task-draft-delivery button { min-height:40px; font-size:16px; background:#edf0ef; }
+.task-draft-delivery-note { padding:12px 16px; border-left:3px solid #ad7c22; background:#fff7e6; }
+.task-draft-delivery-error { padding:12px 16px; border:1px solid #c16c65; border-radius:6px; color:#922f2d; background:#fff0ef; }
+.task-draft-delivery-records { display:grid; gap:12px; list-style:none; padding:0; margin:18px 0 0; }
+.task-draft-delivery-records > li { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:16px; padding:16px; border:1px solid #b2bbbc; border-radius:7px; background:white; }
+.task-draft-delivery-records > li > div { flex:1 1 320px; min-width:0; }
+.task-draft-delivery-records strong { font-size:16px; line-height:1.5; }
+.task-draft-delivery-records code { overflow-wrap:anywhere; user-select:text; }
+@media(max-width:600px) { .task-draft-delivery { padding:16px; } .task-draft-delivery-heading > button,.task-draft-delivery-records > li > button { width:100%; } }

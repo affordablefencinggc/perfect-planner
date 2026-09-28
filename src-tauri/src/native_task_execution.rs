@@ -1,0 +1,125 @@
+//! Private adapter after durable host admission. No renderer/MCP endpoint and
+//! no independent grant authority. Candidate observation remains the host's job.
+#![allow(dead_code)]
+use serde::Deserialize;
+use serde_json::{json,Value};
+use std::{ffi::OsStr,path::PathBuf,sync::atomic::AtomicBool,time::Duration};
+
+#[derive(Deserialize)]
+#[serde(rename_all="camelCase",deny_unknown_fields)]
+struct Limits{stdout_bytes:usize,stderr_bytes:usize,combined_bytes:usize}
+#[derive(Deserialize)]
+#[serde(rename_all="camelCase",deny_unknown_fields)]
+struct Spec{
+    run_id:String,intent_digest:String,registered_root:PathBuf,cwd:PathBuf,
+    executable_path:PathBuf,executable_digest:String,args:Vec<String>,timeout_ms:u64,
+    output_limits:Limits,candidate_digest:String,check_contract_digest:String,
+}
+fn digest(s:&str)->bool{s.len()==64&&s.bytes().all(|b|b.is_ascii_digit()||(b'a'..=b'f').contains(&b))}
+fn parse(value:&Value)->Result<Spec,&'static str>{
+    if serde_json::to_vec(value).map_err(|_|"NATIVE_TASK_SPEC_INVALID")?.len()>65536{return Err("NATIVE_TASK_SPEC_INVALID");}
+    let s:Spec=serde_json::from_value(value.clone()).map_err(|_|"NATIVE_TASK_SPEC_INVALID")?;
+    let l=&s.output_limits;
+    if s.run_id.is_empty()||s.run_id.len()>128||!s.run_id.bytes().all(|b|b.is_ascii_alphanumeric()||b"._:-".contains(&b))
+        ||![&s.intent_digest,&s.executable_digest,&s.candidate_digest,&s.check_contract_digest].iter().all(|s|digest(s))
+        ||s.timeout_ms==0||s.timeout_ms>300000||[l.stdout_bytes,l.stderr_bytes,l.combined_bytes].iter().any(|n|*n==0||*n>2*1024*1024)
+        ||l.combined_bytes>l.stdout_bytes+l.stderr_bytes||s.args.len()>64||s.args.iter().map(|a|a.len()).sum::<usize>()>32768
+        ||s.args.iter().any(|a|a.len()>16384||a.chars().any(|c|c.is_control()))
+        ||[&s.registered_root,&s.cwd,&s.executable_path].iter().any(|p|!p.is_absolute()||p.as_os_str().len()>4096){return Err("NATIVE_TASK_SPEC_INVALID");}
+    Ok(s)
+}
+// Local process plumbing for the installed host, not an authenticated public
+// endpoint. The caller owns approval, enrollment and the durable first intent.
+// Bounded parent containment owns disconnect/cancellation of this whole tree.
+pub fn run_stdio_if_requested()->Option<i32>{
+    use std::io::{Read,Write};
+    let args:Vec<_>=std::env::args_os().collect();
+    if args.get(1).and_then(|s|s.to_str())!=Some("--planner-task-stdio"){return None;}
+    if args.len()!=2{return Some(2);}
+    let result=(||{
+        let mut bytes=Vec::new();std::io::stdin().take(65537).read_to_end(&mut bytes).map_err(|_|())?;
+        if bytes.is_empty()||bytes.len()>65536{return Err(());}
+        #[derive(Deserialize)]#[serde(rename_all="camelCase",deny_unknown_fields)]
+        struct Envelope{schema_version:u32,execution_spec:Value,expires_at_ms:u64}
+        let envelope:Envelope=serde_json::from_slice(&bytes).map_err(|_|())?;
+        if envelope.schema_version!=1||envelope.expires_at_ms>9_007_199_254_740_991{return Err(());}
+        let value=envelope.execution_spec;let spec=parse(&value).map_err(|_|())?;
+        let system=std::env::var("SystemRoot").map_err(|_|())?;
+        let path=format!("{};{}\\System32",spec.executable_path.parent().and_then(|p|p.to_str()).ok_or(())?,system);
+        let mut environment=vec![("SystemRoot".to_owned(),system.clone()),("WINDIR".to_owned(),system),("PATH".to_owned(),path)];
+        for key in ["TEMP","TMP"]{if let Ok(value)=std::env::var(key){environment.push((key.to_owned(),value));}}
+        let borrowed:Vec<(&str,&str)>=environment.iter().map(|(k,v)|(k.as_str(),v.as_str())).collect();
+        let observation=execute_until(&value,&borrowed,&AtomicBool::new(false),Some(envelope.expires_at_ms)).map_err(|_|())?;
+        let mut output=serde_json::to_vec(&observation).map_err(|_|())?;output.push(b'\n');
+        std::io::stdout().write_all(&output).and_then(|_|std::io::stdout().flush()).map_err(|_|())
+    })();
+    Some(if result.is_ok(){0}else{2})
+}
+pub(crate) fn execute(value:&Value,environment:&[(&str,&str)],cancel:&AtomicBool)->Result<Value,&'static str>{
+    execute_until(value,environment,cancel,None)
+}
+fn execute_until(value:&Value,environment:&[(&str,&str)],cancel:&AtomicBool,expires_at:Option<u64>)->Result<Value,&'static str>{
+    let s=parse(value)?;
+    let _pins=crate::native_host_resources::pin_task_files(&s.executable_path,&s.executable_digest,&s.registered_root,&s.cwd)?;
+    if let Some(deadline)=expires_at{
+        let now=std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(|_|"NATIVE_TASK_CLOCK_INVALID")?.as_millis();
+        if now>=deadline as u128{return Err("NATIVE_TASK_GRANT_EXPIRED");}
+    }
+    let args:Vec<&OsStr>=s.args.iter().map(|s|OsStr::new(s)).collect();
+    let run=crate::native_task_containment::run_captured_limits(&s.executable_path,&args,&s.cwd,environment,
+        Duration::from_millis(s.timeout_ms),s.output_limits.stdout_bytes,s.output_limits.stderr_bytes,s.output_limits.combined_bytes,
+        Duration::from_secs(120),cancel).map_err(|_|"NATIVE_TASK_RUN_UNRESOLVED")?;
+    // Refuse undecodable output rather than silently rewriting evidence or
+    // expanding replacement characters beyond the reviewed byte budget.
+    let stdout=String::from_utf8(run.stdout).map_err(|_|"NATIVE_TASK_OUTPUT_ENCODING_INVALID")?;
+    let stderr=String::from_utf8(run.stderr).map_err(|_|"NATIVE_TASK_OUTPUT_ENCODING_INVALID")?;
+    Ok(json!({"schemaVersion":2,"kind":"NATIVE_TASK_OBSERVATION","runId":s.run_id,"exitCode":run.settlement.exit_code,
+        "timedOut":run.timed_out,"cancelObserved":run.cancel_observed,"outputTruncated":run.output_truncated,
+        "cpuTimeExceeded":run.cpu_time_exceeded,"cpuObservationFailed":run.cpu_observation_failed,
+        "descendantsSettled":run.settlement.descendants_settled,"processExited":run.settlement.process_exited,"jobEmptyObserved":run.settlement.job_empty_observed,
+        "ioSettled":run.io_settled,"ioFailed":run.io_failed,"stdout":stdout,"stderr":stderr}))
+}
+
+#[cfg(test)]mod tests{
+ use super::*;use sha2::{Digest,Sha256};use std::fs;
+ fn fixture()->(PathBuf,Value){
+  assert_eq!(std::env::var("COMPUTERNAME").unwrap().to_lowercase(),"dans1");
+  let root=std::env::temp_dir().join(format!("pp-execution-{}-{}",std::process::id(),std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));fs::create_dir(&root).unwrap();
+  let exe=std::env::current_exe().unwrap();let pin=format!("{:x}",Sha256::digest(fs::read(&exe).unwrap()));
+  let name=concat!(module_path!(),"::child").split_once("::").unwrap().1;
+  let spec=json!({"runId":"native-execution-1","intentDigest":"a".repeat(64),"registeredRoot":root,"cwd":root,"executablePath":exe,"executableDigest":pin,
+    "args":["--ignored","--exact",name,"--nocapture"],"timeoutMs":5000,"outputLimits":{"stdoutBytes":8192,"stderrBytes":2048,"combinedBytes":10000},"candidateDigest":"b".repeat(64),"checkContractDigest":"c".repeat(64)});(root,spec)
+ }
+ #[test]fn actual_native_observation_uses_reviewed_spec_and_reports_cleanup(){
+  let(_,spec)=fixture();let system=std::env::var("SystemRoot").unwrap();let result=execute(&spec,&[("SystemRoot",&system)],&AtomicBool::new(false)).unwrap();
+  assert_eq!(result["exitCode"],0);assert!(result["stdout"].as_str().unwrap().contains("native-adapter-child"));
+  for key in ["processExited","jobEmptyObserved","ioSettled","descendantsSettled"]{assert_eq!(result[key],true);}
+  assert_eq!(result["runId"],spec["runId"]);assert_eq!(result.as_object().unwrap().len(),16);
+ }
+ #[test]fn foreign_executable_cwd_and_extra_authority_are_refused(){
+  let(root,spec)=fixture();let mut changed=spec.clone();changed["executableDigest"]=json!("f".repeat(64));assert!(execute(&changed,&[],&AtomicBool::new(false)).is_err());
+  changed=spec.clone();changed["cwd"]=json!(root.parent().unwrap());assert!(execute(&changed,&[],&AtomicBool::new(false)).is_err());
+  changed=spec;changed["executionAuthorized"]=json!(true);assert!(parse(&changed).is_err());
+ }
+ #[test]fn actual_failed_exit_is_preserved_and_bad_encoding_is_not_rewritten(){
+  let(_,spec)=fixture();let system=std::env::var("SystemRoot").unwrap();
+  let result=execute(&spec,&[("SystemRoot",&system),("PP_ADAPTER_CHILD","fail")],&AtomicBool::new(false)).unwrap();
+  assert_eq!(result["exitCode"],7);assert_eq!(result["processExited"],true);assert_eq!(result["jobEmptyObserved"],true);assert_eq!(result["ioSettled"],true);
+  assert_eq!(execute(&spec,&[("SystemRoot",&system),("PP_ADAPTER_CHILD","invalid-utf8")],&AtomicBool::new(false)).unwrap_err(),"NATIVE_TASK_OUTPUT_ENCODING_INVALID");
+ }
+ #[test]fn malformed_spec_and_prelaunch_cancellation_are_refused(){
+  let(_,spec)=fixture();
+  for (key,value) in [("timeoutMs",json!(300001)),("intentDigest",json!("wrong")),("args",json!(["nul\u{0}argument"]))]{let mut bad=spec.clone();bad[key]=value;assert!(parse(&bad).is_err());}
+  assert_eq!(execute(&spec,&[],&AtomicBool::new(true)).unwrap_err(),"NATIVE_TASK_RUN_UNRESOLVED");
+  assert_eq!(execute_until(&spec,&[],&AtomicBool::new(false),Some(0)).unwrap_err(),"NATIVE_TASK_GRANT_EXPIRED");
+ }
+ #[test]fn executable_pin_prevents_write_and_delete_until_released(){
+  let(root,_)=fixture();let file=root.join("pinned.exe");fs::write(&file,b"controlled bytes").unwrap();let pin=format!("{:x}",Sha256::digest(b"controlled bytes"));
+  let locked=crate::native_host_resources::pin_task_files(&file,&pin,&root,&root).unwrap();
+  assert!(fs::write(&file,b"changed").is_err());assert!(fs::remove_file(&file).is_err());assert!(fs::rename(&root,root.with_extension("moved")).is_err());
+  drop(locked);fs::write(&file,b"changed").unwrap();
+ }
+ #[test]#[ignore="inert child invoked only by adapter test"]fn child(){
+  match std::env::var("PP_ADAPTER_CHILD").as_deref(){Ok("fail")=>std::process::exit(7),Ok("invalid-utf8")=>{use std::io::Write;std::io::stdout().write_all(&[0xff]).unwrap();},_=>println!("native-adapter-child")}
+ }
+}

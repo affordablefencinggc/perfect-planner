@@ -1,0 +1,14 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main-read-only",
+  "description": "The main Perfect Planner window may open one user-triggered folder picker, read the runtime snapshot, explicitly register the selected workspace root in app-local storage, and request a bounded metadata-only census. No arbitrary filesystem, process, shell, network, screen, updater, device, menu, tray, path, or window-control capability is granted.",
+  "windows": ["main"],
+  "platforms": ["windows"],
+  "permissions": [
+    "allow-runtime-snapshot",
+    "allow-select-workspace-folder",
+    "allow-register-workspace-read-only",
+    "allow-census-registered-workspace",
+    "allow-preview-registered-workspace"
+  ]
+}

@@ -1,0 +1,847 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-09-02T11:46:54.225Z",
+  "root": "C:\\repos\\perfect-planner-cleanroom",
+  "census": {
+    "fileCount": 166,
+    "summary": {
+      "configuration": 6,
+      "document": 28,
+      "interface": 6,
+      "source": 74,
+      "test": 52
+    },
+    "skipped": 0,
+    "digest": "834c009e432cec1b463686bba96f782474ca5fbb47d5a64adca36cbe4cf877dd"
+  },
+  "componentCatalog": {
+    "ready": true,
+    "verdict": "READY FOR APPROVAL",
+    "blockerCount": 0,
+    "coverage": {
+      "required": 26,
+      "complete": 26,
+      "percentage": 100,
+      "interfaces": 100,
+      "fileClaims": 79
+    }
+  },
+  "collisionPlan": {
+    "valid": true,
+    "collisionCount": 3,
+    "hardStops": 1,
+    "manifestErrors": []
+  },
+  "documentRegistry": {
+    "valid": true,
+    "generation": 2,
+    "active": 166,
+    "deleted": 0,
+    "initialAdded": 166,
+    "duplicateAdds": 0,
+    "refused": 0,
+    "watcherEngineAvailable": true,
+    "continuouslyRunning": false
+  },
+  "journal": {
+    "entries": 25,
+    "contentionEntries": 24,
+    "valid": true,
+    "brokenAt": null,
+    "concurrentWriters": 4
+  },
+  "proofRunner": {
+    "proven": true,
+    "exit": 0,
+    "timedOut": false,
+    "artifact": "PP-TRUTH-RUNNER-1-a5a5e083.proof.json",
+    "sha256": "02ef467bfd4469a2abdc0b92514a71d30caf52ec1bed78b49f385544d4b7468a",
+    "durationMs": 44
+  },
+  "sessionRegistry": {
+    "valid": true,
+    "durableSessionCount": 1,
+    "released": 1,
+    "tokenRedacted": true
+  },
+  "ciDerivation": {
+    "state": "derived",
+    "reason": "local candidates derived; required-status and merged-state execution remain unverified",
+    "workflowCount": 1,
+    "gateCount": 1,
+    "tier3": "grey",
+    "exactMergedTruth": false,
+    "localMergedState": {
+      "schemaVersion": 1,
+      "state": "grey",
+      "reason": "exact target/source refs and an approved rehearsal base were not supplied",
+      "evidence": [],
+      "cleanup": null
+    },
+    "remoteStatus": {
+      "schemaVersion": 1,
+      "state": "grey",
+      "reason": "bounded remote CI status boundary was not configured",
+      "checks": []
+    }
+  },
+  "confirmationStore": {
+    "failClosed": true,
+    "state": "waiting",
+    "forgedWatcherRefused": true,
+    "humanDecisionRecorded": false
+  },
+  "blueprintGate": {
+    "verdict": "BLOCKED",
+    "score": 37,
+    "blockers": [],
+    "requiredQuestions": [
+      "unitEconomics",
+      "accessibilityTarget",
+      "privacyBasis",
+      "abuseModel",
+      "collisionPolicy",
+      "proofPolicy",
+      "rollbackPolicy",
+      "capabilityPolicy",
+      "humanStopPolicy"
+    ]
+  },
+  "rulebookGate": {
+    "verdict": "BLOCKED",
+    "templateCount": 10,
+    "selectedTemplate": {
+      "id": "ai-autopilot-control-plane",
+      "title": "Guarded AI autopilot control plane",
+      "version": 1,
+      "platform": "tauri"
+    },
+    "blockerCount": 0,
+    "blockers": [],
+    "requiredQuestionCount": 22,
+    "requiredQuestions": [
+      "ai-autopilot:rollbackPolicy",
+      "ai-autopilot:humanStopPolicy",
+      "ai-autopilot:costCeiling",
+      "desktop-distribution:osTargets",
+      "desktop-distribution:updateSigning",
+      "desktop-distribution:rollbackChannel",
+      "bounded-capability:native-process:mitigation-and-proof",
+      "scenario:security-breach",
+      "scenario:data-loss",
+      "scenario:critical-dependency-failure",
+      "scenario:vendor-exit",
+      "decision:platform",
+      "decision:data",
+      "decision:identity-auth",
+      "decision:state-sync",
+      "decision:deployment-distribution",
+      "nonFunctional:performanceBudget",
+      "nonFunctional:securityTarget",
+      "nonFunctional:accessibilityTarget",
+      "nonFunctional:operatingCostCeiling",
+      "nonFunctional:recoveryTarget",
+      "nonFunctional:observabilityProof"
+    ],
+    "scenarioCoverage": {
+      "required": 4,
+      "present": 0
+    },
+    "decisionCoverage": {
+      "required": 5,
+      "present": 0
+    },
+    "capabilityAssessment": [
+      {
+        "id": "native-process",
+        "necessity": "mandatory",
+        "support": "bounded"
+      }
+    ],
+    "executionMap": {
+      "direction": "top-down",
+      "template": "ai-autopilot-control-plane@1",
+      "nodes": [
+        {
+          "id": "S01",
+          "stage": "brief",
+          "order": 1
+        },
+        {
+          "id": "S02",
+          "stage": "trust-capabilities",
+          "order": 2
+        },
+        {
+          "id": "S03",
+          "stage": "plans-collisions",
+          "order": 3
+        },
+        {
+          "id": "S04",
+          "stage": "execution-proof",
+          "order": 4
+        },
+        {
+          "id": "S05",
+          "stage": "human-review",
+          "order": 5
+        },
+        {
+          "id": "S06",
+          "stage": "ci-merge",
+          "order": 6
+        },
+        {
+          "id": "S07",
+          "stage": "release-handover",
+          "order": 7
+        }
+      ],
+      "edges": [
+        {
+          "from": "S01",
+          "to": "S02"
+        },
+        {
+          "from": "S02",
+          "to": "S03"
+        },
+        {
+          "from": "S03",
+          "to": "S04"
+        },
+        {
+          "from": "S04",
+          "to": "S05"
+        },
+        {
+          "from": "S05",
+          "to": "S06"
+        },
+        {
+          "from": "S06",
+          "to": "S07"
+        }
+      ]
+    }
+  },
+  "architectureContractGate": {
+    "valid": true,
+    "policyVersion": "2026.09.1",
+    "digest": "259b4ff2374950f84f79d50b04e2febcbfc0296ffc31ca1df1264cc888f3bafe",
+    "template": {
+      "id": "ai-autopilot-control-plane",
+      "platform": "tauri",
+      "title": "Guarded AI autopilot control plane",
+      "version": 1
+    },
+    "stages": 7,
+    "tamperRefused": true
+  },
+  "architectureRegistry": {
+    "valid": true,
+    "planId": "PP-TRUTH",
+    "revisions": 2,
+    "head": {
+      "revision": 2,
+      "registeredAt": "2026-09-02T11:46:55.225Z",
+      "registeredBy": "truth-report",
+      "contractDigest": "3587f9c715f0c743cb92025e8ce74009559aefdc88e7987326e29103111b06aa",
+      "supersedes": "259b4ff2374950f84f79d50b04e2febcbfc0296ffc31ca1df1264cc888f3bafe",
+      "policyVersion": "2026.09.1",
+      "template": {
+        "id": "ai-autopilot-control-plane",
+        "platform": "tauri",
+        "title": "Guarded AI autopilot control plane",
+        "version": 1
+      },
+      "stages": 7,
+      "recordHash": "5a184a974a31e85bbea016799af7bb926ae2e9f4c6820a76375cc3148048c1d1"
+    },
+    "firstDigest": "259b4ff2374950f84f79d50b04e2febcbfc0296ffc31ca1df1264cc888f3bafe",
+    "duplicateOrForkAllowed": false
+  },
+  "viabilityGate": {
+    "verdict": "BLOCKED",
+    "blockerCount": 20,
+    "warningCount": 0,
+    "evidence": {
+      "required": 6,
+      "present": 0,
+      "competitors": 0,
+      "benchmarks": 0,
+      "assumptions": 0
+    },
+    "economics": {
+      "buildP50": null,
+      "buildP80": null,
+      "monthlyCostP50": null,
+      "monthlyCostP80": null,
+      "monthlyRevenueP50": 0,
+      "monthlyRevenueP80Downside": 0,
+      "marginP50": null,
+      "marginP80Downside": null,
+      "runwayMonthsP80": null
+    },
+    "delivery": {
+      "developers": null,
+      "totalHours": 0,
+      "dailyCapacity": null,
+      "calendarDaysP50": null,
+      "calendarDaysP80": null
+    }
+  },
+  "debtGate": {
+    "verdict": "UNKNOWN",
+    "scanId": "DEBT-SCAN-10C2095669B693DC",
+    "blockerCount": 1,
+    "blockers": [
+      "Debt coverage is incomplete: native."
+    ],
+    "coverage": {
+      "required": 4,
+      "covered": 3,
+      "missing": [
+        "native"
+      ]
+    },
+    "counts": {
+      "critical": 0,
+      "high": 0,
+      "medium": 2,
+      "low": 0
+    },
+    "weightedOpen": 10,
+    "delta": {
+      "added": [
+        "DEBT-730681A2F3DCE81E",
+        "DEBT-C88D8C7722459E5D"
+      ],
+      "resolved": [],
+      "regressed": [],
+      "removedWithoutResolution": []
+    },
+    "analyzerEvidence": [
+      {
+        "surface": "ui",
+        "state": "COVERED",
+        "analyzer": {
+          "state": "PASSED",
+          "name": "perfect-planner-static-debt-v1",
+          "coveredFiles": [
+            "src/PerfectPlannerShell.jsx",
+            "src/components/BlueprintWorkspace.css",
+            "src/components/BlueprintWorkspace.jsx",
+            "src/components/CollisionWorkspace.jsx",
+            "src/components/ComponentPlansWorkspace.css",
+            "src/components/ComponentPlansWorkspace.jsx",
+            "src/components/ScreenshotViewingPanel.css",
+            "src/components/ScreenshotViewingPanel.jsx",
+            "src/components/StructureWorkspace.css",
+            "src/components/StructureWorkspace.jsx",
+            "src/main.jsx",
+            "src/styles.css"
+          ],
+          "limitations": [
+            "pattern-based static analysis",
+            "does not replace compiler, dependency, runtime, accessibility, or native security tooling"
+          ]
+        },
+        "fileCount": 12,
+        "bytes": 245899,
+        "digest": "9cbb80e62c82fce503a17553a34c14495bd1d24a07bcc85f7256ce2eb7220921"
+      },
+      {
+        "surface": "engine",
+        "state": "COVERED",
+        "analyzer": {
+          "state": "PASSED",
+          "name": "perfect-planner-static-debt-v1",
+          "coveredFiles": [
+            "src/engine/appMapRegistry.js",
+            "src/engine/architectureContractVerification.js",
+            "src/engine/blueprintEngine.js",
+            "src/engine/blueprintWorkspaceModel.js",
+            "src/engine/collisionAuthorityClient.js",
+            "src/engine/collisionEngine.js",
+            "src/engine/collisionSeed.js",
+            "src/engine/componentPlanEngine.js",
+            "src/engine/componentPlanSeed.js",
+            "src/engine/componentPlans/localAuthorityDossiers.js",
+            "src/engine/componentPlans/repositoryPlanningDossiers.js",
+            "src/engine/componentPlans/runtimeReleaseDossiers.js",
+            "src/engine/conveyorEngine.js",
+            "src/engine/debtEngine.js",
+            "src/engine/editScopeEngine.js",
+            "src/engine/executionEngine.js",
+            "src/engine/folderContractEngine.js",
+            "src/engine/folderContractSeed.js",
+            "src/engine/guaranteeSeed.js",
+            "src/engine/mapCoverageEngine.js",
+            "src/engine/mutationEngine.js",
+            "src/engine/nativeCapabilityPolicy.js",
+            "src/engine/proofEngine.js",
+            "src/engine/rulebookEngine.js",
+            "src/engine/sonarEngine.js",
+            "src/engine/truthGuaranteeMatrix.js",
+            "src/engine/viabilityEngine.js"
+          ],
+          "limitations": [
+            "pattern-based static analysis",
+            "does not replace compiler, dependency, runtime, accessibility, or native security tooling"
+          ]
+        },
+        "fileCount": 27,
+        "bytes": 322180,
+        "digest": "87cda55c736dc27b30eb4e95774ac4c3310eeb5687315c0b0202d97e1bd02d51"
+      },
+      {
+        "surface": "storage",
+        "state": "COVERED",
+        "analyzer": {
+          "state": "PASSED",
+          "name": "perfect-planner-static-debt-v1",
+          "coveredFiles": [
+            "src/node/architectureContractStore.mjs",
+            "src/node/ciDerivation.mjs",
+            "src/node/collisionAuthorityHttp.mjs",
+            "src/node/collisionAuthorityStore.mjs",
+            "src/node/completionReport.mjs",
+            "src/node/componentPlanHttp.mjs",
+            "src/node/componentPlanStore.mjs",
+            "src/node/componentSourceIndex.mjs",
+            "src/node/confirmationStore.mjs",
+            "src/node/conveyorGitAdapter.mjs",
+            "src/node/debtBoundedStaticAnalyzer.mjs",
+            "src/node/documentRegistry.mjs",
+            "src/node/draftMailbox.mjs",
+            "src/node/evidenceBundle.mjs",
+            "src/node/folderContractHttp.mjs",
+            "src/node/folderContractMaterializer.mjs",
+            "src/node/folderContractStore.mjs",
+            "src/node/identityVault.mjs",
+            "src/node/journalStore.mjs",
+            "src/node/localHandoff.mjs",
+            "src/node/localIdentity.mjs",
+            "src/node/mergedStateRunner.mjs",
+            "src/node/planLock.mjs",
+            "src/node/planLockRecovery.mjs",
+            "src/node/proofRunner.mjs",
+            "src/node/providerReview.mjs",
+            "src/node/providerReviewGateway.mjs",
+            "src/node/readOnlyResearchAdapter.mjs",
+            "src/node/repositoryCensus.mjs",
+            "src/node/screenshotEvidence.mjs",
+            "src/node/sessionRegistry.mjs",
+            "src/node/sourceMutationCampaign.mjs",
+            "src/node/windowsDpapiSecretCustody.mjs"
+          ],
+          "limitations": [
+            "pattern-based static analysis",
+            "does not replace compiler, dependency, runtime, accessibility, or native security tooling"
+          ]
+        },
+        "fileCount": 33,
+        "bytes": 244842,
+        "digest": "a104d1d79fabb6db0edd7484377c8e894f707ec5668e00a204ecc5f74d444515"
+      },
+      {
+        "surface": "native",
+        "state": "MISSING_TARGETS",
+        "analyzer": {
+          "state": "NOT_RUN",
+          "name": "perfect-planner-static-debt-v1",
+          "coveredFiles": [],
+          "limitations": [
+            "pattern-based static analysis",
+            "does not replace compiler, dependency, runtime, accessibility, or native security tooling"
+          ]
+        },
+        "fileCount": 0,
+        "bytes": 0,
+        "digest": null
+      }
+    ],
+    "findings": [
+      {
+        "id": "DEBT-730681A2F3DCE81E",
+        "severity": "medium",
+        "surface": "ui",
+        "category": "maintainability",
+        "introducedAt": "2026-09-02T11:46:54.225Z",
+        "lastObservedAt": "2026-09-02T11:46:54.225Z",
+        "status": "open",
+        "owner": "UI owner",
+        "evidence": "src/styles.css:1#2fc16e82cbbf",
+        "ruleId": "large-module",
+        "message": "Module contains 1066 lines; split and ownership review are required."
+      },
+      {
+        "id": "DEBT-C88D8C7722459E5D",
+        "severity": "medium",
+        "surface": "ui",
+        "category": "maintainability",
+        "introducedAt": "2026-09-02T11:46:54.225Z",
+        "lastObservedAt": "2026-09-02T11:46:54.225Z",
+        "status": "open",
+        "owner": "UI owner",
+        "evidence": "src/PerfectPlannerShell.jsx:1#5fa14d6cdea9",
+        "ruleId": "large-module",
+        "message": "Module contains 1130 lines; split and ownership review are required."
+      }
+    ],
+    "refused": [
+      {
+        "path": "artifacts/design-comparison.png",
+        "reason": "file-too-large",
+        "size": 2182301
+      },
+      {
+        "path": "public/assets/evidence/comparison-source.png",
+        "reason": "file-too-large",
+        "size": 1385851
+      },
+      {
+        "path": "public/assets/evidence/selected-spine-canvas.png",
+        "reason": "file-too-large",
+        "size": 1508263
+      },
+      {
+        "path": "public/generated/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1423675
+      },
+      {
+        "path": "public/generated/generations/04893e0313a1bb13bde9cd66d98a3c8f68fec26fb95002d83513b1849cdbc87a/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1426017
+      },
+      {
+        "path": "public/generated/generations/245fe85eaaf9d764386e72deeb4646d522d2ae001b3106f03a8f8c03a51aa15d/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1424243
+      },
+      {
+        "path": "public/generated/generations/5ef27e2625489cb1fd697b081b54f67cb2a88fdba6592dfcda01fa0540d93c88/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1435122
+      },
+      {
+        "path": "public/generated/generations/60cddb99d2a71c2a4a2f39846369878704ea2a6ae6d3860e69a0c2bb51c280ff/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1426278
+      },
+      {
+        "path": "public/generated/generations/6288fb9df5b9db2a7db0f5ecc60fe9dc7c63c0b4a2c7d117e7bb31a6447680dd/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1431769
+      },
+      {
+        "path": "public/generated/generations/63c4ee66f0d0cb2974bbec4a9ea9baddb60de13b3779954d5ecd79acacb16f06/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1424504
+      },
+      {
+        "path": "public/generated/generations/79bcefebd8b785bf4cc813959ffe07b8f220256d470ef04e171f50109e98b468/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1424875
+      },
+      {
+        "path": "public/generated/generations/a64c00dd45f770322a421b13b4fa10f7f53813ddd549cfc8c210b7eec3ecc35e/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1432291
+      },
+      {
+        "path": "public/generated/generations/b94dbe4d8494d7febe96c95c2c7e3911b7b7531dac75a459173d96b58151b25d/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1432813
+      },
+      {
+        "path": "public/generated/generations/c336bab12a59bf585e5db32f70418767bc365df2cb1a97b00f0a8f8374c68c33/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1434600
+      },
+      {
+        "path": "public/generated/generations/c3a83978fb14de1c7146f18b3e27bc6d273b65f391d1a328ea7aa57c87124088/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1435383
+      },
+      {
+        "path": "public/generated/generations/c451c4acdbaef6222879562f092c3055e54d8b28e84f60ead3e2df0e8fd68fff/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1425756
+      },
+      {
+        "path": "public/generated/generations/caf16660d2b2fd5e5b2df5836457b8c20c6dbeb79628fb998b109fcebfbbd34d/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1431508
+      },
+      {
+        "path": "public/generated/generations/d504aae4d97d157bf6c4171813912c36e612f9664cd2f30b56c02b1b70417247/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1434861
+      },
+      {
+        "path": "public/generated/generations/dc16358d8b88ee87dfa0aa4372e4b5df6163adf2f138b9eafe5a8308c5905171/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1432030
+      },
+      {
+        "path": "public/generated/generations/e49cc29035a657dd0a9e8914ccc6bb03bcf8613ed33db05e91e88234ad502b6f/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1435644
+      },
+      {
+        "path": "public/generated/generations/e74aba973d5cf4a37533484cbd68ac47e27c021739e62ff7a4850f2dca09ef92/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1432552
+      },
+      {
+        "path": "public/generated/generations/f42e4199cb48fd82de31316deedecd531ca393ebb2549c77f25926bef16046aa/evidence-bundle.html",
+        "reason": "file-too-large",
+        "size": 1426539
+      }
+    ]
+  },
+  "conveyorGate": {
+    "valid": true,
+    "stations": [
+      "READY",
+      "CLAIMED",
+      "BUILDING",
+      "PROOF",
+      "REVIEW",
+      "CI",
+      "MERGE_QUEUE",
+      "MERGED"
+    ],
+    "branch": "pp/pp-014/b07-collision-engine",
+    "worktree": "pp-worktrees/pp-014/b07",
+    "claimAllowed": true
+  },
+  "localHandoff": {
+    "valid": true,
+    "senderSigningFingerprint": "b30c3868fabccf9a232ddee86bb906079044426fcd3dcb5ae87dfa6f397d3f01",
+    "recipientEncryptionFingerprint": "d7ebfa757b3a61ac7349ab2e8916995e6012c9ab03baf2c6a0e117c5b5e9bb59",
+    "plaintextExposed": false
+  },
+  "peerReviewGate": {
+    "vaultValid": true,
+    "vault": {
+      "schemaVersion": 1,
+      "custody": "PORTABLE_FALLBACK_NOT_OS_BACKED",
+      "providerIds": [
+        "review-a",
+        "review-b"
+      ],
+      "kdf": "scrypt-N16384-r8-p1",
+      "cipher": "aes-256-gcm",
+      "vaultFingerprint": "c1041dc20a87951fe573540a13196ed911031df151c40e844ddbe38a9ca437d6",
+      "secrets": "REDACTED"
+    },
+    "verdict": "BLOCKED",
+    "providerCount": 1,
+    "requiredQuorum": 2,
+    "blockers": [
+      "Independent review quorum is incomplete: 1/2."
+    ]
+  },
+  "providerReviewGateway": {
+    "valid": true,
+    "requestHash": "faf9ff49aa4c686d1cb1ab15a2e4d42aa5f4a21ae36839f18e6bac67d8d21bc9",
+    "promptHash": "6a959f4247091cd49ab3b6e854a2a30743d8a2e7b2c912ff08d0095805baf17a",
+    "artifactHash": "d74493bd01e4e537678b5e0371e7502d3d8bc0bd26f280b6aabeca810158141c",
+    "redactionCount": 1,
+    "reservedCostUsd": 0.000679,
+    "usageStatus": "RECORDED",
+    "overruns": 0,
+    "liveProviderCalled": false
+  },
+  "screenshotEvidence": {
+    "engineValid": true,
+    "validatedExistingArtifact": "public/assets/evidence/whole-plan-map.png",
+    "captureAdapter": null,
+    "artifactHash": "973ca972015358e336ac3a84933cd0ab23a5422ee2374a636edc51d557b2ae27",
+    "width": 1420,
+    "height": 1308,
+    "blank": false,
+    "capturePerformedThisRun": false,
+    "viewingAttestedThisRun": false,
+    "proofAccepted": false
+  },
+  "sonarGate": {
+    "repositoryVerdict": "BLOCKED",
+    "candidateCount": 0,
+    "autoImportAllowed": false,
+    "nameCount": 6,
+    "verifiedNameCount": 0,
+    "generatedNameStatus": "UNVERIFIED"
+  },
+  "mutationGate": {
+    "verdict": "CERTIFIED",
+    "totals": {
+      "total": 22,
+      "killed": 22,
+      "survived": 0,
+      "errors": 0
+    },
+    "coverage": {
+      "required": 22,
+      "covered": 22,
+      "missing": []
+    },
+    "results": [
+      {
+        "id": "M-BOUNDED-CENSUS",
+        "guarantee": "bounded-census",
+        "state": "KILLED"
+      },
+      {
+        "id": "M-STABLE-DOCUMENT-REGISTRY",
+        "guarantee": "stable-document-registry",
+        "state": "KILLED"
+      },
+      {
+        "id": "M-JOURNAL-INTEGRITY",
+        "guarantee": "journal-integrity",
+        "state": "KILLED"
+      },
+      {
+        "id": "M-MACHINE-PROOF",
+        "guarantee": "machine-proof",
+        "state": "KILLED"
+      },
+      {
+        "id": "M-DURABLE-SESSION",
+        "guarantee": "durable-session",
+        "state": "KILLED"
+      },
+      {
+        "id": "M-CI-HONESTY",
+        "guarantee": "ci-honesty",
+        "state": "KILLED"
+      },
+      {
+        "id": "M-CONFIRMATION-FAIL-CLOSED",
+        "guarantee": "confirmation-fail-closed",
+        "state": "KILLED"
+      },
+      {
+        "id": "M-BLUEPRINT-FAIL-CLOSED",
+        "guarantee": "blueprint-fail-closed",
+        "state": "KILLED"
+      },
+      {
+        "id": "M-RULEBOOK-FAIL-CLOSED",
+        "guarantee": "rulebook-fail-closed",
+        "state": "KILLED"
+      },
+      {
+        "id": "M-ARCHITECTURE-CONTRACT-TAMPER-REFUSED",
+        "guarantee": "architecture-contract-tamper-refused",
+        "state": "KILLED"
+      },
+      {
+        "id": "M-ARCHITECTURE-REGISTRY-LINEAR-HISTORY",
+        "guarantee": "architecture-registry-linear-history",
+        "state": "KILLED"
+      },
+      {
+        "id": "M-VIABILITY-FAIL-CLOSED",
+        "guarantee": "viability-fail-closed",
+        "state": "KILLED"
+      },
+      {
+        "id": "M-DEBT-UNKNOWN-NOT-GREEN",
+        "guarantee": "debt-unknown-not-green",
+        "state": "KILLED"
+      },
+      {
+        "id": "M-CONVEYOR-CLAIM-GUARD",
+        "guarantee": "conveyor-claim-guard",
+        "state": "KILLED"
+      },
+      {
+        "id": "M-HANDOFF-CONFIDENTIALITY",
+        "guarantee": "handoff-confidentiality",
+        "state": "KILLED"
+      },
+      {
+        "id": "M-MAILBOX-ONE-TIME-ACCEPTANCE",
+        "guarantee": "mailbox-one-time-acceptance",
+        "state": "KILLED"
+      },
+      {
+        "id": "M-PEER-QUORUM-FAIL-CLOSED",
+        "guarantee": "peer-quorum-fail-closed",
+        "state": "KILLED"
+      },
+      {
+        "id": "M-PROVIDER-BUDGET-REDACTION",
+        "guarantee": "provider-budget-redaction",
+        "state": "KILLED"
+      },
+      {
+        "id": "M-SCREENSHOT-UNPROVEN-WITHOUT-VIEWING",
+        "guarantee": "screenshot-unproven-without-viewing",
+        "state": "KILLED"
+      },
+      {
+        "id": "M-SONAR-NO-AUTO-IMPORT",
+        "guarantee": "sonar-no-auto-import",
+        "state": "KILLED"
+      },
+      {
+        "id": "M-AUTOPILOT-DEVICE-DENIAL",
+        "guarantee": "autopilot-device-denial",
+        "state": "KILLED"
+      },
+      {
+        "id": "M-IDENTITY-PRIVATE-KEY-REDACTION",
+        "guarantee": "identity-private-key-redaction",
+        "state": "KILLED"
+      }
+    ]
+  },
+  "nativeCapabilityGate": {
+    "valid": true,
+    "policyHash": "b5a1e458ccac32260004564e14b78eb8a37291d39c1b1c6d38a381ccca2b8699",
+    "mode": "autopilot",
+    "defaultDecision": "deny",
+    "boundedReadAllowed": true,
+    "deviceControlAllowed": false,
+    "deviceControlReason": "device.control is forbidden during autopilot, even when configured."
+  },
+  "identityVault": {
+    "valid": true,
+    "vaultFingerprint": "1faad8e06e9bc204cc040a68ad274932a30412a41014024c5f9ec71dd57885dc",
+    "identityCount": 2,
+    "kdf": "scrypt-N32768-r8-p1",
+    "cipher": "aes-256-gcm",
+    "privateKeys": "REDACTED",
+    "osBacked": false
+  },
+  "localDraftMailbox": {
+    "valid": true,
+    "inboxCount": 1,
+    "listedContent": "ENCRYPTED",
+    "envelopeHash": "dda74c5860ef31e2fe8e39427c9a03f6fbe7056f26ad54dcbb64b4250a17e682",
+    "acceptedOnce": true,
+    "receiptDraft": "REDACTED",
+    "loginUiAvailable": false
+  },
+  "guarantees": [
+    "read-only bounded census",
+    "stable document source identities",
+    "document revisions and deletion history persist",
+    "symbolic links refused",
+    "active locks are never stolen",
+    "concurrent appends serialize",
+    "tampering blocks the next append",
+    "proof commands run without a shell",
+    "unapproved commands are refused",
+    "session claims survive restart",
+    "ownership tokens stay private"
+  ]
+}

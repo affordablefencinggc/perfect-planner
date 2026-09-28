@@ -1,0 +1,12 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main-collision-authority",
+  "description": "The main Perfect Planner window may inspect and append explicitly approved decisions to the versioned app-local collision journal. This grants no project-folder mutation, arbitrary filesystem, process, shell, network, screen, updater, device, menu, tray, path, or window-control capability.",
+  "windows": ["main"],
+  "platforms": ["windows"],
+  "permissions": [
+    "allow-collision-authority-inspect",
+    "allow-collision-authority-approve",
+    "allow-collision-authority-commit"
+  ]
+}

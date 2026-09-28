@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-collision-authority-commit"
+description = "Enables the collision_authority_commit command without any pre-configured scope."
+commands.allow = ["collision_authority_commit"]
+
+[[permission]]
+identifier = "deny-collision-authority-commit"
+description = "Denies the collision_authority_commit command without any pre-configured scope."
+commands.deny = ["collision_authority_commit"]

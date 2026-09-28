@@ -1,0 +1,447 @@
+import { createHash, randomUUID } from "node:crypto";
+import { lstat, mkdtemp, mkdir, open, readFile, readdir, realpath, rename, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+import { censusRepository } from "../src/node/repositoryCensus.mjs";
+import { reconcileRegisteredRoots } from "../src/node/documentRegistry.mjs";
+import { appendJournalEvent, readJournal, verifyJournal } from "../src/node/journalStore.mjs";
+import { runProof } from "../src/node/proofRunner.mjs";
+import { createSession, heartbeatSession, inspectSessions, readSessionRegistry, releaseSession } from "../src/node/sessionRegistry.mjs";
+import { assessCiTier3, deriveCiPlan, fetchRemoteCiStatus } from "../src/node/ciDerivation.mjs";
+import { rehearseMergedState } from "../src/node/mergedStateRunner.mjs";
+import { awaitConfirmation, requestConfirmation } from "../src/node/confirmationStore.mjs";
+import { writeCompletionReport } from "../src/node/completionReport.mjs";
+import { buildEvidenceBundle } from "../src/node/evidenceBundle.mjs";
+import { ledgerTasks } from "../src/plannerWorkspaceData.js";
+import { evaluateBlueprint } from "../src/engine/blueprintEngine.js";
+import { architectureTemplates, evaluateArchitectureRulebook, freezeArchitectureContract, verifyArchitectureContract } from "../src/engine/rulebookEngine.js";
+import { assessViability } from "../src/engine/viabilityEngine.js";
+import { assessTechnicalDebt } from "../src/engine/debtEngine.js";
+import { DEFAULT_DEBT_SURFACES, scanDebtSurfaces } from "../src/node/debtSurfaceScanner.mjs";
+import { createBoundedStaticAnalyzerAdapter } from "../src/node/debtBoundedStaticAnalyzer.mjs";
+import { CONVEYOR_STAGES, assessConveyorTransition, canonicalWorkUnit } from "../src/engine/conveyorEngine.js";
+import { createLocalDraftEnvelope, generateLocalIdentity, openLocalDraftEnvelope } from "../src/node/localHandoff.mjs";
+import { assessPeerReview, openProviderVault, redactProviderVault, sealProviderVault } from "../src/node/providerReview.mjs";
+import { assessNameCandidates, assessRepositorySonar, generateUnverifiedNames } from "../src/engine/sonarEngine.js";
+import { runMutationCampaign } from "../src/engine/mutationEngine.js";
+import { buildTruthGuaranteeCampaign } from "../src/engine/truthGuaranteeMatrix.js";
+import { authorizeNativeOperation, compileNativeCapabilityPolicy } from "../src/engine/nativeCapabilityPolicy.js";
+import { createIdentityVault, inspectIdentityVault, openIdentityVault } from "../src/node/identityVault.mjs";
+import { acceptLocalDraft, inspectDraftReceipt, listLocalInbox, publishLocalDraft } from "../src/node/draftMailbox.mjs";
+import { inspectProviderBudget, prepareProviderReviewRequest, recordProviderReviewUsage, reserveProviderReviewBudget, validateProviderReviewResponse } from "../src/node/providerReviewGateway.mjs";
+import { captureIsolatedScreenshot, createChromiumScreenshotAdapter, validatePngScreenshot } from "../src/node/screenshotEvidence.mjs";
+import { inspectArchitectureContracts, publishArchitectureContract, readArchitectureContract } from "../src/node/architectureContractStore.mjs";
+import { assessComponentPlans } from "../src/engine/componentPlanEngine.js";
+import { currentComponentPlanInput } from "../src/engine/componentPlanSeed.js";
+import { assessCollisions } from "../src/engine/collisionEngine.js";
+import { collisionSeedManifests } from "../src/engine/collisionSeed.js";
+
+const publicationFiles = ["truth-core-report.json", "completion-report.json", "completion-report.md", "evidence-bundle.html"];
+const fileSha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
+const wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+
+async function acquireReleaseTruthLock(clientDirectory, options = {}) {
+  const timeoutMs = options.lockTimeoutMs ?? 30_000;
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 60_000) {
+    throw new Error("Release truth lock timeout must be an integer from 1 to 60000ms.");
+  }
+  const lockPath = path.join(clientDirectory, ".truth-release.lock");
+  const token = `${process.pid}:${randomUUID()}`;
+  const deadline = Date.now() + timeoutMs;
+  let handle;
+  while (!handle) {
+    try {
+      handle = await open(lockPath, "wx", 0o600);
+    } catch (error) {
+      if (!["EEXIST", "ENOENT", "EPERM"].includes(error?.code)) throw error;
+      if (Date.now() >= deadline) {
+        throw new Error("Timed out waiting for the release truth publisher lock.", { cause: error });
+      }
+      await wait(50);
+    }
+  }
+  await handle.writeFile(token, "utf8");
+  return async () => {
+    await handle.close();
+    let current;
+    try {
+      current = await readFile(lockPath, "utf8");
+    } catch (error) {
+      if (error?.code === "ENOENT") return;
+      throw error;
+    }
+    if (current !== token) throw new Error("Release truth publisher lock identity changed before release.");
+    await rm(lockPath, { force: true });
+  };
+}
+
+export async function assessScreenshotTruth(projectRoot, temporaryRoot, screenshotCapture) {
+  const capturedScreenshot = screenshotCapture?.adapter ? await captureIsolatedScreenshot({
+    planId: "PP-CLEANROOM",
+    itemId: "SCREENSHOT",
+    targetUrl: screenshotCapture.targetUrl,
+    allowedRoot: temporaryRoot,
+    outputPath: path.join(temporaryRoot, "fresh-ui-proof.png"),
+    adapter: screenshotCapture.adapter,
+  }, { viewport: screenshotCapture.viewport, validation: screenshotCapture.validation }) : null;
+  const validatedScreenshot = validatePngScreenshot(await readFile(capturedScreenshot?.artifactPath ?? path.join(projectRoot, "public", "assets", "evidence", "whole-plan-map.png")), screenshotCapture?.validation);
+  const engineValid = validatedScreenshot.valid && validatedScreenshot.blank === false && validatedScreenshot.width >= 320 && validatedScreenshot.height >= 180;
+  const capturePerformedThisRun = capturedScreenshot?.capturePerformedThisRun === true && capturedScreenshot.artifactHash === validatedScreenshot.sha256;
+  return Object.freeze({ engineValid, validatedExistingArtifact: capturedScreenshot ? null : "public/assets/evidence/whole-plan-map.png", captureAdapter: capturedScreenshot?.adapter ?? null, artifactHash: validatedScreenshot.sha256, width: validatedScreenshot.width, height: validatedScreenshot.height, blank: validatedScreenshot.blank, capturePerformedThisRun, viewingAttestedThisRun: false, proofAccepted: false });
+}
+
+export async function publishVerifiedTruthGeneration(outputRoot, stagingDirectory, options = {}) {
+  const artifacts = [];
+  for (const name of publicationFiles) {
+    const bytes = await readFile(path.join(stagingDirectory, name));
+    if (!bytes.length) throw new Error(`Truth generation artifact is empty: ${name}.`);
+    if (name.endsWith(".json")) JSON.parse(bytes.toString("utf8"));
+    artifacts.push({ name, sha256: fileSha256(bytes), size: bytes.length });
+  }
+  const generationId = fileSha256(Buffer.from(artifacts.map((item) => `${item.name}:${item.sha256}`).join("\n")));
+  const generationsRoot = path.join(outputRoot, "generations");
+  const generationDirectory = path.join(generationsRoot, generationId);
+  await mkdir(generationsRoot, { recursive: true });
+  try { await rename(stagingDirectory, generationDirectory); }
+  catch (error) {
+    if (!["EEXIST", "ENOTEMPTY"].includes(error.code)) throw error;
+    await rm(stagingDirectory, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+  }
+  for (const artifact of artifacts) {
+    const published = await readFile(path.join(generationDirectory, artifact.name));
+    if (fileSha256(published) !== artifact.sha256) throw new Error(`Published truth generation failed hash verification: ${artifact.name}.`);
+  }
+  const manifest = { schemaVersion: 1, generationId, generatedAt: options.generatedAt ?? new Date().toISOString(), directory: `generations/${generationId}`, artifacts };
+  const pointerPath = path.join(outputRoot, "current-generation.json");
+  const temporaryPointer = `${pointerPath}.${process.pid}.${randomUUID()}.tmp`;
+  await writeFile(temporaryPointer, `${JSON.stringify(manifest, null, 2)}\n`, { flag: "wx" });
+  await rename(temporaryPointer, pointerPath);
+  const verifiedPointer = JSON.parse(await readFile(pointerPath, "utf8"));
+  if (verifiedPointer.generationId !== generationId) throw new Error("Truth generation pointer verification failed.");
+  return { manifest, pointerPath, generationDirectory };
+}
+
+export async function generateTruthReport(projectRoot = path.resolve(process.argv[2] ?? process.cwd()), options = {}) {
+const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "pp-truth-report-"));
+const journalPath = path.join(temporaryRoot, "journal.jsonl");
+const generatedAt = new Date().toISOString();
+try {
+  const census = await censusRepository(projectRoot, { generatedAt });
+  const componentCatalog = assessComponentPlans(currentComponentPlanInput);
+  const collisionPlan = assessCollisions(collisionSeedManifests);
+  const collisionPlanValid = collisionPlan.manifestErrors.length === 0 && collisionPlan.collisions.length === 3 && collisionPlan.hardStops === 1;
+  const documentRegistryPath = path.join(temporaryRoot, "document-registry.json");
+  const documentRegistryFirst = await reconcileRegisteredRoots(documentRegistryPath, [{ id: "cleanroom", path: projectRoot }], { observedAt: generatedAt, actor: "truth-report" });
+  const documentRegistrySecond = await reconcileRegisteredRoots(documentRegistryPath, [{ id: "cleanroom", path: projectRoot }], { observedAt: generatedAt, actor: "truth-report" });
+  const documentRegistryValid = documentRegistryFirst.counts.active === census.fileCount
+    && documentRegistryFirst.counts.added === census.fileCount
+    && documentRegistrySecond.counts.active === census.fileCount
+    && documentRegistrySecond.counts.added === 0
+    && documentRegistrySecond.registry.sources.every((source) => source.sourceId.startsWith("SRC-AUTO-") && source.revisions.length === 1);
+  await Promise.all(Array.from({ length: 24 }, (_, index) => appendJournalEvent(journalPath, { action: "contention-proof", payload: { index } }, { actor: `worker-${index % 4}` })));
+  const proofScript = path.join(temporaryRoot, "proof-fixture.mjs");
+  await writeFile(proofScript, "console.log('truth-core proof runner green');\n");
+  const proof = await runProof({ allowedRoot: temporaryRoot, cwd: temporaryRoot, evidenceDirectory: path.join(temporaryRoot, "evidence"), journalPath, command: process.execPath, args: [proofScript], policy: { allowedExecutables: [process.execPath] }, planId: "PP-TRUTH", itemId: "RUNNER-1", actor: "truth-report" });
+  const sessionPath = path.join(temporaryRoot, "sessions.json");
+  const session = await createSession(sessionPath, { actor: "truth-report", claim: "RUNNER-1" }, { timestamp: generatedAt });
+  await heartbeatSession(sessionPath, session, { timestamp: new Date(Date.parse(generatedAt) + 1000).toISOString() });
+  const durableSessionCount = (await readSessionRegistry(sessionPath)).sessions.length;
+  await releaseSession(sessionPath, session, { timestamp: new Date(Date.parse(generatedAt) + 2000).toISOString(), reason: "proof accepted" });
+  const visibleSessions = await inspectSessions(sessionPath, { now: Date.parse(generatedAt) + 3000 });
+  const ci = await deriveCiPlan(projectRoot);
+  let localMergedState = { schemaVersion: 1, state: "grey", reason: "exact target/source refs and an approved rehearsal base were not supplied", evidence: [], cleanup: null };
+  if (options.mergedStateRehearsal) {
+    try { localMergedState = await rehearseMergedState({ ...options.mergedStateRehearsal, repositoryRoot: projectRoot, ciPlan: ci }); }
+    catch (error) { localMergedState = { schemaVersion: 1, state: "grey", reason: `merged-state rehearsal unavailable: ${error.message}`, evidence: [], cleanup: null }; }
+  }
+  let remoteCiStatus = { schemaVersion: 1, state: "grey", reason: "bounded remote CI status boundary was not configured", checks: [] };
+  if (options.remoteCiRequest && options.remoteCiBoundary) {
+    try { remoteCiStatus = await fetchRemoteCiStatus(options.remoteCiRequest, options.remoteCiBoundary); }
+    catch (error) { remoteCiStatus = { schemaVersion: 1, state: "grey", reason: `remote CI status unavailable: ${error.message}`, checks: [] }; }
+  }
+  const { exactMergedTruth, ciTier3 } = assessCiTier3(localMergedState, remoteCiStatus);
+  const confirmationPath = path.join(temporaryRoot, "confirmations.json");
+  const confirmation = await requestConfirmation(confirmationPath, { planId: "PP-TRUTH", itemId: "HUMAN-1", question: "Does a missing human decision stay pending?", requestedBy: "truth-report" }, { timestamp: generatedAt });
+  const confirmationWait = await awaitConfirmation(confirmationPath, confirmation, { timeoutMs: 0 });
+  let forgedWatcherRefused = false;
+  try { await awaitConfirmation(confirmationPath, { ...confirmation, watcherToken: "forged" }, { timeoutMs: 0 }); }
+  catch { forgedWatcherRefused = true; }
+  const blueprint = evaluateBlueprint({ templateId: "local-collaboration", platform: "tauri", motive: "money", autopilot: true, publicUsers: true, answers: { participantModel: "named local users", handoffProtocol: "signed encrypted draft", conflictPolicy: "collision gate first", encryptionModel: "recipient public key", identityModel: "local identity key", recoveryPolicy: "export and restore", exitStrategy: "portable JSON" }, mustHaves: [{ title: "No silent collision", acceptance: "overlapping writes block allocation" }], dependencies: [], debtBudget: "zero critical", contingencyTrigger: "dependency proof fails" });
+  const rulebook = evaluateArchitectureRulebook({ templateId: "ai-autopilot-control-plane", templateVersion: 1, platform: "tauri", brief: { autopilot: true, localFirst: true }, useCases: ["ai-autopilot", "desktop-distribution"], answers: { collisionPolicy: "fail closed", proofPolicy: "paired evidence", capabilityPolicy: "deny by default" }, capabilities: [{ id: "native-process", necessity: "mandatory" }], scenarios: [], dependencies: [], decisions: [], nonFunctional: {} });
+  const completeScenario = (kind) => ({ kind, trigger: "named threshold", detection: "machine signal", owner: "owner", immediateAction: "stop", recovery: "fallback", verification: "proof rerun" });
+  const completeDecision = (kind) => ({ kind, choice: `${kind} choice`, rationale: "evidence-backed fit", evidence: "ADR source", alternatives: [{ choice: "other", rejectionReason: "fails a stated constraint" }] });
+  const completeArchitectureInput = { templateId: "ai-autopilot-control-plane", templateVersion: 1, platform: "tauri", brief: { autopilot: true, localFirst: true }, useCases: ["ai-autopilot", "desktop-distribution"], answers: { collisionPolicy: "fail closed", proofPolicy: "paired proof", rollbackPolicy: "restore checkpoint", capabilityPolicy: "deny by default", humanStopPolicy: "explicit gate", costCeiling: "$5/run", osTargets: ["windows"], updateSigning: "signed", rollbackChannel: "stable previous" }, capabilities: [{ id: "native-process", necessity: "mandatory", mitigation: "reviewed bounded sidecar", proof: "capability test" }], scenarios: ["security-breach", "data-loss", "critical-dependency-failure", "vendor-exit"].map(completeScenario), dependencies: [{ name: "Tauri", purpose: "desktop shell", license: "MIT/Apache-2.0", pinnedVersion: "2.x exact lock", maintenanceEvidence: "release history", securityEvidence: "advisory review", critical: true, fallback: "PWA reduced mode", switchTrigger: "native proof fails", dependsOn: [] }], decisions: ["platform", "data", "identity-auth", "state-sync", "deployment-distribution"].map(completeDecision), nonFunctional: { performanceBudget: "startup P80 <2s", securityTarget: "zero critical", accessibilityTarget: "WCAG 2.2 AA", operatingCostCeiling: "$100/month", recoveryTarget: "RPO 0 local ledger", observabilityProof: "hashed run report" } };
+  const frozenArchitecture = await freezeArchitectureContract(completeArchitectureInput, { planId: "PP-TRUTH", actor: "truth-report", approvedAt: generatedAt });
+  const tamperedArchitecture = structuredClone(frozenArchitecture); tamperedArchitecture.input.answers.costCeiling = "$500/run";
+  const tamperedArchitectureVerification = await verifyArchitectureContract(tamperedArchitecture);
+  const architectureRegistryRoot = path.join(temporaryRoot, "architecture-registry");
+  const firstArchitectureRegistration = await publishArchitectureContract(architectureRegistryRoot, frozenArchitecture, { actor: "truth-report", timestamp: generatedAt });
+  const successorArchitectureInput = structuredClone(completeArchitectureInput); successorArchitectureInput.answers.costCeiling = "$6/run";
+  const successorApprovedAt = new Date(Date.parse(generatedAt) + 1000).toISOString();
+  const successorArchitecture = await freezeArchitectureContract(successorArchitectureInput, { planId: "PP-TRUTH", actor: "truth-report", approvedAt: successorApprovedAt });
+  const secondArchitectureRegistration = await publishArchitectureContract(architectureRegistryRoot, successorArchitecture, { actor: "truth-report", timestamp: successorApprovedAt, supersedes: frozenArchitecture.digest });
+  const architectureRegistry = await inspectArchitectureContracts(architectureRegistryRoot, "PP-TRUTH");
+  const architectureRegistryRead = await readArchitectureContract(architectureRegistryRoot, "PP-TRUTH", 1);
+  const architectureRegistryValid = architectureRegistry.valid && architectureRegistry.count === 2 && architectureRegistry.registrations[0].contractDigest === firstArchitectureRegistration.contractDigest && architectureRegistry.head.contractDigest === secondArchitectureRegistration.contractDigest && architectureRegistry.head.supersedes === frozenArchitecture.digest && architectureRegistryRead.contract.digest === frozenArchitecture.digest;
+  const viability = assessViability({ brief: { goal: "Stop unsafe agent builds", business: "Local planning control plane", motive: "money", targetAudience: "software teams", geography: "not yet evidenced" } }, { now: Date.parse(generatedAt) });
+  const tauriAnalyzerScript = path.join(projectRoot, "scripts", "tauri-technical-debt-analyzer.mjs");
+  const nativeDebtAnalyzer = options.nativeDebtAnalyzer ?? createBoundedStaticAnalyzerAdapter({ executablePath: process.execPath, analyzerName: "perfect-planner-tauri-security-clippy-v1", fixedArgs: [tauriAnalyzerScript], timeoutMs: 300_000, maxOutputBytes: 2_000_000 });
+  const debtScan = await scanDebtSurfaces(projectRoot, { capturedAt: generatedAt, analyzers: { native: nativeDebtAnalyzer } });
+  const debt = assessTechnicalDebt(debtScan, {}, { requiredSurfaces: DEFAULT_DEBT_SURFACES.map((surface) => surface.id) });
+  const debtCoverageHonest = (debt.verdict === "WITHIN_BUDGET" && debt.coverage.covered === 4 && debt.coverage.missing.length === 0)
+    || (debt.verdict === "UNKNOWN" && debt.coverage.missing.includes("native"));
+  const conveyorUnit = canonicalWorkUnit({ planId: "PP-014", taskId: "B07", slug: "collision-engine", owner: "Agent A" });
+  const conveyorClaim = assessConveyorTransition(conveyorUnit.unit, "CLAIMED", { sessionState: "active", collisionClear: true });
+  const handoffSender = generateLocalIdentity("truth-sender"); const handoffRecipient = generateLocalIdentity("truth-recipient");
+  const handoffEnvelope = createLocalDraftEnvelope({ senderId: handoffSender.actorId, recipientId: handoffRecipient.actorId, senderSigningPrivateKey: handoffSender.signingPrivateKey, senderSigningPublicKey: handoffSender.signingPublicKey, recipientEncryptionPublicKey: handoffRecipient.encryptionPublicKey, draft: { planId: "PP-TRUTH", state: "draft" } }, { createdAt: generatedAt, expiresAt: new Date(Date.parse(generatedAt) + 60_000).toISOString() });
+  const handoffOpened = openLocalDraftEnvelope(handoffEnvelope, { expectedSenderId: handoffSender.actorId, expectedSenderSigningPublicKey: handoffSender.signingPublicKey, recipientId: handoffRecipient.actorId, recipientEncryptionPrivateKey: handoffRecipient.encryptionPrivateKey }, { now: Date.parse(generatedAt) + 1000, seenDraftIds: new Set() });
+  const mailboxPath = path.join(temporaryRoot, "mailbox");
+  const mailboxPublished = await publishLocalDraft(mailboxPath, handoffEnvelope, { senderId: handoffSender.actorId, timestamp: generatedAt });
+  const mailboxInbox = await listLocalInbox(mailboxPath, handoffRecipient.actorId);
+  const mailboxOpened = await acceptLocalDraft(mailboxPath, handoffEnvelope.draftId, { expectedSenderId: handoffSender.actorId, expectedSenderSigningPublicKey: handoffSender.signingPublicKey, recipientId: handoffRecipient.actorId, recipientEncryptionPrivateKey: handoffRecipient.encryptionPrivateKey }, { now: Date.parse(generatedAt) + 1000, timestamp: new Date(Date.parse(generatedAt) + 1000).toISOString(), actor: handoffRecipient.actorId });
+  const mailboxReceipt = await inspectDraftReceipt(mailboxPath, handoffEnvelope.draftId);
+  const mailboxValid = mailboxInbox.length === 1 && mailboxInbox[0].content === "ENCRYPTED" && mailboxOpened.draft.planId === "PP-TRUTH" && mailboxReceipt.draft === "REDACTED" && mailboxReceipt.envelopeHash === mailboxPublished.envelopeHash && !JSON.stringify(mailboxInbox).includes("PP-TRUTH") && !JSON.stringify(mailboxReceipt).includes("PP-TRUTH");
+  const providerSecrets = [{ providerId: "review-a", apiKey: "ephemeral-a" }, { providerId: "review-b", apiKey: "ephemeral-b" }];
+  const providerVault = sealProviderVault(providerSecrets, "ephemeral-build-passphrase"); const openedProviderVault = openProviderVault(providerVault, "ephemeral-build-passphrase");
+  const clearFinding = { verdict: "clear", evidence: "fixture evidence" };
+  const peerReview = assessPeerReview({ reviews: [{ providerId: "review-a", promptHash: "p".repeat(64), artifactHash: "a".repeat(64), completedAt: generatedAt, findings: { architecture: clearFinding, security: clearFinding, tests: clearFinding, debt: clearFinding } }], requiredQuorum: 2 });
+  const reviewPolicy = { providers: [{ id: "review-a", endpoint: "https://review.example.invalid/v1/review", model: "review-fixture-1", inputUsdPerMillion: 1, outputUsdPerMillion: 2 }], limits: { maxRequests: 2, maxInputTokens: 5000, maxOutputTokens: 1000, maxCostUsd: 0.01, maxProviderRequests: 2, maxProviderCostUsd: 0.01 } };
+  const reviewRequest = prepareProviderReviewRequest({ providerId: "review-a", secretHandle: "secret://provider/review-a/key-1", planId: "PP-TRUTH", itemId: "REVIEW-1", artifactId: "truth-capsule", artifact: { summary: "fixture", apiKey: "must-not-leave" }, maxOutputTokens: 300, requestId: "TRUTH-REVIEW-1", createdAt: generatedAt }, reviewPolicy);
+  const reviewBudgetPath = path.join(temporaryRoot, "review-budget.json");
+  const reviewReservation = await reserveProviderReviewBudget(reviewBudgetPath, reviewRequest, reviewPolicy, { timestamp: generatedAt });
+  const reviewUsage = await recordProviderReviewUsage(reviewBudgetPath, reviewRequest.requestId, { inputTokens: reviewRequest.inputTokens, outputTokens: 100, costUsd: reviewRequest.estimatedCostUsd }, { timestamp: generatedAt });
+  const reviewFinding = { verdict: "clear", evidence: "fixture evidence" };
+  const reviewResponse = validateProviderReviewResponse(reviewRequest, { requestId: reviewRequest.requestId, providerId: reviewRequest.providerId, promptHash: reviewRequest.promptHash, artifactHash: reviewRequest.artifactHash, completedAt: generatedAt, findings: { architecture: reviewFinding, security: reviewFinding, tests: reviewFinding, debt: reviewFinding } });
+  const reviewBudget = await inspectProviderBudget(reviewBudgetPath);
+  const reviewGatewayValid = reviewRequest.redactions.length === 1 && !JSON.stringify(reviewRequest).includes("must-not-leave") && reviewReservation.reservation.status === "RESERVED" && reviewUsage.reservation.status === "RECORDED" && reviewUsage.accepted && reviewResponse.providerId === "review-a" && reviewBudget.totals.overruns === 0;
+  const screenshotTruth = await assessScreenshotTruth(projectRoot, temporaryRoot, options.screenshotCapture);
+  const screenshotEngineValid = screenshotTruth.engineValid;
+  const screenshotCapturedThisRun = screenshotTruth.capturePerformedThisRun;
+  const screenshotViewedThisRun = screenshotTruth.viewingAttestedThisRun;
+  const repositorySonar = assessRepositorySonar({ requiredCapabilities: ["planning-ledger", "collision-guard"], candidates: [] }, { now: Date.parse(generatedAt) });
+  const nameSonar = assessNameCandidates(generateUnverifiedNames(["perfect", "planner"]), { now: Date.parse(generatedAt) });
+  const nativePolicy = compileNativeCapabilityPolicy({ planId: "PP-TRUTH", taskId: "NATIVE-1", mode: "autopilot", grants: [{ capability: "filesystem.read", roots: [projectRoot] }, { capability: "device.control", devices: ["phone"] }] });
+  const nativeRead = authorizeNativeOperation(nativePolicy, { capability: "filesystem.read", target: path.join(projectRoot, "package.json"), planId: "PP-TRUTH", taskId: "NATIVE-1" }, { now: Date.parse(generatedAt) });
+  const nativeDevice = authorizeNativeOperation(nativePolicy, { capability: "device.control", target: "phone", action: "open", planId: "PP-TRUTH", taskId: "NATIVE-1" }, { now: Date.parse(generatedAt) });
+  const nativePolicyValid = nativeRead.allowed === true && nativeDevice.allowed === false && nativeDevice.reasons.some((reason) => reason.includes("forbidden during autopilot"));
+  const identityVaultPath = path.join(temporaryRoot, "identities.vault.json");
+  await createIdentityVault(identityVaultPath, "ephemeral truth identity passphrase", ["truth-sender", "truth-recipient"], { timestamp: generatedAt, actor: "truth-report" });
+  const identityVaultInspection = await inspectIdentityVault(identityVaultPath);
+  const identityVaultOpened = await openIdentityVault(identityVaultPath, "ephemeral truth identity passphrase");
+  const identityVaultValid = identityVaultInspection.identityCount === 2 && identityVaultInspection.privateKeys === "REDACTED" && identityVaultOpened.identities.length === 2 && !JSON.stringify(identityVaultInspection).includes("PRIVATE KEY");
+  const journal = await readJournal(journalPath);
+  const integrity = await verifyJournal(journalPath);
+  const mutationReport = await runMutationCampaign(buildTruthGuaranteeCampaign({
+    boundedCensus: census.fileCount > 0 && census.skipped.length === 0,
+    stableDocumentRegistry: documentRegistryValid,
+    journalIntegrity: integrity.valid && journal.length === 26
+      && journal.slice(0, 24).every(entry => entry.action === "contention-proof")
+      && new Set(journal.slice(0, 24).map(entry => entry.payload.index)).size === 24
+      && journal[24].action === "proof-admitted"
+      && journal[25].action === "prove"
+      && journal[24].payload.runId === proof.runId
+      && journal[25].payload.runId === proof.runId,
+    machineProof: proof.proven && proof.exit === 0 && !proof.timedOut,
+    durableSession: durableSessionCount === 1 && visibleSessions[0]?.state === "released" && !("token" in visibleSessions[0]),
+    ciHonesty: ci.state === "derived" && (exactMergedTruth || ciTier3 !== "green"),
+    confirmationFailClosed: confirmationWait.state === "waiting" && forgedWatcherRefused,
+    blueprintFailClosed: blueprint.verdict === "BLOCKED" && blueprint.requiredQuestions.length > 0,
+    rulebookFailClosed: rulebook.verdict === "BLOCKED" && rulebook.requiredQuestions.length > 0 && rulebook.executionMap?.direction === "top-down",
+    architectureContractTamperRefused: frozenArchitecture.digest.length === 64 && tamperedArchitectureVerification.valid === false && tamperedArchitectureVerification.reasons.some((reason) => reason.includes("changed after approval")),
+    architectureRegistryLinearHistory: architectureRegistryValid,
+    viabilityFailClosed: viability.verdict === "BLOCKED" && viability.evidence.present === 0,
+    debtCoverageHonest,
+    conveyorClaimGuard: conveyorUnit.valid && conveyorClaim.allowed,
+    handoffConfidentiality: handoffOpened.draft.planId === "PP-TRUTH" && !JSON.stringify(handoffEnvelope).includes("PP-TRUTH"),
+    mailboxOneTimeAcceptance: mailboxValid,
+    peerQuorumFailClosed: peerReview.verdict === "BLOCKED" && peerReview.providers.length === 1,
+    providerBudgetRedaction: reviewGatewayValid,
+    screenshotUnprovenWithoutViewing: screenshotEngineValid && !screenshotViewedThisRun,
+    sonarNoAutoImport: repositorySonar.verdict === "BLOCKED" && nameSonar.every((name) => name.status !== "AVAILABLE_AT_CHECK_TIME"),
+    autopilotDeviceDenial: nativePolicyValid,
+    identityPrivateKeyRedaction: identityVaultValid,
+  }));
+  const report = {
+    schemaVersion: 1,
+    generatedAt,
+    root: options.exposeAbsoluteRoot === true ? projectRoot : path.basename(projectRoot),
+    census: { fileCount: census.fileCount, summary: census.summary, skipped: census.skipped.length, digest: census.digest },
+    componentCatalog: { ready: componentCatalog.ready, verdict: componentCatalog.verdict, blockerCount: componentCatalog.blockers.length, coverage: componentCatalog.coverage },
+    collisionPlan: { valid: collisionPlanValid, collisionCount: collisionPlan.collisions.length, hardStops: collisionPlan.hardStops, manifestErrors: collisionPlan.manifestErrors },
+    documentRegistry: { valid: documentRegistryValid, generation: documentRegistrySecond.generation, active: documentRegistrySecond.counts.active, deleted: documentRegistrySecond.counts.deleted, initialAdded: documentRegistryFirst.counts.added, duplicateAdds: documentRegistrySecond.counts.added, refused: documentRegistrySecond.counts.refused, watcherEngineAvailable: true, continuouslyRunning: false },
+    journal: { entries: journal.length, contentionEntries: 24, valid: integrity.valid, brokenAt: integrity.brokenAt, concurrentWriters: 4 },
+    proofRunner: { proven: proof.proven, exit: proof.exit, timedOut: proof.timedOut, artifact: proof.artifactName, sha256: proof.sha256, durationMs: proof.durationMs },
+    sessionRegistry: { valid: durableSessionCount === 1 && visibleSessions.length === 1 && visibleSessions[0].state === "released" && !("token" in visibleSessions[0]), durableSessionCount, released: visibleSessions.filter((item) => item.state === "released").length, tokenRedacted: !("token" in visibleSessions[0]) },
+    ciDerivation: { state: ci.state, reason: ci.reason, workflowCount: ci.workflows.length, gateCount: ci.gates.length, tier3: ciTier3, exactMergedTruth, localMergedState, remoteStatus: remoteCiStatus },
+    confirmationStore: { failClosed: confirmationWait.state === "waiting" && confirmationWait.request.status === "pending" && forgedWatcherRefused, state: confirmationWait.state, forgedWatcherRefused, humanDecisionRecorded: false },
+    blueprintGate: { verdict: blueprint.verdict, score: blueprint.score, blockers: blueprint.blockers, requiredQuestions: blueprint.requiredQuestions },
+    rulebookGate: { verdict: rulebook.verdict, templateCount: architectureTemplates.length, selectedTemplate: rulebook.template, blockerCount: rulebook.blockers.length, blockers: rulebook.blockers, requiredQuestionCount: rulebook.requiredQuestions.length, requiredQuestions: rulebook.requiredQuestions, scenarioCoverage: rulebook.scenarioCoverage, decisionCoverage: rulebook.decisionCoverage, capabilityAssessment: rulebook.capabilityAssessment, executionMap: rulebook.executionMap },
+    architectureContractGate: { valid: tamperedArchitectureVerification.valid === false, policyVersion: frozenArchitecture.policyVersion, digest: frozenArchitecture.digest, template: frozenArchitecture.template, stages: frozenArchitecture.executionMap.nodes.length, tamperRefused: tamperedArchitectureVerification.reasons.some((reason) => reason.includes("changed after approval")) },
+    architectureRegistry: { valid: architectureRegistryValid, planId: architectureRegistry.planId, revisions: architectureRegistry.count, head: architectureRegistry.head, firstDigest: architectureRegistry.registrations[0].contractDigest, duplicateOrForkAllowed: false },
+    viabilityGate: { verdict: viability.verdict, blockerCount: viability.blockers.length, warningCount: viability.warnings.length, evidence: viability.evidence, economics: viability.economics, delivery: viability.delivery },
+    debtGate: { verdict: debt.verdict, scanId: debtScan.scanId, blockerCount: debt.blockers.length, blockers: debt.blockers, coverage: debt.coverage, counts: debt.counts, weightedOpen: debt.weightedOpen, delta: debt.delta, analyzerEvidence: debtScan.evidence, findings: debtScan.findings, refused: debtScan.refused },
+    conveyorGate: { valid: conveyorUnit.valid && conveyorClaim.allowed, stations: CONVEYOR_STAGES, branch: conveyorUnit.unit?.branch, worktree: conveyorUnit.unit?.worktree, claimAllowed: conveyorClaim.allowed },
+    localHandoff: { valid: handoffOpened.draft.planId === "PP-TRUTH" && !JSON.stringify(handoffEnvelope).includes("PP-TRUTH"), senderSigningFingerprint: handoffSender.signingFingerprint, recipientEncryptionFingerprint: handoffRecipient.encryptionFingerprint, plaintextExposed: JSON.stringify(handoffEnvelope).includes("PP-TRUTH") },
+    peerReviewGate: { vaultValid: openedProviderVault.length === 2 && !JSON.stringify(providerVault).includes("ephemeral-a"), vault: redactProviderVault(providerVault), verdict: peerReview.verdict, providerCount: peerReview.providers.length, requiredQuorum: peerReview.requiredQuorum, blockers: peerReview.blockers },
+    providerReviewGateway: { valid: reviewGatewayValid, requestHash: reviewRequest.requestHash, promptHash: reviewRequest.promptHash, artifactHash: reviewRequest.artifactHash, redactionCount: reviewRequest.redactions.length, reservedCostUsd: reviewRequest.estimatedCostUsd, usageStatus: reviewUsage.reservation.status, overruns: reviewBudget.totals.overruns, liveProviderCalled: false },
+    screenshotEvidence: screenshotTruth,
+    sonarGate: { repositoryVerdict: repositorySonar.verdict, candidateCount: repositorySonar.candidates.length, autoImportAllowed: false, nameCount: nameSonar.length, verifiedNameCount: nameSonar.filter((name) => name.status === "AVAILABLE_AT_CHECK_TIME").length, generatedNameStatus: nameSonar[0]?.status ?? "UNAVAILABLE" },
+    mutationGate: { verdict: mutationReport.verdict, totals: mutationReport.totals, coverage: mutationReport.coverage, results: mutationReport.results.map(({ id, guarantee, state }) => ({ id, guarantee, state })) },
+    nativeCapabilityGate: { valid: nativePolicyValid, policyHash: nativePolicy.policyHash, mode: nativePolicy.mode, defaultDecision: nativePolicy.defaultDecision, boundedReadAllowed: nativeRead.allowed, deviceControlAllowed: nativeDevice.allowed, deviceControlReason: nativeDevice.reasons[0] },
+    identityVault: { valid: identityVaultValid, vaultFingerprint: identityVaultInspection.vaultFingerprint, identityCount: identityVaultInspection.identityCount, kdf: identityVaultInspection.kdf, cipher: identityVaultInspection.cipher, privateKeys: identityVaultInspection.privateKeys, osBacked: false },
+    localDraftMailbox: { valid: mailboxValid, inboxCount: mailboxInbox.length, listedContent: mailboxInbox[0]?.content, envelopeHash: mailboxPublished.envelopeHash, acceptedOnce: mailboxReceipt.draftId === handoffEnvelope.draftId, receiptDraft: mailboxReceipt.draft, loginUiAvailable: false },
+    guarantees: ["read-only bounded census", "stable document source identities", "document revisions and deletion history persist", "symbolic links refused", "active locks are never stolen", "concurrent appends serialize", "tampering blocks the next append", "proof commands run without a shell", "unapproved commands are refused", "session claims survive restart", "ownership tokens stay private"],
+  };
+  const outputDirectory = path.resolve(options.outputDirectory ?? path.join(projectRoot, "public", "generated"));
+  const stagingRoot = path.join(outputDirectory, ".cache");
+  await mkdir(stagingRoot, { recursive: true });
+  const stagingDirectory = await mkdtemp(path.join(stagingRoot, "truth-generation-"));
+  await writeFile(path.join(stagingDirectory, "truth-core-report.json"), `${JSON.stringify(report, null, 2)}\n`);
+  const completion = await writeCompletionReport(stagingDirectory, {
+    planId: "PP-CLEANROOM", title: "Perfect Planner clean-room guarantee build", approved: false, openGates: 0,
+    truthCoreValid: componentCatalog.ready && collisionPlanValid && integrity.valid && proof.proven && documentRegistryValid && architectureRegistryValid && nativePolicyValid && identityVaultValid && mailboxValid && reviewGatewayValid && durableSessionCount === 1 && confirmationWait.state === "waiting",
+    ciTier3, completenessReview: false,
+    items: [
+      { id: "CENSUS", title: "Bounded repository census", built: true, tested: true, proven: census.fileCount > 0 },
+      { id: "DOCREG", title: "Durable document reconciliation", built: true, tested: true, proven: documentRegistryValid },
+      { id: "NATIVEPOLICY", title: "Deny-by-default native capability policy", built: true, tested: true, proven: nativePolicyValid },
+      { id: "IDENTITYVAULT", title: "Encrypted durable local identity vault", built: true, tested: true, proven: identityVaultValid },
+      { id: "MAILBOX", title: "Encrypted local draft inbox and receipt", built: true, tested: true, proven: mailboxValid },
+      { id: "REVIEWGATEWAY", title: "Redacted budget-capped provider review gateway", built: true, tested: true, proven: reviewGatewayValid },
+      { id: "SCREENSHOT", title: "Isolated nonblank screenshot and viewing proof", built: true, tested: true, proven: false },
+      { id: "DEBTSCAN", title: "Bounded analyzer-backed debt coverage", built: true, tested: true, proven: debtCoverageHonest },
+      { id: "RULEBOOK", title: "Versioned compatibility, scenario, and use-case rulebook", built: true, tested: true, proven: rulebook.verdict === "BLOCKED" && rulebook.requiredQuestions.length > 0 && rulebook.executionMap?.nodes.length === 7 },
+      { id: "ARCHCONTRACT", title: "Tamper-evident frozen architecture contract", built: true, tested: true, proven: frozenArchitecture.digest.length === 64 && tamperedArchitectureVerification.valid === false },
+      { id: "ARCHREGISTRY", title: "Immutable linear architecture contract registry", built: true, tested: true, proven: architectureRegistryValid },
+      { id: "JOURNAL", title: "Atomic journal", built: true, tested: true, proven: integrity.valid },
+      { id: "PROOF", title: "Guarded proof runner", built: true, tested: true, proven: proof.proven },
+      { id: "SESSION", title: "Durable session registry", built: true, tested: true, proven: durableSessionCount === 1 && visibleSessions[0]?.state === "released" },
+      { id: "CI", title: "Repository-derived CI", built: true, tested: true, proven: exactMergedTruth },
+      { id: "HUMAN", title: "Human confirmation", built: true, tested: true, proven: false },
+    ],
+  }, { generatedAt });
+  await buildEvidenceBundle({ projectRoot, outputPath: path.join(stagingDirectory, "evidence-bundle.html"), tasks: ledgerTasks, truthReport: report, completionReport: completion.report, generatedAt });
+  const publication = await publishVerifiedTruthGeneration(outputDirectory, stagingDirectory, { generatedAt });
+  process.stdout.write(`${JSON.stringify({ ...report, publication: publication.manifest })}\n`);
+} finally {
+  await rm(temporaryRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+}
+}
+
+async function requireRealDirectory(directory, label) {
+  let entry;
+  try {
+    entry = await lstat(directory);
+  } catch {
+    throw new Error(`${label} is missing: ${directory}`);
+  }
+  if (entry.isSymbolicLink() || !entry.isDirectory()) {
+    throw new Error(`${label} must be a real directory: ${directory}`);
+  }
+  return realpath(directory);
+}
+
+async function verifyReleaseTruthDirectory(outputDirectory) {
+  const pointerPath = path.join(outputDirectory, "current-generation.json");
+  const pointer = JSON.parse(await readFile(pointerPath, "utf8"));
+  if (
+    pointer?.schemaVersion !== 1 ||
+    !/^[a-f0-9]{64}$/.test(pointer?.generationId ?? "") ||
+    pointer.directory !== `generations/${pointer.generationId}` ||
+    !Array.isArray(pointer.artifacts) ||
+    pointer.artifacts.length !== publicationFiles.length
+  ) {
+    throw new Error("Release truth generation pointer is invalid.");
+  }
+  const generationRoot = path.join(outputDirectory, "generations");
+  const entries = await readdir(generationRoot, { withFileTypes: true });
+  if (
+    entries.length !== 1 ||
+    !entries[0].isDirectory() ||
+    entries[0].isSymbolicLink() ||
+    entries[0].name !== pointer.generationId
+  ) {
+    throw new Error("Release truth output must contain exactly one verified generation.");
+  }
+  for (const [index, expectedName] of publicationFiles.entries()) {
+    const artifact = pointer.artifacts[index];
+    if (
+      artifact?.name !== expectedName ||
+      !/^[a-f0-9]{64}$/.test(artifact?.sha256 ?? "") ||
+      !Number.isSafeInteger(artifact?.size) ||
+      artifact.size < 1
+    ) {
+      throw new Error(`Release truth manifest entry is invalid: ${expectedName}.`);
+    }
+    const artifactPath = path.join(generationRoot, pointer.generationId, expectedName);
+    const artifactEntry = await lstat(artifactPath);
+    if (artifactEntry.isSymbolicLink() || !artifactEntry.isFile()) {
+      throw new Error(`Release truth artifact must be a regular file: ${expectedName}.`);
+    }
+    const bytes = await readFile(artifactPath);
+    if (bytes.length !== artifact.size || fileSha256(bytes) !== artifact.sha256) {
+      throw new Error(`Release truth artifact verification failed: ${expectedName}.`);
+    }
+  }
+  return pointer;
+}
+
+export async function prepareReleaseTruthGeneration(projectRoot = process.cwd(), options = {}) {
+  const resolvedProjectRoot = path.resolve(projectRoot);
+  const realProjectRoot = await requireRealDirectory(resolvedProjectRoot, "Project root");
+  const distDirectory = path.join(realProjectRoot, "dist");
+  const realDist = await requireRealDirectory(distDirectory, "Vite output");
+  const clientDirectory = path.join(realDist, "client");
+  const realClient = await requireRealDirectory(clientDirectory, "Vite client output");
+  const outputDirectory = path.join(realClient, "generated");
+  const stagingDirectory = path.join(realClient, `.truth-release-${process.pid}-${randomUUID()}`);
+
+  const clientPrefix = `${realClient}${path.sep}`;
+  if (!outputDirectory.startsWith(clientPrefix) || !stagingDirectory.startsWith(clientPrefix)) {
+    throw new Error("Release truth paths escaped the Vite client output.");
+  }
+
+  const releaseLock = await acquireReleaseTruthLock(realClient, options);
+  try {
+    try {
+      const existing = await lstat(outputDirectory);
+      if (existing.isSymbolicLink() || !existing.isDirectory()) {
+        throw new Error("Release truth target must be a real directory.");
+      }
+      if ((await realpath(outputDirectory)) !== outputDirectory) {
+        throw new Error("Release truth target resolved outside its exact path.");
+      }
+      await rm(outputDirectory, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
+    }
+
+    await mkdir(stagingDirectory, { recursive: false });
+    const generate = options.generate ?? generateTruthReport;
+    await generate(realProjectRoot, { ...options, outputDirectory: stagingDirectory });
+    await rm(path.join(stagingDirectory, ".cache"), { recursive: true, force: true });
+    const pointer = await verifyReleaseTruthDirectory(stagingDirectory);
+    await rename(stagingDirectory, outputDirectory);
+    return Object.freeze({ outputDirectory, pointer });
+  } catch (error) {
+    await rm(stagingDirectory, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    throw error;
+  } finally {
+    await releaseLock();
+  }
+}
+
+if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url) {
+  const targetUrl = process.env.PP_SCREENSHOT_TARGET_URL;
+  const executablePath = process.env.PP_SCREENSHOT_CHROMIUM_EXECUTABLE;
+  if (Boolean(targetUrl) !== Boolean(executablePath)) throw new Error("Current-run screenshot capture requires both PP_SCREENSHOT_TARGET_URL and PP_SCREENSHOT_CHROMIUM_EXECUTABLE.");
+  const screenshotCapture = targetUrl && executablePath ? { targetUrl, adapter: createChromiumScreenshotAdapter({ approvedTargets: [targetUrl], executablePath }) } : undefined;
+  const releaseIndex = process.argv.indexOf("--release");
+  if (releaseIndex >= 0) {
+    const requestedRoot = process.argv[releaseIndex + 1];
+    await prepareReleaseTruthGeneration(path.resolve(requestedRoot ?? process.cwd()), { screenshotCapture });
+  } else {
+    await generateTruthReport(path.resolve(process.argv[2] ?? process.cwd()), { screenshotCapture });
+  }
+}
