@@ -99,6 +99,7 @@ impl RetainedInputs{
  // global storage separately; byte_budget is this copy's admitted byte ceiling.
  pub(crate) fn prepare_workspace(&self,profile:&AppContainer,byte_budget:u64,cancel:&AtomicBool,deadline:Instant)->Result<PreparedWorkingCopy>{
   let deadline=self.deadline.map_or(deadline,|d|d.min(deadline));check(cancel,deadline)?;
+  if self.manifest.kind!="NATIVE_TASK_RETAINED_INPUTS"{return Err(INVALID);}
   if self.manifest.profile_sid!=profile.sid_text()||self.manifest.profile_name!=profile.name(){return Err(INVALID);}
   if byte_budget>2*1024*1024*1024||self.manifest.total_bytes>byte_budget{return Err(LIMIT);}
   let(entries,bytes)=inventory(self.root(),&self.guard,cancel,deadline)?;
@@ -131,10 +132,14 @@ impl RetainedInputs{
  }
  pub(crate) fn create(source:&Path,profile:&AppContainer,binding:ArchiveBinding,cancel:&AtomicBool)->Result<Self>{Self::create_observed(source,profile,binding,cancel,||{})}
  pub(crate) fn create_until(source:&Path,profile:&AppContainer,binding:ArchiveBinding,cancel:&AtomicBool,deadline:Instant)->Result<Self>{Self::create_observed_until(source,profile,binding,cancel,Some(deadline),||{})}
+ pub(crate) fn create_runtime_until(source:&Path,profile:&AppContainer,binding:ArchiveBinding,cancel:&AtomicBool,deadline:Instant)->Result<Self>{Self::create_tree(source,profile,binding,cancel,Some(deadline),true,||{})}
  fn create_observed(source:&Path,profile:&AppContainer,binding:ArchiveBinding,cancel:&AtomicBool,before_commit:impl FnOnce())->Result<Self>{
   Self::create_observed_until(source,profile,binding,cancel,None,before_commit)
  }
  fn create_observed_until(source:&Path,profile:&AppContainer,binding:ArchiveBinding,cancel:&AtomicBool,shared_deadline:Option<Instant>,before_commit:impl FnOnce())->Result<Self>{
+  Self::create_tree(source,profile,binding,cancel,shared_deadline,false,before_commit)
+ }
+ fn create_tree(source:&Path,profile:&AppContainer,binding:ArchiveBinding,cancel:&AtomicBool,shared_deadline:Option<Instant>,runtime:bool,before_commit:impl FnOnce())->Result<Self>{
   if !binding_valid(&binding){return Err(INVALID);}let local_deadline=Instant::now()+Duration::from_secs(120);let deadline=shared_deadline.map_or(local_deadline,|d|d.min(local_deadline));check(cancel,deadline)?;
   let _source_pins=pin_directory_names(source)?;let source_guard=CandidateGuard::acquire(source,cancel)?;
   // Inspect all names/streams and hash the pinned population before copying.
@@ -142,7 +147,7 @@ impl RetainedInputs{
   let policy=profile.readonly_descriptors().map_err(|_|UNAVAILABLE)?;
   if serde_json::to_vec(&source_entries).map_err(|_|INVALID)?.len()>32*1024*1024{return Err(LIMIT);}
   let source_index:HashMap<_,_>=source_entries.iter().map(|entry|(entry.path.as_str(),entry)).collect();
-  let root=profile.create_readonly_directory("inputs").map_err(|_|UNAVAILABLE)?;let pins=pin_directory_names(&root)?;
+  let root=profile.create_readonly_directory(if runtime{"runtime"}else{"inputs"}).map_err(|_|UNAVAILABLE)?;let pins=pin_directory_names(&root)?;
   let mut construction=Vec::new();
   let mut directories:Vec<_>=source_guard.pinned_directories().map(|(path,_)|relative(source,path)).collect::<Result<Vec<_>>>()?;
   directories.sort_by_key(|path|(path.matches('/').count(),path.clone()));
@@ -163,11 +168,17 @@ impl RetainedInputs{
   if entries.iter().any(|entry|entry.descriptor!=policy[if entry.path.is_empty(){0}else if entry.kind=="directory"{1}else{2}]){return Err("NATIVE_TASK_ARCHIVE_POLICY_CHANGED");}
   if total_bytes!=source_bytes||entries.len()!=source_entries.len()||entries.iter().zip(&source_entries).any(|(a,b)|a.path!=b.path||a.kind!=b.kind||a.bytes!=b.bytes||a.sha256!=b.sha256){return Err(CHANGED);}
   source_guard.finish()?;check(cancel,deadline)?;guard.validate()?;drop(construction);
-  let manifest=ArchiveManifest{schema_version:1,kind:"NATIVE_TASK_RETAINED_INPUTS".into(),binding,profile_name:profile.name().into(),profile_sid:profile.sid_text().into(),root,readonly_policy:"appcontainer-rx-owner-full-v1".into(),entries,total_bytes,execution_authorized:false};
+  let manifest=ArchiveManifest{schema_version:1,kind:if runtime{"NATIVE_TASK_RETAINED_RUNTIME"}else{"NATIVE_TASK_RETAINED_INPUTS"}.into(),binding,profile_name:profile.name().into(),profile_sid:profile.sid_text().into(),root,readonly_policy:"appcontainer-rx-owner-full-v1".into(),entries,total_bytes,execution_authorized:false};
   let bytes=serde_json::to_vec(&manifest).map_err(|_|INVALID)?;if bytes.len()>32*1024*1024{return Err(LIMIT);}let digest=format!("{:x}",Sha256::digest(&bytes));
   Ok(Self{manifest,digest,guard,_pins:pins,deadline:shared_deadline})
  }
  pub(crate) fn root(&self)->&Path{&self.manifest.root}
+ // Content identity excludes machine/profile ACLs but includes empty dirs and
+ // every retained file. Preflight must bind this digest before native launch.
+ pub(crate) fn content_digest(&self)->Result<String>{
+  let content:Vec<_>=self.manifest.entries.iter().map(|e|(&e.path,&e.kind,e.bytes,&e.sha256)).collect();let bytes=serde_json::to_vec(&content).map_err(|_|INVALID)?;
+  let mut hash=Sha256::new();hash.update(b"NATIVE_TREE_CONTENT_V1\n");hash.update(&bytes);Ok(format!("{:x}",hash.finalize()))
+ }
  pub(crate) fn member(&self,name:&str,directory:bool)->Result<PathBuf>{
   let candidate=if name.is_empty(){self.root().to_path_buf()}else{self.root().join(name.replace('/',"\\"))};
   if relative(self.root(),&candidate)?!=name||!self.manifest.entries.iter().any(|entry|entry.path==name&&entry.kind==if directory{"directory"}else{"file"}){return Err(INVALID);}
@@ -181,11 +192,19 @@ impl RetainedInputs{
   if entries!=self.manifest.entries||bytes!=self.manifest.total_bytes{return Err(CHANGED);}Ok(())
  }
  pub(crate) fn reopen(bytes:&[u8],digest:&str,binding:&ArchiveBinding,cancel:&AtomicBool)->Result<Self>{
+  Self::reopen_tree(bytes,digest,binding,cancel,false,None)
+ }
+ pub(crate) fn reopen_runtime_until(bytes:&[u8],digest:&str,binding:&ArchiveBinding,cancel:&AtomicBool,deadline:Instant)->Result<Self>{
+  Self::reopen_tree(bytes,digest,binding,cancel,true,Some(deadline))
+ }
+ fn reopen_tree(bytes:&[u8],digest:&str,binding:&ArchiveBinding,cancel:&AtomicBool,runtime:bool,deadline:Option<Instant>)->Result<Self>{
+  if let Some(deadline)=deadline{check(cancel,deadline)?;}
   if bytes.len()>32*1024*1024||!hex(digest)||format!("{:x}",Sha256::digest(bytes))!=digest{return Err(INVALID);}
   let manifest:ArchiveManifest=serde_json::from_slice(bytes).map_err(|_|INVALID)?;
-  if manifest.schema_version!=1||manifest.kind!="NATIVE_TASK_RETAINED_INPUTS"||manifest.readonly_policy!="appcontainer-rx-owner-full-v1"||manifest.execution_authorized||manifest.binding!=*binding||!binding_valid(binding)||serde_json::to_vec(&manifest).map_err(|_|INVALID)?!=bytes{return Err(INVALID);}
+  let kind=if runtime{"NATIVE_TASK_RETAINED_RUNTIME"}else{"NATIVE_TASK_RETAINED_INPUTS"};
+  if manifest.schema_version!=1||manifest.kind!=kind||manifest.readonly_policy!="appcontainer-rx-owner-full-v1"||manifest.execution_authorized||manifest.binding!=*binding||!binding_valid(binding)||serde_json::to_vec(&manifest).map_err(|_|INVALID)?!=bytes{return Err(INVALID);}
   let pins=pin_directory_names(&manifest.root)?;let guard=CandidateGuard::acquire(&manifest.root,cancel)?;
-  let retained=Self{manifest,digest:digest.into(),guard,_pins:pins,deadline:None};retained.validate(cancel)?;Ok(retained)
+  let retained=Self{manifest,digest:digest.into(),guard,_pins:pins,deadline};retained.validate(cancel)?;Ok(retained)
  }
 }
 
@@ -216,6 +235,34 @@ impl RetainedInputs{
   // Expire the shared clock without a two-minute test sleep. The real disk
   // archive remains unchanged; validation must not allocate another 120 sec.
   archive.deadline=Some(Instant::now());assert_eq!(archive.validate(&cancel),Err(LIMIT));assert_eq!(archive.finish(&cancel),Err(LIMIT));
+ }
+ #[test]fn runtime_kind_content_identity_and_reopen_deadline_are_explicit(){
+  let(source,profile,binding)=fixture("runtime-kind");fs::write(source.join("node.exe"),b"inert runtime bytes").unwrap();let cancel=AtomicBool::new(false);let deadline=Instant::now()+Duration::from_secs(30);
+  let runtime=RetainedInputs::create_runtime_until(&source,&profile,binding.clone(),&cancel,deadline).unwrap();let bytes=serde_json::to_vec(&runtime.manifest).unwrap();let digest=runtime.digest.clone();let content=runtime.content_digest().unwrap();
+  assert_eq!(runtime.root(),profile.folder().join("runtime"));assert!(runtime.prepare_workspace(&profile,1024,&cancel,deadline).is_err());runtime.finish(&cancel).unwrap();
+  assert!(RetainedInputs::reopen(&bytes,&digest,&binding,&cancel).is_err());assert!(RetainedInputs::reopen_runtime_until(&bytes,&digest,&binding,&cancel,Instant::now()).is_err());
+  let reopened=RetainedInputs::reopen_runtime_until(&bytes,&digest,&binding,&cancel,deadline).unwrap();assert_eq!(reopened.deadline,Some(deadline));assert_eq!(reopened.content_digest().unwrap(),content);
+  let(other_source,other_profile,other_binding)=fixture("runtime-content");fs::write(other_source.join("node.exe"),b"inert runtime bytes").unwrap();let other=RetainedInputs::create_runtime_until(&other_source,&other_profile,other_binding,&cancel,deadline).unwrap();assert_eq!(other.content_digest().unwrap(),content);assert_ne!(other.digest,digest);
+ }
+ #[test]#[ignore="DANS1 desktop, full installed Node/npm distribution and explicit fixture required"]fn actual_retained_npm_lifecycle_uses_writable_copy(){
+  use std::ffi::OsStr;
+  let(source,profile,binding)=fixture("runtime-npm");let package=serde_json::json!({"name":"isolated-lifecycle-fixture","version":"1.0.0","private":true,"scripts":{"pretest":"node step.cjs pretest","test":"npm run inner","inner":"node step.cjs inner","posttest":"node step.cjs posttest"}});
+  fs::write(source.join("package.json"),serde_json::to_vec(&package).unwrap()).unwrap();fs::write(source.join("input"),b"original").unwrap();
+  fs::write(source.join("step.cjs"),br#"const fs=require('node:fs'),p=require('node:path'),a=require('node:assert/strict');const event=process.argv[2];a.equal(process.env.npm_lifecycle_event,event);fs.appendFileSync('order.txt',event+'\n');fs.mkdirSync('dist',{recursive:true});fs.writeFileSync('dist/'+event,'generated');a.throws(()=>fs.writeFileSync(p.join(process.env.PP_INPUTS,'input'),'tampered'));a.throws(()=>fs.writeFileSync(p.join(process.env.PP_SOURCE,'input'),'tampered'));a.throws(()=>fs.writeFileSync(process.env.NPM_CONFIG_USERCONFIG,'tampered'));"#).unwrap();
+  let cancel=AtomicBool::new(false);let deadline=Instant::now()+Duration::from_secs(180);let inputs=RetainedInputs::create_until(&source,&profile,binding.clone(),&cancel,deadline).unwrap();let prepared=inputs.prepare_workspace(&profile,1024*1024,&cancel,deadline).unwrap();let cwd=prepared.manifest.root.clone();
+  let installed_node=PathBuf::from(std::env::var_os("PP_TEST_AGENT_NODE").unwrap());let runtime=RetainedInputs::create_runtime_until(installed_node.parent().unwrap(),&profile,binding.clone(),&cancel,deadline).unwrap();let node=runtime.member("node.exe",false).unwrap();let npm=runtime.member("node_modules/npm/bin/npm-cli.js",false).unwrap();let runtime_bytes=serde_json::to_vec(&runtime.manifest).unwrap();let runtime_digest=runtime.digest.clone();let content_digest=runtime.content_digest().unwrap();let runtime_root=runtime.root().to_path_buf();let _runtime_names=pin_directory_names(&runtime_root).unwrap();
+  // Complete copy custody before OS image preparation. The single execution
+  // guard is acquired only after the actual child exists, still suspended.
+  let _runtime_content_pins:Vec<_>=runtime.guard.pinned_files().map(|(_,file)|file.try_clone().unwrap()).collect();
+  runtime.finish(&cancel).unwrap();
+  let home=profile.folder().join("home");fs::create_dir(&home).unwrap();let cache=home.join("cache");let config=home.join("empty.npmrc");fs::write(&config,b"").unwrap();let _config_pin=OpenOptions::new().read(true).share_mode(1).open(&config).unwrap();
+  let system=std::env::var("SystemRoot").unwrap();let search=format!("{};{}\\System32",runtime_root.display(),system);let comspec=format!("{system}\\System32\\cmd.exe");let mut prepared=Some(prepared);let mut working=None;let mut retained_runtime=None;
+  let run=crate::native_task_containment::run_captured_isolated_after_retention(&node,&[npm.as_os_str(),OsStr::new("run"),OsStr::new("test")],&cwd,&[("SystemRoot",&system),("WINDIR",&system),("COMSPEC",&comspec),("PATH",&search),("USERPROFILE",home.to_str().unwrap()),("HOME",home.to_str().unwrap()),("APPDATA",home.to_str().unwrap()),("LOCALAPPDATA",home.to_str().unwrap()),("TEMP",home.to_str().unwrap()),("TMP",home.to_str().unwrap()),("NPM_CONFIG_CACHE",cache.to_str().unwrap()),("NPM_CONFIG_USERCONFIG",config.to_str().unwrap()),("NPM_CONFIG_UPDATE_NOTIFIER","false"),("NODE_OPTIONS","--preserve-symlinks --preserve-symlinks-main"),("PP_INPUTS",inputs.root().to_str().unwrap()),("PP_SOURCE",source.to_str().unwrap())],Duration::from_secs(30),65536,65536,131072,Duration::from_secs(120),&cancel,&profile,||{
+   let reopened=RetainedInputs::reopen_runtime_until(&runtime_bytes,&runtime_digest,&binding,&cancel,deadline).map_err(std::io::Error::other)?;assert_eq!(reopened.content_digest().unwrap(),content_digest);retained_runtime=Some(reopened);working=Some(prepared.take().unwrap().release(&cancel).map_err(std::io::Error::other)?);Ok(())
+  }).unwrap();
+  let evidence=serde_json::json!({"scope":"real Node/npm nested lifecycle, explicit preserve-symlinks diagnostic policy, synthetic admission, no Boundaries command","exit":run.settlement.exit_code,"stdout":String::from_utf8_lossy(&run.stdout),"stderr":String::from_utf8_lossy(&run.stderr),"runtimeDigest":runtime_digest,"runtimeContentDigest":content_digest,"processExited":run.settlement.process_exited,"jobEmpty":run.settlement.job_empty_observed,"descendantsSettled":run.settlement.descendants_settled,"ioSettled":run.io_settled,"ioFailed":run.io_failed});fs::write(PathBuf::from(std::env::var_os("PP_ARCHIVE_FIXTURE_ROOT").unwrap()).join("npm-lifecycle-result.json"),serde_json::to_vec_pretty(&evidence).unwrap()).unwrap();
+  assert_eq!(run.settlement.exit_code,Some(0),"{evidence}");assert!(run.settlement.process_exited&&run.settlement.job_empty_observed&&run.settlement.descendants_settled&&run.io_settled&&!run.io_failed);
+  assert_eq!(fs::read(cwd.join("order.txt")).unwrap(),b"pretest\ninner\nposttest\n");assert_eq!(fs::read(source.join("input")).unwrap(),b"original");assert!(!source.join("order.txt").exists());inputs.validate(&cancel).unwrap();retained_runtime.unwrap().finish(&cancel).unwrap();assert!(working.is_some());
  }
  #[test]fn workspace_starts_exact_then_mutates_without_changing_retained_inputs(){
   let(source,profile,binding)=fixture("workspace-copy");fs::create_dir(source.join("empty")).unwrap();fs::write(source.join("input"),b"original").unwrap();let cancel=AtomicBool::new(false);

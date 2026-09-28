@@ -72,3 +72,25 @@ runner as fallback and call that isolated execution.
 
 All items above remain open. This extension serves M1/M2; it does not remove
 M3–M6, SHIP, the full population proof or orchestration from the finish line.
+
+## Runtime compatibility observations (2026-09-29)
+
+The first complete retained Node/npm diagnostic (runtime-203) refused before
+scripts: Node's default loader called `realpath` and received `EPERM` inspecting
+`C:\`. Process, Job, descendants and output streams all settled. Preserve this
+failure; default Node loader compatibility has not been established.
+
+The next diagnostic explicitly supplied
+`NODE_OPTIONS=--preserve-symlinks --preserve-symlinks-main`. It ran the actual npm
+pretest, nested npm inner script and posttest in order, with unchanged package
+commands. These flags affect module resolution and are diagnostic environment
+policy, not an implicit production default. Production review must bind them,
+the complete runtime content digest, isolated configuration and OS dependencies.
+The observed success is a synthetic lifecycle fixture, not Boundaries acceptance.
+
+Runtime capture and execution guards have distinct lifetimes. Retain verified
+runtime file handles continuously across completion of the capture guard and
+creation of the suspended child. Reopen and validate the full runtime against
+its exact manifest before resuming, then hold its single execution guard through
+settlement. A post-creation digest alone cannot establish which executable bytes
+were mapped during an unpinned interval. Never discard execution guard events.
