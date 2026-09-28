@@ -23,7 +23,7 @@ import {candidateSnapshot} from '../src/node/mergedStateRunner.mjs';
 import {emptyTaskDraftLedger,updateTaskDraft} from '../src/project/taskDraftLedger.js';
 import {createTrustedUserGestureProducer} from '../src/node/confirmationStore.mjs';
 const enabled=Boolean(process.env.PP_NATIVE_DISPATCH_FIXTURE), proof=[];
-async function fixture(mode, taskCount=1){
+async function fixture(mode, taskCount=1,checkCount=1){
   assert.equal(process.env.COMPUTERNAME.toLowerCase(),'dans1');
   const executable=path.normalize(process.env.PP_NATIVE_DISPATCH_FIXTURE);
   const executableDigest=createHash('sha256').update(await readFile(executable)).digest('hex');
@@ -38,7 +38,7 @@ async function fixture(mode, taskCount=1){
   let ledger=emptyTaskDraftLedger(binding);for(let index=0;index<taskCount;index++)ledger=updateTaskDraft(ledger,{title:`Native fixture ${index+1}`,description:'Bounded controlled native check',owner:'Worker',acceptance:'Observed output',recovery:'Retain original intent',claims:[],dependsOn:[],archived:false});
   const proposal=await createTaskLedgerAuthorityStore(proposalConfig).propose(ledger,{requestId:'proposal',expectedRevision:0,expectedHeadDigest:'GENESIS'});
   const expected={hostRevision:1,headDigest:proposal.proposal.recordHash};
-  const checkContract=createTaskCheckContract({schemaVersion:1,kind:'TASK_CHECK_CONTRACT',projectId:binding.projectId,rootIdentity:binding.rootIdentity,policyVersion:1,policyDigest:'c'.repeat(64),tasks:ledger.tasks.map((task,index)=>({taskId:task.id,checks:[{checkId:'native',executablePath:executable,executableDigest,args:['fixture',taskCount>1&&index===taskCount-1?'fail':mode],cwd:'.',timeoutMs:5000,outputLimits:{stdoutBytes:1000,stderrBytes:1000,combinedBytes:2000}}]}))});
+  const checkContract=createTaskCheckContract({schemaVersion:1,kind:'TASK_CHECK_CONTRACT',projectId:binding.projectId,rootIdentity:binding.rootIdentity,policyVersion:1,policyDigest:'c'.repeat(64),tasks:ledger.tasks.map((task,index)=>({taskId:task.id,checks:Array.from({length:checkCount},(_,check)=>({checkId:check===0?'native':`native${check+1}`,executablePath:executable,executableDigest,args:['fixture',check===1||taskCount>1&&index===taskCount-1?'fail':mode],cwd:'.',timeoutMs:5000,outputLimits:{stdoutBytes:1000,stderrBytes:1000,combinedBytes:2000}}))}))});
   const sessionRegistryPath=path.join(root,'sessions.json'),credentials=await createSession(sessionRegistryPath,{actor:'controlled-worker',claim:'native fixture'});
   const enrollmentConfig={journalPath:path.join(root,'enrollment.jsonl'),projectId:binding.projectId,rootIdentity:binding.rootIdentity};
   const enrollments=createTaskEnrollmentStore(enrollmentConfig);
@@ -208,6 +208,32 @@ test('native guard remains held during retention and interrupted custody cannot 
   await assert.rejects(f.resultCustody.reconcile(original),/FINALIZATION_UNRESOLVED/);
   assert.equal((await createTaskNativeDispatch(f).dispatch(f.args)).dispatchObserved,false);assert.equal(f.launches(),1);
  }
+});
+
+test('installed owner derives complete required-check coverage from retained native executions',{skip:!enabled||!process.env.PP_NATIVE_TASK_HOST},async()=>{
+ const f=await fixture('pass',1,3),c=f.composition,stateDirectory=path.join(c.root,'coverage-state');await mkdir(stateDirectory);
+ const custody=createInstalledTaskExecutionCustody({stateDirectory,binding:c.binding,observeBinding:async()=>c.binding});
+ const config={...c,registeredRoot:f.candidateRoot,actor:'coverage-owner',nativeConfig:{executable:path.normalize(process.env.PP_NATIVE_TASK_HOST),executableDigest:process.env.PP_NATIVE_TASK_HOST_SHA256,cwd:c.root,compilationTempRoot:path.join(stateDirectory,'compilation')}};
+ const owner=custody.createExecution(config),credentials=await owner.createWorker('Complete check coverage');
+ const {enrollment}=await owner.enroll(f.args.expected,f.args.confirmationId,[{taskId:'T0001',workerId:'coverage-worker',credentials}],{expectedRevision:0,requestId:'coverage-enroll'});
+ const head={revision:enrollment.revision,epoch:enrollment.epoch,headDigest:enrollment.recordHash};let anchor;
+ const query=()=>({expected:f.args.expected,confirmationId:f.args.confirmationId,grantId:anchor});
+ for(const [index,checkId]of ['native','native2','native3'].entries()){
+  const input={taskId:'T0001',checkId,attemptId:'coverage-attempt',attemptNumber:1,workerId:'coverage-worker',credentials};
+  const issued=await owner.issue(f.args.expected,f.args.confirmationId,head,input,{expectedRevision:index*4,requestId:`coverage-issue-${index}`,ttlMs:300000});anchor??=issued.grant.grantId;
+  if(index===0){const pending=await owner.inspectAttempt(query());assert.deepEqual(pending.unresolved,['native']);assert.deepEqual(pending.missing,['native2','native3']);assert.equal(pending.allRequiredChecksPassed,false);}
+  const consumed=await owner.consume(f.args.expected,f.args.confirmationId,head,input,{grantId:issued.grant.grantId,expectedRevision:index*4+1,requestId:`coverage-consume-${index}`});
+  await owner.dispatch({expected:f.args.expected,confirmationId:f.args.confirmationId,enrollmentHead:head,input,consumptionReceipt:consumed.consumptionReceipt,request:{grantId:issued.grant.grantId,expectedRevision:index*4+2,requestId:`coverage-intent-${index}`}});
+  const observed=await owner.inspectAttempt(query());
+  assert.deepEqual(observed.requiredCheckIds,['native','native2','native3']);assert.deepEqual(observed.missing,['native','native2','native3'].slice(index+1));
+  assert.deepEqual(observed.failed,index===0?[]:['native2']);assert.deepEqual(observed.unresolved,[]);assert.equal(observed.allRequiredChecksPassed,false);assert.equal(observed.authorityVerified,false);assert.equal(observed.promotionAuthority,false);
+ }
+ const before=await owner.inspectAttempt(query());await owner.releaseWorker(credentials);await owner.shutdown();
+ const reopened=custody.createExecution(config);assert.deepEqual(await reopened.inspectAttempt(query()),before);
+ await assert.rejects(reopened.inspectAttempt({...query(),confirmationId:'missing'}));
+ await assert.rejects(reopened.inspectAttempt({...query(),grantId:'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'}));
+ await assert.rejects(reopened.inspectAttempt({...query(),requiredCheckIds:['native']}));
+ await reopened.shutdown();
 });
 
 test('155 actual native checks preserve one failure and every result across owner restart', {skip:!enabled||!process.env.PP_NATIVE_TASK_HOST||process.env.PP_NATIVE_POPULATION!=='155',timeout:900000},async()=>{

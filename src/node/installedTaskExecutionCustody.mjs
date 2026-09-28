@@ -38,6 +38,54 @@ export function createInstalledTaskExecutionCustody({stateDirectory,binding,obse
   // Private owner capabilities only. Worker credentials never become renderer
   // results; transport composition must keep them inside the native host.
   const methods={
+   async inspectAttempt(input){
+    input=structuredClone(input);await current();
+    const fail=code=>{throw Error(`NATIVE_TASK_COVERAGE_${code}`);};
+    if(!input||Object.keys(input).sort().join('|')!=='confirmationId|expected|grantId'||typeof input.grantId!=='string')fail('REQUEST_INVALID');
+    const enrollmentStore=createTaskEnrollmentStore(enrollmentConfig);
+    const snapshot=await review.withApprovedProposal(input.expected,input.confirmationId,async context=>{
+     const state=await grants.inspect(),enrollments=await enrollmentStore.inspect();
+     const anchor=state.grants.find(entry=>entry.grant.grantId===input.grantId),bound=anchor?.grant.binding,contract=context.checkContract;
+     if(!bound||state.projectId!==binding.projectId||state.rootIdentity!==binding.rootIdentity)fail('GRANT_UNAVAILABLE');
+     if(bound.proposalRevision!==context.proposal.hostRevision||bound.proposalDigest!==context.proposal.recordHash||bound.checkContractDigest!==contract.contractDigest||bound.policyVersion!==contract.policyVersion||bound.policyDigest!==contract.policyDigest)fail('CONTEXT_MISMATCH');
+     const task=contract.tasks.find(task=>task.taskId===bound.taskId);if(!task)fail('CONTEXT_MISMATCH');
+     const requiredCheckIds=task.checks.map(check=>check.checkId),required=new Set(requiredCheckIds);
+     const entries=state.grants.filter(entry=>entry.grant.binding.taskId===bound.taskId&&entry.grant.binding.attemptId===bound.attemptId);
+     if(entries.length>256)fail('LIMIT');
+     const grouped=new Map(),failed=[],unresolved=[],checks=[];
+     for(const entry of entries){
+      const b=entry.grant.binding;
+      for(const key of ['proposalRevision','proposalDigest','checkContractDigest','attemptNumber','candidateSchemaVersion','candidateDigest','policyVersion','policyDigest'])if(b[key]!==bound[key])fail('CONFLICT');
+      if(!required.has(b.checkId)||grouped.has(b.checkId))fail('CONFLICT');grouped.set(b.checkId,entry);
+      // Check each retained mapping independently. Current grant admission also
+      // requires a shared worker/session/enrollment for checks in one attempt.
+      const enrollment=enrollments.history.find(row=>row.epoch===b.enrollmentEpoch),mapping=enrollment?.snapshot;
+      if(!mapping||mapping.hostRevision!==b.proposalRevision||mapping.proposalDigest!==b.proposalDigest||mapping.checkContractDigest!==b.checkContractDigest||mapping.policyVersion!==b.policyVersion||mapping.policyDigest!==b.policyDigest||!mapping.assignments.some(a=>a.taskId===b.taskId&&a.workerId===b.workerId&&a.sessionId===b.sessionId))fail('ENROLLMENT_MISMATCH');
+     }
+     for(const checkId of requiredCheckIds){
+      const entry=grouped.get(checkId);if(!entry)continue;
+      let result=null;
+      if(entry.state==='result-recorded'&&entry.intentReceipt&&entry.observationLink){
+       try{result=await results.readOwner({grantId:entry.grant.grantId});}catch{ /* retain an explicit unresolved check */ }
+      }
+      const linked=result?.journalLinked===true&&result.runId===entry.intentReceipt?.runId&&result.intentDigest===entry.intentReceipt?.recordDigest&&result.artifactDigest===entry.observationLink?.artifactDigest;
+      const settled=linked&&nativeTaskSettlementObserved(result?.process)&&result.process.exitCode!==null;
+      if(!settled)unresolved.push(checkId);
+      if(linked&&result.failureReasons.length)failed.push(checkId);
+      checks.push({checkId,grantId:entry.grant.grantId,runId:entry.intentReceipt?.runId??null,artifactDigest:linked?result.artifactDigest:null,state:!settled?'unresolved':result.process.exitCode===0&&result.failureReasons.length===0?'pass-observed':'failure-observed'});
+     }
+     const missing=requiredCheckIds.filter(id=>!grouped.has(id));
+     return {approvalDigest:createHash('sha256').update(JSON.stringify(context.confirmation)).digest('hex'),grantHead:state.headDigest,grantRevision:state.revision,enrollmentHead:enrollments.headDigest,enrollmentRevision:enrollments.revision,
+      value:{schemaVersion:1,kind:'NATIVE_TASK_REQUIRED_CHECK_COVERAGE',projectId:binding.projectId,rootIdentity:binding.rootIdentity,proposalRevision:bound.proposalRevision,proposalDigest:bound.proposalDigest,checkContractDigest:contract.contractDigest,taskId:bound.taskId,attemptId:bound.attemptId,attemptNumber:bound.attemptNumber,candidateDigest:bound.candidateDigest,requiredCheckIds,checks,missing,failed,unresolved,allRequiredChecksPassed:missing.length===0&&failed.length===0&&unresolved.length===0,authorityVerified:false,promotionAuthority:false,executionAuthorized:false}};
+    });
+    // Reacquire all current review gates after asynchronous artifact reads.
+    // This is observed historical coverage, never a candidate/producer lease.
+    return review.withApprovedProposal(input.expected,input.confirmationId,async context=>{
+     await current();const state=await grants.inspect(),enrollments=await enrollmentStore.inspect();await current();
+     if(createHash('sha256').update(JSON.stringify(context.confirmation)).digest('hex')!==snapshot.approvalDigest||state.headDigest!==snapshot.grantHead||state.revision!==snapshot.grantRevision||enrollments.headDigest!==snapshot.enrollmentHead||enrollments.revision!==snapshot.enrollmentRevision)fail('STALE');
+     const freeze=value=>{if(value&&typeof value==='object'){Object.values(value).forEach(freeze);Object.freeze(value);}return value;};return freeze(snapshot.value);
+    });
+   },
    async inspectHeads(){await current();const enrollment=await createTaskEnrollmentStore(enrollmentConfig).inspect(),grant=await grants.inspect();return {enrollmentRevision:enrollment.revision,grantRevision:grant.revision};},
    async createWorker(claim){await current();return createSession(sessionRegistryPath,{actor,claim},options);},
    async heartbeatWorker(credentials){await current();return heartbeatSession(sessionRegistryPath,credentials,options);},
