@@ -329,16 +329,16 @@ describe("project Home consumes the project-home model", () => {
       "authoritative",
     );
     await waitFor(() => expect(screen.getByLabelText("Current project stage").textContent).toContain(
-      "Plan authority stale",
+      "Plan record out of date",
     ));
     expect(
       screen.getByRole("region", { name: "Project blockers" }).textContent,
     ).toContain("1 item prevent promotion");
-    expect(screen.queryByText("Project truth ready")).toBeNull();
+    expect(screen.queryByText("Project status ready")).toBeNull();
     const next = expectOnlyModelAction(
       container,
       "refresh-plan-authority",
-      "Refresh plan authority",
+      "Refresh plan record",
     );
     await user.click(next);
     expect(window.location.search).toContain("workspace=plan");
@@ -348,7 +348,7 @@ describe("project Home consumes the project-home model", () => {
     const project = withAuthorities(importedProject({ name: "Offline approval", rootCharacter: "e", digestCharacter: "4", discovery: discovery() }));
     renderShell(registryWith(project), project);
     await screen.findByText(/Saved architecture could not be checked/);
-    expect(screen.getByLabelText("Current project stage").textContent).not.toContain("Project truth ready");
+    expect(screen.getByLabelText("Current project stage").textContent).not.toContain("Project status ready");
     expect(screen.getByText("last known · revision 1")).toBeTruthy();
     expect(screen.getByRole("region", { name: "Project blockers" }).textContent).toContain("authority-architecture-unavailable");
   });
@@ -357,7 +357,7 @@ describe("project Home consumes the project-home model", () => {
     ["stale", "Project evidence stale", "refresh-project-evidence"],
     [
       "unavailable",
-      "Project authority unavailable",
+      "Project record unavailable",
       "restore-project-authority",
     ],
   ])(
@@ -386,7 +386,7 @@ describe("project Home consumes the project-home model", () => {
       );
       if (state === "unavailable") {
         expect(screen.getByLabelText("Project intake evidence").textContent).toContain(
-          "File census unavailable",
+          "File scan unavailable",
         );
         expect(
           screen.getByLabelText("Project intake evidence").textContent,

@@ -89,7 +89,7 @@ test("an approved plan reaches promotion and Confirm project is ready records Re
   expect(homeAction(container).textContent).toContain("Confirm project is ready");
   await user.click(homeAction(container));
   expect(readSection(project.projectId, "planAuthority").data.confirmedAt).toBeTruthy();
-  await waitFor(() => expect(screen.getByLabelText("Current project stage").textContent).toContain("Project truth ready"));
+  await waitFor(() => expect(screen.getByLabelText("Current project stage").textContent).toContain("Project status ready"));
   expect(window.location.search).toContain("workspace=home");
 });
 

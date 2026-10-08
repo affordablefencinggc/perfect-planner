@@ -2712,7 +2712,7 @@ function ProjectHomeWorkspace({
           <div>
             <span className="eyebrow">
               {hasProject
-                ? `${project.projectId} · generation ${project.generation} · ${mode}`
+                ? `${project.projectId} · scan ${project.generation} · ${mode}`
                 : "No project selected · honest empty state"}
             </span>
             <h1>
@@ -2732,7 +2732,7 @@ function ProjectHomeWorkspace({
             <span>
               <small>CURRENT STAGE</small>
               <strong>{stage.label}</strong>
-              <em>{stage.state} · {blockers.length} blocking truth{blockers.length === 1 ? "" : "s"}</em>
+              <em>{stage.state} · {blockers.length} blocking item{blockers.length === 1 ? "" : "s"}</em>
             </span>
           </div>
         </header>
@@ -2743,7 +2743,7 @@ function ProjectHomeWorkspace({
             <strong>{nextAction.label}</strong>
             <p>{nextAction.reason}</p>
             {hasProject && <span>
-              Bound to {binding.projectId} · generation {binding.sessionGeneration ?? "unavailable"} · registry {binding.registryRevision ?? "unavailable"}
+              Bound to {binding.projectId} · scan {binding.sessionGeneration ?? "unavailable"} · registry {binding.registryRevision ?? "unavailable"}
             </span>}
           </div>
           <div className="project-home-action-buttons">
@@ -2773,12 +2773,12 @@ function ProjectHomeWorkspace({
               {summary.census.fileCount == null ||
               summary.census.state === "unavailable"
                 ? hasProject
-                  ? "File census unavailable"
+                  ? "File scan unavailable"
                   : "No app folder registered"
                 : `${summary.census.state === "stale" ? "Last known · " : ""}${summary.census.fileCount} files captured`}
             </strong>
             <small>
-              Skipped {unavailableValue(summary.census.skippedCount, summary.census.state)} · digest {digestValue(summary.census.digest, summary.census.state)} · registry revision {unavailableValue(binding.registryRevision, summary.registration.state)}
+              Skipped {unavailableValue(summary.census.skippedCount, summary.census.state)} · fingerprint {digestValue(summary.census.digest, summary.census.state)} · registry revision {unavailableValue(binding.registryRevision, summary.registration.state)}
             </small>
           </div>
           <em>
@@ -2807,9 +2807,9 @@ function ProjectHomeWorkspace({
               <StatusChip status={summary.registration.state === "available" ? "verified" : summary.registration.state === "unavailable" ? "risk" : "active"}>{summary.registration.state}</StatusChip>
             </article>
             <article data-fact-state={summary.census.state}>
-              <small>CENSUS</small>
+              <small>FOLDER SCAN</small>
               <strong>{unavailableValue(summary.census.fileCount, summary.census.state, " files")}</strong>
-              <p>{unavailableValue(summary.census.skippedCount, summary.census.state, " skipped")} · digest {digestValue(summary.census.digest, summary.census.state)}</p>
+              <p>{unavailableValue(summary.census.skippedCount, summary.census.state, " skipped")} · fingerprint {digestValue(summary.census.digest, summary.census.state)}</p>
               <StatusChip status={summary.census.state === "available" ? "verified" : summary.census.state === "unavailable" || summary.census.state === "blocked" ? "risk" : "active"}>{summary.census.state}</StatusChip>
             </article>
             <article data-fact-state={summary.discovery.state}>
@@ -2819,11 +2819,11 @@ function ProjectHomeWorkspace({
               <StatusChip status={summary.discovery.state === "available" ? "verified" : summary.discovery.state === "unavailable" || summary.discovery.state === "stale" ? "risk" : "active"}>{summary.discovery.state}</StatusChip>
             </article>
             <article className="project-home-authorities">
-              <small>REGISTERED AUTHORITIES</small>
+              <small>SAVED RECORDS</small>
               <ul>
                 {Object.entries(summary.authorities).map(([kind, authority]) => (
                   <li key={kind} data-fact-state={authority.state}>
-                    <span>{kind === "plan" ? "Registered Plan authority" : kind}</span>
+                    <span>{kind === "plan" ? "Saved Plan record" : kind}</span>
                     <strong>{authority.state}</strong>
                     <em>{authority.revision == null ? "revision unavailable" : `${authority.state === "unavailable" || authority.state === "stale" ? "last known · " : ""}revision ${authority.revision}`}</em>
                   </li>
@@ -2859,7 +2859,7 @@ function ProjectHomeWorkspace({
               <button type="button" className="soft-button" disabled={!projectContext?.refreshComponent || componentRefresh?.state === "refreshing"} onClick={() => { void projectContext?.refreshComponent(activeProject.projectId); }}>Refresh saved components</button>
             </div>
             <div aria-label="Saved planning approval status">
-              <p>Planning review check — separate from the registered Plan authority above. A checked Ledger does not promote that authority or permit execution.</p>
+              <p>Planning review check — separate from the saved Plan record above. A checked Ledger does not promote that authority or permit execution.</p>
               <p>{planRefresh?.state === "observed" && planRefresh.projectId === activeProject.projectId && planRefresh.rootIdentity === activeProject.registration?.rootIdentity && planRefresh.censusDigest === activeProject.census?.digest && !["stale", "unavailable"].includes(activeProject.state)
                 ? `Checked planning approval revision ${planRefresh.revision} · saved Ledger revision ${planRefresh.ledgerRevision}. No execution or completion is authorized.`
                 : planRefresh?.state === "refreshing" ? "Checking the saved plan and its complete Ledger…"
@@ -2878,7 +2878,7 @@ function ProjectHomeWorkspace({
           <section className="project-home-blockers" aria-label="Project blockers">
             <header>
               <span>
-                <small>BLOCKING TRUTH</small>
+                <small>BLOCKING ITEMS</small>
                 <strong>{blockers.length ? `${blockers.length} item${blockers.length === 1 ? "" : "s"} prevent promotion` : "No blockers for this revision"}</strong>
               </span>
             </header>
@@ -2893,7 +2893,7 @@ function ProjectHomeWorkspace({
                 ))}
               </ol>
             ) : (
-              <p className="project-home-no-blockers">All required receipts are current for this project generation.</p>
+              <p className="project-home-no-blockers">All required records are current for this project scan.</p>
             )}
           </section>
 

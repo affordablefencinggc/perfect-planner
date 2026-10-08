@@ -116,7 +116,7 @@ test("empty, Demo, imported, generated, and authoritative sessions select distin
 
   const authoritative = deriveProjectHomeModel(withAuthorities(generatedSession));
   assert.equal(authoritative.mode, "authoritative");
-  assert.deepEqual(authoritative.stage, { id: "ready", state: "ready", label: "Project truth ready" });
+  assert.deepEqual(authoritative.stage, { id: "ready", state: "ready", label: "Project status ready" });
   assert.equal(authoritative.blockers.length, 0);
   assert.equal(authoritative.nextAction.id, "open-authoritative-plan");
 
@@ -200,7 +200,7 @@ test("stale and unavailable session states override fully authoritative underlyi
   const unavailableSession = withProjectState(ready, "unavailable", { now: "2026-09-04T11:00:00.000Z", reason: "adapter-unavailable" });
   const unavailable = deriveProjectHomeModel(unavailableSession);
   assert.equal(unavailable.mode, "unavailable");
-  assert.deepEqual(unavailable.stage, { id: "unavailable", state: "unavailable", label: "Project authority unavailable" });
+  assert.deepEqual(unavailable.stage, { id: "unavailable", state: "unavailable", label: "Project record unavailable" });
   assert.equal(unavailable.nextAction.id, "restore-project-authority");
   assert.equal(unavailable.summary.census.state, "unavailable");
   assert.equal(unavailable.summary.authorities.plan.state, "unavailable");
