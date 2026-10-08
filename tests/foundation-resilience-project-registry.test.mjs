@@ -52,7 +52,10 @@ test("foundation resilience: corrupt persisted JSON fails to an explicit empty s
   assert.equal(registry.getHealth().state, "stale");
   assert.equal(registry.getHealth().persistence, "memory");
   assert.equal(registry.getHealth().reason, "storage-corrupt");
-  assert.equal(storage.getItem(DEFAULT_PROJECT_REGISTRY_KEY), null);
+  // Saved projects are never deleted: the unreadable value stays and is copied to a dated backup key.
+  assert.equal(storage.getItem(DEFAULT_PROJECT_REGISTRY_KEY), "{ definitely-not-json");
+  assert.equal(registry.unreadableBackupKey, `${DEFAULT_PROJECT_REGISTRY_KEY}.unreadable-${new Date(Date.parse(at)).toISOString()}`);
+  assert.equal(storage.getItem(registry.unreadableBackupKey), "{ definitely-not-json");
 });
 
 test("foundation resilience: storage read failure does not fabricate an active project", () => {

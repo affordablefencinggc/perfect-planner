@@ -34,6 +34,8 @@ import { inspectArchitecture } from "../runtime/architectureClient.js";
 import { useOptionalProject } from "../project/ProjectProvider.jsx";
 import "./StructureWorkspace.css";
 import { IndexingActivity } from './IndexingActivity.jsx';
+import { FolderReconnectNotice } from "./FolderReconnectNotice.jsx";
+import { describeFolderConnection } from "../project/folderReconnectModel.js";
 import { folderPlanGuidance } from '../engine/folderPlanGuidance.js';
 
 const cloneSeed = () => structuredClone(currentFolderContractInput);
@@ -211,6 +213,18 @@ export function StructureWorkspace({
   const scanRunRef = useRef(0);
   const selectionRunRef = useRef(0);
   const [scanProgress, setScanProgress] = useState(null);
+  const [folderAccess, setFolderAccess] = useState({ projectId: null, access: null, busy: false, error: "" });
+  const canRemember = imported && activeProject.registration?.adapter === "browser" && typeof workspaceAdapter.rememberedFolder === "function";
+  useEffect(() => {
+    if (!canRemember) return undefined;
+    let current = true;
+    const projectId = activeProject.projectId;
+    setFolderAccess({ projectId, access: null, busy: false, error: "" });
+    Promise.resolve(workspaceAdapter.rememberedFolder(projectId)).then((access) => {
+      if (current) setFolderAccess((state) => state.projectId === projectId ? { ...state, access } : state);
+    }).catch(() => {});
+    return () => { current = false; };
+  }, [canRemember, activeProject?.projectId, workspaceAdapter]);
   const assessment = useMemo(() => assessFolderContract(draft), [draft]);
   const [draftFingerprint, setDraftFingerprint] = useState(null);
   useEffect(() => {
@@ -495,9 +509,12 @@ export function StructureWorkspace({
       "Refused analysis cleared; no prior census or findings were retained.",
     );
   };
-  const connectFolder = async () => {
+  const connectFolder = async (pathOverride) => {
+    const path = typeof pathOverride === "string" ? pathOverride : rootPath;
+    const runWorkspaceId = path.trim() ? createStableProjectId(projectRegistrationLabelFromRoot(path), path) : "pending_workspace";
+    const runLabel = projectLabelFromRoot(path);
     if (scanAbortRef.current && !scanAbortRef.current.signal.aborted) return;
-    if (!rootPath.trim()) {
+    if (!path.trim()) {
       const message = "Choose one app folder before approving analysis.";
       setIntake((current) => ({ ...current, state: "error", message }));
       onDiagnostic?.("workspace", "error", message);
@@ -519,8 +536,8 @@ export function StructureWorkspace({
     });
     try {
       const registration = await workspaceAdapter.registerWorkspaceReadOnly({
-        workspaceId,
-        rootPath: rootPath.trim(),
+        workspaceId: runWorkspaceId,
+        rootPath: path.trim(),
         explicitUserApproval: true,
       });
       if (!isCurrentRun()) return;
@@ -537,7 +554,7 @@ export function StructureWorkspace({
           gaps: null,
           message,
         });
-        onProjectUnavailable?.({ reason: message, workspaceId });
+        onProjectUnavailable?.({ reason: message, workspaceId: runWorkspaceId });
         onDiagnostic?.("workspace", "error", message);
         return;
       }
@@ -550,7 +567,7 @@ export function StructureWorkspace({
       });
       if (workspaceAdapter.previewRegisteredWorkspace) {
         setFolderPreview(null);
-        const preview = await workspaceAdapter.previewRegisteredWorkspace({workspaceId,registryRevision:registration.registryRevision});
+        const preview = await workspaceAdapter.previewRegisteredWorkspace({workspaceId:runWorkspaceId,registryRevision:registration.registryRevision});
         if (!isCurrentRun()) return;
         if (preview?.available && preview.authoritative === false && preview.contentVerified === false && buildWorkspaceStructureTree(preview).state !== "invalid") {
           setFolderPreview(preview);
@@ -560,7 +577,7 @@ export function StructureWorkspace({
         }
       }
       const census = await workspaceAdapter.censusRegisteredWorkspace({
-        workspaceId,
+        workspaceId: runWorkspaceId,
         registryRevision: registration.registryRevision,
         signal: controller.signal,
         onProgress: (progress) => {
@@ -586,7 +603,7 @@ export function StructureWorkspace({
           onProjectUnavailable?.({
             reason: message,
             registration,
-            workspaceId,
+            workspaceId: runWorkspaceId,
           });
         onDiagnostic?.(
           "workspace",
@@ -596,10 +613,10 @@ export function StructureWorkspace({
         return;
       }
       const validatedStructure = buildWorkspaceStructureTree(census, {
-        appName: projectLabel,
+        appName: runLabel,
       });
       const validatedDiscovery = buildWorkspaceDiscovery(census, {
-        appName: projectLabel,
+        appName: runLabel,
       });
       if (
         validatedStructure.state === "invalid" ||
@@ -618,7 +635,7 @@ export function StructureWorkspace({
           message,
         });
         setScanProgress(null);
-        onProjectUnavailable?.({ reason: message, registration, workspaceId });
+        onProjectUnavailable?.({ reason: message, registration, workspaceId: runWorkspaceId });
         onDiagnostic?.("workspace", "error", message);
         return;
       }
@@ -630,7 +647,7 @@ export function StructureWorkspace({
           adapter: workspaceAdapter.mode,
           census,
           discovery: validatedDiscovery,
-          name: projectLabel,
+          name: runLabel,
           persistence:
             workspaceAdapter.mode === "browser"
               ? "reselect-required"
@@ -642,7 +659,7 @@ export function StructureWorkspace({
         activeProject.registration?.rootIdentity === registration.rootIdentity && draft.planId === activeProject.projectId
       );
       const indexed = assessWorkspaceIntake({
-        selectedPath: rootPath.trim(),
+        selectedPath: path.trim(),
         registration,
         census,
         contractAssessment: sameRegisteredProject ? assessment : null,
@@ -664,7 +681,7 @@ export function StructureWorkspace({
       }
       const gaps = analyzeWorkspaceStructure(census, draft);
       const result = assessWorkspaceIntake({
-        selectedPath: rootPath.trim(),
+        selectedPath: path.trim(),
         registration,
         census,
         gaps,
@@ -696,11 +713,36 @@ export function StructureWorkspace({
         gaps: null,
         message,
       }));
-      onProjectUnavailable?.({ reason: message, workspaceId });
+      onProjectUnavailable?.({ reason: message, workspaceId: runWorkspaceId });
       onDiagnostic?.("workspace", "error", message);
     } finally {
       if (scanRunRef.current === runId) scanAbortRef.current = null;
     }
+  };
+  const reconnectFolder = async () => {
+    if (!canRemember || mapLoading || typeof workspaceAdapter.reconnectRememberedFolder !== "function") return;
+    const projectId = activeProject.projectId;
+    setFolderAccess((state) => ({ ...state, busy: true, error: "" }));
+    let receipt;
+    try {
+      // First await is the browser's permission prompt, so it stays tied to the click.
+      receipt = await workspaceAdapter.reconnectRememberedFolder(projectId);
+    } catch {
+      receipt = { authoritative: false, reason: "Folder access could not be requested. Choose the folder again." };
+    }
+    if (currentPlanRef.current !== projectId) return;
+    if (!receipt?.authoritative || receipt.selectionState !== "selected" || !receipt.selectedPath) {
+      const message = receipt?.reason || "The folder could not be reconnected. Choose it again.";
+      setFolderAccess((state) => ({ ...state, busy: false, error: message }));
+      onDiagnostic?.("workspace", "warning", message);
+      return;
+    }
+    setFolderAccess((state) => ({ ...state, busy: false, error: "" }));
+    setRootPath(receipt.selectedPath);
+    await connectFolder(receipt.selectedPath);
+    Promise.resolve(workspaceAdapter.rememberedFolder(projectId)).then((access) => {
+      setFolderAccess((state) => state.projectId === projectId ? { ...state, access } : state);
+    }).catch(() => {});
   };
   const beginFolderSelection = () => {
     const runId = ++selectionRunRef.current;
@@ -1034,6 +1076,18 @@ export function StructureWorkspace({
         </header>
         {openSections.intake && (
           <div id="folder-intake" className="folder-intake-grid">
+            {canRemember && (
+              <FolderReconnectNotice
+                status={describeFolderConnection({
+                  project: activeProject,
+                  access: folderAccess.projectId === activeProject.projectId ? folderAccess.access : null,
+                  scannedThisVisit: Boolean(intake.census) && intake.registration?.rootIdentity === activeProject.registration?.rootIdentity,
+                })}
+                busy={folderAccess.busy || mapLoading}
+                error={folderAccess.error}
+                onReconnect={reconnectFolder}
+              />
+            )}
             <ol className="intake-process" aria-label="App intake progress">
               {workspaceIntakeStages.map((stage, index) => (
                 <li
