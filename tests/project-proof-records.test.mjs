@@ -153,6 +153,11 @@ test("integrity summaries never claim resolution or ownership from unknown shape
   assert.equal(collisionSummary(record({ collisions: [] })).state, "done");
   assert.equal(collisionSummary(record({ collisions: [{ status: "resolved" }, { status: "open" }] })).state, "open");
   assert.equal(collisionSummary(record({ something: 1 })).state, "unknown");
+  // The Collision page's own record: decisions live in resolutions and must match the collision's signature.
+  const pair = { key: "T0001|T0002", tasks: ["T0001", "T0002"], signature: "sig-1", severity: "hard-stop", paths: ["src/notes"] };
+  assert.equal(collisionSummary(record({ collisions: [pair], resolutions: {} })).state, "open");
+  assert.equal(collisionSummary(record({ collisions: [pair], resolutions: { "T0001|T0002": { choice: "order", first: "T0001", signature: "sig-1" } } })).state, "done");
+  assert.equal(collisionSummary(record({ collisions: [pair], resolutions: { "T0001|T0002": { choice: "order", first: "T0001", signature: "older" } } })).state, "open");
   assert.equal(ownerSummary(record({ owners: { T0001: "Ana", T0002: "" } }), ["T0001", "T0002"]).text, "1 of 2 tasks have an owner assigned in Allocation.");
   assert.equal(ownerSummary(record({ owners: [{ taskId: "T0001", owner: "Ana" }] }), ["T0001"]).state, "done");
   assert.equal(ownerSummary(record({ weird: true }), ["T0001"]).state, "unknown");
