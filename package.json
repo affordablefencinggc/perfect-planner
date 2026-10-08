@@ -30,6 +30,7 @@
     "test:engine": "node --test tests/collision-engine.test.mjs",
     "test": "node --test tests/*.test.mjs",
     "test:ui": "vitest run",
+    "test:e2e": "node scripts/e2e-v1-journey.mjs",
     "test:all": "npm test && npm run test:ui",
     "verify:web": "npm run verify:secrets && npm run build && npm run verify:performance && npm test && npm run test:ui && npm run test:sites",
     "release:web": "npm run verify:secrets && node scripts/run-release-gates.mjs --profile web",
