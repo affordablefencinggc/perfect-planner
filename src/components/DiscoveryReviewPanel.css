@@ -1,0 +1,31 @@
+.discovery-review-panel{margin:18px 0;padding:18px 20px;border:1px solid var(--line-strong);border-radius:10px;background:var(--paper);color:var(--ink)}
+.discovery-review-panel>header{display:flex;align-items:center;gap:12px;margin-bottom:12px}
+.discovery-review-panel>header>svg{flex:none;width:22px;height:22px;color:var(--green)}
+.discovery-review-panel>header>span{display:grid;gap:3px;flex:1;min-width:0}
+.discovery-review-panel>header strong{font:700 15px var(--mono)}
+.discovery-review-panel>header small{color:var(--muted);font:12px/1.5 var(--mono)}
+.discovery-review-panel>header>b{padding:4px 10px;border-radius:999px;background:var(--amber-soft);color:var(--ink);font:700 12px var(--mono)}
+.discovery-review-panel>header>b.done{background:var(--green-soft)}
+.discovery-review-panel>ol{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px;margin:0;padding:0;list-style:none}
+.discovery-review-row{display:grid;gap:8px;align-content:start;padding:14px;border:1px solid var(--line);border-radius:8px;background:var(--paper-strong)}
+.discovery-review-row.open{border-left:3px solid var(--amber)}
+.discovery-review-row.decided{border-left:3px solid var(--green)}
+.discovery-review-head{display:grid;gap:3px}
+.discovery-review-head>span{display:flex;align-items:baseline;gap:8px}
+.discovery-review-head code{color:var(--muted);font:11px var(--mono)}
+.discovery-review-head strong{font:700 14px var(--mono)}
+.discovery-review-head small,.discovery-review-empty,.discovery-review-questions,.discovery-review-footnote{color:var(--muted);font:12px/1.5 var(--mono);margin:0}
+.discovery-review-findings{display:grid;gap:6px;margin:0;padding:0;list-style:none;font:13px/1.45 var(--mono)}
+.discovery-review-findings b{margin-right:6px;font-size:11px;color:var(--green-dark)}
+.discovery-review-findings small{display:block;color:var(--muted);font-size:11px}
+.discovery-review-decision{display:flex;align-items:center;gap:6px;margin:0;color:var(--green-dark);font:600 13px/1.45 var(--mono);overflow-wrap:anywhere}
+.discovery-review-actions,.discovery-review-answer>div{display:flex;flex-wrap:wrap;gap:6px}
+.discovery-review-actions button,.discovery-review-answer button{display:inline-flex;align-items:center;gap:5px;min-height:34px}
+.discovery-review-actions button[aria-pressed=true]{border-color:var(--green);background:var(--green-soft)}
+.discovery-review-answer{display:grid;gap:6px}
+.discovery-review-answer label{display:grid;gap:4px;font:12px var(--mono)}
+.discovery-review-answer textarea{width:100%;box-sizing:border-box;padding:8px;border:1px solid var(--line-strong);border-radius:6px;background:var(--paper);color:var(--ink);font:13px/1.45 var(--mono);resize:vertical}
+.discovery-review-note{padding:10px 12px;border-left:3px solid var(--amber);background:var(--amber-soft);font:12px/1.5 var(--mono)}
+.discovery-review-error{padding:10px 12px;border-left:3px solid var(--red);background:var(--red-soft);font:12px/1.5 var(--mono)}
+.discovery-review-footnote{margin-top:12px}
+@media(max-width:600px){.discovery-review-panel{padding:14px}.discovery-review-panel>ol{grid-template-columns:1fr}}

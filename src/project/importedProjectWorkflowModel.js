@@ -1,4 +1,5 @@
 import { workspaceDiscoveryCategories } from "../engine/workspaceDiscoveryEngine.js";
+import { deriveDiscoveryReview, discoveryReviewDetail } from "./discoveryReviewModel.js";
 import { deriveProjectHomeModel } from "./projectHomeModel.js";
 import { validateProjectSession } from "./projectSession.js";
 import { deriveWorkRecordReceipt } from "./workRecordReceipts.js";
@@ -112,17 +113,13 @@ function authorityReceipt(project, kind, label) {
   );
 }
 
-function sessionReceipts(project) {
+function sessionReceipts(project, records = null) {
   const registration = project.registration;
   const census = project.census;
   const discovery = project.discovery;
-  const discoveryState = !discovery
-    ? "unanswered"
-    : discovery.state === "stale" || discovery.state === "unavailable"
-      ? discovery.state
-      : discovery.counts.signals > 0 || discovery.counts.unanswered > 0
-        ? "review"
-        : "recorded";
+  // Discovery clears only when the user has decided every area that needs a decision for this exact scan.
+  const discoveryReview = deriveDiscoveryReview(project, records);
+  const discoveryState = discoveryReview.state;
 
   return [
     receipt("REC-PROJECT", "Project identity", effectiveState(project, "recorded"), `${project.projectId} · generation ${project.generation}`),
@@ -147,7 +144,7 @@ function sessionReceipts(project) {
       "Discovery snapshot",
       effectiveState(project, discoveryState),
       discovery
-        ? `${discovery.counts.observed} observed · ${discovery.counts.signals} review signals · ${discovery.counts.unanswered} unanswered`
+        ? `${discovery.counts.observed} observed · ${discovery.counts.signals} review signals · ${discovery.counts.unanswered} unanswered · ${discoveryReviewDetail(discoveryReview)}`
         : "No discovery snapshot is recorded.",
     ),
     authorityReceipt(project, "architecture", "Architecture authority"),
@@ -224,11 +221,13 @@ function requirementsFor(workspace, receipts, records, project) {
   return plans[workspace];
 }
 
-function planningQuestions(project) {
+function planningQuestions(project, records) {
   const categoryById = new Map((project.discovery?.categories ?? []).map((category) => [category.id, category]));
+  const decisions = new Map(deriveDiscoveryReview(project, records).items.map((item) => [item.id, item.decision]));
   return workspaceDiscoveryCategories.map((definition) => {
     const category = categoryById.get(definition.id) ?? null;
-    let state = !category ? "unanswered" : category.state === "observed" ? "recorded" : category.state === "signal" ? "review" : "unanswered";
+    const decision = decisions.get(definition.id) ?? null;
+    let state = decision ? "recorded" : !category ? "unanswered" : category.state === "observed" ? "recorded" : category.state === "signal" ? "review" : "unanswered";
     state = effectiveState(project, state);
     return {
       id: definition.id,
@@ -236,6 +235,7 @@ function planningQuestions(project) {
       state,
       findingIds: category?.findingIds ?? [],
       questions: definition.questions,
+      decision,
     };
   });
 }
@@ -281,8 +281,8 @@ export function deriveImportedProjectWorkflowModel(session, workspace, records =
   const project = validateProjectSession(session);
   if (project.kind === "demo" || project.state === "demo") throw new Error("Demo projects cannot be rendered by the imported-project workflow.");
 
-  const home = deriveProjectHomeModel(project);
-  const receipts = sessionReceipts(project);
+  const home = deriveProjectHomeModel(project, records);
+  const receipts = sessionReceipts(project, records);
   const requirements = requirementsFor(workspace, receipts, records, project)
     .filter(Boolean)
     .map((item) => project.state === "unavailable" || project.state === "stale"
@@ -308,7 +308,7 @@ export function deriveImportedProjectWorkflowModel(session, workspace, records =
     pageState,
     counts: { recorded: recordedCount, review: reviewCount, unanswered: unansweredCount, total: requirements.length },
     requirements,
-    questions: workspace === "plan" || workspace === "index" ? planningQuestions(project) : [],
+    questions: workspace === "plan" || workspace === "index" ? planningQuestions(project, records) : [],
     nextAction: nextActionFor(workspace, requirements),
     caveats: [
       ...(project.census?.skippedCount > 0 ? [`${project.census.skippedCount} census item${project.census.skippedCount === 1 ? " was" : "s were"} skipped; coverage is incomplete.`] : []),
