@@ -15,6 +15,7 @@ export const WORK_RECORD_SECTIONS = Object.freeze([
 
 const PREFIX = "perfect-planner.work-records.v1:";
 const EVENT = "perfect-planner:work-records";
+export const WORK_RECORDS_CHANGED_EVENT = EVENT;
 export const workRecordsKey = (projectId) => `${PREFIX}${projectId}`;
 
 function defaultStorage() {

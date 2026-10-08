@@ -11,6 +11,7 @@ import {
 } from "@phosphor-icons/react";
 import { deriveImportedProjectWorkflowModel } from "../project/importedProjectWorkflowModel.js";
 import { useProjectWorkRecords } from "../project/useProjectWorkRecords.js";
+import { useTaskDraftLedger } from "../project/useTaskDraftLedger.js";
 import { workspacePanels } from "./workspacePanels.js";
 import { usePlanTaskDriftWatch } from "../project/usePlanApproval.js";
 import { focusRequirementTarget } from "./focusRequirementTarget.js";
@@ -122,13 +123,14 @@ export function ImportedProjectWorkflowWorkspace({
 }) {
   const records = useProjectWorkRecords(activeProject?.projectId);
   usePlanTaskDriftWatch(activeProject, records);
+  useTaskDraftLedger(activeProject); // keeps the "saved task drafts" requirement current
   const model = useMemo(
     () => deriveImportedProjectWorkflowModel(activeProject, workspace, records),
     [activeProject, workspace, records],
   );
   const [query, setQuery] = useState("");
   const firstOpen = model.requirements.find((item) => item.state !== "recorded") ?? null;
-  const showSearch = workspace === "ledger" || workspace === "index";
+  const showSearch = workspace === "ledger" || (workspace === "index" && !workspacePanels.index);
   const handleNext = (event) => {
     if (model.nextAction.workspace && model.nextAction.workspace !== workspace) {
       onWorkspace?.(model.nextAction.workspace);
@@ -189,7 +191,7 @@ export function ImportedProjectWorkflowWorkspace({
       <span><b>{model.counts.recorded}</b><small>recorded</small></span>
       <span><b>{model.counts.review}</b><small>needs review</small></span>
       <span><b>{model.counts.unanswered}</b><small>unanswered or unavailable</small></span>
-      <span><b>—</b><small>{workspace === "collision" ? (records?.sections?.collisions ? "overlap check saved above" : "collisions not evaluated") : workspace === "allocation" ? (records?.sections?.allocation ? "owners saved above" : "owners not allocated") : workspace === "build" ? "builds not run" : workspace === "evidence" ? "proof not claimed" : "no inferred completion"}</small></span>
+      <span><b>—</b><small>{workspace === "collision" ? (records?.sections?.collisions ? "overlap check saved above" : "collisions not evaluated") : workspace === "allocation" ? (records?.sections?.allocation ? "owners saved above" : "owners not allocated") : workspace === "build" ? "statuses are set by you" : workspace === "evidence" ? "proof not claimed" : "no inferred completion"}</small></span>
     </section>
 
     {showSearch && <label className="imported-workflow-search"><MagnifyingGlassIcon aria-hidden="true" /><span className="sr-only">Search current project evidence</span><input value={query} maxLength={160} onChange={(event) => setQuery(event.target.value.slice(0, 160))} placeholder="Search this project’s recorded receipts and questions…" /></label>}

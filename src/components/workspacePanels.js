@@ -5,6 +5,8 @@ import { ProjectCollisionPanel } from "./ProjectCollisionPanel.jsx";
 import { ProjectAllocationPanel } from "./ProjectAllocationPanel.jsx";
 import { ProjectEvidencePanel } from "./ProjectEvidencePanel.jsx";
 import { ProjectIntegrityPanel } from "./ProjectIntegrityPanel.jsx";
+import { ProjectBuildBoard } from "./ProjectBuildBoard.jsx";
+import { ProjectIndexPanel } from "./ProjectIndexPanel.jsx";
 
 export const workspacePanels = Object.freeze({
   collision: ProjectCollisionPanel,
@@ -12,4 +14,6 @@ export const workspacePanels = Object.freeze({
   plan: PlanApprovalStep,
   evidence: ProjectEvidencePanel,
   integrity: ProjectIntegrityPanel,
+  build: ProjectBuildBoard,
+  index: ProjectIndexPanel,
 });

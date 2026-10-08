@@ -44,9 +44,9 @@ const WORKSPACE_COPY = Object.freeze({
   build: {
     eyebrow: "BUILD · GUARDED EXECUTION",
     title: "Build readiness",
-    purpose: "Run only work that an authoritative plan and cleared allocation have made executable.",
-    outcome: "A bounded build-run receipt attached to the exact project and plan revision.",
-    unlock: "Proof begins after the build produces scoped output and a code difference.",
+    purpose: "Track each approved task: who owns it, what is in its way, and whether it is done.",
+    outcome: "Every approved task marked done by the people doing the work.",
+    unlock: "Proof comes next: attach a screenshot, code change, or test result for each finished task.",
   },
   evidence: {
     eyebrow: "PROVE · PROJECT EVIDENCE",
@@ -72,8 +72,8 @@ const WORKSPACE_COPY = Object.freeze({
   index: {
     eyebrow: "PROJECT INDEX · SAFE LOCATORS",
     title: "Project evidence index",
-    purpose: "Find this project's stored receipts and unanswered discovery areas without searching Demo fixtures.",
-    outcome: "A searchable index whose entries all point to this project and generation.",
+    purpose: "Search this project's tasks, discovery areas, saved plans, and proof in one place.",
+    outcome: "A search built only from this project's own records, never the Demo.",
     unlock: "Indexed evidence can be reviewed; it does not become authority by appearing here.",
   },
 });
@@ -203,7 +203,7 @@ function requirementsFor(workspace, receipts, records, project) {
       authority("plan"),
       missingReceipt("BUILD-CLEARANCE", "Collision clearance", "Overlapping tasks have not been checked and decided yet."),
       missingReceipt("BUILD-ALLOCATION", "Allocation authority", "No owners are saved for this project's tasks yet."),
-      missingReceipt("BUILD-RUN", "Build run", "No bounded build execution receipt is recorded."),
+      missingReceipt("BUILD-RUN", "Approved tasks done", "No approved task has been marked done on the Build board yet."),
     ],
     evidence: [
       census,
@@ -220,11 +220,11 @@ function requirementsFor(workspace, receipts, records, project) {
     ],
     ledger: [
       ...receipts,
-      missingReceipt("LEDGER-TASKS", "Task ledger authority", "The current ProjectSession stores no project task, dependency, owner, conflict, or proof ledger."),
+      missingReceipt("LEDGER-TASKS", "Saved task drafts", "No task drafts are saved for this project yet. Add the first task in the Ledger."),
     ],
     index: [
       ...receipts,
-      missingReceipt("INDEX-BUILD", "Derived search index", "No project-scoped derived index receipt is recorded."),
+      missingReceipt("INDEX-BUILD", "Project search", "Search needs a folder scan of this project first."),
     ],
   };
   return plans[workspace];

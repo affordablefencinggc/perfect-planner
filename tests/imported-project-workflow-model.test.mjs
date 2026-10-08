@@ -118,7 +118,8 @@ test("the Ledger and Index expose current project receipts plus their missing au
   assert.equal(ledger.requirements.find((item) => item.id === "REC-CENSUS").state, "recorded");
   assert.equal(ledger.requirements.find((item) => item.id === "AUTH-PLAN").state, "unanswered");
   assert.equal(ledger.requirements.find((item) => item.id === "LEDGER-TASKS").state, "unanswered");
-  assert.equal(index.requirements.find((item) => item.id === "INDEX-BUILD").state, "unanswered");
+  // The project search is computed from current records, so it exists once a folder census does.
+  assert.equal(index.requirements.find((item) => item.id === "INDEX-BUILD").state, "recorded");
   assert.equal(index.questions.length, 8);
   assert.equal(index.binding.projectId, project.projectId);
   assert.equal(index.binding.censusDigest, project.census.digest);

@@ -11,12 +11,21 @@ import { receiptDerivers as allocationReceiptDerivers } from "./receipts/allocat
 
 import { receiptDerivers as proofReceiptDerivers } from "./receipts/proof.js";
 
+import { receiptDerivers as indexBuildReceiptDerivers } from "./receipts/indexBuild.js";
+import { receiptDerivers as ledgerReceiptDerivers } from "./receipts/ledger.js";
+
 const derivers = Object.freeze({
   ...collisionReceiptDerivers,
   ...allocationReceiptDerivers,
   ...proofReceiptDerivers,
+  ...indexBuildReceiptDerivers,
+  ...ledgerReceiptDerivers,
   // ...featureReceiptDerivers,
   ...planReceiptDerivers,
+  // LEDGER-TASKS has two sources: the approved plan snapshot wins once one is
+  // saved; before that, the saved task-draft presence from the Ledger answers it.
+  "LEDGER-TASKS": (sections, context) => planReceiptDerivers["LEDGER-TASKS"](sections, context)
+    ?? ledgerReceiptDerivers["LEDGER-TASKS"](sections, context),
 });
 
 export function deriveWorkRecordReceipt(receiptId, records, context) {
