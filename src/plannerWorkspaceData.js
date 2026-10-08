@@ -88,15 +88,16 @@ export const allocationRows = [
   ] },
 ];
 
+// Evidence ids use their own EV- prefix so they never collide with plan package ids (B01…).
 export const evidenceNodes = [
-  { id: "B01", title: "Market map", phase: "P1", x: 8, y: 7, width: 23, image: "/assets/evidence/whole-plan-map.png", note: "Positioning, audience, and viability evidence.", status: "ready" },
-  { id: "B02", title: "Problem brief & outcomes", phase: "P1", x: 68, y: 8, width: 22, image: "/assets/evidence/spine-detail.png", note: "Must-haves and measurable outcomes.", status: "ready" },
-  { id: "B04", title: "Architecture contract", phase: "P2", x: 4, y: 31, width: 25, image: "/assets/evidence/comparison-source.png", note: "System boundary and interface decisions.", status: "ready" },
-  { id: "B07", title: "Collision-safe plan capsule", phase: "P3", x: 62, y: 35, width: 31, image: "/assets/evidence/selected-spine-canvas.png", note: "Exact claims, merge order, and contract freeze.", status: "active" },
-  { id: "B06", title: "Timeline forecast", phase: "P3", x: 6, y: 59, width: 25, image: "/assets/evidence/plan-spine-source.png", note: "P50/P80 delivery forecast and safe lanes.", status: "risk" },
-  { id: "B09", title: "Collision comparison", phase: "P3", x: 69, y: 63, width: 24, image: "/assets/evidence/comparison-source.png", note: "Before/after proof and impact surface.", status: "ready" },
-  { id: "B10", title: "Peer review summary", phase: "P4", x: 10, y: 81, width: 23, image: "/assets/evidence/spine-detail.png", note: "Architecture, security, and debt review.", status: "queued" },
-  { id: "B12", title: "Release proof journal", phase: "P5", x: 65, y: 84, width: 23, image: "/assets/evidence/whole-plan-map.png", note: "Integrity, completion, and honest limitations.", status: "queued" },
+  { id: "EV-01", title: "Market map", phase: "P1", x: 8, y: 7, width: 23, image: "/assets/evidence/whole-plan-map.png", note: "Positioning, audience, and viability evidence.", status: "ready" },
+  { id: "EV-02", title: "Problem brief & outcomes", phase: "P1", x: 68, y: 8, width: 22, image: "/assets/evidence/spine-detail.png", note: "Must-haves and measurable outcomes.", status: "ready" },
+  { id: "EV-03", title: "Architecture contract", phase: "P2", x: 4, y: 31, width: 25, image: "/assets/evidence/comparison-source.png", note: "System boundary and interface decisions.", status: "ready" },
+  { id: "EV-04", title: "Collision-safe plan capsule", phase: "P3", x: 62, y: 35, width: 31, image: "/assets/evidence/selected-spine-canvas.png", note: "Exact claims, merge order, and contract freeze.", status: "active" },
+  { id: "EV-05", title: "Timeline forecast", phase: "P3", x: 6, y: 59, width: 25, image: "/assets/evidence/plan-spine-source.png", note: "P50/P80 delivery forecast and safe lanes.", status: "risk" },
+  { id: "EV-06", title: "Collision comparison", phase: "P3", x: 69, y: 63, width: 24, image: "/assets/evidence/comparison-source.png", note: "Before/after proof and impact surface.", status: "ready" },
+  { id: "EV-07", title: "Peer review summary", phase: "P4", x: 10, y: 81, width: 23, image: "/assets/evidence/spine-detail.png", note: "Architecture, security, and debt review.", status: "queued" },
+  { id: "EV-08", title: "Release proof journal", phase: "P5", x: 65, y: 84, width: 23, image: "/assets/evidence/whole-plan-map.png", note: "Integrity, completion, and honest limitations.", status: "queued" },
 ];
 
 export const journeySteps = [

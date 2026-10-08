@@ -12,6 +12,7 @@ import {
 import { buildBlueprintWorkspaceModel } from "../engine/blueprintWorkspaceModel.js";
 import { workspaceDiscoveryCategories } from "../engine/workspaceDiscoveryEngine.js";
 import "./BlueprintWorkspace.css";
+import { DEMO_ONLY_REASON, DemoOnlyReason } from "../demo/DemoSampleNotice.jsx";
 import { ArchitectureDraftPanel } from "./ArchitectureDraftPanel.jsx";
 import { inspectArchitecture } from "../runtime/architectureClient.js";
 import { useOptionalProject } from "../project/ProjectProvider.jsx";
@@ -169,7 +170,8 @@ export function BlueprintWorkspace({ onSelect, onOpenStructure, activeProject = 
 function DemoBlueprintWorkspace({ onSelect, onOpenStructure }) {
   const model = useMemo(() => buildBlueprintWorkspaceModel(), []);
   const map = model.rulebook.executionMap;
-  const coveredSurfaces = new Set(currentDebtSurfaces(model));
+  // The Demo debt scan is a fixed sample; no analyzer ran, so it never shows as cleared.
+  const gates = model.gates.map((gate) => gate.id === "G-DEBT" ? { ...gate, status: "unknown", verdict: "SAMPLE ONLY", metric: "sample", detail: "Sample scan result. No analyzer ran in the Demo." } : gate);
   return (
     <section className="workspace blueprint-workspace" aria-label="Blueprint decision gates">
       <header className="blueprint-header">
@@ -178,7 +180,7 @@ function DemoBlueprintWorkspace({ onSelect, onOpenStructure }) {
       </header>
 
       <section className="blueprint-gates" aria-label="Blueprint gate status">
-        {model.gates.map((gate) => (
+        {gates.map((gate) => (
           <button key={gate.id} className={`blueprint-gate gate-${gate.status}`} onClick={() => onSelect({ id: gate.id, title: gate.title, status: gateStatus(gate), estimate: gate.metric, items: [gate.verdict, gate.detail, "This gate cannot be manually rounded up to green."] })}>
             <span className="blueprint-gate-icon">{gate.status === "clear" ? <CheckCircleIcon weight="fill" /> : gate.status === "unknown" ? <WarningIcon weight="fill" /> : <XCircleIcon weight="fill" />}</span>
             <span><code>{gate.id}</code><strong>{gate.title}</strong><small>{gate.detail}</small></span>
@@ -213,8 +215,8 @@ function DemoBlueprintWorkspace({ onSelect, onOpenStructure }) {
           <div className="template-card"><span className="template-key">AI</span><span><strong>{model.rulebook.template?.title}</strong><small>{model.rulebook.template?.id}@{model.rulebook.template?.version} · {model.rulebook.template?.platform}</small></span><b>{model.decisions.length} open</b></div>
           <div className="architecture-rule"><strong>Compatibility result</strong><p>{model.rulebook.blockers[0] ?? "The selected platform is compatible, but bounded native execution still requires mitigation and proof before architecture may begin."}</p></div>
           <div className="rulebook-coverage"><span><b>{model.rulebook.scenarioCoverage.present}/{model.rulebook.scenarioCoverage.required}</b><small>failure scenarios</small></span><span><b>{model.rulebook.decisionCoverage.present}/{model.rulebook.decisionCoverage.required}</b><small>architecture decisions</small></span><span><b>{model.rulebook.capabilityAssessment.length}</b><small>capability assessed</small></span></div>
-          <button className="primary-button" disabled={!model.canEnterPlan}><ShieldCheckIcon /> Enter planning spine</button>
-          <small className="button-explanation">Disabled until all four gates are clear. There is no override on this screen.</small>
+          <button className="primary-button" disabled title={`${DEMO_ONLY_REASON}: the sample gates never clear.`}><ShieldCheckIcon /> Enter planning spine</button>
+          <DemoOnlyReason className="button-explanation">the sample gates never clear, so this stays off. In a real project it unlocks once all four gates are clear.</DemoOnlyReason>
         </section>
 
         <section className="blueprint-panel rulebook-map-panel">
@@ -226,14 +228,11 @@ function DemoBlueprintWorkspace({ onSelect, onOpenStructure }) {
         </section>
 
         <section className="blueprint-panel debt-coverage-panel">
-          <header><span><ActivityIcon /><strong>Debt coverage contract</strong></span><StatusChip status={model.debt.ready ? "ready" : "queued"}>{model.debt.verdict}</StatusChip></header>
-          <div className="debt-surface-grid">{["ui", "engine", "storage", "native"].map((surface) => {
-            const covered = coveredSurfaces.has(surface);
-            const missingItems = surface === "native" ? ["Tauri/Rust targets exist, but the exact analyzer receipt is absent or failed.", "Native coverage stays UNKNOWN until ACL, CSP, command, and compiler checks all pass.", "Compilation alone is never accepted as the security receipt."] : ["No source target exists for this required surface.", "Missing coverage stays UNKNOWN, never green.", "Add the mapped source and its required analyzer before release."];
-            const coveredItems = surface === "native" ? ["Thirteen exact Tauri/client security inputs are covered.", "ACL, folder-picker, census, CSP, command-surface, and cargo-clippy checks pass without a shell.", "Any new native command or permission requires an updated bounded analyzer contract."] : ["Bounded source targets were found and read.", "Findings remain visible until resolution evidence exists.", "Static coverage does not replace deeper specialist analyzers."];
-            return <button key={surface} onClick={() => onSelect({ id: `DEBT-${surface.toUpperCase()}`, title: `${surface} debt coverage`, status: covered ? "ready" : "queued", estimate: covered ? "analyzed" : surface === "native" ? "analyzer pending" : "missing", items: covered ? coveredItems : missingItems })}>{covered ? <CheckCircleIcon weight="fill" /> : <WarningIcon weight="fill" />}<strong>{surface}</strong><small>{covered ? "covered" : surface === "native" ? "pending" : "missing"}</small></button>;
-          })}</div>
-          <p className="debt-truth">{model.debt.counts.medium} medium findings · weighted open {model.debt.weightedOpen}. {model.debt.ready ? "All four required surfaces are covered and remain within the current debt budget." : `Coverage remains incomplete: ${model.debt.coverage.missing.join(", ") || "policy blockers are open"}.`}</p>
+          <header><span><ActivityIcon /><strong>Debt coverage contract</strong></span><StatusChip status="queued">SAMPLE ONLY</StatusChip></header>
+          <div className="debt-surface-grid">{["ui", "engine", "storage", "native"].map((surface) => (
+            <button key={surface} onClick={() => onSelect({ id: `DEBT-${surface.toUpperCase()}`, title: `${surface} debt coverage`, status: "queued", estimate: "sample", items: ["Sample scan entry from the Demo project.", "No analyzer ran here, so nothing was checked for this surface.", "Coverage for a real project only counts once its own scan has run."] })}><WarningIcon weight="fill" /><strong>{surface}</strong><small>sample</small></button>
+          ))}</div>
+          <p className="debt-truth">Sample findings: {model.debt.counts.medium} medium · weighted open {model.debt.weightedOpen}. No analyzer ran in the Demo, so this is not a coverage result.</p>
         </section>
 
         <section className="blueprint-panel folder-contract-panel">
@@ -249,9 +248,4 @@ function DemoBlueprintWorkspace({ onSelect, onOpenStructure }) {
       </div>
     </section>
   );
-}
-
-function currentDebtSurfaces(model) {
-  const required = ["ui", "engine", "storage", "native"];
-  return required.filter((surface) => !model.debt.coverage.missing.includes(surface));
 }

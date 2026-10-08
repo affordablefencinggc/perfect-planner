@@ -1,0 +1,132 @@
+import React from "react";
+import { afterEach, describe, expect, test, vi } from "vitest";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { InspectorDrawer, PerfectPlannerShell } from "../src/PerfectPlannerShell.jsx";
+import { BlueprintWorkspace } from "../src/components/BlueprintWorkspace.jsx";
+import { ComponentPlansWorkspace } from "../src/components/ComponentPlansWorkspace.jsx";
+import { ProjectProvider } from "../src/project/ProjectProvider.jsx";
+import { createMemoryStorage, createProjectRegistry } from "../src/project/projectRegistry.js";
+import { createDemoProjectSession } from "../src/demo/demoProject.js";
+import { evidenceNodes, phases } from "../src/plannerWorkspaceData.js";
+import { diagnosticSessionFixture } from "./diagnosticSessionFixture.js";
+
+afterEach(() => { cleanup(); window.localStorage.clear(); vi.unstubAllGlobals(); });
+
+function renderShell({ demo = true, route = "plan" } = {}) {
+  const registry = createProjectRegistry({ storage: createMemoryStorage() });
+  const url = new URL(window.location.href);
+  url.search = "";
+  url.searchParams.set("workspace", route);
+  if (demo) {
+    const session = registry.upsert(createDemoProjectSession(), { activate: true });
+    url.searchParams.set("project", session.projectId);
+  }
+  window.history.replaceState({}, "", `${url.pathname}${url.search}`);
+  return render(<ProjectProvider registry={registry}><PerfectPlannerShell diagnosticSession={diagnosticSessionFixture()} /></ProjectProvider>);
+}
+
+describe("Demo controls are honest about being sample data", () => {
+  test("a persistent badge marks the Demo, and only the Demo", () => {
+    renderShell({ demo: true, route: "plan" });
+    expect(screen.getByRole("status", { name: "Demo — sample data" })).toBeTruthy();
+    cleanup();
+    renderShell({ demo: false, route: "home" });
+    expect(screen.queryByRole("status", { name: "Demo — sample data" })).toBeNull();
+  });
+
+  test("evidence ids never collide with plan package ids, so the inspector shows the clicked item", async () => {
+    const planIds = new Set(phases.flatMap((phase) => phase.nodes.map((node) => node.id)));
+    for (const node of evidenceNodes) expect(planIds.has(node.id)).toBe(false);
+    const user = userEvent.setup();
+    renderShell({ route: "evidence" });
+    await user.click(within(screen.getByRole("group", { name: "Evidence views" })).getByRole("button", { name: /Screenshot proof/ }));
+    await user.click(screen.getByRole("button", { name: /EV-01\s*Market map/ }));
+    expect(screen.getByRole("heading", { name: /EV-01 · Market map/ })).toBeTruthy();
+  });
+
+  test("the sample orchestrator feed is labelled sample, with no unread pip or fake timestamps", async () => {
+    const user = userEvent.setup();
+    const { container } = renderShell({ route: "plan" });
+    expect(container.querySelector(".orchestrator-message-pip")).toBeNull();
+    const orchestrator = container.querySelector(".head-orchestrator-character");
+    expect(orchestrator).toBeTruthy();
+    await user.click(orchestrator);
+    const feed = container.querySelector(".orchestrator-popover");
+    expect(feed.textContent).toContain("sample");
+    expect(feed.textContent).not.toMatch(/\blive\b/);
+    expect(feed.textContent).not.toMatch(/\d\d:\d\d ·/);
+  });
+
+  test("allocation is labelled as a sample with example dates", () => {
+    const { container } = renderShell({ route: "allocation" });
+    expect(container.textContent).not.toContain("Live allocation");
+    expect(container.textContent).toContain("Sample allocation");
+    expect(container.querySelector(".today-line")).toBeNull();
+  });
+
+  test("Operations explains its blocker and the sample merge gate cannot pretend to run", async () => {
+    const user = userEvent.setup();
+    const { container } = renderShell({ route: "plan" });
+    const handle = container.querySelector(".ops-handle");
+    expect(handle.textContent).not.toMatch(/1 blocker/);
+    expect(handle.textContent).toContain("collision check not connected");
+    expect(container.querySelector(".ops-status-explained").getAttribute("title")).toMatch(/Collision authority has not supplied/);
+    fireEvent.click(handle);
+    await user.click(screen.getByRole("button", { name: /Merge queue/ }));
+    const run = screen.getByRole("button", { name: /Run merge gate/ });
+    expect(run.disabled).toBe(true);
+    expect(run.closest(".merge-conveyor").textContent).toContain("Demo only — sample data");
+  });
+
+  test("sample plans and sample people cannot pretend to open", async () => {
+    const user = userEvent.setup();
+    const { container } = renderShell({ route: "plan" });
+    await user.click(screen.getByRole("button", { name: "Open Repositories" }));
+    const rows = container.querySelectorAll(".plan-row");
+    expect(rows.length).toBeGreaterThan(0);
+    for (const row of rows) expect(row.disabled).toBe(true);
+    expect(container.querySelector(".repository-drawer, aside")?.textContent ?? container.textContent).toContain("Demo only — sample data");
+    expect(container.querySelector(".toast")).toBeNull();
+  });
+
+  test("the Demo inspector shows only what the sample item carries and cannot approve", () => {
+    const node = phases[2].nodes[0];
+    const { container } = render(<InspectorDrawer open demoMode onClose={vi.fn()} selected={node} />);
+    const dialog = screen.getByRole("dialog", { name: "Work item inspector" });
+    expect(within(dialog).getByText(node.owner)).toBeTruthy();
+    expect(within(dialog).getByText(node.branch)).toBeTruthy();
+    expect(container.textContent).not.toContain("Worktree");
+    for (const invented of ["B04 · Architecture contract", "src/sync/plan.ts", "plan-registry:v2", "Wave 4", "NO-GO"]) expect(container.textContent).not.toContain(invented);
+    const approve = within(dialog).getByRole("button", { name: /Approve next gate/ });
+    expect(approve.disabled).toBe(true);
+    expect(dialog.textContent).toContain("Demo only — sample data");
+    expect(dialog.textContent).toContain("None of its checks are proven yet");
+  });
+
+  test("the Demo inspector says plainly when a field is not in the sample", () => {
+    const { container } = render(<InspectorDrawer open demoMode onClose={vi.fn()} selected={{ id: "EV-02", title: "Sample", status: "ready" }} />);
+    expect(container.textContent).toContain("Not recorded in the sample");
+    expect(container.textContent).not.toContain("Danie");
+  });
+
+  test("the Demo blueprint never shows the sample debt scan as cleared and explains the locked entry", () => {
+    const { container } = render(<BlueprintWorkspace onSelect={vi.fn()} onOpenStructure={vi.fn()} />);
+    const debtGate = [...container.querySelectorAll(".blueprint-gate")].find((gate) => gate.textContent.includes("G-DEBT"));
+    expect(debtGate.className).not.toContain("gate-clear");
+    expect(debtGate.textContent).toContain("SAMPLE ONLY");
+    expect(container.textContent).not.toMatch(/clippy/i);
+    expect(container.textContent).not.toContain("All four required surfaces are covered");
+    const enter = screen.getByRole("button", { name: /Enter planning spine/ });
+    expect(enter.disabled).toBe(true);
+    expect(enter.parentElement.textContent).toContain("Demo only — sample data");
+  });
+
+  test("the Demo component catalog cannot pretend to freeze a revision", () => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: false, status: 503, json: async () => ({ error: "unavailable in test" }) })));
+    render(<ComponentPlansWorkspace activeProject={{ kind: "demo" }} />);
+    const freeze = screen.getByRole("button", { name: /Freeze revision/ });
+    expect(freeze.disabled).toBe(true);
+    expect(freeze.parentElement.textContent).toContain("Demo only — sample data");
+  });
+});
