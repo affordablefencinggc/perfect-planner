@@ -9,9 +9,12 @@ import { receiptDerivers as planReceiptDerivers } from "./receipts/plan.js";
 import { receiptDerivers as collisionReceiptDerivers } from "./receipts/collision.js";
 import { receiptDerivers as allocationReceiptDerivers } from "./receipts/allocation.js";
 
+import { receiptDerivers as proofReceiptDerivers } from "./receipts/proof.js";
+
 const derivers = Object.freeze({
   ...collisionReceiptDerivers,
   ...allocationReceiptDerivers,
+  ...proofReceiptDerivers,
   // ...featureReceiptDerivers,
   ...planReceiptDerivers,
 });
