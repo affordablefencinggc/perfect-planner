@@ -59,12 +59,12 @@ import {
   guaranteeManifest,
   guaranteeSessions,
 } from "./engine/guaranteeSeed.js";
-import { BlueprintWorkspace } from "./components/BlueprintWorkspace.jsx";
+const BlueprintWorkspace = lazy(() => import("./components/BlueprintWorkspace.jsx").then((module) => ({ default: module.BlueprintWorkspace })));
 import { CollisionWorkspace } from "./components/CollisionWorkspace.jsx";
-import { StructureWorkspace } from "./components/StructureWorkspace.jsx";
-import { ComponentPlansWorkspace } from "./components/ComponentPlansWorkspace.jsx";
+const StructureWorkspace = lazy(() => import("./components/StructureWorkspace.jsx").then((module) => ({ default: module.StructureWorkspace })));
+const ComponentPlansWorkspace = lazy(() => import("./components/ComponentPlansWorkspace.jsx").then((module) => ({ default: module.ComponentPlansWorkspace })));
 import { ImportedProjectWorkflowWorkspace } from "./components/ImportedProjectWorkflowWorkspace.jsx";
-import { ConnectAgentDrawer } from "./components/ConnectAgentDrawer.jsx";
+const ConnectAgentDrawer = lazy(() => import("./components/ConnectAgentDrawer.jsx").then((module) => ({ default: module.ConnectAgentDrawer })));
 import { ProjectTruthGate } from "./components/ProjectTruthGate.jsx";
 import { DEMO_ONLY_REASON, DemoOnlyReason, DemoSampleBadge } from "./demo/DemoSampleNotice.jsx";
 const loadRuntimeTools = (name) => import("./components/RuntimeConnectionsPanel.jsx")
@@ -768,7 +768,7 @@ function TopBar({
           >
             <PlugsConnectedIcon /> Connect agent
           </button>
-          <ConnectAgentDrawer open={agentDrawerOpen} onClose={() => setAgentDrawerOpen(false)} onWorkspace={onWorkspace} />
+          {agentDrawerOpen && <Suspense fallback={null}><ConnectAgentDrawer open={agentDrawerOpen} onClose={() => setAgentDrawerOpen(false)} onWorkspace={onWorkspace} /></Suspense>}
           <div className="topbar-menu-anchor more-actions-anchor">
             <IconButton
               label="More actions"
@@ -6034,7 +6034,7 @@ function PerfectPlannerShellCore({
           )}
           {workspace === "blueprint" &&
             (projectWorkflowReady ? (
-              <BlueprintWorkspace
+              <Suspense fallback={<p role="status" className="workspace-loading">Opening…</p>}><BlueprintWorkspace
                 activeProject={activeProject}
                 onOpenStructure={() => navigateWorkspace("structure")}
                 onSelect={(item) => {
@@ -6042,7 +6042,7 @@ function PerfectPlannerShellCore({
                   setInspectorSide("right");
                   setRightOpen(true);
                 }}
-              />
+              /></Suspense>
             ) : (
               <ProjectWorkspaceGate
                 workspace="blueprint"
@@ -6051,7 +6051,7 @@ function PerfectPlannerShellCore({
               />
             ))}
           {workspace === "structure" && (
-            <StructureWorkspace
+            <Suspense fallback={<p role="status" className="workspace-loading">Opening…</p>}><StructureWorkspace
               activeProject={activeProject}
               onOpenBlueprint={() => navigateWorkspace("blueprint")}
               onToast={showToast}
@@ -6059,14 +6059,14 @@ function PerfectPlannerShellCore({
               onProjectCaptured={registerCapturedProject}
               onProjectUnavailable={markCapturedProjectUnavailable}
               onDiagnostic={recordDiagnostic}
-            />
+            /></Suspense>
           )}
           {workspace === "components" && (
-            <ComponentPlansWorkspace
+            <Suspense fallback={<p role="status" className="workspace-loading">Opening…</p>}><ComponentPlansWorkspace
               onToast={showToast}
               activeProject={activeProject}
               onOpenStructure={() => navigateWorkspace("structure")}
-            />
+            /></Suspense>
           )}
           {workspace === "plan" &&
             (demoMode ? (

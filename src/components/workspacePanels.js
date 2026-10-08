@@ -1,19 +1,16 @@
 // Feature panels rendered inside imported-project workflow pages, keyed by workspace.
-// Each feature adds one import and one entry; a panel receives { project, records, onWorkspace, onSelect }.
-import { PlanApprovalStep } from "./PlanApprovalStep.jsx";
-import { ProjectCollisionPanel } from "./ProjectCollisionPanel.jsx";
-import { ProjectAllocationPanel } from "./ProjectAllocationPanel.jsx";
-import { ProjectEvidencePanel } from "./ProjectEvidencePanel.jsx";
-import { ProjectIntegrityPanel } from "./ProjectIntegrityPanel.jsx";
-import { ProjectBuildBoard } from "./ProjectBuildBoard.jsx";
-import { ProjectIndexPanel } from "./ProjectIndexPanel.jsx";
+// Each feature adds one lazy entry; a panel receives { project, records, onWorkspace, onSelect }.
+// Panels load on demand so the first screen stays within the bundle budget.
+import { lazy } from "react";
+
+const panel = (load, name) => lazy(() => load().then((module) => ({ default: module[name] })));
 
 export const workspacePanels = Object.freeze({
-  collision: ProjectCollisionPanel,
-  allocation: ProjectAllocationPanel,
-  plan: PlanApprovalStep,
-  evidence: ProjectEvidencePanel,
-  integrity: ProjectIntegrityPanel,
-  build: ProjectBuildBoard,
-  index: ProjectIndexPanel,
+  collision: panel(() => import("./ProjectCollisionPanel.jsx"), "ProjectCollisionPanel"),
+  allocation: panel(() => import("./ProjectAllocationPanel.jsx"), "ProjectAllocationPanel"),
+  plan: panel(() => import("./PlanApprovalStep.jsx"), "PlanApprovalStep"),
+  evidence: panel(() => import("./ProjectEvidencePanel.jsx"), "ProjectEvidencePanel"),
+  integrity: panel(() => import("./ProjectIntegrityPanel.jsx"), "ProjectIntegrityPanel"),
+  build: panel(() => import("./ProjectBuildBoard.jsx"), "ProjectBuildBoard"),
+  index: panel(() => import("./ProjectIndexPanel.jsx"), "ProjectIndexPanel"),
 });

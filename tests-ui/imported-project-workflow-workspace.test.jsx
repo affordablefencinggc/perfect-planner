@@ -144,7 +144,7 @@ describe("ImportedProjectWorkflowWorkspace", () => {
 
     render(<ImportedProjectWorkflowWorkspace workspace="index" activeProject={project} onWorkspace={vi.fn()} />);
     // Index now searches the project's own records through the project search panel.
-    const indexSearch = screen.getByPlaceholderText("Search tasks, areas, saved plans, proof and file names…");
+    const indexSearch = await screen.findByPlaceholderText("Search tasks, areas, saved plans, proof and file names…", {}, { timeout: 5000 });
     await user.type(indexSearch, "tenancy");
     const results = screen.getByRole("list", { name: "Search results" });
     expect(results.textContent).toContain("Data, tenancy & auth");
