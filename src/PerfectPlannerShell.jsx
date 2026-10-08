@@ -64,6 +64,7 @@ import { StructureWorkspace } from "./components/StructureWorkspace.jsx";
 import { ComponentPlansWorkspace } from "./components/ComponentPlansWorkspace.jsx";
 import { ImportedProjectWorkflowWorkspace } from "./components/ImportedProjectWorkflowWorkspace.jsx";
 import { ProjectTruthGate } from "./components/ProjectTruthGate.jsx";
+import { DEMO_ONLY_REASON, DemoOnlyReason, DemoSampleBadge } from "./demo/DemoSampleNotice.jsx";
 const loadRuntimeTools = (name) => import("./components/RuntimeConnectionsPanel.jsx")
   .then((module) => ({ default: module[name] })).catch(() => ({ default: RuntimeToolsUnavailable }));
 const BundledPlannerConnection = lazy(() => loadRuntimeTools("BundledPlannerConnection"));
@@ -622,7 +623,7 @@ function TopBar({
                   <strong>People on this project</strong>
                   <span>
                     {people.length
-                      ? `${people.length} demo identities`
+                      ? `${people.length} sample people · ${DEMO_ONLY_REASON}`
                       : "No roster connected"}
                   </span>
                 </header>
@@ -648,10 +649,9 @@ function TopBar({
                   return (
                     <button
                       key={person.name}
-                      onClick={() => {
-                        onToast(`${person.name} profile opened.`);
-                        setOpenMenu(null);
-                      }}
+                      className="demo-sample-row"
+                      disabled
+                      title={`${DEMO_ONLY_REASON}: sample people have no profile pages.`}
                     >
                       <span
                         className="popover-avatar"
@@ -962,13 +962,13 @@ function TopBar({
                       </p>
                     ) : (
                       <div className="more-actions-list">
+                        <DemoOnlyReason>sample people have no profile pages.</DemoOnlyReason>
                         {people.map((person) => (
                           <button
                             key={person.name}
-                            onClick={() => {
-                              onToast(`${person.name} profile opened.`);
-                              setOpenMenu(null);
-                            }}
+                            className="demo-sample-row"
+                            disabled
+                            title={`${DEMO_ONLY_REASON}: sample people have no profile pages.`}
                           >
                             <UsersThreeIcon />
                             <span>
@@ -1199,7 +1199,6 @@ function TopBar({
 function RepositoryDrawer({
   open,
   onClose,
-  onPlanSelect,
   onWorkspace,
   projectContext,
   onProjectSelect,
@@ -1291,6 +1290,7 @@ function RepositoryDrawer({
             })}
           </section>
         )}
+        {demoMode && <DemoOnlyReason className="demo-drawer-reason">these sample plans cannot be opened.</DemoOnlyReason>}
         {demoMode &&
           repositories.map((repo) => (
             <section className="repo-group" key={repo.key}>
@@ -1304,9 +1304,10 @@ function RepositoryDrawer({
               </div>
               {plans.slice(0, repo.key === "P" ? 2 : 1).map((plan) => (
                 <button
-                  className="plan-row"
+                  className="plan-row demo-sample-row"
                   key={`${repo.key}-${plan.id}`}
-                  onClick={() => onPlanSelect(plan)}
+                  disabled
+                  title={`${DEMO_ONLY_REASON}: this sample plan cannot be opened.`}
                 >
                   <span className="plan-row-top">
                     <strong>{plan.id}</strong>
@@ -1382,6 +1383,18 @@ function RepositoryDrawer({
   );
 }
 
+// Demo inspector shows only fields the selected sample item actually carries.
+function demoInspectorProperties(selected) {
+  const missing = "Not recorded in the sample";
+  return [
+    ["Owner", selected.owner ?? missing],
+    ["Branch", selected.branch ?? missing],
+    ["Repository", selected.repository ?? missing],
+    ["Depends on", selected.dependency ?? missing],
+    ["Files", Array.isArray(selected.files) && selected.files.length ? selected.files.join(" · ") : missing],
+  ];
+}
+
 export function InspectorDrawer({ open, onClose, selected, side = "right", demoMode = false }) {
   const dialogRef = useDialogFocus(open, onClose);
   if (!selected) return null;
@@ -1405,6 +1418,9 @@ export function InspectorDrawer({ open, onClose, selected, side = "right", demoM
     selected.proof?.screenshot ??
     selected.image ??
     "/assets/evidence/selected-spine-canvas.png";
+  const checklist = selected.items?.length
+    ? selected.items
+    : ["Exact claim surface", "Collision scan", "Safe merge order", "Proof complete"];
   return (
     <aside
       ref={dialogRef}
@@ -1429,48 +1445,31 @@ export function InspectorDrawer({ open, onClose, selected, side = "right", demoM
       <div className="drawer-scroll inspector-body">
         <div className="inspector-summary">
           <StatusChip status={selected.status} />
-          <span>{selected.estimate ?? "2h · 5k tok"}</span>
+          <span>{selected.estimate ?? "No estimate in the sample"}</span>
         </div>
+        <DemoOnlyReason>this item comes from the sample project; nothing here describes real work.</DemoOnlyReason>
         <dl className="property-list">
-          <div>
-            <dt>Owner</dt>
-            <dd>Danie</dd>
-          </div>
-          <div>
-            <dt>Branch</dt>
-            <dd>pp/pp-014/{selected.id.toLowerCase()}</dd>
-          </div>
-          <div>
-            <dt>Worktree</dt>
-            <dd>pp-014/{selected.id.toLowerCase()}</dd>
-          </div>
-          <div>
-            <dt>Depends on</dt>
-            <dd>B04 · Architecture contract</dd>
-          </div>
-          <div>
-            <dt>Files</dt>
-            <dd>src/plans/* · src/sync/plan.ts</dd>
-          </div>
-          <div>
-            <dt>Resources</dt>
-            <dd>plan-registry:v2</dd>
-          </div>
+          {demoInspectorProperties(selected).map(([label, value]) => (
+            <div key={label}>
+              <dt>{label}</dt>
+              <dd>{value}</dd>
+            </div>
+          ))}
         </dl>
         <section className="inspector-section">
           <div className="section-title">
             <ListChecksIcon />
             <strong>Proof-gated must-haves</strong>
-            <span>{proofReady ? "4/4" : "0/4"}</span>
+            <span>{proofReady ? `${checklist.length}/${checklist.length}` : `0/${checklist.length} proven`}</span>
           </div>
-          {(
-            selected.items ?? [
-              "Exact claim surface",
-              "Collision scan",
-              "Safe merge order",
-              "Proof complete",
-            ]
-          ).map((item, index) => (
+          {!proofReady && (
+            <p className="demo-inspector-status-note">
+              {selected.status === "ready" || selected.status === "active"
+                ? `Status "${statusLabel[selected.status] ?? selected.status}" means this sample work can start or is under way. None of its checks are proven yet.`
+                : "None of these sample checks are proven yet."}
+            </p>
+          )}
+          {checklist.map((item, index) => (
             <div
               className={`proof-requirement ${proofReady ? "proof-ready" : "proof-blocked"}`}
               key={item}
@@ -1489,7 +1488,7 @@ export function InspectorDrawer({ open, onClose, selected, side = "right", demoM
                   {item}
                 </span>
                 <strong className="gate-verdict">
-                  {proofReady ? "GO" : "NO-GO"}
+                  {proofReady ? "Proven" : "Not proven"}
                 </strong>
               </label>
               <div className="proof-pair">
@@ -1497,7 +1496,7 @@ export function InspectorDrawer({ open, onClose, selected, side = "right", demoM
                   {proofReady ? (
                     <img
                       src={proofImage}
-                      alt={`Verified UI state for ${item}`}
+                      alt={`Sample screenshot for ${item}`}
                       loading="lazy"
                       decoding="async"
                       width="640"
@@ -1509,7 +1508,7 @@ export function InspectorDrawer({ open, onClose, selected, side = "right", demoM
                     </div>
                   )}
                   <figcaption>
-                    SCREENSHOT · {proofReady ? "current build" : "missing"}
+                    SCREENSHOT · {proofReady ? "sample" : "missing"}
                   </figcaption>
                 </figure>
                 <div className="proof-diff">
@@ -1524,44 +1523,22 @@ export function InspectorDrawer({ open, onClose, selected, side = "right", demoM
             </div>
           ))}
         </section>
-        <section className="inspector-section">
-          <div className="section-title">
-            <WarningIcon />
-            <strong>Contingency</strong>
-            <span>ready</span>
-          </div>
-          <p>
-            Freeze <code>plan-registry:v2</code>, preserve both leases, and
-            resume C04 through the compatibility adapter.
-          </p>
-        </section>
-        <section className="inspector-section debt-section">
-          <div className="section-title">
-            <ActivityIcon />
-            <strong>Debt delta</strong>
-            <span>+0 high</span>
-          </div>
-          <p>
-            One low-severity adapter debt item is scheduled for Wave 4
-            repayment.
-          </p>
-        </section>
         {proofReady && (
           <section className="inspector-section">
             <div className="section-title">
               <ShieldCheckIcon />
               <strong>Reviewer</strong>
-              <span>matched</span>
+              <span>sample</span>
             </div>
             <p>{selected.proof.reviewer}</p>
           </section>
         )}
       </div>
       <div className="drawer-action">
-        <button className="primary-button" disabled={!proofReady}>
-          <ShieldCheckIcon weight="bold" />{" "}
-          {proofReady ? "Approve next gate" : "NO-GO · proof incomplete"}
+        <button className="primary-button" disabled title={`${DEMO_ONLY_REASON}: approvals are not recorded in the Demo.`}>
+          <ShieldCheckIcon weight="bold" /> Approve next gate
         </button>
+        <DemoOnlyReason>approvals are not recorded in the Demo.</DemoOnlyReason>
       </div>
     </aside>
   );
@@ -1815,32 +1792,32 @@ function HeadOrchestrator() {
         className="head-orchestrator-character"
         onClick={() => setChatOpen((value) => !value)}
         aria-expanded={chatOpen}
-        aria-label={`${orchestrator.label} by ${orchestrator.provider}, head orchestrator. Open worker updates.`}
-        title={`${orchestrator.label} · ${orchestrator.provider} · HEAD ORCHESTRATOR`}
+        aria-label={`${orchestrator.label} by ${orchestrator.provider}, head orchestrator. Open sample worker updates.`}
+        title={`${orchestrator.label} · ${orchestrator.provider} · sample worker updates`}
       >
         <img className="model-worker-image" src={orchestratorAsset} alt="" />
-        <span className="orchestrator-message-pip">3</span>
       </button>
       {chatOpen && (
         <div className="orchestrator-popover" aria-live="polite">
           <div className="feed-heading">
             <ChatsCircleIcon weight="fill" />
             <span>
-              {orchestrator.label} / {orchestrator.provider} · ORCHESTRATOR NOTE
-              FEED
+              {orchestrator.label} / {orchestrator.provider} · SAMPLE WORKER
+              UPDATES
             </span>
-            <small>live</small>
+            <small>sample</small>
           </div>
+          <DemoOnlyReason>no worker is connected; these messages are examples.</DemoOnlyReason>
           <div className="relay-line relay-in">
-            <span>01:18 · B07 → ORCH</span>
+            <span>Sample · B07 → ORCH</span>
             <strong>Success lap in progress. Collision surfaces 3/4.</strong>
           </div>
           <div className="relay-line relay-in">
-            <span>01:19 · B07 → ORCH</span>
+            <span>Sample · B07 → ORCH</span>
             <strong>Heartbeat good. No new file claim collision.</strong>
           </div>
           <div className="relay-line relay-out">
-            <span>01:20 · ORCH → USER</span>
+            <span>Sample · ORCH → USER</span>
             <strong>{activeLabel} working. All other workers stopped.</strong>
           </div>
         </div>
@@ -3603,7 +3580,7 @@ function AllocationWorkspace({ onSelect, collisionGate, onOpenCollision }) {
       </div>
       <div className="timeline-heading">
         <div>
-          <span className="eyebrow">Live allocation</span>
+          <span className="eyebrow">Sample allocation · fixed example dates</span>
           <h1>Who is doing what, and when</h1>
         </div>
         <div className="timeline-actions">
@@ -3612,7 +3589,7 @@ function AllocationWorkspace({ onSelect, collisionGate, onOpenCollision }) {
             onClick={() =>
               onSelect({
                 id: "ROSTER",
-                title: "Active delivery roster",
+                title: "Sample delivery roster",
                 status: "active",
                 estimate: `${allocation.rows.length} workers`,
                 items: allocation.rows.map(
@@ -3629,7 +3606,7 @@ function AllocationWorkspace({ onSelect, collisionGate, onOpenCollision }) {
             onClick={() =>
               onSelect({
                 id: "CAPACITY",
-                title: "Current capacity model",
+                title: "Sample capacity model",
                 status: "ready",
                 estimate: `P80 ${allocation.metrics.p80Days} days`,
                 items: allocation.rows.map(
@@ -3645,11 +3622,9 @@ function AllocationWorkspace({ onSelect, collisionGate, onOpenCollision }) {
       </div>
       <div className="timeline-grid">
         <div className="timeline-corner">Worker / lane</div>
-        <div className="timeline-days">
-          {timelineDates.map((date, index) => (
-            <span className={index === 0 ? "today" : ""} key={date}>
-              {date}
-            </span>
+        <div className="timeline-days" title="Example dates from the sample project, not today's calendar.">
+          {timelineDates.map((date) => (
+            <span key={date}>{date}</span>
           ))}
         </div>
         {allocation.rows.map((row) => (
@@ -3678,7 +3653,6 @@ function AllocationWorkspace({ onSelect, collisionGate, onOpenCollision }) {
               </span>
             </button>
             <div className="schedule-track">
-              <div className="today-line" aria-hidden="true" />
               {row.assignments.map((assignment) => (
                 <button
                   key={`${row.name}-${assignment.id}`}
@@ -5132,9 +5106,11 @@ function OpsDock({
       <button ref={handleRef} className="ops-handle" onClick={(event) => { if (event.detail < 2) onToggle(); }} onDoubleClick={(event) => event.preventDefault()} title="Click or double-click to expand or collapse Operations." aria-expanded={open} aria-controls="operations-panel">
         {open ? <CaretDownIcon /> : <CaretUpIcon />}
         <span>Operations</span>
-        <StatusChip status={errorCount || operationalBlockerCount ? "blocked" : "unverified"}>
-          {errorCount} diagnostic errors{operationalBlockerCount ? ` · ${operationalBlockerCount} blocker` : ""} · task outcomes unverified
-        </StatusChip>
+        <span className="ops-status-explained" title={operationalBlockerCount ? `Blocked: ${collisionGate?.authorityReason ?? "The collision check is not connected."} Work cannot be cleared until it runs.` : undefined}>
+          <StatusChip status={errorCount || operationalBlockerCount ? "blocked" : "unverified"}>
+            {errorCount} diagnostic errors{operationalBlockerCount ? " · collision check not connected" : ""} · task outcomes unverified
+          </StatusChip>
+        </span>
         <span className="ops-mini-status">
           <GitBranchIcon />{" "}
           {demoMode ? "3 demo branches" : "branches unavailable"}
@@ -5381,7 +5357,7 @@ function OpsDock({
                   <button
                     className="branch-table-row"
                     key={row.branch}
-                    onClick={() => onToast(`${row.branch} selected.`)}
+                    onClick={() => onToast(`${row.branch} is a sample branch. ${DEMO_ONLY_REASON}; no branch exists.`)}
                   >
                     <span>
                       <GitBranchIcon />
@@ -5436,16 +5412,10 @@ function OpsDock({
                     {index < 4 && <small>B07</small>}
                   </div>
                 ))}
-                <button
-                  className="primary-button"
-                  onClick={() =>
-                    onToast(
-                      "Merge gate queued: collision rescan → simulated merge → CI.",
-                    )
-                  }
-                >
+                <button className="primary-button" disabled title={`${DEMO_ONLY_REASON}: there is no repository to merge.`}>
                   <GitMergeIcon /> Run merge gate
                 </button>
+                <DemoOnlyReason>this conveyor is an example; there is no repository to merge.</DemoOnlyReason>
               </div>
             )}
             {activeTab === "delivery" && (
@@ -6031,6 +6001,7 @@ function PerfectPlannerShellCore({
         onDisconnectPlannerConnection={disconnectPlannerConnection}
       />
       <main className="app-main">
+        {demoMode && <DemoSampleBadge />}
         <div className={`workspace-stage${stageForWorkspace(workspace)?.id === "coordinate" ? " workspace-stage-coordinate" : ""}`} key={workspace}>
           {stageForWorkspace(workspace)?.id === "coordinate" && <WorkspacePageNavigation stage={stageForWorkspace(workspace)} workspace={workspace} onWorkspace={navigateWorkspace} />}
           {workspace === "home" && (
@@ -6327,9 +6298,6 @@ function PerfectPlannerShellCore({
         open={leftOpen}
         onClose={() => setLeftOpen(false)}
         onWorkspace={navigateWorkspace}
-        onPlanSelect={(plan) =>
-          showToast(`${plan.id} loaded into the current workspace.`)
-        }
         projectContext={projectContext}
         onProjectSelect={selectProject}
       />
