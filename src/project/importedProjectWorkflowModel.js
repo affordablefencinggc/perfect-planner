@@ -1,6 +1,7 @@
 import { workspaceDiscoveryCategories } from "../engine/workspaceDiscoveryEngine.js";
 import { deriveProjectHomeModel } from "./projectHomeModel.js";
 import { validateProjectSession } from "./projectSession.js";
+import { deriveWorkRecordReceipt } from "./workRecordReceipts.js";
 
 export const IMPORTED_WORKFLOW_MODEL_SCHEMA_VERSION = 1;
 
@@ -157,8 +158,14 @@ function sessionReceipts(project) {
 }
 
 const missingReceipt = (id, label, detail) => receipt(id, label, "unanswered", detail);
+// A work-record receipt replaces the missing placeholder only when the feature has recorded something.
+const recordedOr = (records, context) => (id, label, detail) => {
+  const derived = deriveWorkRecordReceipt(id, records, context);
+  return derived ? receipt(id, label, derived.state, derived.detail, derived.source ?? null) : missingReceipt(id, label, detail);
+};
 
-function requirementsFor(workspace, receipts) {
+function requirementsFor(workspace, receipts, records, project) {
+  const missingReceipt = recordedOr(records, { project, receipts });
   const byId = new Map(receipts.map((item) => [item.id, item]));
   const authority = (kind) => byId.get(`AUTH-${kind.toUpperCase()}`);
   const registration = byId.get("REC-REGISTRATION");
@@ -269,14 +276,14 @@ function nextActionFor(workspace, requirements) {
  * Read-only selector for imported-project workflow pages. It consumes one
  * validated ProjectSession and deliberately has no Demo-data fallback.
  */
-export function deriveImportedProjectWorkflowModel(session, workspace) {
+export function deriveImportedProjectWorkflowModel(session, workspace, records = null) {
   if (!SUPPORTED_WORKSPACES.has(workspace)) throw new Error(`Unsupported imported-project workspace: ${String(workspace)}.`);
   const project = validateProjectSession(session);
   if (project.kind === "demo" || project.state === "demo") throw new Error("Demo projects cannot be rendered by the imported-project workflow.");
 
   const home = deriveProjectHomeModel(project);
   const receipts = sessionReceipts(project);
-  const requirements = requirementsFor(workspace, receipts)
+  const requirements = requirementsFor(workspace, receipts, records, project)
     .filter(Boolean)
     .map((item) => project.state === "unavailable" || project.state === "stale"
       ? { ...item, state: project.state }

@@ -7,3 +7,6 @@ target-codex/
 .env
 .env.*
 public/generated/generations/
+
+# Codex-era ledger leftovers (archived outside the repo)
+.ledger/

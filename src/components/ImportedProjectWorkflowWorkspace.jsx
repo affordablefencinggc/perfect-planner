@@ -10,6 +10,7 @@ import {
   WarningIcon,
 } from "@phosphor-icons/react";
 import { deriveImportedProjectWorkflowModel } from "../project/importedProjectWorkflowModel.js";
+import { useProjectWorkRecords } from "../project/useProjectWorkRecords.js";
 import { ProjectTruthGate } from "./ProjectTruthGate.jsx";
 const TaskDraftLedger = lazy(() => import("./TaskDraftLedger.jsx").then(module => ({ default: module.TaskDraftLedger })));
 const TaskDraftMap = lazy(() => import("./TaskDraftMap.jsx").then(module => ({ default: module.TaskDraftMap })));
@@ -115,9 +116,10 @@ export function ImportedProjectWorkflowWorkspace({
   onWorkspace,
   onSelect,
 }) {
+  const records = useProjectWorkRecords(activeProject?.projectId);
   const model = useMemo(
-    () => deriveImportedProjectWorkflowModel(activeProject, workspace),
-    [activeProject, workspace],
+    () => deriveImportedProjectWorkflowModel(activeProject, workspace, records),
+    [activeProject, workspace, records],
   );
   const [query, setQuery] = useState("");
   const firstOpen = model.requirements.find((item) => item.state !== "recorded") ?? null;
