@@ -29,6 +29,8 @@
   --green-soft: #dcecdf;
   --amber: #c38a2a;
   --amber-soft: #fbefd7;
+  /* Text-safe amber: 5.57:1 on paper and 4.88:1 on canvas (WCAG AA body text). */
+  --amber-text: #8a5a0c;
   --red: #bd4b45;
   --red-soft: #f8dfdc;
   --blue-focus: #3c6ee8;
@@ -4218,7 +4220,7 @@ code {
   white-space: nowrap;
 }
 .ledger-task-state {
-  color: var(--amber);
+  color: var(--amber-text);
 }
 .ledger-task.proven .ledger-task-state {
   color: var(--green);
@@ -4320,7 +4322,7 @@ code {
   color: var(--muted);
 }
 .ledger-task-files > small {
-  color: var(--amber);
+  color: var(--amber-text);
   font: 8px/1.45 var(--mono);
 }
 .ledger-task-detail > .soft-button {
@@ -5392,7 +5394,7 @@ code {
   background: var(--amber-soft);
 }
 .merge-station.current span {
-  color: var(--amber);
+  color: var(--amber-text);
 }
 
 .toast {

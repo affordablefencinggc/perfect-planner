@@ -235,8 +235,10 @@ try {
   const screenshotTruth = await assessScreenshotTruth(projectRoot, temporaryRoot, options.screenshotCapture);
   const screenshotEngineValid = screenshotTruth.engineValid;
   const screenshotCapturedThisRun = screenshotTruth.capturePerformedThisRun;
-  // A fresh, valid capture is accepted as viewing proof only when a person approved this exact revision.
-  const screenshotViewedThisRun = screenshotCapturedThisRun && humanApproval.valid;
+  // Viewing is never inferred from release approval or from a fresh capture. Only an explicit viewing attestation
+  // could set this; none exists today, so the screenshot stays unviewed.
+  const explicitViewingAttestation = null;
+  const screenshotViewedThisRun = Boolean(explicitViewingAttestation) && screenshotCapturedThisRun;
   const screenshotProofAccepted = screenshotEngineValid && screenshotViewedThisRun;
   const repositorySonar = assessRepositorySonar({ requiredCapabilities: ["planning-ledger", "collision-guard"], candidates: [] }, { now: Date.parse(generatedAt) });
   const nameSonar = assessNameCandidates(generateUnverifiedNames(["perfect", "planner"]), { now: Date.parse(generatedAt) });
@@ -276,7 +278,7 @@ try {
     mailboxOneTimeAcceptance: mailboxValid,
     peerQuorumFailClosed: peerReview.verdict === "BLOCKED" && peerReview.providers.length === 1,
     providerBudgetRedaction: reviewGatewayValid,
-    screenshotUnprovenWithoutViewing: screenshotEngineValid && (!screenshotProofAccepted || screenshotViewedThisRun),
+    screenshotUnprovenWithoutViewing: screenshotEngineValid && !screenshotViewedThisRun,
     sonarNoAutoImport: repositorySonar.verdict === "BLOCKED" && nameSonar.every((name) => name.status !== "AVAILABLE_AT_CHECK_TIME"),
     autopilotDeviceDenial: nativePolicyValid,
     identityPrivateKeyRedaction: identityVaultValid,
