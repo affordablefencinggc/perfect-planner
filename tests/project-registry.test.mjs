@@ -126,7 +126,10 @@ test("corrupt storage recovers to an honest empty in-memory registry", () => {
   assert.equal(registry.getHealth().state, "stale");
   assert.equal(registry.getHealth().reason, "storage-corrupt");
   assert.equal(registry.getHealth().persistence, "memory");
-  assert.equal(storage.getItem(DEFAULT_PROJECT_REGISTRY_KEY), null);
+  // Saved projects are never deleted: the unreadable value is retained and backed up.
+  assert.equal(storage.getItem(DEFAULT_PROJECT_REGISTRY_KEY), "{not-json");
+  assert.equal(registry.unreadableBackupKey, `${DEFAULT_PROJECT_REGISTRY_KEY}.unreadable-${new Date(baseTime).toISOString()}`);
+  assert.equal(storage.getItem(registry.unreadableBackupKey), "{not-json");
 });
 
 test("write quota failures keep a usable memory fallback and disclose non-durability", () => {
@@ -193,4 +196,16 @@ test("registry schema zero migrates, while future schema data is rejected withou
   assert.equal(rejected.getSnapshot().state, "empty");
   assert.equal(rejected.getHealth().reason, "schema-version-unsupported");
   assert.equal(futureStorage.getItem(DEFAULT_PROJECT_REGISTRY_KEY), futureRaw);
+});
+
+test("unreadable registry backups survive later saves and are not duplicated on reload", () => {
+  const storage = createMemoryStorage({ [DEFAULT_PROJECT_REGISTRY_KEY]: "{still-broken" });
+  const first = createProjectRegistry({ storage, now: () => baseTime });
+  const again = createProjectRegistry({ storage, now: () => baseTime + 5000 });
+  assert.equal(again.unreadableBackupKey, first.unreadableBackupKey);
+  again.upsert(session("a", "App A"));
+  assert.equal(storage.getItem(first.unreadableBackupKey), "{still-broken");
+  const backups = [...Array(storage.length).keys()].map((i) => storage.key(i)).filter((key) => key.includes(".unreadable-"));
+  assert.equal(backups.length, 1);
+  assert.equal(createProjectRegistry({ storage, now: () => baseTime + 9000 }).getActive().name, "App A");
 });

@@ -6,6 +6,7 @@ import { createPlanRefresh } from "./planRefresh.js";
 import { taskDraftBinding } from "./taskDraftLedger.js";
 import { createImportedProjectSession, createEmptyProjectState, validateProjectSession, withProjectState } from "./projectSession.js";
 import { createProjectRegistry, resolveProjectRegistryStorage } from "./projectRegistry.js";
+import { recaptureImportedProject } from "./projectRecapture.js";
 import { selectProjectMetric, selectProjectMetrics } from "./projectProvenance.js";
 import { createProjectHistoryState, projectHistoryHref, resolveProjectSelection } from "./projectUrl.js";
 
@@ -230,7 +231,10 @@ export function ProjectProvider({ children, registry: suppliedRegistry = null, s
     architectureRefreshStatus: displaySnapshot.activeProject?.authorities.architecture?.state==='stale'&&architectureStatuses[snapshot.activeProjectId]?.state==='observed'?{state:'idle',projectId:snapshot.activeProjectId}:architectureStatuses[snapshot.activeProjectId]??{state:'idle',projectId:snapshot.activeProjectId},
     emptyState: snapshot.activeProject ? null : createEmptyProjectState(),
     registerProject(session, options) { return registry.upsert(validateProjectSession(session), options); },
-    registerImportedProject(input, options) { return registry.upsert(createImportedProjectSession(input), options); },
+    registerImportedProject(input, options) {
+      const fresh = createImportedProjectSession(input);
+      return registry.upsert(recaptureImportedProject(registry.get(fresh.projectId), input), options);
+    },
     selectProject,
     closeProject(projectId) { return registry.remove(projectId); },
     clearProjects() { return registry.clear(); },

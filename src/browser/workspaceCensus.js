@@ -1,4 +1,6 @@
 import { validateWorkspaceCensus, validateWorkspaceRegistration } from "../native/workspaceCensus.js";
+import { createImportedProjectId } from "../project/projectIds.js";
+import { findRememberedFolder, folderAccessState, loadRememberedFolder, rememberFolder, requestRememberedFolder } from "./folderAccess.js";
 
 const handles = new Map();
 const encoder = new TextEncoder();
@@ -53,6 +55,9 @@ async function selectedPathForHandle(handle) {
     if (!selectedPath.startsWith("browser://") || candidate?.handle) continue;
     if (await sameDirectoryHandle(candidate, handle)) return selectedPath;
   }
+  // Same folder chosen after a reload: reuse its path so it stays the same project.
+  const remembered = await findRememberedFolder(handle);
+  if (remembered) return remembered.selectedPath;
   browserSelectionSequence += 1;
   const token = (await sha256(
     `${handle.name}\0${Date.now()}\0${browserSelectionSequence}`,
@@ -370,7 +375,24 @@ export const browserWorkspaceAdapter = Object.freeze({
     const rootIdentity = await sha256(`${rootPath}:${handle.name}`);
     const registration = validateWorkspaceRegistration({ schemaVersion: 1, workspaceId, registryRevision: 1, canonicalRoot: rootPath, rootIdentity, access: "metadata-read-only", idempotent: false, capabilities: ["workspace-census:read"] });
     handles.set(`${workspaceId}:1`, { handle, registration });
+    await rememberFolder({ projectId: createImportedProjectId(registration.rootIdentity), selectedPath: rootPath, handle });
     return registration;
+  },
+  // Reload recovery: what is remembered for a project, without asking for access.
+  async rememberedFolder(projectId) {
+    await loadRememberedFolder(projectId);
+    return folderAccessState(projectId);
+  },
+  // Must be called from a click. Asks the browser for read access to the
+  // remembered folder, then makes it selectable again under its original path.
+  async reconnectRememberedFolder(projectId) {
+    const result = await requestRememberedFolder(projectId);
+    if (result.state !== "granted") {
+      const reasons = { missing: "This folder is not remembered in this browser. Choose it again.", "missing-folder": "The remembered folder could not be found. It may have been moved or deleted. Choose it again.", denied: "Folder access was not allowed. Nothing was read.", failed: "Folder access could not be requested. Choose the folder again." };
+      return unavailable(reasons[result.state] ?? reasons.failed);
+    }
+    handles.set(result.record.selectedPath, result.record.handle);
+    return Object.freeze({ available: true, authoritative: true, schemaVersion: 1, commandRevision: 1, capabilities: Object.freeze(["workspace-folder-picker:select"]), selectionState: "selected", selectedPath: result.record.selectedPath, reconnected: true });
   },
   async censusRegisteredWorkspace({
     workspaceId,
