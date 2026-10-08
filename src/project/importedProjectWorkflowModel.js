@@ -37,9 +37,9 @@ const WORKSPACE_COPY = Object.freeze({
   allocation: {
     eyebrow: "COORDINATE · RESPONSIBILITY",
     title: "Allocation readiness",
-    purpose: "Assign approved packages only when owner, branch, worktree, and claim receipts exist.",
-    outcome: "A project-bound allocation receipt for every approved package.",
-    unlock: "Build begins after ownership and isolated write surfaces are recorded.",
+    purpose: "Give every task a named owner (a person or an agent) and an order to run in.",
+    outcome: "An owner and a wave for every current task, saved for this project. Branches and worktrees are not tracked in this version.",
+    unlock: "Build begins after overlapping work is decided and every task has an owner.",
   },
   build: {
     eyebrow: "BUILD · GUARDED EXECUTION",
@@ -192,18 +192,17 @@ function requirementsFor(workspace, receipts, records, project) {
     collision: [
       authority("plan"),
       authority("component"),
-      missingReceipt("COL-EVALUATION", "Collision evaluation", "A project-bound collision authority receipt is not represented by the current ProjectSession schema."),
+      missingReceipt("COL-EVALUATION", "Collision evaluation", "Tasks have not been checked for overlapping files yet."),
     ],
     allocation: [
       authority("plan"),
-      missingReceipt("ALLOC-CLEARANCE", "Collision clearance", "No collision-clearance receipt is recorded for this project generation."),
-      missingReceipt("ALLOC-OWNERS", "Named owners", "No project-scoped owner allocation receipt is recorded."),
-      missingReceipt("ALLOC-WORKTREES", "Branch and worktree allocation", "No branch or isolated-worktree receipt is recorded."),
+      missingReceipt("ALLOC-CLEARANCE", "Collision clearance", "Overlapping tasks have not been checked and decided yet."),
+      missingReceipt("ALLOC-OWNERS", "Named owners", "No owners are saved for this project's tasks yet."),
     ],
     build: [
       authority("plan"),
-      missingReceipt("BUILD-CLEARANCE", "Collision clearance", "No collision-clearance receipt is recorded for this project generation."),
-      missingReceipt("BUILD-ALLOCATION", "Allocation authority", "No owner, claim, branch, or worktree allocation receipt is recorded."),
+      missingReceipt("BUILD-CLEARANCE", "Collision clearance", "Overlapping tasks have not been checked and decided yet."),
+      missingReceipt("BUILD-ALLOCATION", "Allocation authority", "No owners are saved for this project's tasks yet."),
       missingReceipt("BUILD-RUN", "Build run", "No bounded build execution receipt is recorded."),
     ],
     evidence: [

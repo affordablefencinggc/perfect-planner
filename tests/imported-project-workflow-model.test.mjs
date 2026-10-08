@@ -99,7 +99,7 @@ test("downstream pages never turn absent operational receipts into confident zer
   const integrity = deriveImportedProjectWorkflowModel(project, "integrity");
 
   assert.equal(collision.requirements.find((item) => item.id === "COL-EVALUATION").state, "unanswered");
-  assert.match(collision.requirements.find((item) => item.id === "COL-EVALUATION").detail, /not represented/);
+  assert.match(collision.requirements.find((item) => item.id === "COL-EVALUATION").detail, /not been checked/);
   assert.equal(allocation.requirements.find((item) => item.id === "ALLOC-OWNERS").state, "unanswered");
   assert.equal(build.requirements.find((item) => item.id === "BUILD-RUN").state, "unanswered");
   assert.equal(evidence.requirements.find((item) => item.id === "PROOF-SCREENSHOT").state, "unanswered");

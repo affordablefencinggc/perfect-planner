@@ -6,7 +6,12 @@
 // absence is never shown as success. Valid states: recorded, review, unanswered, stale, unavailable.
 import { receiptDerivers as planReceiptDerivers } from "./receipts/plan.js";
 
+import { receiptDerivers as collisionReceiptDerivers } from "./receipts/collision.js";
+import { receiptDerivers as allocationReceiptDerivers } from "./receipts/allocation.js";
+
 const derivers = Object.freeze({
+  ...collisionReceiptDerivers,
+  ...allocationReceiptDerivers,
   // ...featureReceiptDerivers,
   ...planReceiptDerivers,
 });
