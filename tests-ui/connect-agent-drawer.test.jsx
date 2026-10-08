@@ -113,7 +113,7 @@ describe("Connect agent drawer", () => {
     render(<ProjectProvider registry={registry}><PerfectPlannerShell diagnosticSession={diagnosticSessionFixture()} /></ProjectProvider>);
     const opener = screen.getByRole("button", { name: "Connect agent" });
     fireEvent.click(opener);
-    const dialog = screen.getByRole("dialog", { name: "Connect agent" });
+    const dialog = await screen.findByRole("dialog", { name: "Connect agent" });
     expect(within(dialog).getByLabelText("Run once in a terminal setup text").textContent).toContain("perfectPlannerMcpServer.mjs");
     expect(window.location.search).toContain("workspace=structure");
     fireEvent.keyDown(document, { key: "Escape" });
@@ -122,7 +122,7 @@ describe("Connect agent drawer", () => {
     fireEvent.click(screen.getByRole("button", { name: "More actions" }));
     fireEvent.click(screen.getByRole("button", { name: /MCP access/ }));
     fireEvent.click(screen.getByRole("button", { name: /Set up an agent connection/ }));
-    expect(screen.getByRole("dialog", { name: "Connect agent" })).toBeTruthy();
+    expect(await screen.findByRole("dialog", { name: "Connect agent" })).toBeTruthy();
     expect(screen.queryByRole("dialog", { name: "More actions" })).toBeNull();
     window.localStorage.clear();
   }, 20000);

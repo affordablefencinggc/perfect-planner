@@ -30,7 +30,7 @@ test("fresh intake definitions stay project-scoped and disappear on reload witho
   const registry = createProjectRegistry({ storage: createMemoryStorage() });
   const shell = () => <ProjectProvider registry={registry}><PerfectPlannerShell /></ProjectProvider>;
   const view = render(shell());
-  fireEvent.click(screen.getByRole("button", { name: "Capture first fixture" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Capture first fixture" }));
   const firstId = registry.getActive().projectId;
   expect(registry.getActive().census.files).toBeUndefined();
   fireEvent.click(screen.getByRole("button", { name: /^Operations/ }));
@@ -40,7 +40,7 @@ test("fresh intake definitions stay project-scoped and disappear on reload witho
   fireEvent.click(screen.getByRole("button", { name: "Delivery pipeline" }));
   const changes = screen.getByRole("button", { name: /Local changes/ });
   expect(within(changes).getByText("unavailable")).toBeTruthy();
-  fireEvent.click(screen.getByRole("button", { name: "Capture second fixture" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Capture second fixture" }));
   fireEvent.click(screen.getByRole("button", { name: "Hooks & catchers" }));
   expect(screen.queryByText(/Hook definitions observed\. Installation and execution/)).toBeNull();
   act(() => { registry.setActive(firstId); });

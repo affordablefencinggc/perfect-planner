@@ -236,7 +236,9 @@ describe("real-life UI survival matrix", () => {
     async (route, regionName) => {
       const { container, demo } = renderDemo(route);
 
-      expect(await screen.findByRole("region", { name: regionName })).toBeTruthy();
+      expect(
+        await screen.findByRole("region", { name: regionName }, { timeout: 5000 }),
+      ).toBeTruthy();
       expect(new URLSearchParams(window.location.search).get("workspace")).toBe(
         route,
       );

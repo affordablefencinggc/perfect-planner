@@ -102,7 +102,7 @@ describe("Next honest action on the page that owns the requirement", () => {
     const onWorkspace = vi.fn(), onSelect = vi.fn();
     const project = session();
     render(<ImportedProjectWorkflowWorkspace workspace="plan" activeProject={project} onWorkspace={onWorkspace} onSelect={onSelect} />);
-    const panel = screen.getByRole("region", { name: "Approve this plan" });
+    const panel = await screen.findByRole("region", { name: "Approve this plan" });
     await user.click(screen.getByRole("button", { name: "Review Plan approval" }));
     expect(onWorkspace).not.toHaveBeenCalled();
     expect(document.activeElement).toBe(panel);
