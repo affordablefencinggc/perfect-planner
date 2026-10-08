@@ -165,7 +165,7 @@ test("Next honest action never routes to the page that is already open", async (
     }
   }
   const plan = deriveImportedProjectWorkflowModel(session, "plan", null).nextAction;
-  assert.deepEqual([plan.workspace, plan.target, plan.label], [null, "AUTH-PLAN", "Review Plan authority"]);
+  assert.deepEqual([plan.workspace, plan.target, plan.label], [null, "AUTH-PLAN", "Review Plan approval"]);
   const collision = deriveImportedProjectWorkflowModel(session, "collision", null).nextAction;
   assert.deepEqual([collision.workspace, collision.target], ["plan", "AUTH-PLAN"]);
 

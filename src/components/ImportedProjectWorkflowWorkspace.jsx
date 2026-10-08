@@ -48,9 +48,9 @@ function selectedItem(item, model) {
     estimate: STATE_LABELS[item.state] ?? "Unavailable",
     items: [
       item.detail,
-      item.source ? `Source receipt: ${item.source}` : "No source receipt is recorded for this requirement.",
+      item.source ? `Source record: ${item.source}` : "No source record is saved for this requirement.",
       `Project: ${model.project.projectId}`,
-      `Generation: ${model.project.generation}`,
+      `Scan: ${model.project.generation}`,
     ],
   };
 }
@@ -74,7 +74,7 @@ function RequirementList({ model, onSelect, query }) {
       <span className="imported-workflow-requirement-copy"><strong>{item.label}</strong><small>{item.detail}</small></span>
       <StateMark state={item.state} />
     </button></div>)}
-    {!visible.length && <p className="imported-workflow-search-empty">No project receipt or question matches “{query}”.</p>}
+    {!visible.length && <p className="imported-workflow-search-empty">No project record or question matches “{query}”.</p>}
   </div>;
 }
 
@@ -99,7 +99,7 @@ function QuestionMap({ model, onSelect, query }) {
           status: item.state === "recorded" ? "ready" : item.state === "review" || item.state === "stale" ? "active" : "queued",
           estimate: STATE_LABELS[item.state],
           items: [
-            item.findingIds.length ? `Recorded finding references: ${item.findingIds.join(", ")}` : "No finding receipt is stored for this area.",
+            item.findingIds.length ? `Saved finding references: ${item.findingIds.join(", ")}` : "No finding record is saved for this area.",
             ...item.questions.map((question) => `Unanswered: ${question}`),
             `Project: ${model.project.projectId}`,
           ],
@@ -172,7 +172,7 @@ export function ImportedProjectWorkflowWorkspace({
       </div>
       <div className={`imported-workflow-verdict state-${model.pageState}`}>
         {model.pageState === "recorded" ? <CheckCircleIcon weight="fill" aria-hidden="true" /> : <WarningIcon weight="fill" aria-hidden="true" />}
-        <span><small>CURRENT PROJECT STATE</small><strong>{model.pageState === "recorded" ? "RECEIPTS RECORDED" : model.pageState === "stale" ? "STALE — REFRESH REQUIRED" : model.pageState === "unavailable" ? "AUTHORITY UNAVAILABLE" : "EXPLICITLY UNANSWERED"}</strong><em>No Demo tasks, people, dates, collisions, or proof are shown.</em></span>
+        <span><small>CURRENT PROJECT STATE</small><strong>{model.pageState === "recorded" ? "RECORDS SAVED" : model.pageState === "stale" ? "STALE — REFRESH REQUIRED" : model.pageState === "unavailable" ? "APPROVAL UNAVAILABLE" : "Not done yet"}</strong><em>No Demo tasks, people, dates, collisions, or proof are shown.</em></span>
       </div>
     </header>
 
@@ -187,20 +187,20 @@ export function ImportedProjectWorkflowWorkspace({
       <article><small>UNLOCK NEXT</small><span>{model.copy.unlock}</span></article>
     </section>
 
-    <section className="imported-workflow-summary" aria-label="Workflow receipt summary">
+    <section className="imported-workflow-summary" aria-label="Workflow record summary">
       <span><b>{model.counts.recorded}</b><small>recorded</small></span>
       <span><b>{model.counts.review}</b><small>needs review</small></span>
       <span><b>{model.counts.unanswered}</b><small>unanswered or unavailable</small></span>
       <span><b>—</b><small>{workspace === "collision" ? (records?.sections?.collisions ? "overlap check saved above" : "collisions not evaluated") : workspace === "allocation" ? (records?.sections?.allocation ? "owners saved above" : "owners not allocated") : workspace === "build" ? "statuses are set by you" : workspace === "evidence" ? "proof not claimed" : "no inferred completion"}</small></span>
     </section>
 
-    {showSearch && <label className="imported-workflow-search"><MagnifyingGlassIcon aria-hidden="true" /><span className="sr-only">Search current project evidence</span><input value={query} maxLength={160} onChange={(event) => setQuery(event.target.value.slice(0, 160))} placeholder="Search this project’s recorded receipts and questions…" /></label>}
+    {showSearch && <label className="imported-workflow-search"><MagnifyingGlassIcon aria-hidden="true" /><span className="sr-only">Search current project evidence</span><input value={query} maxLength={160} onChange={(event) => setQuery(event.target.value.slice(0, 160))} placeholder="Search this project’s saved records and questions…" /></label>}
 
     <div className="imported-workflow-layout">
       <main className="imported-workflow-main">
         <section className="imported-workflow-panel">
-          <header><span><FileMagnifyingGlassIcon aria-hidden="true" /><strong>{workspace === "ledger" ? "Recorded and missing ledger authorities" : workspace === "index" ? "Indexed receipt sources" : "Required project receipts"}</strong></span><small>{model.counts.recorded}/{model.counts.total} recorded</small></header>
-          <p>Every row is derived from this project’s validated session. “Unanswered” means no matching receipt exists; it does not mean zero.</p>
+          <header><span><FileMagnifyingGlassIcon aria-hidden="true" /><strong>{workspace === "ledger" ? "Saved and missing ledger approvals" : workspace === "index" ? "Indexed record sources" : "Required project records"}</strong></span><small>{model.counts.recorded}/{model.counts.total} recorded</small></header>
+          <p>Every row is derived from this project’s validated session. “Unanswered” means no matching record is saved; it does not mean zero.</p>
           <RequirementList model={model} onSelect={onSelect} query={query} />
         </section>
         <QuestionMap model={model} onSelect={onSelect} query={query} />
@@ -208,17 +208,17 @@ export function ImportedProjectWorkflowWorkspace({
 
       <aside className="imported-workflow-aside">
         <section className="imported-workflow-panel imported-workflow-binding">
-          <header><span><ShieldWarningIcon aria-hidden="true" /><strong>Generation binding</strong></span></header>
+          <header><span><ShieldWarningIcon aria-hidden="true" /><strong>Scan binding</strong></span></header>
           <dl>
             <div><dt>Project</dt><dd>{model.binding.projectId}</dd></div>
-            <div><dt>Generation</dt><dd>{model.binding.sessionGeneration}</dd></div>
+            <div><dt>Scan</dt><dd>{model.binding.sessionGeneration}</dd></div>
             <div><dt>Registry revision</dt><dd>{model.binding.registryRevision ?? "Unavailable"}</dd></div>
-            <div><dt>Census digest</dt><dd>{model.binding.censusDigest ? `${model.binding.censusDigest.slice(0, 12)}…` : "Unavailable"}</dd></div>
+            <div><dt>Folder scan fingerprint</dt><dd>{model.binding.censusDigest ? `${model.binding.censusDigest.slice(0, 12)}…` : "Unavailable"}</dd></div>
           </dl>
         </section>
 
-        <section className="imported-workflow-panel imported-workflow-caveats" aria-label="Truth boundaries">
-          <header><span><WarningIcon aria-hidden="true" /><strong>Truth boundaries</strong></span></header>
+        <section className="imported-workflow-panel imported-workflow-caveats" aria-label="Status boundaries">
+          <header><span><WarningIcon aria-hidden="true" /><strong>Status boundaries</strong></span></header>
           <ul>{model.caveats.map((item) => <li key={item}>{item}</li>)}</ul>
         </section>
 

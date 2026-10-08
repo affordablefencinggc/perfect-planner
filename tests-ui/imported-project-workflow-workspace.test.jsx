@@ -77,7 +77,7 @@ describe("ImportedProjectWorkflowWorkspace", () => {
     ["build", "Build readiness"],
     ["evidence", "Evidence register"],
     ["integrity", "Integrity readiness"],
-    ["ledger", "Project receipt ledger"],
+    ["ledger", "Project record ledger"],
     ["index", "Project evidence index"],
   ])("renders the %s route from one project-bound model", (workspace, heading) => {
     const project = importedProject();
@@ -99,7 +99,7 @@ describe("ImportedProjectWorkflowWorkspace", () => {
     expect(region.getAttribute("data-project-id")).toBe(project.projectId);
     expect(region.getAttribute("data-page-state")).toBe("unanswered");
     expect(screen.getByRole("heading", { name: "Planning intake" })).toBeTruthy();
-    expect(screen.getByText("EXPLICITLY UNANSWERED")).toBeTruthy();
+    expect(screen.getByText("Not done yet")).toBeTruthy();
     expect(screen.getByText("463 files", { exact: false })).toBeTruthy();
     expect(screen.getByText("Which runtime and framework are present?")).toBeTruthy();
     expect(screen.getByText("S013", { exact: false })).toBeTruthy();
@@ -135,8 +135,8 @@ describe("ImportedProjectWorkflowWorkspace", () => {
     const project = importedProject();
     const first = render(<ImportedProjectWorkflowWorkspace workspace="ledger" activeProject={project} onWorkspace={vi.fn()} />);
 
-    expect(screen.getByRole("heading", { name: "Project receipt ledger" })).toBeTruthy();
-    const search = screen.getByPlaceholderText("Search this project’s recorded receipts and questions…");
+    expect(screen.getByRole("heading", { name: "Project record ledger" })).toBeTruthy();
+    const search = screen.getByPlaceholderText("Search this project’s saved records and questions…");
     await user.type(search, "task drafts");
     expect(screen.getByText("Saved task drafts")).toBeTruthy();
     expect(screen.queryByText("Folder registration")).toBeNull();

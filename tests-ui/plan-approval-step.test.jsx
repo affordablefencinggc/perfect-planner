@@ -103,7 +103,7 @@ describe("Next honest action on the page that owns the requirement", () => {
     const project = session();
     render(<ImportedProjectWorkflowWorkspace workspace="plan" activeProject={project} onWorkspace={onWorkspace} onSelect={onSelect} />);
     const panel = screen.getByRole("region", { name: "Approve this plan" });
-    await user.click(screen.getByRole("button", { name: "Review Plan authority" }));
+    await user.click(screen.getByRole("button", { name: "Review Plan approval" }));
     expect(onWorkspace).not.toHaveBeenCalled();
     expect(document.activeElement).toBe(panel);
     expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({ id: "AUTH-PLAN" }));

@@ -24,14 +24,14 @@ const WORKSPACE_COPY = Object.freeze({
     eyebrow: "DEFINE · PROJECT-SCOPED PLANNING",
     title: "Planning intake",
     purpose: "Turn reviewed folder evidence into explicit decisions without borrowing tasks from the Demo project.",
-    outcome: "One approved plan authority bound to this project, census digest, and authority revisions.",
-    unlock: "Collision review begins only after the exact plan revision is authoritative.",
+    outcome: "One approved plan bound to this project, folder scan fingerprint, and saved approval revisions.",
+    unlock: "Collision review begins only after the exact plan revision is approved.",
   },
   collision: {
-    eyebrow: "COORDINATE · COLLISION AUTHORITY",
+    eyebrow: "COORDINATE · COLLISION CHECK",
     title: "Collision review",
     purpose: "Compare exact planned write claims before two workers can touch the same surface.",
-    outcome: "A project-bound collision evaluation receipt; absence is never shown as zero collisions.",
+    outcome: "A saved collision check for this project; a missing check is never shown as zero collisions.",
     unlock: "Allocation begins after collisions are resolved or explicitly serialized.",
   },
   allocation: {
@@ -63,9 +63,9 @@ const WORKSPACE_COPY = Object.freeze({
     unlock: "A changed plan needs a fresh sign-off; nothing is marked done from estimates.",
   },
   ledger: {
-    eyebrow: "PROJECT LEDGER · RECORDED TRUTH",
-    title: "Project receipt ledger",
-    purpose: "List what this ProjectSession actually records and keep every missing workflow authority visible.",
+    eyebrow: "PROJECT LEDGER · SAVED STATUS",
+    title: "Project record ledger",
+    purpose: "List what this project actually saved and keep every missing workflow approval visible.",
     outcome: "One complete, project-bound history of inputs, decisions, work, conflicts, owners, and proof.",
     unlock: "No stage is promoted from an unrecorded or cross-project value.",
   },
@@ -74,7 +74,7 @@ const WORKSPACE_COPY = Object.freeze({
     title: "Project evidence index",
     purpose: "Search this project's tasks, discovery areas, saved plans, and proof in one place.",
     outcome: "A search built only from this project's own records, never the Demo.",
-    unlock: "Indexed evidence can be reviewed; it does not become authority by appearing here.",
+    unlock: "Indexed evidence can be reviewed; it does not become approved by appearing here.",
   },
 });
 
@@ -100,7 +100,7 @@ function receipt(id, label, state, detail, source = null) {
 
 function authorityReceipt(project, kind, label) {
   const authority = project.authorities?.[kind] ?? null;
-  if (!authority) return receipt(`AUTH-${kind.toUpperCase()}`, label, effectiveState(project, "unanswered"), "No authority receipt is recorded.");
+  if (!authority) return receipt(`AUTH-${kind.toUpperCase()}`, label, effectiveState(project, "unanswered"), "No approval record is saved.");
   const state = authority.state === "authoritative"
     ? "recorded"
     : authority.state === "generated"
@@ -119,8 +119,8 @@ function authorityReceipt(project, kind, label) {
 // session's own plan authority is used only when no such record exists.
 function planReceipt(project, records) {
   const status = planApprovalStatus(project, records);
-  if (!status) return authorityReceipt(project, "plan", "Plan authority");
-  return receipt("AUTH-PLAN", "Plan authority", effectiveState(project, status.state), status.detail, status.revision ? `Saved plan approval · revision ${status.revision}` : null);
+  if (!status) return authorityReceipt(project, "plan", "Plan approval");
+  return receipt("AUTH-PLAN", "Plan approval", effectiveState(project, status.state), status.detail, status.revision ? `Saved plan approval · revision ${status.revision}` : null);
 }
 
 function sessionReceipts(project, records = null) {
@@ -132,22 +132,22 @@ function sessionReceipts(project, records = null) {
   const discoveryState = discoveryReview.state;
 
   return [
-    receipt("REC-PROJECT", "Project identity", effectiveState(project, "recorded"), `${project.projectId} · generation ${project.generation}`),
+    receipt("REC-PROJECT", "Project identity", effectiveState(project, "recorded"), `${project.projectId} · scan ${project.generation}`),
     receipt(
       "REC-REGISTRATION",
       "Folder registration",
       effectiveState(project, registration?.access === "metadata-read-only" ? "recorded" : "unavailable"),
       registration
         ? `${registration.rootLabel} · ${registration.adapter} · registry revision ${registration.registryRevision}`
-        : "No redacted registration receipt is recorded.",
+        : "No folder registration is saved.",
     ),
     receipt(
       "REC-CENSUS",
-      "Bounded folder census",
+      "Bounded folder scan",
       effectiveState(project, census ? (census.skippedCount > 0 ? "review" : "recorded") : "unanswered"),
       census
-        ? `${census.fileCount.toLocaleString()} files · ${census.skippedCount} skipped · ${compactDigest(census.digest)}`
-        : "No census receipt is recorded.",
+        ? `${census.fileCount.toLocaleString()} files · ${census.skippedCount} skipped · fingerprint ${compactDigest(census.digest)}`
+        : "No folder scan is saved yet.",
     ),
     receipt(
       "REC-DISCOVERY",
@@ -155,11 +155,11 @@ function sessionReceipts(project, records = null) {
       effectiveState(project, discoveryState),
       discovery
         ? `${discovery.counts.observed} observed · ${discovery.counts.signals} review signals · ${discovery.counts.unanswered} unanswered · ${discoveryReviewDetail(discoveryReview)}`
-        : "No discovery snapshot is recorded.",
+        : "No discovery snapshot is saved yet.",
     ),
-    authorityReceipt(project, "architecture", "Architecture authority"),
-    authorityReceipt(project, "folder", "Folder-contract authority"),
-    authorityReceipt(project, "component", "Component authority"),
+    authorityReceipt(project, "architecture", "Architecture approval"),
+    authorityReceipt(project, "folder", "Folder-contract approval"),
+    authorityReceipt(project, "component", "Component approval"),
     planReceipt(project, records),
   ];
 }
@@ -202,7 +202,7 @@ function requirementsFor(workspace, receipts, records, project) {
     build: [
       authority("plan"),
       missingReceipt("BUILD-CLEARANCE", "Collision clearance", "Overlapping tasks have not been checked and decided yet."),
-      missingReceipt("BUILD-ALLOCATION", "Allocation authority", "No owners are saved for this project's tasks yet."),
+      missingReceipt("BUILD-ALLOCATION", "Allocation approval", "No owners are saved for this project's tasks yet."),
       missingReceipt("BUILD-RUN", "Approved tasks done", "No approved task has been marked done on the Build board yet."),
     ],
     evidence: [
@@ -291,7 +291,7 @@ export function deriveImportedProjectWorkflowModel(session, workspace, records =
     questions: workspace === "plan" || workspace === "index" ? planningQuestions(project, records) : [],
     nextAction: nextActionFor(workspace, requirements),
     caveats: [
-      ...(project.census?.skippedCount > 0 ? [`${project.census.skippedCount} census item${project.census.skippedCount === 1 ? " was" : "s were"} skipped; coverage is incomplete.`] : []),
+      ...(project.census?.skippedCount > 0 ? [`${project.census.skippedCount} folder scan item${project.census.skippedCount === 1 ? " was" : "s were"} skipped; coverage is incomplete.`] : []),
       ...(project.registration?.persistence === "reselect-required" ? ["Folder access must be reselected after this browser session."] : []),
       "Recorded metadata is evidence about structure, not proof that a workflow action occurred.",
     ],
