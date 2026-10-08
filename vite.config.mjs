@@ -10,6 +10,7 @@ import { createComponentPlanMiddleware } from "./src/node/componentPlanHttp.mjs"
 import { createPlanningLedgerMiddleware } from "./src/node/planningLedgerHttp.mjs";
 import { initializePlanningLedgerHostRoot } from "./src/node/planningLedgerHostRoot.mjs";
 import { taskObservationVitePlugin } from './src/node/taskObservationVitePlugin.mjs';
+import { defaultRegistryRoot, mcpServerPath } from "./mcp/agentSetupPaths.mjs";
 
 const collisionAuthority = () => ({ name: "perfect-planner-collision-authority", configureServer(server) { server.middlewares.use(createCollisionAuthorityMiddleware({ root: path.join(process.env.LOCALAPPDATA ?? os.tmpdir(), "PerfectPlannerCleanroom", "authority") })); } });
 const folderContracts = () => ({ name: "perfect-planner-folder-contracts", configureServer(server) { server.middlewares.use(createFolderContractMiddleware({ root: path.join(process.env.LOCALAPPDATA ?? os.tmpdir(), "PerfectPlannerCleanroom", "authority") })); } });
@@ -32,7 +33,17 @@ export const mermaidDocuments = () => ({
   },
 });
 
-export default defineConfig({
+// "Connect agent" snippets need this checkout's absolute MCP server path. Embed it only for the
+// local dev server; shipped builds keep a placeholder unless PP_MCP_SERVER_PATH is set explicitly.
+const agentSetupDefines = (command) => {
+  const local = command === "serve";
+  const serverPath = process.env.PP_MCP_SERVER_PATH ?? (local ? mcpServerPath() : "");
+  const registryRoot = process.env.PP_MCP_REGISTRY_ROOT ?? (local ? defaultRegistryRoot() ?? "" : "");
+  return { "import.meta.env.VITE_PP_MCP_SERVER_PATH": JSON.stringify(serverPath), "import.meta.env.VITE_PP_MCP_REGISTRY_ROOT": JSON.stringify(registryRoot) };
+};
+
+export default defineConfig(({ command }) => ({
+  define: agentSetupDefines(command),
   build: {
     outDir: "dist/client",
     rollupOptions: {
@@ -60,4 +71,4 @@ export default defineConfig({
     },
   },
   plugins: [mermaidDocuments(), collisionAuthority(), architectureContracts(), folderContracts(), componentPlans(), planningLedger(), taskObservationVitePlugin(), react()],
-});
+}));

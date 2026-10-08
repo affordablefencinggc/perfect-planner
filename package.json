@@ -7,6 +7,7 @@
     "dev": "vite",
     "dev:tauri": "vite --host 127.0.0.1 --port 4173 --strictPort",
     "truth:report": "node scripts/generate-truth-report.mjs",
+    "mcp": "node scripts/run-perfect-planner-mcp.mjs",
     "verify:mcp": "node scripts/verify-perfect-planner-mcp.mjs",
     "verify:native-mcp": "node scripts/verify-bundled-native-mcp.mjs",
     "verify:secrets": "node scripts/verify-secrets.mjs",

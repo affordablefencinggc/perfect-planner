@@ -1,0 +1,144 @@
+.connect-agent-scrim {
+  position: fixed;
+  z-index: 90;
+  inset: 0;
+  border: 0;
+  background: rgba(39, 48, 43, 0.18);
+}
+.connect-agent-drawer {
+  position: fixed;
+  z-index: 91;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(460px, 100vw);
+  display: grid;
+  grid-template-rows: auto 1fr;
+  border-left: 1px solid var(--chrome-dark);
+  background: var(--paper);
+  color: var(--ink);
+  box-shadow: -12px 0 30px rgba(36, 43, 39, 0.22), inset 1px 0 0 #fff;
+  animation: connect-agent-in 0.22s ease;
+}
+@keyframes connect-agent-in { from { transform: translateX(40px); opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .connect-agent-drawer { animation: none; } }
+.connect-agent-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--line);
+  background: var(--chrome-light);
+}
+.connect-agent-head > span {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--chrome-dark);
+  border-radius: 9px;
+  background: var(--paper-strong);
+  font-size: 20px;
+}
+.connect-agent-head > div { flex: 1; min-width: 0; }
+.connect-agent-head h2 { margin: 3px 0 0; font: 700 15px var(--mono); }
+.connect-agent-close {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--paper-strong);
+  color: var(--ink);
+  cursor: pointer;
+}
+.connect-agent-scroll { min-height: 0; overflow: auto; padding: 14px 16px 24px; display: grid; gap: 14px; align-content: start; }
+.connect-agent-lede { margin: 0; font-size: 13px; line-height: 1.5; }
+.connect-agent-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--canvas);
+}
+.connect-agent-tabs button {
+  flex: 1;
+  padding: 7px 8px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  font: 600 12px var(--mono);
+  cursor: pointer;
+}
+.connect-agent-tabs button[aria-selected="true"] {
+  border-color: var(--chrome-dark);
+  background: var(--paper-strong);
+  color: var(--ink);
+  box-shadow: 0 2px 5px rgba(54, 66, 82, 0.12);
+}
+.connect-agent-panel { display: grid; gap: 10px; }
+.connect-agent-snippet {
+  border: 1px solid var(--chrome-dark);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--paper-strong);
+  box-shadow: var(--chrome-panel-shadow);
+}
+.connect-agent-snippet-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--line);
+  background: var(--chrome-light);
+  font: 11px var(--mono);
+}
+.connect-agent-snippet-head button,
+.connect-agent-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 10px;
+  border: 1px solid var(--ink);
+  border-radius: 7px;
+  background: var(--ink);
+  color: var(--paper-strong);
+  font: 600 11px var(--mono);
+  cursor: pointer;
+}
+.connect-agent-link { justify-self: start; }
+.connect-agent-snippet pre {
+  margin: 0;
+  padding: 10px 12px;
+  overflow: auto;
+  max-height: 220px;
+  background: #27302b;
+  color: #f4f1e8;
+  font: 11.5px/1.5 var(--mono);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.connect-agent-note { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
+.connect-agent-warn { color: #7a5313; }
+p.connect-agent-warn { margin: 0; padding: 6px 10px; background: var(--amber-soft); font-size: 12px; }
+.connect-agent-section { display: grid; gap: 8px; padding-top: 12px; border-top: 1px solid var(--line); }
+.connect-agent-section h3 { display: flex; align-items: center; gap: 6px; margin: 0; font: 700 12px var(--mono); }
+.connect-agent-section p { margin: 0; font-size: 13px; line-height: 1.45; }
+.connect-agent-section ul { margin: 0; padding-left: 18px; display: grid; gap: 6px; font-size: 12.5px; line-height: 1.45; }
+.connect-agent-section code { font: 11px var(--mono); background: var(--canvas); padding: 0 3px; border-radius: 3px; word-break: break-all; }
+.connect-agent-tools { list-style: none; padding-left: 0 !important; }
+.connect-agent-tools li {
+  display: grid;
+  gap: 2px;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--paper-strong);
+}
+.connect-agent-tools li code { justify-self: start; color: var(--muted); background: none; padding: 0; }
+.connect-agent-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.topbar-connect-agent { font-weight: 700; }
