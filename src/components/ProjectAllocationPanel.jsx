@@ -22,7 +22,7 @@ export function ProjectAllocationPanel({ project, records, onWorkspace, store, s
   const [message, setMessage] = useState("");
   useEffect(() => { if (!dirty) setForm(initial); }, [initial, dirty]);
 
-  const change = (id, field, value) => { setDirty(true); setMessage(""); setForm((current) => ({ ...current, [id]: { ...current[id], [field]: value } })); };
+  const change = (id, field, value) => { setDirty(true); setMessage(""); setForm((current) => ({ ...current, [id]: { ...(current[id] ?? initial[id]), [field]: value } })); };
   const resetWaves = () => { setDirty(true); setForm((current) => Object.fromEntries(tasks.map((task) => [task.id, { ...current[task.id], wave: String(defaults.waves[task.id] ?? "") }]))); };
   const canSave = Boolean(tasks.length && drafts.binding && project?.state !== "unavailable");
   const recordedCurrent = Boolean(allocation && allocation.taskSnapshot === snapshot && allocation.censusDigest === drafts.binding?.censusDigest);
@@ -57,7 +57,7 @@ export function ProjectAllocationPanel({ project, records, onWorkspace, store, s
       <div className="coord-table" role="table" aria-label="Task assignments">
         <div role="row" className="coord-row head"><span role="columnheader">Task</span><span role="columnheader">Owner</span><span role="columnheader">Wave</span></div>
         {tasks.map((task) => {
-          const value = form[task.id] ?? { owner: "", wave: "" };
+          const value = form[task.id] ?? initial[task.id] ?? { owner: "", wave: "" };
           const kind = ownerKind(value.owner.trim());
           return <div role="row" className="coord-row" key={task.id}>
             <span role="cell"><code>{task.id}</code> {task.title}</span>
