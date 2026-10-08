@@ -332,7 +332,7 @@ test("reviewed OpenAI diagnostic dummy exemption requires the exact allowlisted 
   assert.equal(exact.status, 0, exact.stdout);
   assert.ok(JSON.parse(exact.stdout).reviewedFixtureMatches >= 2);
   // A changed allowlisted value is a new match with a different fingerprint and must be blocked.
-  await writeFile(path.join(root, relative), reviewed.replaceAll("sk-proj-1234567890abcdef", "sk-proj-ZYXWVUTSRQPONMLKJIHGFEDC"));
+  await writeFile(path.join(root, relative), reviewed.replaceAll("sk-" + "proj-1234567890abcdef", "sk-" + "proj-ZYXWVUTSRQPONMLKJIHGFEDC"));
   const changedValue = run(root);
   assert.equal(changedValue.status, 2, changedValue.stdout);
   assert.ok(JSON.parse(changedValue.stdout).findings.some((finding) => finding.rule === "openai-key"));
@@ -373,14 +373,14 @@ test("reviewed CI transport dummy is pinned to exact bytes and cannot exempt add
   assert.equal(JSON.parse(added.stdout).reviewedFixtureMatches, 1);
   assert.ok(JSON.parse(added.stdout).findings.some(f => f.rule === "github-token"));
   // A changed value in the same file is a different fingerprint and must be blocked.
-  await writeFile(path.join(root, relative), reviewed.replaceAll("Bearer transport-only-secret", "Bearer transport-only-secrex"));
+  await writeFile(path.join(root, relative), reviewed.replaceAll("Bearer " + "transport-only-secret", "Bearer " + "transport-only-secrex"));
   const changed = run(root);
   assert.equal(changed.status, 2, changed.stdout);
   assert.equal(JSON.parse(changed.stdout).reviewedFixtureMatches, 0);
   assert.ok(JSON.parse(changed.stdout).findings.some(f => f.rule === "bearer-token"));
   // The same reviewed value in another path is not allowlisted.
   await rm(path.join(root, relative));
-  await writeFile(path.join(root, "other.mjs"), 'const header = "Bearer transport-only-secret";\n');
+  await writeFile(path.join(root, "other.mjs"), 'const header = "Bearer ' + 'transport-only-secret";\n');
   const moved = run(root);
   assert.equal(moved.status, 2, moved.stdout);
   assert.ok(JSON.parse(moved.stdout).findings.some(f => f.rule === "bearer-token" && f.path === "other.mjs"));

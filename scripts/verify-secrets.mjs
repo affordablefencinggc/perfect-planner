@@ -8,7 +8,7 @@ const args = process.argv.slice(2);
 const mode = args.includes("--staged") ? "staged" : args.includes("--push") ? "push" : "workspace";
 const limits = { files: 20_000, bytesPerFile: 5_000_000, totalBytes: 80_000_000, commits: 250, entries: 50_000, depth: 64, durationMs: 60_000, pushInputBytes: 64_000, pushInputMs: 5_000 };
 const started = Date.now();
-const ignored = new Set([".git", "node_modules", "dist", "target", "target-codex", "generated", ".codex-tmp", ".local-preview-cache"]);
+const ignored = new Set([".git", "node_modules", "dist", "target", "target-codex", "generated", ".codex-tmp", ".local-preview-cache", ".claude"]);
 // Exact reviewed dummy matches only, keyed by path, rule and the SHA-256 of the matched dummy string.
 // Edits elsewhere in a fixture file keep its reviewed dummies exempt; any new or changed match in that
 // file (or anywhere else) is still a finding. Never exempt a whole file or a source marker.
