@@ -1,0 +1,24 @@
+.project-index-panel{min-width:0;border:1.5px solid #9daab1;border-radius:12px;background:#fff;color:var(--ink,#27302b);box-shadow:0 7px 20px #343d4222;padding:24px}
+.project-index-panel>header{background:#edf0ef;margin:-24px -24px 18px;padding:20px 24px;border-bottom:1px solid #a8b1b4;border-radius:11px 11px 0 0}
+.project-index-panel h2{display:flex;align-items:center;gap:10px;font-size:24px;margin:0}
+.project-index-panel>header p{margin:8px 0 0;max-width:760px;font-size:15px;line-height:1.5;color:var(--muted,#5f6762)}
+.project-index-panel p{font-size:14px;line-height:1.5;margin:10px 0}
+.project-index-search{display:flex;align-items:center;gap:10px;border:1px solid #939f99;border-radius:10px;background:#fff;padding:0 14px}
+.project-index-search svg{width:20px;height:20px;color:var(--muted,#5f6762)}
+.project-index-search input{flex:1;min-width:0;border:0;background:transparent;padding:13px 0;font:16px/1.4 var(--mono);color:#252a27}
+.project-index-search:focus-within{outline:3px solid var(--blue-focus,#3c6ee8);outline-offset:2px}
+.project-index-search input:focus{outline:none}
+.project-index-counts{font:13px var(--mono);color:var(--muted,#5f6762)}
+.project-index-note{color:var(--muted,#5f6762);border-left:3px solid var(--line-strong,#9aa5ae);padding-left:12px}
+.project-index-error{color:#922f2d;background:#fff0ef;padding:12px;border:1px solid #c16c65;border-radius:6px}
+.project-index-results{display:grid;gap:8px;margin-top:14px}
+.project-index-result{width:100%;display:grid;grid-template-columns:130px minmax(0,1fr) auto;gap:14px;align-items:center;text-align:left;cursor:pointer;border:1px solid #c6cbc8;border-radius:10px;background:var(--paper,#faf8f1);color:var(--ink,#27302b);padding:12px 14px}
+.project-index-result:hover{border-color:#88969c;background:#fff}
+.project-index-result:focus-visible{outline:3px solid var(--blue-focus,#3c6ee8);outline-offset:2px}
+.project-index-kind{font:12px var(--mono);color:var(--muted,#5f6762);text-transform:uppercase;letter-spacing:.04em}
+.project-index-copy{display:grid;gap:3px;min-width:0}
+.project-index-copy strong{font-size:15px;overflow-wrap:anywhere}
+.project-index-copy small{font-size:13px;color:var(--muted,#5f6762);overflow-wrap:anywhere}
+.project-index-open{display:inline-flex;align-items:center;gap:6px;font:13px var(--mono);color:#2f5a3e}
+.project-index-empty{padding:12px;border:1px dashed #a9b4ba;border-radius:8px}
+@media(max-width:700px){.project-index-panel{padding:16px}.project-index-panel>header{margin:-16px -16px 16px;padding:16px}.project-index-result{grid-template-columns:1fr}}

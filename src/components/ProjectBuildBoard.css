@@ -1,0 +1,46 @@
+.project-build-board{min-width:0;border:1.5px solid #9daab1;border-radius:12px;background:#fff;color:var(--ink,#27302b);box-shadow:0 7px 20px #343d4222;padding:24px}
+.project-build-board>header{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:16px;background:#edf0ef;margin:-24px -24px 18px;padding:20px 24px;border-bottom:1px solid #a8b1b4;border-radius:11px 11px 0 0}
+.project-build-board h2{display:flex;align-items:center;gap:10px;font-size:24px;margin:0}
+.project-build-board>header p{margin:8px 0 0;max-width:760px;font-size:15px;line-height:1.5;color:var(--muted,#5f6762)}
+.project-build-board p{font-size:15px;line-height:1.5;margin:10px 0}
+.build-board-counts{font:14px/1.5 var(--mono);color:var(--ink,#27302b)!important}
+.build-board-counts b{font-size:18px}
+.project-build-board button{display:inline-flex;align-items:center;gap:7px;font:14px/1.45 var(--mono);color:var(--ink,#27302b);background:#fff;border:1px solid #88969c;border-radius:8px;min-height:40px;padding:8px 13px;cursor:pointer}
+.project-build-board button:disabled{cursor:not-allowed;opacity:.6}
+.project-build-board button.primary-button{background:var(--green,#397a52);border-color:var(--green,#397a52);color:#fff}
+.project-build-board :is(button,select,input,textarea):focus-visible{outline:3px solid var(--blue-focus,#3c6ee8);outline-offset:2px}
+.build-board-error{color:#922f2d;background:#fff0ef;padding:12px;border:1px solid #c16c65;border-radius:6px}
+.build-board-note{display:flex;align-items:center;gap:8px;border-left:3px solid var(--amber,#c38a2a);background:var(--amber-soft,#fbefd7);padding:9px 14px}
+.build-board-empty{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px;padding:16px;border:1px dashed #a9b4ba;border-radius:10px;background:var(--paper,#faf8f1)}
+.build-board-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:18px;margin-top:16px}
+.build-card{display:grid;gap:12px;align-content:start;min-width:0;padding:18px;border:1px solid #a9b4ba;border-left:4px solid #9aa5ae;border-radius:10px;background:var(--paper,#faf8f1)}
+.build-card.build-state-in-progress{border-left-color:var(--amber,#c38a2a)}
+.build-card.build-state-done{border-left-color:var(--green,#397a52)}
+.build-card.build-state-blocked{border-left-color:var(--red,#bd4b45)}
+.build-card>header{display:flex;align-items:baseline;flex-wrap:wrap;gap:10px}
+.build-card h3{flex:1;margin:0;font-size:17px;overflow-wrap:anywhere}
+.build-card code{font:13px var(--mono);color:var(--muted,#5f6762)}
+.build-card-status{display:inline-flex;align-items:center;gap:5px;font:12px var(--mono);padding:3px 9px;border-radius:999px;background:#e6e9e7}
+.build-state-done .build-card-status{background:var(--green-soft,#dcecdf);color:#24563a}
+.build-state-blocked .build-card-status{background:var(--red-soft,#f8dfdc);color:#7e2a25}
+.build-state-in-progress .build-card-status{background:var(--amber-soft,#fbefd7);color:#6d4c10}
+.build-card dl{display:grid;gap:6px;margin:0}
+.build-card dl div{display:grid;grid-template-columns:70px 1fr;gap:8px}
+.build-card dt{font:12px/1.6 var(--mono);color:var(--muted,#5f6762)}
+.build-card dd{margin:0;font-size:14px;overflow-wrap:anywhere}
+.build-card dd small{color:var(--muted,#5f6762)}
+.build-card-warning{display:flex;gap:8px;align-items:center;font-size:13px!important;color:#6d4c10;margin:0!important}
+.build-card-blockers strong{font:12px var(--mono);color:var(--muted,#5f6762);text-transform:uppercase;letter-spacing:.04em}
+.build-card-blockers ul{margin:6px 0 0;padding-left:18px;display:grid;gap:6px}
+.build-card-blockers li{font-size:14px;line-height:1.45}
+.build-card-blockers li span{margin-right:8px}
+.build-card-blockers p{margin:6px 0 0;font-size:14px}
+.build-card-constraints li{color:var(--muted,#5f6762)}
+.project-build-board .build-link{border:0;background:none;min-height:28px;padding:2px 4px;text-decoration:underline;color:#2f5a3e}
+.build-card-controls{display:grid;gap:10px;border-top:1px solid var(--line,#d0cdc3);padding-top:12px}
+.build-card-controls label{display:grid;gap:5px;font:13px var(--mono)}
+.build-card-controls :is(select,input,textarea){width:100%;box-sizing:border-box;border:1px solid #939f99;border-radius:6px;background:#fff;color:#252a27;padding:8px 10px;font:14px/1.45 var(--mono)}
+.build-card-controls textarea{resize:vertical;white-space:pre-wrap}
+.build-card-actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.build-card-controls small{color:var(--muted,#5f6762);font-size:12px}
+@media(max-width:700px){.project-build-board{padding:16px}.project-build-board>header{margin:-16px -16px 16px;padding:16px}.build-board-grid{grid-template-columns:1fr}}

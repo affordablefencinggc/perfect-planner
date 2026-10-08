@@ -5,7 +5,12 @@
 // nothing is recorded yet, which keeps the original "unanswered" receipt so that
 // absence is never shown as success. Valid states: recorded, review, unanswered, stale, unavailable.
 
+import { receiptDerivers as indexBuildReceiptDerivers } from "./receipts/indexBuild.js";
+import { receiptDerivers as ledgerReceiptDerivers } from "./receipts/ledger.js";
+
 const derivers = Object.freeze({
+  ...indexBuildReceiptDerivers,
+  ...ledgerReceiptDerivers,
   // ...featureReceiptDerivers,
 });
 

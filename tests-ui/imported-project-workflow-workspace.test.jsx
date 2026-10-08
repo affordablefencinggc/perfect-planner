@@ -137,16 +137,17 @@ describe("ImportedProjectWorkflowWorkspace", () => {
 
     expect(screen.getByRole("heading", { name: "Project receipt ledger" })).toBeTruthy();
     const search = screen.getByPlaceholderText("Search this project’s recorded receipts and questions…");
-    await user.type(search, "task ledger");
-    expect(screen.getByText("Task ledger authority")).toBeTruthy();
+    await user.type(search, "task drafts");
+    expect(screen.getByText("Saved task drafts")).toBeTruthy();
     expect(screen.queryByText("Folder registration")).toBeNull();
     first.unmount();
 
     render(<ImportedProjectWorkflowWorkspace workspace="index" activeProject={project} onWorkspace={vi.fn()} />);
-    const indexSearch = screen.getByPlaceholderText("Search this project’s recorded receipts and questions…");
+    // Index now searches the project's own records through the project search panel.
+    const indexSearch = screen.getByPlaceholderText("Search tasks, areas, saved plans, proof and file names…");
     await user.type(indexSearch, "tenancy");
-    expect(screen.getByText("Data, tenancy & auth")).toBeTruthy();
-    expect(screen.getByText("Is the app single-tenant or multi-tenant?")).toBeTruthy();
-    expect(screen.queryByText("App identity")).toBeNull();
+    const results = screen.getByRole("list", { name: "Search results" });
+    expect(results.textContent).toContain("Data, tenancy & auth");
+    expect(results.textContent).not.toContain("App identity");
   });
 });
