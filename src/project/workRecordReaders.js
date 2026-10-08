@@ -2,6 +2,8 @@
 // its own section shape, so these readers accept the plausible forms and return
 // empty results (never invented values) when a shape is not recognised.
 
+import { validResolution } from "./taskCoordination.js";
+
 const list = (value) => Array.isArray(value) ? value : [];
 const text = (value) => typeof value === "string" && value.trim() ? value.trim() : null;
 const taskKey = (item) => text(item?.taskId) ?? text(item?.task) ?? text(item?.id);
@@ -50,7 +52,11 @@ export function recordedCollisions(sections) {
     const paths = list(item?.paths ?? item?.files).map((p) => typeof p === "string" ? p : text(p?.path)).filter(Boolean);
     if (text(item?.path)) paths.push(item.path.trim());
     const decision = String(item?.resolution ?? item?.decision ?? item?.state ?? item?.status ?? "").toLowerCase();
-    return { taskIds: pair, paths, resolved: item?.resolved === true || RESOLVED.has(decision), note: text(item?.note) ?? text(item?.resolutionNote) };
+    // The Collision page saves decisions beside the list, keyed by collision; a decision
+    // only counts while it still matches that collision's current signature.
+    const saved = text(item?.key) && data.resolutions && typeof data.resolutions === "object" ? data.resolutions[item.key] : null;
+    const decided = Boolean(saved) && Array.isArray(item?.tasks) && saved.signature === item.signature && validResolution(item, saved);
+    return { taskIds: pair, paths, resolved: item?.resolved === true || RESOLVED.has(decision) || decided, note: text(item?.note) ?? text(item?.resolutionNote) ?? (decided && saved.choice === "order" ? `${saved.first} goes first` : null) };
   }).filter((item) => item.taskIds.length);
 }
 

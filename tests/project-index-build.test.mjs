@@ -9,6 +9,7 @@ import { ledgerTasksReceipt } from "../src/project/receipts/ledger.js";
 import { readTaskDraftPresence, recordTaskDraftPresence } from "../src/project/taskDraftPresence.js";
 import { createMemoryStorage } from "../src/project/projectRegistry.js";
 import { deriveWorkRecordReceipt } from "../src/project/workRecordReceipts.js";
+import { buildCollisionRecord, createResolution } from "../src/project/taskCoordination.js";
 
 const binding = { projectId: "pp_index_build", rootIdentity: "a".repeat(64), censusDigest: "b".repeat(64) };
 const project = {
@@ -69,6 +70,22 @@ test("recorded allocation, resolved collisions, proof and statuses shape the car
   assert.equal(first.status.state, "done");
   assert.equal(second.blockers.length, 0, "dependency is done and collision resolved");
   assert.equal(board.counts.done, 1);
+});
+
+test("a decision saved on the Collision page clears the build blocker, and only while it still matches", () => {
+  const ledger = sample();
+  const record = buildCollisionRecord({ ledger, censusDigest: binding.censusDigest, now: "2026-10-02T00:00:00.000Z" });
+  const collision = record.collisions.find((item) => item.tasks.includes("T0001") && item.tasks.includes("T0002"));
+  assert.ok(collision, "the shared write claim is a recorded collision");
+  const undecided = deriveBuildBoard({ project, ledger, sections: { collisions: { revision: 1, data: record } }, planStatus: observed(ledger) });
+  assert.ok(undecided.cards[0].blockers.some((item) => item.kind === "collision"));
+  const decided = { ...record, resolutions: { [collision.key]: createResolution(collision, "order", "T0001", "2026-10-02T00:01:00.000Z") } };
+  const board = deriveBuildBoard({ project, ledger, sections: { collisions: { revision: 2, data: decided } }, planStatus: observed(ledger) });
+  assert.equal(board.cards[0].blockers.filter((item) => item.kind === "collision").length, 0);
+  assert.match(board.cards[0].constraints[0], /Agreed with T0002.*T0001 goes first/);
+  const outdated = { ...decided, resolutions: { [collision.key]: { ...decided.resolutions[collision.key], signature: "changed" } } };
+  const stale = deriveBuildBoard({ project, ledger, sections: { collisions: { revision: 3, data: outdated } }, planStatus: observed(ledger) });
+  assert.ok(stale.cards[0].blockers.some((item) => item.kind === "collision"), "a decision for an earlier version of the overlap does not count");
 });
 
 test("a recorded plan approval section takes precedence and a changed ledger is flagged", () => {
