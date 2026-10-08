@@ -5,7 +5,10 @@
 // nothing is recorded yet, which keeps the original "unanswered" receipt so that
 // absence is never shown as success. Valid states: recorded, review, unanswered, stale, unavailable.
 
+import { receiptDerivers as proofReceiptDerivers } from "./receipts/proof.js";
+
 const derivers = Object.freeze({
+  ...proofReceiptDerivers,
   // ...featureReceiptDerivers,
 });
 
