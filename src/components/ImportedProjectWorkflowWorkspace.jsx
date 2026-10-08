@@ -11,6 +11,7 @@ import {
 } from "@phosphor-icons/react";
 import { deriveImportedProjectWorkflowModel } from "../project/importedProjectWorkflowModel.js";
 import { useProjectWorkRecords } from "../project/useProjectWorkRecords.js";
+import { workspacePanels } from "./workspacePanels.js";
 import { ProjectTruthGate } from "./ProjectTruthGate.jsx";
 const TaskDraftLedger = lazy(() => import("./TaskDraftLedger.jsx").then(module => ({ default: module.TaskDraftLedger })));
 const TaskDraftMap = lazy(() => import("./TaskDraftMap.jsx").then(module => ({ default: module.TaskDraftMap })));
@@ -169,6 +170,8 @@ export function ImportedProjectWorkflowWorkspace({
 
     {workspace === "ledger" && <Suspense fallback={<p role="status">Opening task drafts…</p>}><TaskDraftLedger project={activeProject} /></Suspense>}
     {workspace === "plan" && <Suspense fallback={<p role="status">Opening the saved task map…</p>}><TaskDraftMap project={activeProject} onWorkspace={onWorkspace} /></Suspense>}
+
+    {workspacePanels[workspace] && (() => { const FeaturePanel = workspacePanels[workspace]; return <FeaturePanel project={activeProject} records={records} onWorkspace={onWorkspace} onSelect={onSelect} />; })()}
 
     <section className="imported-workflow-context" aria-label="Workspace contract">
       <article><small>PURPOSE</small><span>{model.copy.purpose}</span></article>

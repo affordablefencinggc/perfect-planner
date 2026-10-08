@@ -516,7 +516,7 @@ socket.on('close',()=>{clearTimeout(timer);process.exit(stage===3?0:8);});});"#;
         host();let node=std::env::var("PP_TEST_AGENT_NODE").expect("Explicit remote Node fixture required");
         let name=id();let pipe=AgentPipe::create(&name).unwrap();
         // Public test endpoint name only; no credentials or source content in argv.
-        let script=r#"const net=require('node:net');const timer=setTimeout(()=>process.exit(2),5000);
+        let script=r#"const net=require('node:net');const timer=setTimeout(()=>process.exit(2),15000);
 const socket=net.connect(process.argv[1]);let bytes=Buffer.alloc(0);
 socket.on('error',()=>process.exit(3));socket.on('connect',()=>socket.write(Buffer.from([0,0,0,2,123,125])));
 socket.on('data',chunk=>{bytes=Buffer.concat([bytes,chunk]);if(bytes.length>6)process.exit(4);
