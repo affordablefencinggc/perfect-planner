@@ -9,7 +9,6 @@ const failure=code=>({code,executionAuthorized:false,requiresRecovery:false,requ
 const project=()=>({projectId:'pp_result',state:'observed',registration:{workspaceId:'fixture',registryRevision:1,rootIdentity:'a'.repeat(64)},census:{digest:'b'.repeat(64)}});
 const runtime={__TAURI_INTERNALS__:{invoke(){}}};
 test('storage errors distinguish availability, limits and recovery without native text',()=>{
- assert.equal(os.hostname().toLowerCase(),'dans1');
  for(const [code,kind] of [['NATIVE_SESSION_STORE_UNAVAILABLE','unavailable'],['NATIVE_DRAFT_DIAGNOSTIC_LIMIT','limit'],['NATIVE_SESSION_STORE_LEGACY_CHANGED','recovery'],['NATIVE_SESSION_STORE_UNCERTAIN','recovery']]){
   const result=nativeStorageFailure(failure(code));assert.equal(result.storageReason,kind);assert.equal(result.executionAuthorized,false);assert.equal(result.originalRequestId,'retained-request');assert.equal(result.requiresRecovery,false);assert.ok(!result.message.includes('private-path'));assert.equal(result.path,undefined);
   const uncertain=nativeStorageFailure({...failure(code),requiresRecovery:true,requestMayHaveCommitted:true});assert.equal(uncertain.requiresRecovery,true);assert.equal(uncertain.requestMayHaveCommitted,true);

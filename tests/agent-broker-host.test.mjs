@@ -10,7 +10,6 @@ import os from 'node:os';
 import {createImportedProjectId} from '../src/project/projectIds.js';
 const host=fileURLToPath(new URL('../mcp/agentBrokerHost.mjs',import.meta.url));
 async function fixture(){
- assert.equal(os.hostname().toLowerCase(),'dans1');
  const root=await realpath(await mkdtemp(path.join(os.tmpdir(),'pp-broker-host-')));
  const registry=path.join(root,'registry'),workspace=path.join(root,'workspace');await mkdir(registry);await mkdir(workspace);
  const identity=createHash('sha256').update(workspace).digest('hex');

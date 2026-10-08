@@ -1,8 +1,9 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { inspectFolderContracts, publishFolderContract } from "./folderContractStore.mjs";
+import { isSameOriginLoopbackRequest } from "./loopbackRequestHttp.mjs";
 
 const json = (res, status, value) => { res.statusCode = status; res.setHeader("content-type", "application/json; charset=utf-8"); res.setHeader("cache-control", "no-store"); res.setHeader("x-content-type-options", "nosniff"); res.end(JSON.stringify(value)); };
-const sameOrigin = (req) => Boolean(req.headers.origin && req.headers.host && (req.headers.origin === `http://${req.headers.host}` || req.headers.origin === `https://${req.headers.host}`));
+const sameOrigin = isSameOriginLoopbackRequest;
 const sameToken = (provided, expected) => { const left = Buffer.from(provided ?? ""); const right = Buffer.from(expected); return left.length === right.length && timingSafeEqual(left, right); };
 async function readBody(req, limit = 512_000) { const chunks = []; let size = 0; for await (const chunk of req) { size += chunk.length; if (size > limit) throw new Error("Folder publication exceeds its byte limit."); chunks.push(chunk); } return JSON.parse(Buffer.concat(chunks).toString("utf8")); }
 

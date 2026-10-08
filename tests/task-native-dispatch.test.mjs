@@ -24,7 +24,6 @@ import {emptyTaskDraftLedger,updateTaskDraft} from '../src/project/taskDraftLedg
 import {createTrustedUserGestureProducer} from '../src/node/confirmationStore.mjs';
 const enabled=Boolean(process.env.PP_NATIVE_DISPATCH_FIXTURE), proof=[];
 async function fixture(mode, taskCount=1,checkCount=1){
-  assert.equal(process.env.COMPUTERNAME.toLowerCase(),'dans1');
   const executable=path.normalize(process.env.PP_NATIVE_DISPATCH_FIXTURE);
   const executableDigest=createHash('sha256').update(await readFile(executable)).digest('hex');
   assert.equal(executableDigest,process.env.PP_NATIVE_DISPATCH_FIXTURE_SHA256);

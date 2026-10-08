@@ -1,6 +1,5 @@
 import test from'node:test';import assert from'node:assert/strict';import os from'node:os';import path from'node:path';import{mkdtemp}from'node:fs/promises';
 import{createAgentLedgerReads}from'../mcp/agentLedgerReads.mjs';import{createAgentClientRouter}from'../mcp/agentClientRouter.mjs';import{createAgentSessionBroker}from'../mcp/agentSessionBroker.mjs';import{createNativeTaskDraftSubmission}from'../src/node/nativeTaskDraftSubmission.mjs';import{emptyTaskDraftLedger,updateTaskDraft}from'../src/project/taskDraftLedger.js';
-assert.equal(os.hostname().toLowerCase(),'dans1');
 test('scoped router reads paged real journal and refuses mixing revisions',async()=>{
  const binding={projectId:'pp_agent_reads',rootIdentity:'a'.repeat(64),workspaceId:'reader',registryRevision:1},draftBinding={projectId:binding.projectId,rootIdentity:binding.rootIdentity,censusDigest:'b'.repeat(64)};
  const dir=await mkdtemp(path.join(os.tmpdir(),'pp-agent-read-'));const submission=createNativeTaskDraftSubmission({proposalConfig:{journalPath:path.join(dir,'proposal.jsonl'),projectId:binding.projectId,rootIdentity:binding.rootIdentity},registeredBinding:async()=>draftBinding});

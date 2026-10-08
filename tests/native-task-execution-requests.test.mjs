@@ -3,7 +3,6 @@ import test from 'node:test';import assert from 'node:assert/strict';
 import {mkdtemp,mkdir,readdir,readFile,writeFile} from 'node:fs/promises';import path from 'node:path';import os from 'node:os';
 import {createNativeTaskExecutionRequests} from '../src/node/nativeTaskExecutionRequests.mjs';
 async function fixture(mode='success'){
- assert.equal(process.env.COMPUTERNAME.toLowerCase(),'dans1');
  const root=await mkdtemp(path.join(os.tmpdir(),'pp-execution-request-')),directory=path.join(root,'requests');
  const request={requestId:'request-1',expected:{hostRevision:1,headDigest:'a'.repeat(64)},contractHead:{revision:1,headDigest:'b'.repeat(64)},confirmationId:'confirmation-1',taskId:'T0001',checkId:'unit',attemptId:'attempt-1',attemptNumber:1};
  let runs=0,workers=0,released=0;const grantId='11111111-1111-4111-8111-111111111111',runId='22222222-2222-4222-8222-222222222222';

@@ -6,3 +6,4 @@ target-codex/
 .cache/
 .env
 .env.*
+public/generated/generations/

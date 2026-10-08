@@ -9,7 +9,6 @@ import {emptyTaskDraftLedger,updateTaskDraft} from '../src/project/taskDraftLedg
 import {submissionWire} from '../src/project/taskDraftSubmission.js';
 import {PassThrough,Writable} from 'node:stream';
 import {createNativeReviewHostStream} from '../src/node/nativeReviewHostStream.mjs';
-assert.equal(os.hostname().toLowerCase(),'dans1');
 const binding={projectId:'pp_large_snapshot',rootIdentity:'a'.repeat(64),censusDigest:'b'.repeat(64)};
 const hash=v=>createHash('sha256').update(v).digest('hex');
 const flow={inspectRecoveryState:async()=>({}),reviewProposal:async()=>({}),recoverFailedPresentation:async()=>({}),recoverInterruptedRequest:async()=>({}),cancelActiveReview:async()=>({})};

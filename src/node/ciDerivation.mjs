@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { lstat, readFile, readdir, realpath } from "node:fs/promises";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 
 const WORKFLOW_EXTENSIONS = new Set([".yml", ".yaml"]);
 const SAFE_COMMANDS = new Set(["node", "npm", "npm.cmd", "pnpm", "pnpm.cmd", "yarn", "yarn.cmd"]);
@@ -9,12 +10,63 @@ const REF_PATTERN = /^(?!-)(?!.*\.\.)(?!.*@\{)[A-Za-z0-9._/-]+$/;
 const SHA_PATTERN = /^[a-f0-9]{40}$/i;
 const requestHash = (value) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 
-export function assessCiTier3(localMergedState, remoteCiStatus) {
-  // Matching input commits do not identify the tested merge tree, environment,
-  // or check contract. The local runner explicitly grants no promotion authority.
-  // Until an authoritative exact-candidate adapter exists, never turn these two
-  // observations into release permission (including caller-supplied green flags).
-  return { exactMergedTruth: false, ciTier3: localMergedState?.state === "red" || remoteCiStatus?.state === "red" ? "red" : "grey" };
+// A release run records every gate it executes against one exact workspace revision. Only that
+// recorded, digest-consistent, revision-bound evidence can turn Tier 3 green; flags never can.
+export const RELEASE_EVIDENCE_KIND = "perfect-planner-release-evidence";
+export const RELEASE_APPROVAL_KIND = "perfect-planner-release-approval";
+// Gates that must have passed (in this run, on this revision) before the release build may claim GO.
+export const RELEASE_PROFILES = Object.freeze({
+  web: Object.freeze(["verify:secrets", "test", "test:ui", "test:sites"]),
+  release: Object.freeze(["verify:secrets", "test", "test:ui", "verify:mcp", "test:sites", "test:native"]),
+});
+const canonical = (value) => Array.isArray(value) ? `[${value.map(canonical).join(",")}]` : value && typeof value === "object" ? `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonical(value[key])}`).join(",")}}` : JSON.stringify(value);
+export const releaseRecordDigest = (record) => { const { digest, ...payload } = record ?? {}; return createHash("sha256").update(canonical(payload)).digest("hex"); };
+const sameRevision = (left, right) => Boolean(left && right && SHA_PATTERN.test(String(left.head ?? "")) && /^[a-f0-9]{64}$/.test(String(left.treeDigest ?? "")) && left.head === right.head && left.treeDigest === right.treeDigest);
+
+// Exact workspace identity: HEAD plus a digest of every tracked change and every untracked, non-ignored file.
+export function computeWorkspaceRevision(root, options = {}) {
+  const run = (args, maxBuffer = 64_000_000) => { const result = spawnSync("git", ["--no-optional-locks", "-c", "core.fsmonitor=false", ...args], { cwd: root, shell: false, windowsHide: true, timeout: options.timeoutMs ?? 30_000, maxBuffer }); if (result.error || result.status !== 0) throw new Error("git-read-failed"); return result.stdout; };
+  try {
+    const head = run(["rev-parse", "--verify", "HEAD^{commit}"]).toString("utf8").trim();
+    const digest = createHash("sha256").update(`head:${head}\n`).update(run(["diff", "HEAD", "--binary", "--no-ext-diff", "--no-color"]));
+    const untracked = run(["ls-files", "--others", "--exclude-standard", "-z"]).toString("utf8").split("\0").filter(Boolean).sort();
+    if (untracked.length > 20_000) throw new Error("untracked-limit");
+    for (const file of untracked) { const blob = run(["hash-object", "--no-filters", "--", file]).toString("utf8").trim(); digest.update(`untracked:${file}:${blob}\n`); }
+    return { head, treeDigest: digest.digest("hex"), untrackedCount: untracked.length };
+  } catch { return null; }
+}
+
+export function assessReleaseEvidence(evidence, { revision, requiredSteps } = {}) {
+  const reasons = [];
+  const required = [...(requiredSteps ?? RELEASE_PROFILES[evidence?.profile] ?? [])];
+  if (!evidence || evidence.schemaVersion !== 1 || evidence.kind !== RELEASE_EVIDENCE_KIND || !Array.isArray(evidence.steps) || !(evidence.profile in RELEASE_PROFILES)) return { valid: false, failed: false, profile: null, passed: [], missing: required, reasons: ["release evidence is absent or malformed"] };
+  if (evidence.digest !== releaseRecordDigest(evidence)) reasons.push("release evidence digest does not match its content");
+  if (!sameRevision(evidence.revision, revision)) reasons.push("release evidence was recorded for a different workspace revision");
+  if (!required.length || RELEASE_PROFILES[evidence.profile].some((step) => !required.includes(step))) reasons.push("release evidence profile does not cover the required gates");
+  const steps = evidence.steps.filter((step) => step && typeof step.name === "string" && Number.isSafeInteger(step.exitCode));
+  const failedSteps = steps.filter((step) => step.exitCode !== 0).map((step) => step.name);
+  const passed = required.filter((name) => steps.some((step) => step.name === name && step.exitCode === 0));
+  const missing = required.filter((name) => !passed.includes(name));
+  if (failedSteps.length) reasons.push(`release gate(s) failed: ${failedSteps.join(", ")}`);
+  if (missing.length) reasons.push(`release gate(s) not recorded as passed: ${missing.join(", ")}`);
+  return { valid: reasons.length === 0, failed: failedSteps.length > 0 && sameRevision(evidence.revision, revision), profile: evidence.profile, runId: evidence.runId ?? null, passed, missing, reasons };
+}
+
+export function assessReleaseApproval(approval, { revision } = {}) {
+  if (!approval || approval.schemaVersion !== 1 || approval.kind !== RELEASE_APPROVAL_KIND || !String(approval.approvedBy ?? "").trim() || !Number.isFinite(Date.parse(approval.approvedAt))) return { valid: false, reason: "human release approval is absent or malformed" };
+  if (approval.digest !== releaseRecordDigest(approval)) return { valid: false, reason: "human release approval digest does not match its content" };
+  if (!sameRevision(approval.revision, revision)) return { valid: false, reason: "human release approval names a different workspace revision" };
+  return { valid: true, approvedBy: String(approval.approvedBy), approvedAt: approval.approvedAt };
+}
+
+export function assessCiTier3(localMergedState, remoteCiStatus, release = null) {
+  // Matching input commits alone do not identify the tested tree, so caller-supplied green flags
+  // never promote. Green requires release evidence recorded by the gate runner for the exact
+  // workspace revision (HEAD + full working-tree digest) with every required gate passing.
+  if (localMergedState?.state === "red" || remoteCiStatus?.state === "red") return { exactMergedTruth: false, ciTier3: "red" };
+  if (!release) return { exactMergedTruth: false, ciTier3: "grey" };
+  const assessed = assessReleaseEvidence(release.evidence, release);
+  return assessed.valid ? { exactMergedTruth: true, ciTier3: "green" } : { exactMergedTruth: false, ciTier3: assessed.failed ? "red" : "grey" };
 }
 
 function indentation(line) { return line.match(/^\s*/)[0].replace(/\t/g, "  ").length; }

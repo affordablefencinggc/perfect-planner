@@ -1,8 +1,9 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { approveCollisionOrder, commitCollisionAssessment, inspectCollisionAuthority } from "./collisionAuthorityStore.mjs";
+import { isSameOriginLoopbackRequest } from "./loopbackRequestHttp.mjs";
 
 const json = (res, status, value) => { res.statusCode = status; res.setHeader("content-type", "application/json; charset=utf-8"); res.setHeader("cache-control", "no-store"); res.setHeader("x-content-type-options", "nosniff"); res.end(JSON.stringify(value)); };
-const sameOrigin = (req) => { const origin = req.headers.origin; const host = req.headers.host; return Boolean(origin && host && (origin === `http://${host}` || origin === `https://${host}`)); };
+const sameOrigin = isSameOriginLoopbackRequest;
 const equalToken = (provided, expected) => { try { const left = Buffer.from(provided ?? ""); const right = Buffer.from(expected); return left.length === right.length && timingSafeEqual(left, right); } catch { return false; } };
 async function readBody(req, limit = 256_000) { const chunks = []; let size = 0; for await (const chunk of req) { size += chunk.length; if (size > limit) throw new Error("Authority request exceeds its byte limit."); chunks.push(chunk); } return JSON.parse(Buffer.concat(chunks).toString("utf8")); }
 

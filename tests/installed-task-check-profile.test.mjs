@@ -10,7 +10,6 @@ import {createInstalledTaskCheckProfileEvidenceStore} from '../src/node/installe
 const hash=v=>createHash('sha256').update(v).digest('hex');
 
 test('repository npm preparation retains exact scripts without requiring Planner files or executing code',async()=>{
- assert.equal(os.hostname().toLowerCase(),'dans1');
  const f=await fixture();f.profile.profileId='npm-project-checks-v1';f.profile.assignments[0].categories=['tests','build'];
  const scripts={test:'node -e "throw new Error(\'must not execute\')"',build:'npm run compile',compile:'node custom-build.cjs'};
  await writeFile(path.join(f.root,'package.json'),JSON.stringify({name:'user-project',scripts}));
@@ -37,7 +36,7 @@ test('repository profile refuses missing selected scripts and oversized definiti
  }
 });
 test('native extended-length Windows paths work while redirected roots still refuse',async()=>{
- assert.equal(os.hostname().toLowerCase(),'dans1');assert.equal(process.platform,'win32');
+ assert.equal(process.platform,'win32');
  const f=await fixture();f.profile.registeredRoot=path.toNamespacedPath(f.root);f.profile.npmCli.path=path.toNamespacedPath(f.profile.npmCli.path);
  assert.equal((await prepareInstalledTaskCheckProfile(f)).executionAuthorized,false);
  const alias=f.root+'-native-alias';await symlink(f.root,alias,'junction');
@@ -74,7 +73,7 @@ test('missing required file and linked tool bytes cannot become prepared policy'
 
 
 test('repository hooks are retained, ordered and policy-bound; actual npm runs the declared lifecycle',async()=>{
- assert.equal(os.hostname().toLowerCase(),'dans1');const f=await fixture();f.profile.profileId='npm-project-checks-v1';f.profile.assignments[0].categories=['tests'];
+ const f=await fixture();f.profile.profileId='npm-project-checks-v1';f.profile.assignments[0].categories=['tests'];
  const scripts=Object.fromEntries(['pretest','test','posttest'].map(name=>[name,`node -e "require('node:fs').appendFileSync('order.txt','${name}|')"`]));
  await writeFile(path.join(f.root,'package.json'),JSON.stringify({name:'lifecycle-fixture',scripts}));
  const prepared=await prepareInstalledTaskCheckProfile(f);

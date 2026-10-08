@@ -28,7 +28,10 @@
     "test": "node --test tests/*.test.mjs",
     "test:ui": "vitest run",
     "test:all": "npm test && npm run test:ui",
-    "verify:release": "npm run verify:secrets && npm run build && npm run verify:performance && npm test && npm run test:ui && npm run verify:mcp && npm run test:sites && npm run test:native && npm run tauri:build -- --no-bundle && npm run verify:readiness"
+    "verify:web": "npm run verify:secrets && npm run build && npm run verify:performance && npm test && npm run test:ui && npm run test:sites",
+    "release:web": "npm run verify:secrets && node scripts/run-release-gates.mjs --profile web",
+    "release:approve": "node scripts/run-release-gates.mjs --approve",
+    "verify:release": "npm run verify:secrets && node scripts/run-release-gates.mjs --profile release"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",

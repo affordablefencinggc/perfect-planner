@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-execute-native-check"
+description = "Enables the execute_native_check command without any pre-configured scope."
+commands.allow = ["execute_native_check"]
+
+[[permission]]
+identifier = "deny-execute-native-check"
+description = "Denies the execute_native_check command without any pre-configured scope."
+commands.deny = ["execute_native_check"]

@@ -13,7 +13,6 @@ import {candidateSnapshot} from '../src/node/mergedStateRunner.mjs';
 // process, guarded snapshot, retained archive, Node and owner stores are real.
 const hash=b=>createHash('sha256').update(b).digest('hex');
 async function fixture(answer){
- assert.equal(os.hostname().toLowerCase(),'dans1');
  assert.ok(process.env.PP_CONNECTED_NATIVE_EXE,'explicit current native executable required');
  const root=await mkdtemp(path.join(os.tmpdir(),'pp-connected-'));
  const source=path.join(root,'source'),directory=path.join(root,'observations'),scratch=path.join(root,'scratch');

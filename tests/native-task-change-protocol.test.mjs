@@ -10,7 +10,6 @@ const encode=(payload,requestId='transport-1')=>JSON.stringify({version:1,reques
 const call=async(protocol,payload,id)=>JSON.parse(await protocol.dispatchLine(encode(payload,id)));
 const task=(title,file)=>({title,description:'Description',owner:'Display only',acceptance:'Proof required',recovery:'Preserve work',claims:[{path:file,access:'write'}],dependsOn:[],archived:false});
 async function fixture(){
- assert.equal(os.hostname().toLowerCase(),'dans1');
  const root=await mkdtemp(path.join(os.tmpdir(),'pp-task-protocol-'));
  const binding={projectId:'pp_protocol',rootIdentity:'a'.repeat(64),censusDigest:'b'.repeat(64)};
  const config={proposalConfig:{journalPath:path.join(root,'proposals.jsonl'),projectId:binding.projectId,rootIdentity:binding.rootIdentity},registeredBinding:async()=>binding};

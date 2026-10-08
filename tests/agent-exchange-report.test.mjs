@@ -6,7 +6,6 @@ import path from 'node:path';
 import {createAgentExchangeStore} from '../mcp/agentExchangeStore.mjs';
 import {createAgentSessionBroker} from '../mcp/agentSessionBroker.mjs';
 import {createAgentClientRouter} from '../mcp/agentClientRouter.mjs';
-assert.equal(os.hostname().toLowerCase(),'dans1');
 const binding={projectId:'pp_exchange',workspaceId:'exchange',registryRevision:1,rootIdentity:'a'.repeat(64)};
 const input=()=>({binding,exchangeId:'turn-1',summary:{turn:'First exchange',request:'Inspect one task',response:'Read the task',observed:'Read receipt returned',explanation:'',error:'',solution:'Review before approving',evidence:''}});
 async function fixture(write=true){

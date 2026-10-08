@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-review-native-checks"
+description = "Enables the review_native_checks command without any pre-configured scope."
+commands.allow = ["review_native_checks"]
+
+[[permission]]
+identifier = "deny-review-native-checks"
+description = "Denies the review_native_checks command without any pre-configured scope."
+commands.deny = ["review_native_checks"]

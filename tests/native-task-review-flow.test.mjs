@@ -31,7 +31,7 @@ async function fixture(){
 const answer=decision=>({decision,rationale:'Reviewed exact task and checks',nativeEvent:{isTrusted:true}});
 
 test('repository script evidence is required, policy-bound and captured in the exact native display',async()=>{
- assert.equal(os.hostname().toLowerCase(),'dans1');const f=await fixture(),root=path.dirname(f.confirmationPath);
+ const f=await fixture(),root=path.dirname(f.confirmationPath);
  const scripts={pretest:'node before-tests.cjs',test:'node custom-tests.cjs',posttest:'node after-tests.cjs',prebuild:'node check-boundaries.cjs',build:'npm run compile',compile:'node custom-build.cjs'};
  await fs.writeFile(path.join(root,'package.json'),JSON.stringify({name:'other-repository',scripts}));
  await fs.writeFile(path.join(root,'package-lock.json'),'{"lockfileVersion":3}');

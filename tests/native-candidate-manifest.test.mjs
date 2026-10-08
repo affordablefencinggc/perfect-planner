@@ -8,7 +8,6 @@ import {candidateSnapshot} from '../src/node/mergedStateRunner.mjs';
 import {createInstalledTaskExecutionCustody} from '../src/node/installedTaskExecutionCustody.mjs';
 const hash=v=>createHash('sha256').update(v).digest('hex');
 async function fixture(manifestOverride){
- assert.equal(os.hostname().toLowerCase(),'dans1');
  const root=await mkdtemp(path.join(os.tmpdir(),'pp-candidate-manifest-')),candidate=path.join(root,'candidate');await mkdir(candidate);
  await writeFile(path.join(candidate,'input.txt'),'original tested input');
  const inventory=async(_root,args)=>({exit:0,stdout:args.includes('--stage')?'index-material':args.includes('--cached')?'input.txt\0':''});
