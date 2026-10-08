@@ -2,6 +2,7 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import { readFileSync } from "node:fs";
 import { localAuthorityVitePlugin } from "./src/node/localAuthorityHost.mjs";
+import { defaultRegistryRoot, mcpServerPath } from "./mcp/agentSetupPaths.mjs";
 
 // The atlas displays the first diagram, not the surrounding authoring notes.
 // Extract at build time so development and packaged clients render identical text.
@@ -17,7 +18,17 @@ export const mermaidDocuments = () => ({
   },
 });
 
-export default defineConfig({
+// "Connect agent" snippets need this checkout's absolute MCP server path. Embed it only for the
+// local dev server; shipped builds keep a placeholder unless PP_MCP_SERVER_PATH is set explicitly.
+const agentSetupDefines = (command) => {
+  const local = command === "serve";
+  const serverPath = process.env.PP_MCP_SERVER_PATH ?? (local ? mcpServerPath() : "");
+  const registryRoot = process.env.PP_MCP_REGISTRY_ROOT ?? (local ? defaultRegistryRoot() ?? "" : "");
+  return { "import.meta.env.VITE_PP_MCP_SERVER_PATH": JSON.stringify(serverPath), "import.meta.env.VITE_PP_MCP_REGISTRY_ROOT": JSON.stringify(registryRoot) };
+};
+
+export default defineConfig(({ command }) => ({
+  define: agentSetupDefines(command),
   build: {
     outDir: "dist/client",
     rollupOptions: {
@@ -46,4 +57,4 @@ export default defineConfig({
   },
   // Local saving APIs (shared with scripts/serve-local.mjs for production use).
   plugins: [mermaidDocuments(), localAuthorityVitePlugin(), react()],
-});
+}));

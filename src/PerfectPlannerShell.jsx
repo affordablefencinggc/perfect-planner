@@ -23,6 +23,7 @@ import {
   ListChecksIcon,
   MagnifyingGlassIcon,
   MinusIcon,
+  PlugsConnectedIcon,
   PlusIcon,
   RobotIcon,
   ShieldCheckIcon,
@@ -63,6 +64,7 @@ import { CollisionWorkspace } from "./components/CollisionWorkspace.jsx";
 import { StructureWorkspace } from "./components/StructureWorkspace.jsx";
 import { ComponentPlansWorkspace } from "./components/ComponentPlansWorkspace.jsx";
 import { ImportedProjectWorkflowWorkspace } from "./components/ImportedProjectWorkflowWorkspace.jsx";
+import { ConnectAgentDrawer } from "./components/ConnectAgentDrawer.jsx";
 import { ProjectTruthGate } from "./components/ProjectTruthGate.jsx";
 import { DEMO_ONLY_REASON, DemoOnlyReason, DemoSampleBadge } from "./demo/DemoSampleNotice.jsx";
 const loadRuntimeTools = (name) => import("./components/RuntimeConnectionsPanel.jsx")
@@ -405,6 +407,8 @@ function TopBar({
   const [inviteRole, setInviteRole] = useState("Developer");
   const [organizationName, setOrganizationName] = useState("");
   const [mcpAllowed, setMcpAllowed] = useState(true);
+  const [agentDrawerOpen, setAgentDrawerOpen] = useState(false);
+  const openAgentDrawer = () => { setOpenMenu(null); setAgentDrawerOpen(true); };
   const menuTriggerRef = useRef(null);
   const menuPopoverRef = useRef(null);
   let runtimeCapabilityMatrix = null;
@@ -756,6 +760,15 @@ function TopBar({
               ? `${collisionGate.unresolved} unresolved collisions`
               : "Collision scan unavailable"}
           </button>
+          <button
+            className="top-metric-button topbar-connect-agent"
+            aria-haspopup="dialog"
+            aria-expanded={agentDrawerOpen}
+            onClick={openAgentDrawer}
+          >
+            <PlugsConnectedIcon /> Connect agent
+          </button>
+          <ConnectAgentDrawer open={agentDrawerOpen} onClose={() => setAgentDrawerOpen(false)} onWorkspace={onWorkspace} />
           <div className="topbar-menu-anchor more-actions-anchor">
             <IconButton
               label="More actions"
@@ -1065,14 +1078,8 @@ function TopBar({
                         onChange={(event) => setMcpAccess(event.target.checked)}
                       />
                     </label>
-                    <button
-                      className="popover-primary"
-                      onClick={() => {
-                        onWorkspace("structure");
-                        setOpenMenu(null);
-                      }}
-                    >
-                      Open app connection map <ArrowRightIcon />
+                    <button className="popover-primary" onClick={openAgentDrawer}>
+                      Set up an agent connection <ArrowRightIcon />
                     </button>
                   </section>
                 )}
