@@ -1,5 +1,6 @@
 import { projectAuthorityKinds, validateProjectSession } from "./projectSession.js";
 import { deriveDiscoveryReview } from "./discoveryReviewModel.js";
+import { effectivePlanAuthority } from "./planApproval.js";
 
 export const PROJECT_HOME_MODEL_SCHEMA_VERSION = 1;
 
@@ -195,7 +196,28 @@ function collectBlockers(project, records = null) {
   return blockers;
 }
 
-function nextStage(project, records = null) {
+// Plan-specific copy when the plan comes from the saved approval (work record).
+function planStage(authority, planStatus) {
+  if (!authority) return {
+    stage: { id: "plan", state: "unavailable", label: "Plan approval required" },
+    nextAction: action("approve-plan", "Approve the plan", "plan", "Add tasks in the Ledger, then approve them on the Plan page."),
+  };
+  if (!planStatus || authority.state === "authoritative") return null;
+  if (planStatus.state === "unavailable") return {
+    stage: { id: "plan", state: "unavailable", label: "Saved plan approval unreadable" },
+    nextAction: action("approve-plan", "Approve the plan again", "plan", planStatus.detail),
+  };
+  if (planStatus.state === "stale") return {
+    stage: { id: "plan", state: "stale", label: "Plan approval out of date" },
+    nextAction: action("refresh-plan-approval", "Review and approve the plan", "plan", planStatus.detail),
+  };
+  return {
+    stage: { id: "plan", state: "review", label: "Tasks changed since approval" },
+    nextAction: action("reapprove-plan", "Review and approve the plan", "plan", planStatus.detail),
+  };
+}
+
+function nextStage(project, records = null, planStatus = null) {
   const registration = project.registration;
   const census = project.census;
   const discovery = project.discovery;
@@ -241,6 +263,7 @@ function nextStage(project, records = null) {
     const authority = project.authorities[kind];
     const workspace = kind === "architecture" ? "blueprint" : kind === "folder" ? "structure" : kind === "component" ? "components" : "plan";
     const capitalized = `${kind[0].toUpperCase()}${kind.slice(1)}`;
+    if (kind === "plan") { const plan = planStage(authority, planStatus); if (plan) return plan; }
     if (!authority || authority.state === "unavailable") return {
       stage: { id: kind, state: "unavailable", label: `${capitalized} authority required` },
       nextAction: action(`generate-${kind}-authority`, `Generate ${kind} authority`, workspace, `Create a project-bound ${kind} revision from current evidence.`),
@@ -255,9 +278,13 @@ function nextStage(project, records = null) {
     };
   }
 
-  if (project.state !== "authoritative") return {
-    stage: { id: "promotion", state: "review", label: "Project promotion required" },
-    nextAction: action("confirm-project-authority", "Confirm the project revision", "home", "Bind the authoritative receipts to one promoted ProjectSession revision."),
+  // Ready needs an explicit confirmation: either a promoted session, or the
+  // user's "Confirm project is ready" recorded against the current approved plan.
+  if (project.state !== "authoritative" && !planStatus?.confirmed) return {
+    stage: { id: "promotion", state: "review", label: "Confirm the project is ready" },
+    nextAction: planStatus?.state === "recorded"
+      ? action("confirm-project-ready", "Confirm project is ready", null, "Every planning step is recorded. Confirm to mark this project ready for coordinated work.")
+      : action("approve-plan", "Approve the plan", "plan", "Approve the current tasks on the Plan page so the readiness confirmation has a plan to belong to."),
   };
   return {
     stage: { id: "ready", state: "ready", label: "Project truth ready" },
@@ -281,15 +308,18 @@ function summaryMessage(project, stage) {
  */
 export function deriveProjectHomeModel(session, records = null) {
   if (session == null || (session.state === "empty" && session.project == null && !session.kind)) return emptyModel();
-  const project = validateProjectSession(session);
-  if (project.kind === "empty" || project.state === "empty") return emptyModel();
-  if (project.kind === "demo" || project.state === "demo") return demoModel(project);
+  const validated = validateProjectSession(session);
+  if (validated.kind === "empty" || validated.state === "empty") return emptyModel();
+  if (validated.kind === "demo" || validated.state === "demo") return demoModel(validated);
 
-  const { stage, nextAction } = nextStage(project, records);
+  // The saved plan approval (work record), when present, stands in for the plan authority.
+  const plan = effectivePlanAuthority(validated, records);
+  const project = plan.status ? { ...validated, authorities: { ...validated.authorities, plan: plan.authority } } : validated;
+  const { stage, nextAction } = nextStage(project, records, plan.status);
   const blockers = collectBlockers(project, records);
   if (project.state === "stale") blockers.unshift(blocker("project-stale", "project", "stale", "The active ProjectSession is stale."));
   if (project.state === "unavailable") blockers.unshift(blocker("project-unavailable", "project", "unavailable", "The active ProjectSession authority is unavailable."));
-  if (stage.id === "promotion") blockers.push(blocker("project-promotion-pending", "project", "review", "Required receipts exist, but the ProjectSession is not promoted."));
+  if (stage.id === "promotion") blockers.push(blocker("project-promotion-pending", "project", "review", "Every planning step is recorded, but nobody has confirmed the project is ready yet."));
 
   return deepFreeze({
     schemaVersion: PROJECT_HOME_MODEL_SCHEMA_VERSION,

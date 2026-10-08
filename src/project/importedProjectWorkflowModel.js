@@ -3,6 +3,8 @@ import { deriveDiscoveryReview, discoveryReviewDetail } from "./discoveryReviewM
 import { deriveProjectHomeModel } from "./projectHomeModel.js";
 import { validateProjectSession } from "./projectSession.js";
 import { deriveWorkRecordReceipt } from "./workRecordReceipts.js";
+import { planApprovalStatus } from "./planApproval.js";
+import { workflowNextAction } from "./workflowNextAction.js";
 
 export const IMPORTED_WORKFLOW_MODEL_SCHEMA_VERSION = 1;
 
@@ -113,6 +115,14 @@ function authorityReceipt(project, kind, label) {
   );
 }
 
+// The approved plan is recorded as a project work record (planAuthority); the
+// session's own plan authority is used only when no such record exists.
+function planReceipt(project, records) {
+  const status = planApprovalStatus(project, records);
+  if (!status) return authorityReceipt(project, "plan", "Plan authority");
+  return receipt("AUTH-PLAN", "Plan authority", effectiveState(project, status.state), status.detail, status.revision ? `Saved plan approval · revision ${status.revision}` : null);
+}
+
 function sessionReceipts(project, records = null) {
   const registration = project.registration;
   const census = project.census;
@@ -150,7 +160,7 @@ function sessionReceipts(project, records = null) {
     authorityReceipt(project, "architecture", "Architecture authority"),
     authorityReceipt(project, "folder", "Folder-contract authority"),
     authorityReceipt(project, "component", "Component authority"),
-    authorityReceipt(project, "plan", "Plan authority"),
+    planReceipt(project, records),
   ];
 }
 
@@ -240,37 +250,8 @@ function planningQuestions(project, records) {
   });
 }
 
-function nextActionFor(workspace, requirements) {
-  const firstOpen = requirements.find((item) => item.state !== "recorded");
-  if (!firstOpen) {
-    const next = {
-      plan: ["Open collision review", "collision"],
-      collision: ["Open allocation", "allocation"],
-      allocation: ["Open build", "build"],
-      build: ["Open evidence", "evidence"],
-      evidence: ["Open integrity", "integrity"],
-      integrity: ["Review ledger", "ledger"],
-      ledger: ["Open project index", "index"],
-      index: ["Return to project home", "home"],
-    }[workspace];
-    return { label: next[0], workspace: next[1], reason: "All receipts represented on this surface are recorded." };
-  }
-
-  const route = firstOpen.id === "REC-CENSUS" || firstOpen.id === "REC-DISCOVERY" || firstOpen.id === "AUTH-FOLDER"
-    ? "structure"
-    : firstOpen.id === "AUTH-ARCHITECTURE"
-      ? "blueprint"
-      : firstOpen.id === "AUTH-COMPONENT"
-        ? "components"
-        : firstOpen.id === "AUTH-PLAN"
-          ? "plan"
-          : workspace;
-  return {
-    label: route === workspace ? `Review ${firstOpen.label}` : `Open ${route === "blueprint" ? "Blueprint" : route[0].toUpperCase() + route.slice(1)}`,
-    workspace: route,
-    reason: firstOpen.detail,
-  };
-}
+// Never routes to the open page; see workflowNextAction.js.
+const nextActionFor = workflowNextAction;
 
 /**
  * Read-only selector for imported-project workflow pages. It consumes one
