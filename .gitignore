@@ -10,3 +10,4 @@ public/generated/generations/
 
 # Codex-era ledger leftovers (archived outside the repo)
 .ledger/
+.claude/

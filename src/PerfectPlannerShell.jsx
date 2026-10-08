@@ -78,6 +78,7 @@ import {
   useOptionalProject,
 } from "./project/ProjectProvider.jsx";
 import { deriveProjectHomeModel } from "./project/projectHomeModel.js";
+import { useProjectWorkRecords } from "./project/useProjectWorkRecords.js";
 import { createDemoProjectSession, isDemoProject } from "./demo/demoProject.js";
 import {
   createProjectHistoryState,
@@ -2674,9 +2675,10 @@ function ProjectHomeWorkspace({
   const componentRefresh = projectContext?.componentRefreshStatus;
   const planRefresh = projectContext?.planRefreshStatus;
   const demoMode = isDemoProject(activeProject);
+  const workRecords = useProjectWorkRecords(activeProject?.projectId);
   const homeModel = useMemo(
-    () => deriveProjectHomeModel(activeProject),
-    [activeProject],
+    () => deriveProjectHomeModel(activeProject, workRecords),
+    [activeProject, workRecords],
   );
   if (!demoMode) {
     const { binding, blockers, mode, nextAction, project, stage, summary } =

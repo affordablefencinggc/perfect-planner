@@ -1,4 +1,5 @@
 import { projectAuthorityKinds, validateProjectSession } from "./projectSession.js";
+import { deriveDiscoveryReview } from "./discoveryReviewModel.js";
 
 export const PROJECT_HOME_MODEL_SCHEMA_VERSION = 1;
 
@@ -54,8 +55,11 @@ function summarizeCensus(project) {
   };
 }
 
-function discoveryNeedsReview(discovery) {
-  if (!discovery) return false;
+// A recorded user review of every open area for this exact scan resolves the discovery gaps.
+const discoveryReviewed = (project, records) => deriveDiscoveryReview(project, records).state === "recorded";
+
+function discoveryNeedsReview(discovery, reviewed = false) {
+  if (!discovery || reviewed) return false;
   return discovery.counts.observed === 0
     || discovery.counts.signals > 0
     || discovery.counts.unanswered > 0
@@ -63,12 +67,13 @@ function discoveryNeedsReview(discovery) {
     || discovery.categories.some((category) => category.state !== "observed");
 }
 
-function summarizeDiscovery(project) {
+function summarizeDiscovery(project, records = null) {
   const discovery = project?.discovery ?? null;
+  const review = discovery ? deriveDiscoveryReview(project, records) : null;
   let recordedState = "unavailable";
   if (discovery?.state === "stale") recordedState = "stale";
   else if (discovery?.state === "unavailable") recordedState = "unavailable";
-  else if (discoveryNeedsReview(discovery)) recordedState = "review";
+  else if (discoveryNeedsReview(discovery, review?.state === "recorded")) recordedState = "review";
   else if (discovery) recordedState = "available";
   return {
     state: effectiveFactState(project?.state, recordedState),
@@ -78,6 +83,8 @@ function summarizeDiscovery(project) {
     categoryCount: discovery?.categories.length ?? null,
     censusDigest: discovery?.censusDigest ?? null,
     generatedAt: discovery?.generatedAt ?? null,
+    reviewRequired: review?.required ?? null,
+    reviewDecided: review?.decided ?? null,
   };
 }
 
@@ -155,7 +162,7 @@ function demoModel(project) {
   });
 }
 
-function collectBlockers(project) {
+function collectBlockers(project, records = null) {
   const blockers = [];
   const registration = project.registration;
   const census = project.census;
@@ -168,6 +175,7 @@ function collectBlockers(project) {
   else if (census.skippedCount > 0) blockers.push(blocker("census-skipped-files", "census", "blocked", `${census.skippedCount} indexed item${census.skippedCount === 1 ? " was" : "s were"} skipped.`));
 
   if (!discovery) blockers.push(blocker("discovery-missing", "discovery", "unavailable", "No discovery snapshot is available."));
+  else if (discovery.state === "generated" && discoveryReviewed(project, records)) { /* every open area has the user's decision */ }
   else {
     if (discovery.state === "stale") blockers.push(blocker("discovery-stale", "discovery", "stale", "The discovery snapshot is stale."));
     if (discovery.state === "unavailable") blockers.push(blocker("discovery-unavailable", "discovery", "unavailable", "The discovery snapshot is unavailable."));
@@ -187,7 +195,7 @@ function collectBlockers(project) {
   return blockers;
 }
 
-function nextStage(project) {
+function nextStage(project, records = null) {
   const registration = project.registration;
   const census = project.census;
   const discovery = project.discovery;
@@ -224,7 +232,7 @@ function nextStage(project) {
     stage: { id: "discovery-review", state: "stale", label: "Discovery snapshot stale" },
     nextAction: action("refresh-discovery", "Refresh project discovery", "structure", "Replace the stale discovery snapshot before promotion."),
   };
-  if (discoveryNeedsReview(discovery)) return {
+  if (discoveryNeedsReview(discovery, discoveryReviewed(project, records))) return {
     stage: { id: "discovery-review", state: "review", label: "Discovery review required" },
     nextAction: action("review-discovery", "Review discovery gaps", "structure", "Resolve signals, unanswered categories, and missing observations."),
   };
@@ -271,14 +279,14 @@ function summaryMessage(project, stage) {
  * selector never consults Demo fixtures, ambient registry state, or another
  * project. Pass null when there is no active project.
  */
-export function deriveProjectHomeModel(session) {
+export function deriveProjectHomeModel(session, records = null) {
   if (session == null || (session.state === "empty" && session.project == null && !session.kind)) return emptyModel();
   const project = validateProjectSession(session);
   if (project.kind === "empty" || project.state === "empty") return emptyModel();
   if (project.kind === "demo" || project.state === "demo") return demoModel(project);
 
-  const { stage, nextAction } = nextStage(project);
-  const blockers = collectBlockers(project);
+  const { stage, nextAction } = nextStage(project, records);
+  const blockers = collectBlockers(project, records);
   if (project.state === "stale") blockers.unshift(blocker("project-stale", "project", "stale", "The active ProjectSession is stale."));
   if (project.state === "unavailable") blockers.unshift(blocker("project-unavailable", "project", "unavailable", "The active ProjectSession authority is unavailable."));
   if (stage.id === "promotion") blockers.push(blocker("project-promotion-pending", "project", "review", "Required receipts exist, but the ProjectSession is not promoted."));
@@ -293,7 +301,7 @@ export function deriveProjectHomeModel(session) {
       message: summaryMessage(project, stage),
       registration: summarizeRegistration(project),
       census: summarizeCensus(project),
-      discovery: summarizeDiscovery(project),
+      discovery: summarizeDiscovery(project, records),
       authorities: summarizeAuthorities(project),
     },
     blockers,

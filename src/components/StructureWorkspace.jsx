@@ -36,6 +36,7 @@ import "./StructureWorkspace.css";
 import { IndexingActivity } from './IndexingActivity.jsx';
 import { FolderReconnectNotice } from "./FolderReconnectNotice.jsx";
 import { describeFolderConnection } from "../project/folderReconnectModel.js";
+import { DiscoveryReviewPanel } from "./DiscoveryReviewPanel.jsx";
 import { folderPlanGuidance } from '../engine/folderPlanGuidance.js';
 
 const cloneSeed = () => structuredClone(currentFolderContractInput);
@@ -1525,6 +1526,7 @@ export function StructureWorkspace({
             </div>
           ))}
       </section>
+      {imported && <DiscoveryReviewPanel project={activeProject} liveDiscovery={discoveryMap} liveCensusDigest={intake.census?.digest ?? null} onToast={onToast} />}
       <div className="structure-layout">
         <section
           className={`structure-tree-panel ${openSections.paths ? "expanded" : "collapsed"}`}
