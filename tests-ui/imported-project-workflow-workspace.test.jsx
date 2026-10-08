@@ -123,7 +123,7 @@ describe("ImportedProjectWorkflowWorkspace", () => {
 
     expect(screen.getByRole("heading", { name: "Collision review" })).toBeTruthy();
     expect(screen.getByText("collisions not evaluated")).toBeTruthy();
-    expect(screen.getAllByText("A project-bound collision authority receipt is not represented by the current ProjectSession schema.")).toHaveLength(2);
+    expect(screen.getAllByText("Tasks have not been checked for overlapping files yet.")).toHaveLength(2);
     expect(container.textContent).not.toMatch(/0 collisions|collision-free|clear to build/i);
 
     await user.click(screen.getByRole("button", { name: "Review Collision evaluation" }));

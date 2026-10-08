@@ -183,7 +183,7 @@ export function ImportedProjectWorkflowWorkspace({
       <span><b>{model.counts.recorded}</b><small>recorded</small></span>
       <span><b>{model.counts.review}</b><small>needs review</small></span>
       <span><b>{model.counts.unanswered}</b><small>unanswered or unavailable</small></span>
-      <span><b>—</b><small>{workspace === "collision" ? "collisions not evaluated" : workspace === "allocation" ? "owners not allocated" : workspace === "build" ? "builds not run" : workspace === "evidence" ? "proof not claimed" : "no inferred completion"}</small></span>
+      <span><b>—</b><small>{workspace === "collision" ? (records?.sections?.collisions ? "overlap check saved above" : "collisions not evaluated") : workspace === "allocation" ? (records?.sections?.allocation ? "owners saved above" : "owners not allocated") : workspace === "build" ? "builds not run" : workspace === "evidence" ? "proof not claimed" : "no inferred completion"}</small></span>
     </section>
 
     {showSearch && <label className="imported-workflow-search"><MagnifyingGlassIcon aria-hidden="true" /><span className="sr-only">Search current project evidence</span><input value={query} maxLength={160} onChange={(event) => setQuery(event.target.value.slice(0, 160))} placeholder="Search this project’s recorded receipts and questions…" /></label>}

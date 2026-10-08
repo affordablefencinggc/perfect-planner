@@ -5,7 +5,12 @@
 // nothing is recorded yet, which keeps the original "unanswered" receipt so that
 // absence is never shown as success. Valid states: recorded, review, unanswered, stale, unavailable.
 
+import { receiptDerivers as collisionReceiptDerivers } from "./receipts/collision.js";
+import { receiptDerivers as allocationReceiptDerivers } from "./receipts/allocation.js";
+
 const derivers = Object.freeze({
+  ...collisionReceiptDerivers,
+  ...allocationReceiptDerivers,
   // ...featureReceiptDerivers,
 });
 
