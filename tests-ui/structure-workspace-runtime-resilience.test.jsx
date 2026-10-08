@@ -163,7 +163,7 @@ describe("Structure workspace runtime resilience", () => {
     });
 
     const progress = screen.getByRole("status", {
-      name: /(?:Workspace scan|Read-only census) progress/i,
+      name: /(?:Workspace scan|Read-only folder scan) progress/i,
     });
     expect(progress.textContent).toMatch(/37/);
     expect(progress.textContent).toMatch(/40/);

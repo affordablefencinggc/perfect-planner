@@ -71,7 +71,7 @@ describe("Demo controls are honest about being sample data", () => {
     const handle = container.querySelector(".ops-handle");
     expect(handle.textContent).not.toMatch(/1 blocker/);
     expect(handle.textContent).toContain("collision check not connected");
-    expect(container.querySelector(".ops-status-explained").getAttribute("title")).toMatch(/Collision authority has not supplied/);
+    expect(container.querySelector(".ops-status-explained").getAttribute("title")).toMatch(/The collision check has not returned a saved record/);
     fireEvent.click(handle);
     await user.click(screen.getByRole("button", { name: /Merge queue/ }));
     const run = screen.getByRole("button", { name: /Run merge gate/ });

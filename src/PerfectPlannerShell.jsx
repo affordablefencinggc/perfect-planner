@@ -210,7 +210,7 @@ const workspaceContext = {
   integrity: {
     stage: "prove",
     purpose: "Test whether the plan can truthfully continue.",
-    outcome: "A fail-closed GO or NO-GO verdict.",
+    outcome: "A fail-closed Ready or Not ready verdict.",
     unlock: "Clear every release stop.",
   },
   evidence: {
@@ -265,7 +265,7 @@ const initialCollisionGate = {
   unresolved: initialCollisionAssessment.unresolved,
   hardStops: initialCollisionAssessment.hardStops,
   authorityAvailable: false,
-  authorityReason: "Collision authority has not supplied a receipt.",
+  authorityReason: "The collision check has not returned a saved record.",
 };
 const statusLabel = {
   verified: "verified",
@@ -522,7 +522,7 @@ function TopBar({
     anchor.download = `${activeProject.projectId}-perfect-planner.json`;
     anchor.click();
     URL.revokeObjectURL(href);
-    onToast("Current project truth exported as a redacted local JSON file.");
+    onToast("Current project status exported as a redacted local JSON file.");
     setOpenMenu(null);
   };
   return (
@@ -716,7 +716,7 @@ function TopBar({
                   <span>
                     {demoMode
                       ? "Demonstration forecast"
-                      : "No authoritative forecast"}
+                      : "No approved forecast"}
                   </span>
                 </header>
                 {demoMode ? (
@@ -736,7 +736,7 @@ function TopBar({
                   </>
                 ) : (
                   <p className="popover-note">
-                    A folder census does not create dates. Generate and approve
+                    A folder scan does not create dates. Generate and approve
                     a plan before forecasting.
                   </p>
                 )}
@@ -758,7 +758,7 @@ function TopBar({
             <ShieldCheckIcon />{" "}
             {demoMode
               ? `${collisionGate.unresolved} unresolved collisions`
-              : "Collision scan unavailable"}
+              : "Collision check unavailable"}
           </button>
           <button
             className="top-metric-button topbar-connect-agent"
@@ -820,7 +820,7 @@ function TopBar({
                         <span>
                           <strong>Delivery calendar</strong>
                           <small>
-                            {demoMode ? "P80 · 18 days" : "No authoritative forecast"}
+                            {demoMode ? "P80 · 18 days" : "No approved forecast"}
                           </small>
                         </span>
                         <ArrowRightIcon />
@@ -851,7 +851,7 @@ function TopBar({
                           <small>
                             {demoMode
                               ? `${collisionGate.unresolved} unresolved collisions`
-                              : "Collision scan unavailable"}
+                              : "Collision check unavailable"}
                           </small>
                         </span>
                         <ArrowRightIcon />
@@ -862,7 +862,7 @@ function TopBar({
                           <strong>Runtime &amp; connections</strong>
                           <small>
                             {activeProject
-                              ? "Project-bound capability receipts"
+                              ? "Project-bound capability records"
                               : "Select a project to evaluate runtimes"}
                           </small>
                         </span>
@@ -912,7 +912,7 @@ function TopBar({
                       <button onClick={exportPlan}>
                         <ArrowRightIcon />
                         <span>
-                          <strong>Export project receipt</strong>
+                          <strong>Export project record</strong>
                           <small>
                             Download a redacted identity and evidence snapshot
                           </small>
@@ -1010,7 +1010,7 @@ function TopBar({
                       </button>
                       <span>
                         <strong>Delivery calendar</strong>
-                        <small>{demoMode ? "Demonstration forecast" : "No authoritative forecast"}</small>
+                        <small>{demoMode ? "Demonstration forecast" : "No approved forecast"}</small>
                       </span>
                     </header>
                     {demoMode ? (
@@ -1021,7 +1021,7 @@ function TopBar({
                       </>
                     ) : (
                       <p className="popover-note">
-                        A folder census does not create dates. Generate and approve a plan before forecasting.
+                        A folder scan does not create dates. Generate and approve a plan before forecasting.
                       </p>
                     )}
                     <button
@@ -1061,7 +1061,7 @@ function TopBar({
                       </span>
                       <small>
                         This switch records a session preference only. A
-                        timestamped runtime capability receipt is still required
+                        timestamped runtime capability record is still required
                         before Perfect Planner may claim any MCP connection.
                       </small>
                     </div>

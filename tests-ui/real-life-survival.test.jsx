@@ -486,13 +486,13 @@ describe("real-life UI survival matrix", () => {
     const { demo, unmount } = renderDemo("home");
 
     await user.click(screen.getByRole("button", { name: "More actions" }));
-    await user.click(screen.getByRole("button", { name: /Export project receipt/ }));
+    await user.click(screen.getByRole("button", { name: /Export project record/ }));
     expect(createObjectUrl).toHaveBeenCalledTimes(1);
     expect(anchorClick).toHaveBeenCalledTimes(1);
     expect(revokeObjectUrl).toHaveBeenCalledWith("blob:perfect-planner-survival");
     expect(
       await screen.findByText(
-        "Current project truth exported as a redacted local JSON file.",
+        "Current project status exported as a redacted local JSON file.",
       ),
     ).toBeTruthy();
     const payload = JSON.parse(await createObjectUrl.mock.calls[0][0].text());
@@ -502,7 +502,7 @@ describe("real-life UI survival matrix", () => {
     unmount();
     renderShell(registryWith(), "/?workspace=home");
     await user.click(screen.getByRole("button", { name: "More actions" }));
-    await user.click(screen.getByRole("button", { name: /Export project receipt/ }));
+    await user.click(screen.getByRole("button", { name: /Export project record/ }));
     expect(createObjectUrl).toHaveBeenCalledTimes(1);
     expect(anchorClick).toHaveBeenCalledTimes(1);
     expect(

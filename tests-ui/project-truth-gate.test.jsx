@@ -37,11 +37,11 @@ describe("ProjectTruthGate", () => {
     const trigger = screen.getByRole("button", { name: /Alpha App/ });
     expect(trigger.getAttribute("aria-expanded")).toBe("false");
     expect(trigger.textContent).toContain("project-alpha");
-    expect(trigger.textContent).toContain("generation 3");
+    expect(trigger.textContent).toContain("scan 3");
     expect(document.body.textContent).not.toContain(importedProject.canonicalRoot);
 
     await user.click(trigger);
-    const dialog = screen.getByRole("dialog", { name: "Identity and provenance" });
+    const dialog = screen.getByRole("dialog", { name: "Identity and source" });
     expect(dialog).toBeTruthy();
     expect(trigger.getAttribute("aria-expanded")).toBe("true");
     expect(screen.getByText("Indexed files")).toBeTruthy();
@@ -55,7 +55,7 @@ describe("ProjectTruthGate", () => {
 
     await waitFor(() => expect(screen.getByRole("button", { name: "Close project truth details" })).toBe(document.activeElement));
     await user.keyboard("{Escape}");
-    expect(screen.queryByRole("dialog", { name: "Identity and provenance" })).toBeNull();
+    expect(screen.queryByRole("dialog", { name: "Identity and source" })).toBeNull();
     expect(trigger).toBe(document.activeElement);
   });
 
@@ -65,7 +65,7 @@ describe("ProjectTruthGate", () => {
 
     expect(screen.getByText("Demo")).toBeTruthy();
     await user.click(screen.getByRole("button", { name: /Perfect Planner sample/ }));
-    expect(screen.getByRole("dialog", { name: "Identity and provenance" })).toBeTruthy();
+    expect(screen.getByRole("dialog", { name: "Identity and source" })).toBeTruthy();
     expect(screen.getAllByText("Demo")).toHaveLength(2);
   });
 

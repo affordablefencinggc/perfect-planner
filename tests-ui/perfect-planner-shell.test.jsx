@@ -170,7 +170,7 @@ describe("Perfect Planner shell interaction and accessibility", () => {
     expect(screen.getByRole("button", { name: /Diagnostics console/ })).toBeTruthy();
     expect(screen.getByRole("button", { name: /Invite to organization/ })).toBeTruthy();
     expect(screen.getByRole("button", { name: /Organization settings/ })).toBeTruthy();
-    expect(screen.getByRole("button", { name: /Export project receipt/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Export project record/ })).toBeTruthy();
     expect(screen.getByRole("button", { name: /People & roster/ }).className).toContain("responsive-topbar-action");
     expect(screen.getByRole("button", { name: /Delivery calendar/ }).className).toContain("responsive-topbar-action");
 

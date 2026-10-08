@@ -3,6 +3,7 @@ import { ClockIcon, ShieldCheckIcon, WarningIcon, XCircleIcon } from "@phosphor-
 
 const NON_READY_STATES = new Set(["empty", "unavailable", "stale"]);
 const KNOWN_STATES = new Set(["empty", "demo", "imported", "generated", "authoritative", "ready", "unavailable", "stale"]);
+const ROW_LABEL_OVERRIDES = { Generation: "Scan", Digest: "Fingerprint", "Authority reason": "Approval reason" };
 const WINDOWS_PATH = /(?:[a-zA-Z]:[\\/]|\\\\)[^\n\r]*/g;
 const POSIX_PATH = /(^|[\s("'=])\/(?!\/)[^\n\r]*/g;
 
@@ -18,12 +19,12 @@ function safeText(value) {
 function stateCopy(state, hasProject) {
   if (!hasProject || state === "empty") return "No active project has been selected.";
   if (state === "stale") return "This project is stale and must be refreshed before its values are trusted.";
-  if (state === "unavailable") return "The project authority is unavailable. Existing values are not being presented as current.";
+  if (state === "unavailable") return "The project's saved status is unavailable. Existing values are not being presented as current.";
   if (state === "demo") return "This is an explicit demonstration project. Its fixtures are not imported-app evidence.";
-  if (state === "imported") return "A project-scoped folder receipt was observed. Planning authority has not been granted.";
-  if (state === "generated") return "Generated project evidence is ready for human review, not yet authoritative.";
-  if (state === "authoritative") return "Project truth is authoritative for this recorded generation.";
-  return "Project truth is available for this recorded generation.";
+  if (state === "imported") return "A folder check was recorded for this project. Planning approval has not been granted.";
+  if (state === "generated") return "Generated project evidence is ready for human review, not yet approved.";
+  if (state === "authoritative") return "Project status is approved for this recorded scan.";
+  return "Project status is available for this recorded scan.";
 }
 
 function stateLabel(state, hasProject) {
@@ -105,7 +106,11 @@ export function ProjectTruthGate({
       ["Timestamp", detail.timestamp ?? detail.observedAt ?? census.generatedAt ?? projectSession?.updatedAt],
       ["Adapter", detail.adapter ?? workspace.adapter],
       ["Authority reason", detail.authorityReason ?? projectSession?.authorityReason ?? (["ready", "authoritative"].includes(state) ? null : statusReason)],
-    ].map(([label, value]) => ({ label, value: safeText(value) }));
+    ].map(([label, value]) => ({
+      key: label.toLowerCase().replaceAll(" ", "-"),
+      label: ROW_LABEL_OVERRIDES[label] ?? label,
+      value: safeText(value),
+    }));
   }, [projectSession, provenance, state, statusReason]);
 
   useEffect(() => {
@@ -170,7 +175,7 @@ export function ProjectTruthGate({
         <span className="project-truth-trigger-copy">
           <small>ACTIVE PROJECT</small>
           <strong>{projectName}</strong>
-          <span>{hasProject ? projectId : stateLabel(state, hasProject)}{projectSession?.generation !== null && projectSession?.generation !== undefined ? ` · generation ${safeText(projectSession.generation)}` : ""}</span>
+          <span>{hasProject ? projectId : stateLabel(state, hasProject)}{projectSession?.generation !== null && projectSession?.generation !== undefined ? ` · scan ${safeText(projectSession.generation)}` : ""}</span>
         </span>
         {isDemo && <span className="project-truth-demo-badge">Demo</span>}
         <span className={`project-truth-state-badge state-${state}`}>{stateLabel(state, hasProject)}</span>
@@ -200,8 +205,8 @@ export function ProjectTruthGate({
           >
             <header className="project-truth-dialog-header">
               <span>
-                <small>PROJECT TRUTH</small>
-                <strong id={headingId}>Identity and provenance</strong>
+                <small>PROJECT STATUS</small>
+                <strong id={headingId}>Identity and source</strong>
               </span>
               {isDemo && <span className="project-truth-demo-badge">Demo</span>}
               <button ref={closeRef} type="button" className="project-truth-dialog-close" aria-label="Close project truth details" onClick={() => setDialogOpen(false)}><XCircleIcon aria-hidden="true" /></button>
@@ -214,7 +219,7 @@ export function ProjectTruthGate({
 
             <dl className="project-truth-provenance-list">
               {rows.map((row) => (
-                <div key={row.label} className="project-truth-provenance-row" data-provenance-field={row.label.toLowerCase().replaceAll(" ", "-")}>
+                <div key={row.key} className="project-truth-provenance-row" data-provenance-field={row.key}>
                   <dt>{row.label}</dt>
                   <dd>{row.value}</dd>
                 </div>

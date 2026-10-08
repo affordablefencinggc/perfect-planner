@@ -507,7 +507,7 @@ export function StructureWorkspace({
     onDiagnostic?.(
       "workspace",
       "info",
-      "Refused analysis cleared; no prior census or findings were retained.",
+      "Refused analysis cleared; no prior folder scan or findings were kept.",
     );
   };
   const connectFolder = async (pathOverride) => {
@@ -547,7 +547,7 @@ export function StructureWorkspace({
           registration?.reason === "native-runtime-unavailable"
             ? "Open the native desktop app to connect a local folder. Static preview remains safely read-only."
             : registration?.reason ||
-              "Folder registration failed without an authoritative receipt.";
+              "Folder registration failed without a saved check.";
         setIntake({
           state: "error",
           registration: null,
@@ -591,7 +591,7 @@ export function StructureWorkspace({
           census?.reason === "workspace-census-aborted"
             ? "Analysis cancelled. No partial result was accepted."
             : census?.reason ||
-              "Folder census failed without an authoritative receipt.";
+              "Folder scan failed without a saved check.";
         setIntake({
           state: "error",
           registration,
@@ -698,7 +698,7 @@ export function StructureWorkspace({
       setScanProgress(null);
       publishProject(gaps);
       onToast?.(
-        `Folder census complete · ${gaps.gaps.length} planned gaps · ${gaps.unexpected.length} outside contract.`,
+        `Folder scan complete · ${gaps.gaps.length} planned gaps · ${gaps.unexpected.length} outside contract.`,
       );
     } catch (error) {
       if (!isCurrentRun()) return;
@@ -806,7 +806,7 @@ export function StructureWorkspace({
       ...current,
       state: "idle",
       message:
-        "Folder received. Review the path, then approve the read-only census.",
+        "Folder received. Review the path, then approve the read-only folder scan.",
     }));
   };
   const chooseFolder = async (select = () => workspaceAdapter.selectWorkspaceFolder()) => {
@@ -820,7 +820,7 @@ export function StructureWorkspace({
           receipt?.reason === "native-runtime-unavailable"
             ? "Open the native desktop app to choose a folder. This browser does not provide secure folder access."
             : receipt?.reason ||
-              "Folder selection failed without an authoritative receipt.";
+              "Folder selection failed without a saved check.";
         setIntake((current) => ({ ...current, state: "error", message }));
         onDiagnostic?.("workspace", "error", message);
         return;
@@ -839,7 +839,7 @@ export function StructureWorkspace({
         ...current,
         state: "selected",
         message:
-          "Folder selected. Review the path, then approve the separate read-only census.",
+          "Folder selected. Review the path, then approve the separate read-only folder scan.",
       }));
     } catch (error) {
       if (selectionRunRef.current !== runId) return;
@@ -973,7 +973,7 @@ export function StructureWorkspace({
             <strong>{matchesSavedRevision ? `SAVED REVISION ${registry.revision}` : assessment.verdict}</strong>
             <em>
               {matchesSavedRevision ? "This draft matches the saved contract · no files created" : assessment.ready
-                ? registry.head ? "Unsaved draft · saved revision remains unchanged" : "Valid draft · authoritative freeze pending"
+                ? registry.head ? "Unsaved draft · saved revision remains unchanged" : "Valid draft · approval to lock pending"
                 : `${assessment.blockers.length} blockers`}
             </em>
           </span>
@@ -1189,7 +1189,7 @@ export function StructureWorkspace({
               <div
                 className="folder-scan-progress"
                 role="status"
-                aria-label="Read-only census progress"
+                aria-label="Read-only folder scan progress"
               >
                 <span>
                   <strong>{scanProgress.filesHashed} files hashed</strong>
@@ -1202,7 +1202,7 @@ export function StructureWorkspace({
                 <code title={scanProgress.currentPath ?? undefined}>
                   {scanProgress.currentPath ?? "Starting at repository root"}
                 </code>
-                <em>Partial results are never accepted as project truth.</em>
+                <em>Partial results are never accepted as project status.</em>
               </div>
             )}
             {intake.census &&
@@ -1287,8 +1287,8 @@ export function StructureWorkspace({
                         </code>
                       </p>
                       <em>
-                        Named approval + live collision authority + rollback
-                        receipt required
+                        Named approval + live collision check + rollback
+                        record required
                       </em>
                     </article>
                   ))}
@@ -1317,10 +1317,10 @@ export function StructureWorkspace({
               <small>
                 {folderPreview && !intake.census ? `Folder preview · ${folderPreview.fileCount} source-file paths · content not verified` : discoveryMap.state === "empty"
                   ? intake.census && structureTree.integrity?.accepted
-                    ? `No files observed in this census · ${intake.census.skipped?.length ?? 0} entries skipped · not proof the folder is empty`
+                    ? `No files observed in this folder scan · ${intake.census.skipped?.length ?? 0} entries skipped · not proof the folder is empty`
                     : "Empty until a folder is indexed · headings are questions, not answers"
                   : discoveryMap.state === "invalid"
-                    ? `Analysis refused · ${structureTree.integrity?.reason || discoveryMap.integrity?.reason || "invalid census"} · no facts accepted`
+                    ? `Analysis refused · ${structureTree.integrity?.reason || discoveryMap.integrity?.reason || "invalid folder scan"} · no facts accepted`
                     : `${discoveryMap.observedFiles} files observed · ${discoveryMap.counts.observed} facts · ${discoveryMap.counts.signals} signals need review`}
               </small>
             </span>
@@ -1355,10 +1355,10 @@ export function StructureWorkspace({
                 <p>
                   The indexed metadata did not pass the safe structure contract.
                   No files, folders, or inferred architecture were promoted to
-                  project truth.
+                  project status.
                 </p>
                 <small>
-                  Retry reads a fresh bounded census. Clearing removes this
+                  Retry reads a fresh bounded folder scan. Clearing removes this
                   rejected result before another folder is selected.
                 </small>
               </span>
