@@ -12,6 +12,8 @@ import {
 import { deriveImportedProjectWorkflowModel } from "../project/importedProjectWorkflowModel.js";
 import { useProjectWorkRecords } from "../project/useProjectWorkRecords.js";
 import { workspacePanels } from "./workspacePanels.js";
+import { usePlanTaskDriftWatch } from "../project/usePlanApproval.js";
+import { focusRequirementTarget } from "./focusRequirementTarget.js";
 import { ProjectTruthGate } from "./ProjectTruthGate.jsx";
 const TaskDraftLedger = lazy(() => import("./TaskDraftLedger.jsx").then(module => ({ default: module.TaskDraftLedger })));
 const TaskDraftMap = lazy(() => import("./TaskDraftMap.jsx").then(module => ({ default: module.TaskDraftMap })));
@@ -61,6 +63,7 @@ function RequirementList({ model, onSelect, query }) {
   return <div className="imported-workflow-requirements" role="list" aria-label={`${model.copy.title} requirements`}>
     {visible.map((item, index) => <div key={item.id} role="listitem" className="imported-workflow-requirement-item"><button
       type="button"
+      data-requirement-id={item.id}
       aria-label={`${item.id} ${item.label} — ${STATE_LABELS[item.state] ?? "Unavailable"}`}
       className={`imported-workflow-requirement state-${item.state}`}
       onClick={() => onSelect?.(selectedItem(item, model))}
@@ -118,6 +121,7 @@ export function ImportedProjectWorkflowWorkspace({
   onSelect,
 }) {
   const records = useProjectWorkRecords(activeProject?.projectId);
+  usePlanTaskDriftWatch(activeProject, records);
   const model = useMemo(
     () => deriveImportedProjectWorkflowModel(activeProject, workspace, records),
     [activeProject, workspace, records],
@@ -125,11 +129,13 @@ export function ImportedProjectWorkflowWorkspace({
   const [query, setQuery] = useState("");
   const firstOpen = model.requirements.find((item) => item.state !== "recorded") ?? null;
   const showSearch = workspace === "ledger" || workspace === "index";
-  const handleNext = () => {
-    if (model.nextAction.workspace !== workspace) {
+  const handleNext = (event) => {
+    if (model.nextAction.workspace && model.nextAction.workspace !== workspace) {
       onWorkspace?.(model.nextAction.workspace);
       return;
     }
+    // This page owns the open requirement: bring its own panel (or row) into view.
+    focusRequirementTarget(event.currentTarget.closest(".imported-workflow-workspace"), model.nextAction.target);
     if (firstOpen) onSelect?.(selectedItem(firstOpen, model));
   };
 

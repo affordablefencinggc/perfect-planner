@@ -4,9 +4,11 @@
 // Add one import + one spread line per feature below. A deriver returns null when
 // nothing is recorded yet, which keeps the original "unanswered" receipt so that
 // absence is never shown as success. Valid states: recorded, review, unanswered, stale, unavailable.
+import { receiptDerivers as planReceiptDerivers } from "./receipts/plan.js";
 
 const derivers = Object.freeze({
   // ...featureReceiptDerivers,
+  ...planReceiptDerivers,
 });
 
 export function deriveWorkRecordReceipt(receiptId, records, context) {

@@ -6,6 +6,7 @@ import {sameTaskDraftBinding,inspectTaskDraft} from '../project/taskDraftLedger.
 import {canonicalArchitectureJson as canonical} from '../engine/architectureContractVerification.js';
 import './PlanApprovalPanel.css';
 import {useOptionalProject} from '../project/ProjectProvider.jsx';
+import {recordPlanApproval} from '../project/planApproval.js';
 
 // Unsent mapping choices survive navigation only. Full requests enter durable
 // recovery storage before any submission; this map is never an approval store.
@@ -36,6 +37,8 @@ function BoundPlanApprovalPanel({project,binding,ledger,store,dirty,disabled}){
  useEffect(()=>{if(refreshPlan&&current&&!sharedMatches(sharedStatus,current)){setCurrent(null);setNotice('Shared planning status changed. Previous approval is historical until checked again.');}},[sharedStatus,current,refreshPlan]);
  useEffect(()=>{invalidatePlan?.(binding.projectId,{dirty:Boolean(dirty),reason:'ledger-context-changed'});},[signature,invalidatePlan,binding.projectId]);
  useEffect(()=>{alive.current=true;return()=>{alive.current=false;generation.current++;};},[]);
+ // A checked planning-ledger approval is also this project's saved plan approval.
+ useEffect(()=>{if(current&&!blocked&&!pending&&(!refreshPlan||sharedMatches(sharedStatus,current)))void recordPlanApproval(binding.projectId,{tasks:current.record.proposal.ledger.tasks,censusDigest:binding.censusDigest,source:'planning-ledger',ledgerRevision:current.observedApprovalHead.revision}).catch(()=>{});},[current]);
  const blocked=disabled||dirty||!ledger||!sameTaskDraftBinding(ledger.binding,binding);
  const findings=useMemo(()=>ledger?inspectTaskDraft(ledger):null,[ledger]);
  const begin=()=>{invalidatePlan?.(binding.projectId,{reason:'planning-review-in-progress'});const number=++generation.current,operation=++inflight.current,captured=latest.current;setBusy(true);setError('');const valid=()=>alive.current&&generation.current===number&&latest.current===captured;valid.finish=()=>{if(alive.current&&inflight.current===operation)setBusy(false);};return valid;};

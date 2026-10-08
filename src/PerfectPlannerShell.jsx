@@ -78,6 +78,9 @@ import {
   useOptionalProject,
 } from "./project/ProjectProvider.jsx";
 import { deriveProjectHomeModel } from "./project/projectHomeModel.js";
+import { useProjectWorkRecords } from "./project/useProjectWorkRecords.js";
+import { usePlanTaskDriftWatch } from "./project/usePlanApproval.js";
+import { confirmProjectReady } from "./project/planApproval.js";
 import { createDemoProjectSession, isDemoProject } from "./demo/demoProject.js";
 import {
   createProjectHistoryState,
@@ -2674,10 +2677,18 @@ function ProjectHomeWorkspace({
   const componentRefresh = projectContext?.componentRefreshStatus;
   const planRefresh = projectContext?.planRefreshStatus;
   const demoMode = isDemoProject(activeProject);
+  const workRecords = useProjectWorkRecords(demoMode ? null : activeProject?.projectId);
+  usePlanTaskDriftWatch(activeProject, workRecords);
+  const [homeActionError, setHomeActionError] = useState("");
   const homeModel = useMemo(
-    () => deriveProjectHomeModel(activeProject),
-    [activeProject],
+    () => deriveProjectHomeModel(activeProject, workRecords),
+    [activeProject, workRecords],
   );
+  const runHomeNextAction = (nextAction) => {
+    setHomeActionError("");
+    if (nextAction.id !== "confirm-project-ready") return onWorkspace(nextAction.workspace);
+    try { confirmProjectReady(activeProject.projectId); } catch (error) { setHomeActionError(error?.message ?? "The confirmation could not be saved."); }
+  };
   if (!demoMode) {
     const { binding, blockers, mode, nextAction, project, stage, summary } =
       homeModel;
@@ -2755,10 +2766,11 @@ function ProjectHomeWorkspace({
             <button
               className="primary-button"
               data-home-next-action={nextAction.id}
-              onClick={() => onWorkspace(nextAction.workspace)}
+              onClick={() => runHomeNextAction(nextAction)}
             >
               {nextAction.label} <ArrowRightIcon />
             </button>
+            {homeActionError && <p role="alert">{homeActionError}</p>}
             <button className="soft-button" onClick={onOpenDemo}>
               Explore the explicit Demo
             </button>
