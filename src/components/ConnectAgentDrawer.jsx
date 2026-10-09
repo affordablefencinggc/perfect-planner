@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { ArrowRightIcon, CheckCircleIcon, CopyIcon, InfoIcon, RobotIcon, XIcon } from "@phosphor-icons/react";
 import { AGENT_TOOLS, buildAgentSnippets, copyText, resolveAgentSetup } from "../project/connectAgentSetup.js";
+import { CoreAgentConnect } from "../core-screens/CoreAgentConnect.jsx";
 import "./ConnectAgentDrawer.css";
 
 const FOCUSABLE = 'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
@@ -62,6 +63,7 @@ export function ConnectAgentDrawer({ open, onClose, onWorkspace, setup: setupOve
         </header>
 
         <div className="connect-agent-scroll">
+          <CoreAgentConnect />
           <p className="connect-agent-lede">
             Let your coding agent read the apps you added to Perfect Planner. It can look, search and suggest tasks.
             It cannot change Perfect Planner, approve plans or edit your files through this connection.
