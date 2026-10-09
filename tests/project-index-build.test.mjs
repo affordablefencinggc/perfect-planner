@@ -129,6 +129,39 @@ test("the agent brief names files, criteria, owner, constraints and how to repor
   assert.match(empty, /No acceptance criteria were written/);
 });
 
+test("Build tells 'nothing approved yet' apart from a real out-of-date approval (gap 26)", () => {
+  const ledger = sample();
+  // An unchecked or invalidated planning check is not an approval going out of date.
+  const nothing = resolveApprovedTasks({ project, ledger, sections: {}, planStatus: { state: "stale", projectId: binding.projectId, reason: "ledger-context-changed" } });
+  assert.equal(nothing.state, "missing");
+  const missing = resolveApprovedTasks({ project, ledger, sections: {}, planStatus: { state: "missing", projectId: binding.projectId } });
+  assert.equal(missing.state, "missing");
+  // A recorded approval made against an earlier folder scan is really out of date.
+  const data = { planDigest: "c".repeat(64), taskIds: ["T0001"], tasks: [{ id: "T0001", title: "Add checkout page" }], taskCount: 1, approvedAt: "2026-10-01T00:00:00.000Z", source: "local-approval", censusDigest: "d".repeat(64), confirmedAt: null, confirmedDigest: null, tasksChangedAt: null };
+  const stale = resolveApprovedTasks({ project, ledger, sections: { planAuthority: { revision: 2, data } }, planStatus: null });
+  assert.equal(stale.state, "stale");
+  assert.deepEqual(stale.taskIds, []);
+  const current = resolveApprovedTasks({ project, ledger, sections: { planAuthority: { revision: 2, data: { ...data, censusDigest: binding.censusDigest } } }, planStatus: null });
+  assert.equal(current.state, "approved");
+});
+
+test("the agent brief's Depends on includes ordering decided on the Collision page (gap 24)", () => {
+  const ledger = ledgerWith(
+    { title: "Settings page", owner: "Sam", claims: [{ path: "src/settings.jsx", access: "write" }] },
+    { title: "Theme switch", owner: "Ann", claims: [{ path: "src/settings.jsx", access: "write" }] },
+  );
+  const record = buildCollisionRecord({ ledger, censusDigest: binding.censusDigest, now: "2026-10-02T00:00:00.000Z" });
+  const [collision] = record.collisions;
+  const decided = { ...record, resolutions: { [collision.key]: createResolution(collision, "order", "T0002", "2026-10-02T00:01:00.000Z") } };
+  const board = deriveBuildBoard({ project, ledger, sections: { collisions: { revision: 2, data: decided } }, planStatus: observed(ledger) });
+  const first = agentBrief(board.cards[0], { projectName: "Shop app", statusOf: () => "not-started" });
+  assert.match(first, /Depends on:\n- T0002 \(from the Collision decision: run after\) — currently Not started/);
+  assert.doesNotMatch(first, /Depends on:\n- Nothing/);
+  const second = agentBrief(board.cards[1], { projectName: "Shop app" });
+  assert.match(second, /Depends on:\n- Nothing\./);
+  assert.ok(board.cards[0].blockers.some((item) => item.kind === "dependency" && /T0002/.test(item.text)), "the decided order also shows on the card");
+});
+
 test("the index searches tasks, areas, saved plans, proof, named files and build notes", () => {
   const sections = {
     proof: { data: { items: [{ taskId: "T0001", label: "Checkout screenshot", kind: "screenshot" }] } },

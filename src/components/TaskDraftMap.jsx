@@ -4,6 +4,8 @@ import { projectTaskDraftMap, taskDraftLink, taskDraftConnectionPoints } from '.
 import { createTaskDraftStore } from '../project/taskDraftStore.js';
 import {useOptionalProject} from '../project/ProjectProvider.jsx';
 import {canonicalArchitectureJson as canonical} from '../engine/architectureContractVerification.js';
+import {planApprovalStatus,savedPlanCheckText} from '../project/planApproval.js';
+import {useProjectWorkRecords} from '../project/useProjectWorkRecords.js';
 import './TaskDraftMap.css';
 
 export function TaskDraftMap({project,onWorkspace,store}){
@@ -17,6 +19,7 @@ function BoundMap({binding,project,onWorkspace,providedStore}){
   const [width,setWidth]=useState(1100),[ledger,setLedger]=useState(null),[error,setError]=useState(''),[busy,setBusy]=useState(true),[selected,setSelected]=useState(null);
   const model=useMemo(()=>ledger?projectTaskDraftMap(ledger,width):null,[ledger,width]);
   const stale=ledger&&!sameTaskDraftBinding(ledger.binding,binding);
+  const records=useProjectWorkRecords(binding.projectId),approval=planApprovalStatus(project,records);
   const planChecked=!busy&&!error&&!stale&&project.state!=='stale'&&project.state!=='unavailable'&&planStatus?.state==='observed'&&planStatus.projectId===binding.projectId&&planStatus.rootIdentity===binding.rootIdentity&&planStatus.censusDigest===binding.censusDigest&&planStatus.checkedLedger&&ledger&&canonical(planStatus.checkedLedger)===canonical(ledger);
   async function refresh(){const request=++sequence.current;setBusy(true);setError('');try{const next=await store.read(binding);if(alive.current&&request===sequence.current)setLedger(next);}catch(e){if(alive.current&&request===sequence.current)setError(e.message);}finally{if(alive.current&&request===sequence.current)setBusy(false);}}
   useEffect(()=>{alive.current=true;refresh();const unsubscribe=store.subscribe?.(binding,refresh);const onFocus=()=>refresh();window.addEventListener('focus',onFocus);return()=>{alive.current=false;sequence.current++;unsubscribe?.();window.removeEventListener('focus',onFocus);if(!providedStore)store.close().catch(()=>{});};},[store]);
@@ -29,8 +32,8 @@ function BoundMap({binding,project,onWorkspace,providedStore}){
   return <section className="draft-map-panel" aria-label="Project draft mind map">
     <header><div><h2>Plan at a glance</h2><p>Saved Ledger revision {model?.revision??'—'} · {model?.nodes.length??0} active drafts{model?.archived?` · ${model.archived} archived in Ledger`:''}</p></div><div className="draft-map-tools"><button type="button" onClick={refresh} disabled={busy}>Refresh map</button><button type="button" onClick={()=>onWorkspace?.('ledger')}>Open Ledger</button></div></header>
     <details className="draft-map-note"><summary>How to read this map</summary><p>Lines show recorded dependencies, not progress or permission to execute. Click a task for its full Ledger record. File conflicts and incomplete details still need review.</p></details>
-    <p role="status">{busy?'Reading the saved draft…':error?'Map refresh failed; any displayed map is the last loaded revision.':`${model?.reviewCount??0} planning review findings · ${planChecked?'planning approval checked; no work executed or completed':'no current planning approval checked; no work completed'}`}</p>
-    <div aria-label="Map planning approval"><p>{planChecked?`Checked planning approval revision ${planStatus.revision} for this exact saved Ledger. Planning only.`:planStatus?.state==='unfinished'?'Unfinished editor text needs recovery or an explicit decision in Ledger.':planStatus?.state==='pending'?'An original request needs reconciliation in Ledger.':planStatus?.state==='missing'?'No saved planning approval exists. Review in Ledger.':planStatus?.state==='unavailable'?'Planning approval could not be checked. Last-known history is not current.':planStatus?.state==='refreshing'?'Checking planning approval…':'Planning approval is not checked for this exact saved Ledger. Refresh or review in Ledger.'}</p><button type="button" disabled={!projectContext?.refreshPlan||busy||planStatus?.state==='refreshing'} onClick={()=>{void projectContext?.refreshPlan(binding.projectId);}}>Check planning approval</button></div>
+    <p role="status">{busy?'Reading the saved draft…':error?'Map refresh failed; any displayed map is the last loaded revision.':`${model?.reviewCount??0} planning review findings · ${planChecked?'saved-plan check passed; no work executed or completed':approval?.state==='recorded'?'plan approved by you; saved-plan check not passed yet; no work completed':'no plan approved yet; no work completed'}`}</p>
+    {(()=>{const copy=savedPlanCheckText({check:planStatus,approval,checked:planChecked});return <div aria-label="Map planning approval"><p>{copy.text}</p><p><small>{copy.explainer}</small></p><button type="button" disabled={!projectContext?.refreshPlan||busy||planStatus?.state==='refreshing'} onClick={()=>{void projectContext?.refreshPlan(binding.projectId);}}>{copy.action}</button></div>;})()}
     {error&&<p role="alert" className="draft-map-error">{error}</p>}
     {stale&&<p role="alert" className="draft-map-error">This draft belongs to an older folder census. It is shown for reference only. Review it in the Ledger.</p>}
     {model?.edges.length>800&&<p>Dense dependency map: focus or hover a task to show its connections. All {model.nodes.length} active tasks remain visible; full dependency lists are in the Ledger.</p>}

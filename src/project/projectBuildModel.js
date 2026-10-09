@@ -3,6 +3,7 @@
 // Statuses are what the user set; nothing here infers that work happened.
 import { canonicalArchitectureJson as canonical } from "../engine/architectureContractVerification.js";
 import { inspectTaskDraft } from "./taskDraftLedger.js";
+import { planApprovalStatus } from "./planApproval.js";
 import { allocationByTask, approvedTaskIdsFrom, proofItems, recordedCollisions } from "./workRecordReaders.js";
 
 export const BUILD_STATES = Object.freeze(["not-started", "in-progress", "done", "blocked"]);
@@ -14,6 +15,10 @@ const sameIds = (left, right) => left.length === right.length && [...left].sort(
 /** Which tasks are approved, and where that came from. Never guesses. */
 export function resolveApprovedTasks({ project, ledger, sections, planStatus }) {
   const recorded = approvedTaskIdsFrom(sections);
+  // A saved approval made against an earlier folder scan is really out of date.
+  if (recorded && planApprovalStatus(project, { sections })?.state === "stale") {
+    return { state: "stale", source: "recorded", taskIds: [], changed: false, revision: sections.planAuthority.revision ?? null, sourceTasks: [] };
+  }
   if (recorded) {
     return { state: "approved", source: "recorded", taskIds: recorded, changed: false, revision: sections.planAuthority.revision ?? null, sourceTasks: ledger?.tasks ?? [] };
   }
@@ -24,7 +29,10 @@ export function resolveApprovedTasks({ project, ledger, sections, planStatus }) 
     const changed = Boolean(ledger) && canonical(checked) !== canonical(ledger);
     return { state: "approved", source: "plan-approval", taskIds, changed, revision: planStatus.revision ?? null, sourceTasks: checked.tasks ?? [] };
   }
-  return { state: matchesProject ? planStatus.state ?? "missing" : "missing", source: null, taskIds: [], changed: false, revision: null, sourceTasks: [] };
+  // Without any saved approval, an unchecked or invalidated planning check
+  // ("stale") only means nothing is approved yet, not that an approval aged.
+  const state = matchesProject && planStatus.state && planStatus.state !== "stale" ? planStatus.state : "missing";
+  return { state, source: null, taskIds: [], changed: false, revision: null, sourceTasks: [] };
 }
 
 function overlapFindings(ledger) {
@@ -69,8 +77,11 @@ export function deriveBuildBoard({ project, ledger, sections = {}, planStatus = 
       const others = item.taskIds.filter((other) => other !== id);
       blockers.push({ kind: "collision", text: `Plans to change the same files as ${others.join(", ")}; not reviewed in Collision yet.`, workspace: "collision" });
     }
-    for (const dependency of task.dependsOn ?? []) {
-      if (statusOf(dependency).state !== "done") blockers.push({ kind: "dependency", text: `Waits for ${dependency} to be done.`, workspace: "build" });
+    // An order decided on the Collision page is a dependency too: this task runs after `first`.
+    const orderedAfter = [...new Set((collisions ?? []).filter((item) => item.resolved && item.first && item.first !== id && item.taskIds.includes(id)).map((item) => item.first))]
+      .filter((first) => !(task.dependsOn ?? []).includes(first));
+    for (const dependency of [...(task.dependsOn ?? []), ...orderedAfter]) {
+      if (statusOf(dependency).state !== "done") blockers.push({ kind: "dependency", text: `Waits for ${dependency} to be done${orderedAfter.includes(dependency) ? " (Collision decision: run after)" : ""}.`, workspace: "build" });
     }
     const status = statusOf(id);
     return {
@@ -81,6 +92,7 @@ export function deriveBuildBoard({ project, ledger, sections = {}, planStatus = 
       owner,
       ownerSource,
       wave: allocated?.wave ?? null,
+      orderedAfter,
       blockers,
       constraints,
       proof: proof.filter((item) => item.taskId === id),
@@ -131,7 +143,11 @@ export function agentBrief(card, { projectName = "this project", statusOf = () =
   const task = card.task;
   const writes = task.claims.filter((claim) => claim.access === "write").map((claim) => `${claim.path} (may change)`);
   const reads = task.claims.filter((claim) => claim.access === "read").map((claim) => `${claim.path} (read only)`);
-  const dependencies = (task.dependsOn ?? []).map((id) => `${id}${statusOf(id) ? ` — currently ${BUILD_STATE_LABELS[statusOf(id)] ?? statusOf(id)}` : ""}`);
+  const current = (id) => statusOf(id) ? ` — currently ${BUILD_STATE_LABELS[statusOf(id)] ?? statusOf(id)}` : "";
+  const dependencies = [
+    ...(task.dependsOn ?? []).map((id) => `${id}${current(id)}`),
+    ...(card.orderedAfter ?? []).map((id) => `${id} (from the Collision decision: run after)${current(id)}`),
+  ];
   const constraints = [
     ...card.blockers.filter((item) => item.kind === "collision").map((item) => `${item.text} Do not change the shared files until this is agreed.`),
     ...card.constraints,

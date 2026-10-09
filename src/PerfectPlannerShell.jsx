@@ -89,7 +89,7 @@ import {
 import { deriveProjectHomeModel } from "./project/projectHomeModel.js";
 import { useProjectWorkRecords } from "./project/useProjectWorkRecords.js";
 import { usePlanTaskDriftWatch } from "./project/usePlanApproval.js";
-import { confirmProjectReady } from "./project/planApproval.js";
+import { confirmProjectReady, planApprovalStatus, savedPlanCheckText } from "./project/planApproval.js";
 import { createDemoProjectSession, isDemoProject } from "./demo/demoProject.js";
 import {
   createProjectHistoryState,
@@ -2893,16 +2893,15 @@ function ProjectHomeWorkspace({
               <button type="button" className="soft-button" disabled={!projectContext?.refreshComponent || componentRefresh?.state === "refreshing"} onClick={() => { void projectContext?.refreshComponent(activeProject.projectId); }}>Refresh saved components</button>
             </div>
             <div aria-label="Saved planning approval status">
-              <p>Planning review check — separate from the saved Plan record above. A checked Ledger does not promote that authority or permit execution.</p>
-              <p>{planRefresh?.state === "observed" && planRefresh.projectId === activeProject.projectId && planRefresh.rootIdentity === activeProject.registration?.rootIdentity && planRefresh.censusDigest === activeProject.census?.digest && !["stale", "unavailable"].includes(activeProject.state)
-                ? `Checked planning approval revision ${planRefresh.revision} · saved Ledger revision ${planRefresh.ledgerRevision}. No execution or completion is authorized.`
-                : planRefresh?.state === "refreshing" ? "Checking the saved plan and its complete Ledger…"
-                : planRefresh?.state === "pending" ? "An original planning request needs reconciliation in Ledger."
-                : planRefresh?.state === "unfinished" ? "Unfinished editor text needs recovery or an explicit decision in Ledger."
-                : planRefresh?.state === "missing" ? "No saved planning approval. Review the complete Ledger."
-                : planRefresh?.state === "unavailable" ? "Planning approval could not be checked. Previous history is not current."
-                : "Planning approval is not checked for the current saved Ledger and references."}</p>
-              <button type="button" className="soft-button" disabled={!projectContext?.refreshPlan || planRefresh?.state === "refreshing"} onClick={() => { void projectContext?.refreshPlan(activeProject.projectId); }}>Check planning approval</button>
+              {(() => {
+                const planCheckMatches = planRefresh?.state === "observed" && planRefresh.projectId === activeProject.projectId && planRefresh.rootIdentity === activeProject.registration?.rootIdentity && planRefresh.censusDigest === activeProject.census?.digest && !["stale", "unavailable"].includes(activeProject.state);
+                const copy = savedPlanCheckText({ check: planRefresh?.projectId === activeProject.projectId ? planRefresh : null, approval: planApprovalStatus(activeProject, workRecords), checked: planCheckMatches });
+                return <>
+                  <p>{copy.explainer}</p>
+                  <p>{copy.text}</p>
+                  <button type="button" className="soft-button" disabled={!projectContext?.refreshPlan || planRefresh?.state === "refreshing"} onClick={() => { void projectContext?.refreshPlan(activeProject.projectId); }}>{copy.action}</button>
+                </>;
+              })()}
               <button type="button" className="soft-button" onClick={() => onWorkspace("ledger")}>Review complete Ledger</button>
             </div>
           </div>}
