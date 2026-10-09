@@ -1,0 +1,16 @@
+name: Temporary DPAPI diagnostic
+on:
+  push:
+    branches: [diag/dpapi-windows]
+permissions:
+  contents: read
+jobs:
+  dpapi:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node scripts/diag-dpapi.mjs
