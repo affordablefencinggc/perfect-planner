@@ -3,7 +3,15 @@
 // directory when the project has no scripts/verify-secrets.mjs of its own.
 // It prints only file, line and rule for each finding, never the matched text,
 // and exits 1 on any finding or read failure so the commit is blocked.
+// It reads whatever index git hands the hook in GIT_INDEX_FILE, so it also
+// covers `git commit -a` and partial commits, which use a temporary index.
+//
+// `--index-is-normal` instead exits 0 when GIT_INDEX_FILE is unset or names the
+// checkout's own index, and 1 otherwise. The hook uses it to decide whether a
+// project scanner that only accepts the normal index can run as well.
 import { spawnSync } from "node:child_process";
+import { realpathSync } from "node:fs";
+import path from "node:path";
 
 export const SECRET_PATTERNS = [
   ["private-key", /-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----/g],
@@ -29,8 +37,8 @@ export function scanText(file, text) {
   return findings;
 }
 
-function git(args, maxBuffer = 16_000_000) {
-  const result = spawnSync("git", args, { encoding: "buffer", windowsHide: true, maxBuffer, shell: false });
+function git(args, maxBuffer = 16_000_000, env = process.env) {
+  const result = spawnSync("git", args, { encoding: "buffer", windowsHide: true, maxBuffer, shell: false, env });
   if (result.error || result.status !== 0) throw new Error("git-read-failed");
   return result.stdout;
 }
@@ -50,9 +58,31 @@ function main() {
   }
 }
 
+function sameFile(a, b) {
+  const real = (p) => { try { return realpathSync(p); } catch { return path.resolve(p); } };
+  const ra = real(a);
+  const rb = real(b);
+  return process.platform === "win32" || process.platform === "darwin" ? ra.toLowerCase() === rb.toLowerCase() : ra === rb;
+}
+
+export function indexIsNormal(env = process.env, cwd = process.cwd()) {
+  const key = Object.keys(env).find((k) => k.toUpperCase() === "GIT_INDEX_FILE");
+  if (key === undefined) return true;
+  if (!env[key]) return false;
+  // --git-path honours GIT_INDEX_FILE, so ask without it for the checkout's own index.
+  const plain = { ...env };
+  delete plain[key];
+  const normal = git(["rev-parse", "--git-path", "index"], 1_000_000, plain).toString("utf8").trim();
+  return sameFile(path.resolve(cwd, env[key]), path.resolve(cwd, normal));
+}
+
 const invokedDirectly = process.argv[1] && /bundledSecretScan\.mjs$|pp-secret-scan\.mjs$/.test(process.argv[1]);
 if (invokedDirectly) {
-  try { main(); } catch (error) {
+  if (process.argv.includes("--index-is-normal")) {
+    let normal = false;
+    try { normal = indexIsNormal(); } catch { normal = false; }
+    process.exitCode = normal ? 0 : 1;
+  } else try { main(); } catch (error) {
     process.stderr.write("Perfect Planner: secret scan could not read staged files (" + error.message + "); commit blocked.\n");
     process.exitCode = 1;
   }

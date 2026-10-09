@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { promises as fs, readFileSync } from "node:fs";
 import net from "node:net";
 import os from "node:os";
@@ -138,6 +139,18 @@ test("launch creates branch, worktree, linked deps, free port, placeholder setti
     assert.ok(entry.evidence.includes(`port:${result.port}`));
     assert.ok(entry.evidence.includes("path:.perfect-planner/worktrees/T-14"));
     assert.ok(!JSON.stringify(entry).includes(FAKE_VALUE));
+    // The hook is recorded by path and sha256 so a later step can check it was not altered.
+    const hookEvidence = entry.evidence.find((e) => e.startsWith("hook:")).slice("hook:".length);
+    const hookFile = path.join(root, hookEvidence);
+    assert.equal(hookFile, result.hook);
+    const digest = createHash("sha256").update(readFileSync(hookFile)).digest("hex");
+    assert.ok(entry.evidence.includes(`hook-sha256:${digest}`));
+    assert.equal(result.hookSha256, digest);
+    assert.ok(entry.evidence.some((e) => /^scan-sha256:[0-9a-f]{64}$/.test(e)));
+    // Nothing was written to the shared info/exclude of the main checkout.
+    const sharedExclude = path.join(root, ".git", "info", "exclude");
+    const sharedText = await fs.readFile(sharedExclude, "utf8").catch(() => "");
+    assert.ok(!sharedText.includes("/node_modules"), "shared info/exclude untouched");
 
     const listed = await manager.list();
     assert.equal(listed.length, 1);
@@ -187,9 +200,9 @@ test("pre-commit hook prefers the project's scripts/verify-secrets.mjs when pres
   const manager = createWorktreeManager({ repoRoot: root, ledger: fakeLedger() });
   try {
     const { path: wt } = await manager.launch("T-2", { baseBranch: "main" });
-    // Prove which scanner ran: remove the bundled copy so only the project's can act.
+    // Prove which scanner ran: stub out the bundled copy (it always passes) so only the project's can block.
     const hooksDir = git(wt, "config", "--worktree", "--get", "core.hooksPath");
-    await fs.rm(path.join(hooksDir, "pp-secret-scan.mjs"));
+    await fs.writeFile(path.join(hooksDir, "pp-secret-scan.mjs"), "process.exitCode = 0;\n");
     await fs.writeFile(path.join(wt, "leak.txt"), `${FAKE_AWS}\n`);
     git(wt, "add", "leak.txt");
     const blocked = gitTry(wt, "commit", "-m", "leak");
@@ -225,6 +238,17 @@ test("remove refuses unmerged and dirty work, then removes merged work without t
     await fs.writeFile(path.join(wt, "scratch.js"), "uncommitted\n");
     await assert.rejects(manager.remove("T-3"), { code: "WORKTREE_DIRTY" });
     assert.equal(gitTry(root, "rev-parse", "--verify", "pp/T-3").status, 0, "branch kept when dirty");
+    // A refused removal leaves the worktree intact: deps link and placeholder settings are still there.
+    assert.ok((await fs.lstat(path.join(wt, "node_modules"))).isSymbolicLink(), "deps link kept when dirty");
+    assert.match(await fs.readFile(path.join(wt, ".env"), "utf8"), /^API_KEY=PLACEHOLDER_API_KEY$/m, "settings kept when dirty");
+    // A tracked modification is refused just the same, again without touching anything.
+    await fs.rm(path.join(wt, "scratch.js"));
+    await fs.writeFile(path.join(wt, "app.js"), "export const x = 3;\n");
+    await assert.rejects(manager.remove("T-3"), { code: "WORKTREE_DIRTY" });
+    assert.ok((await fs.lstat(path.join(wt, "node_modules"))).isSymbolicLink());
+    assert.ok(await fs.stat(path.join(wt, ".env")));
+    git(wt, "checkout", "--", "app.js");
+    await fs.writeFile(path.join(wt, "scratch.js"), "uncommitted\n");
     await fs.rm(path.join(wt, "scratch.js"));
 
     const removed = await manager.remove("T-3");
@@ -332,4 +356,227 @@ test("configuration is validated", () => {
   assert.throws(() => createWorktreeManager({ repoRoot: os.tmpdir() }), { code: "WORKTREE_CONFIG" });
   assert.throws(() => createWorktreeManager({ repoRoot: os.tmpdir(), ledger: fakeLedger(), maxParallel: 0 }), { code: "WORKTREE_CONFIG" });
   assert.throws(() => createWorktreeManager({ repoRoot: os.tmpdir(), ledger: fakeLedger(), portRange: [10, 5] }), { code: "WORKTREE_CONFIG" });
+});
+
+async function listenOn(options) {
+  const server = net.createServer();
+  await new Promise((resolve, reject) => { server.once("error", reject); server.listen(options, resolve); });
+  return server;
+}
+const closeServer = (server) => new Promise((resolve) => server.close(resolve));
+
+test("a port held on the wildcard address (0.0.0.0 or Node's default listen) is not reported free", async () => {
+  const wildcard = await listenOn({ port: 0, host: "0.0.0.0" });
+  try {
+    assert.equal(await isPortFree(wildcard.address().port), false, "0.0.0.0 holder");
+  } finally { await closeServer(wildcard); }
+  const defaultHost = await listenOn({ port: 0 });
+  try {
+    const port = defaultHost.address().port;
+    assert.equal(await isPortFree(port), false, "listen(port) with no host");
+    const root = await makeRepo({ withDeps: false, envFiles: false });
+    try {
+      const result = await createWorktreeManager({ repoRoot: root, ledger: fakeLedger(), portRange: [port, Math.min(port + 5, 65535)] }).launch("T-1");
+      assert.notEqual(result.port, port);
+    } finally { await cleanup(root); }
+  } finally { await closeServer(defaultHost); }
+  // And a port nobody holds is still free.
+  const probe = await listenOn({ port: 0 });
+  const freePort = probe.address().port;
+  await closeServer(probe);
+  assert.equal(await isPortFree(freePort), true);
+});
+
+test("git commit -a and partial commits are scanned and work when the project has scripts/verify-secrets.mjs", async () => {
+  const root = await makeRepo({ withDeps: false, envFiles: false });
+  await fs.mkdir(path.join(root, "scripts"));
+  await fs.copyFile(path.join(here, "..", "scripts", "verify-secrets.mjs"), path.join(root, "scripts", "verify-secrets.mjs"));
+  git(root, "add", "-A");
+  git(root, "commit", "-q", "-m", "add scanner");
+  const manager = createWorktreeManager({ repoRoot: root, ledger: fakeLedger() });
+  try {
+    const { path: wt } = await manager.launch("T-7", { baseBranch: "main" });
+    const head = git(wt, "rev-parse", "HEAD");
+    // The gate that decides whether the project scanner runs too: normal index yes, any other index no.
+    const scan = path.join(git(wt, "config", "--worktree", "--get", "core.hooksPath"), "pp-secret-scan.mjs");
+    const baseEnv = { ...process.env };
+    for (const key of Object.keys(baseEnv)) if (key.toUpperCase().startsWith("GIT_")) delete baseEnv[key];
+    const gate = (extra) => spawnSync(process.execPath, [scan, "--index-is-normal"], { cwd: wt, env: { ...baseEnv, ...extra }, windowsHide: true }).status;
+    const normalIndex = path.resolve(wt, git(wt, "rev-parse", "--git-path", "index"));
+    assert.equal(gate({}), 0, "unset GIT_INDEX_FILE counts as the normal index");
+    assert.equal(gate({ GIT_INDEX_FILE: normalIndex }), 0, "the normal index");
+    assert.equal(gate({ GIT_INDEX_FILE: normalIndex + ".lock" }), 1, "a temporary index");
+    assert.equal(gate({ GIT_INDEX_FILE: "" }), 1, "an empty override");
+    // A tracked file changed but not staged: commit -a must still catch the key (temporary index).
+    await fs.writeFile(path.join(wt, "app.js"), `export const key = "${FAKE_AWS}";\n`);
+    const blocked = gitTry(wt, "commit", "-am", "leak");
+    assert.notEqual(blocked.status, 0, "commit -am with a fake key must be refused");
+    assert.match(blocked.stderr, /aws-access-key/);
+    assert.ok(!blocked.stderr.includes(FAKE_AWS));
+    assert.equal(git(wt, "rev-parse", "HEAD"), head);
+    // A partial commit (pathspec) uses a temporary index too.
+    const partial = gitTry(wt, "commit", "-m", "leak", "--", "app.js");
+    assert.notEqual(partial.status, 0, "partial commit with a fake key must be refused");
+    assert.equal(git(wt, "rev-parse", "HEAD"), head);
+
+    await fs.writeFile(path.join(wt, "app.js"), "export const x = 2;\n");
+    const ok = gitTry(wt, "commit", "-am", "clean change");
+    assert.equal(ok.status, 0, ok.stderr);
+    assert.notEqual(git(wt, "rev-parse", "HEAD"), head);
+    await fs.writeFile(path.join(wt, "app.js"), "export const x = 3;\n");
+    const okPartial = gitTry(wt, "commit", "-m", "clean partial", "--", "app.js");
+    assert.equal(okPartial.status, 0, okPartial.stderr);
+  } finally { await cleanup(root); }
+});
+
+test("a missing bundled scan blocks commits (fail closed)", async () => {
+  const root = await makeRepo({ withDeps: false, envFiles: false });
+  const manager = createWorktreeManager({ repoRoot: root, ledger: fakeLedger() });
+  try {
+    const { path: wt } = await manager.launch("T-8");
+    await fs.rm(path.join(git(wt, "config", "--worktree", "--get", "core.hooksPath"), "pp-secret-scan.mjs"));
+    await fs.writeFile(path.join(wt, "fine.txt"), "hello\n");
+    git(wt, "add", "fine.txt");
+    assert.notEqual(gitTry(wt, "commit", "-m", "fine").status, 0);
+  } finally { await cleanup(root); }
+});
+
+test("the hook falls back to node on PATH when the recorded runtime is gone", async () => {
+  const root = await makeRepo({ withDeps: false, envFiles: false });
+  const manager = createWorktreeManager({ repoRoot: root, ledger: fakeLedger() });
+  try {
+    const { path: wt, hook } = await manager.launch("T-11");
+    const text = await fs.readFile(hook, "utf8");
+    assert.match(text, /^node_bin='.+'$/m);
+    await fs.writeFile(hook, text.replace(/^node_bin='.+'$/m, "node_bin='/nonexistent/pp-node/node'"));
+    // Make sure the test's own runtime directory is on PATH for the fallback.
+    const env = { ...process.env, PATH: `${path.dirname(process.execPath)}${path.delimiter}${process.env.PATH}` };
+    await fs.writeFile(path.join(wt, "leak.js"), `export const key = "${FAKE_AWS}";\n`);
+    git(wt, "add", "leak.js");
+    const blocked = spawnSync("git", ["commit", "-m", "leak"], { cwd: wt, encoding: "utf8", windowsHide: true, env });
+    assert.notEqual(blocked.status, 0);
+    assert.match(blocked.stderr, /aws-access-key/, "the fallback runtime ran the scan");
+    await fs.writeFile(path.join(wt, "leak.js"), "export const key = process.env.KEY;\n");
+    git(wt, "add", "leak.js");
+    const ok = spawnSync("git", ["commit", "-m", "clean"], { cwd: wt, encoding: "utf8", windowsHide: true, env });
+    assert.equal(ok.status, 0, ok.stderr);
+  } finally { await cleanup(root); }
+});
+
+test("placeholder settings and the deps link are excluded per worktree, so git add -A cannot commit them", async () => {
+  const root = await makeRepo({ envFiles: false });
+  try {
+    // No ignore rule at all for the settings names.
+    await fs.writeFile(path.join(root, ".gitignore"), "node_modules/\n");
+    await fs.writeFile(path.join(root, ".env.local.example"), `SERVICE_TOKEN=${FAKE_VALUE}\n`);
+    git(root, "add", "-A");
+    git(root, "commit", "-q", "-m", "template");
+    await fs.writeFile(path.join(root, ".env"), `API_KEY=${FAKE_VALUE}\n`);
+    const sharedExclude = path.join(root, ".git", "info", "exclude");
+    const sharedBefore = await fs.readFile(sharedExclude, "utf8").catch(() => null);
+    const ledger = fakeLedger();
+    const manager = createWorktreeManager({ repoRoot: root, ledger });
+    const result = await manager.launch("T-12");
+    assert.deepEqual([...result.settings].sort(), [".env", ".env.local"]);
+    assert.equal(result.dependencies, "linked");
+    assert.equal(git(result.path, "status", "--porcelain", "--untracked-files=all"), "", "worktree starts clean");
+    git(result.path, "add", "-A");
+    assert.equal(git(result.path, "diff", "--cached", "--name-only"), "", "git add -A stages nothing launch() added");
+    assert.equal(await fs.readFile(sharedExclude, "utf8").catch(() => null), sharedBefore, "shared info/exclude unchanged");
+    // The main checkout still sees its own untracked .env: the per-worktree exclude does not leak.
+    assert.match(git(root, "status", "--porcelain"), /^\?\? \.env$/m);
+    // Removal of the (trivially merged) worktree still cleans up the owned files.
+    await manager.remove("T-12");
+    await assert.rejects(fs.lstat(result.path), { code: "ENOENT" });
+  } finally { await cleanup(root); }
+});
+
+test("remove validates the integration branch instead of passing it to git as an option", async () => {
+  const root = await makeRepo({ withDeps: false, envFiles: false });
+  const manager = createWorktreeManager({ repoRoot: root, ledger: fakeLedger() });
+  try {
+    await manager.launch("T-13");
+    await assert.rejects(manager.remove("T-13", { into: "--all" }), { code: "WORKTREE_BAD_BASE" });
+    await assert.rejects(manager.remove("T-13", { into: "-h" }), { code: "WORKTREE_BAD_BASE" });
+    await assert.rejects(manager.remove("T-13", { into: "no-such-branch" }), { code: "WORKTREE_BAD_BASE" });
+    await assert.rejects(manager.remove("T-13", { into: "" }), { code: "WORKTREE_BAD_BASE" });
+    await assert.rejects(manager.launch("T-20", { baseBranch: "--all" }), { code: "WORKTREE_BAD_BASE" });
+    assert.equal(gitTry(root, "rev-parse", "--verify", "refs/heads/pp/T-13").status, 0, "nothing removed");
+    const removed = await manager.remove("T-13", { into: "main" });
+    assert.equal(removed.mergedInto, "main");
+  } finally { await cleanup(root); }
+});
+
+test("list().present is right when repoRoot goes through a link", async () => {
+  const root = await makeRepo({ withDeps: false, envFiles: false });
+  const alias = path.join(path.dirname(root), path.basename(root) + "-alias");
+  await fs.symlink(root, alias, process.platform === "win32" ? "junction" : "dir");
+  try {
+    const manager = createWorktreeManager({ repoRoot: alias, ledger: fakeLedger() });
+    const result = await manager.launch("T-16");
+    assert.equal(result.path, path.join(root, ".perfect-planner", "worktrees", "T-16"), "paths use the real repo root");
+    const [listed] = await manager.list();
+    assert.equal(listed.present, true);
+  } finally {
+    await fs.unlink(alias).catch(() => {});
+    await cleanup(root);
+  }
+});
+
+test("reopened task ids with an attempt suffix share the base task's branch and worktree", async () => {
+  const root = await makeRepo({ withDeps: false, envFiles: false });
+  const ledger = fakeLedger();
+  const manager = createWorktreeManager({ repoRoot: root, ledger });
+  try {
+    for (const bad of ["T-14.a1", "T-14.a0", "T-14.a", "T-14.b2", "T-14.a02"]) {
+      await assert.rejects(manager.launch(bad), { code: "WORKTREE_BAD_TASK" }, bad);
+    }
+    const result = await manager.launch("T-14.a2");
+    assert.equal(result.taskId, "T-14");
+    assert.equal(result.attempt, "T-14.a2");
+    assert.equal(result.branch, "pp/T-14");
+    assert.equal(result.path, path.join(root, ".perfect-planner", "worktrees", "T-14"));
+    const entry = ledger.entries().at(-1);
+    assert.equal(entry.subject, "T-14");
+    assert.ok(entry.evidence.includes("attempt:T-14.a2"));
+    await assert.rejects(manager.launch("T-14.a3"), { code: "WORKTREE_EXISTS" });
+    await assert.rejects(manager.launch("T-14"), { code: "WORKTREE_EXISTS" });
+    assert.equal(manager.branchName("T-14.a10"), "pp/T-14");
+    const removed = await manager.remove("T-14.a2");
+    assert.equal(removed.taskId, "T-14");
+  } finally { await cleanup(root); }
+});
+
+test("envPlaceholders drops continuation lines of single-quoted and backtick multi-line values", () => {
+  const input = [
+    "A='first",
+    `# looks like a comment ${FAKE_VALUE}`,
+    "still inside'",
+    "B=`one",
+    `#${FAKE_VALUE}`,
+    "two`  # trailing comment",
+    'C="x\\"',
+    `# inside double ${FAKE_VALUE}`,
+    '"',
+    "# real comment",
+    "D=done",
+  ].join("\n");
+  const out = placeholderEnv(input);
+  assert.ok(!out.includes(FAKE_VALUE), out);
+  assert.ok(!out.includes("still inside") && !out.includes("two"));
+  assert.match(out, /^A=PLACEHOLDER_A$/m);
+  assert.match(out, /^B=PLACEHOLDER_B$/m);
+  assert.match(out, /^C=PLACEHOLDER_C$/m);
+  assert.match(out, /^# real comment$/m);
+  assert.match(out, /^D=PLACEHOLDER_D$/m);
+  // A single-quoted value closed on its own line does not swallow what follows.
+  assert.match(placeholderEnv(`E='${FAKE_VALUE}'\nF=1`), /^F=PLACEHOLDER_F$/m);
+});
+
+test("the pre-commit hook is executable on POSIX", { skip: process.platform === "win32" && "POSIX-only check" }, async () => {
+  const root = await makeRepo({ withDeps: false, envFiles: false });
+  try {
+    const { hook } = await createWorktreeManager({ repoRoot: root, ledger: fakeLedger() }).launch("T-17");
+    assert.ok(((await fs.stat(hook)).mode & 0o111) !== 0, "hook has an execute bit");
+  } finally { await cleanup(root); }
 });

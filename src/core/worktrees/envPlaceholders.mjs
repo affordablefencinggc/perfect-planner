@@ -3,6 +3,18 @@
 
 const ASSIGNMENT = /^(\s*)(export\s+)?([A-Za-z_][A-Za-z0-9_.-]*)(\s*[=:]).*$/;
 
+const QUOTES = ['"', "'", "`"];
+
+// True when `text` contains an unescaped closing `quote` followed only by an
+// optional comment.
+function closesQuote(text, quote) {
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] === "\\" && quote !== "'") { i++; continue; }
+    if (text[i] === quote) return /^\s*(#.*)?$/.test(text.slice(i + 1));
+  }
+  return false;
+}
+
 export function placeholderFor(key) {
   return "PLACEHOLDER_" + String(key).toUpperCase().replace(/[^A-Z0-9_]/g, "_");
 }
@@ -10,11 +22,13 @@ export function placeholderFor(key) {
 export function placeholderEnv(text) {
   const lines = String(text).replace(/^﻿/, "").split(/\r?\n/);
   const out = [];
-  let inMultiline = false;
+  // The quote character (", ' or `) of a multi-line value still open, or null.
+  let openQuote = null;
   for (const line of lines) {
-    if (inMultiline) {
-      // Drop the continuation lines of a quoted multi-line value entirely.
-      if (/^[^"]*"\s*(#.*)?$/.test(line)) inMultiline = false;
+    if (openQuote) {
+      // Drop the continuation lines of a quoted multi-line value entirely,
+      // including ones that look like comments.
+      if (closesQuote(line, openQuote)) openQuote = null;
       continue;
     }
     const match = ASSIGNMENT.exec(line);
@@ -25,7 +39,8 @@ export function placeholderEnv(text) {
     }
     const [, indent, exported = "", key, separator] = match;
     const value = line.slice(indent.length + exported.length + key.length + separator.length).trimStart();
-    if (value.startsWith('"') && !/^"(?:[^"\\]|\\.)*"\s*(#.*)?$/.test(value)) inMultiline = true;
+    const quote = QUOTES.includes(value[0]) ? value[0] : null;
+    if (quote && !closesQuote(value.slice(1), quote)) openQuote = quote;
     out.push(`${indent}${exported}${key}${separator.trim() === ":" ? ": " : "="}${placeholderFor(key)}`);
   }
   return out.join("\n");
