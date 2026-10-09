@@ -1,7 +1,7 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { CameraIcon, CheckCircleIcon, CircleDashedIcon, CodeIcon, FlaskIcon, LinkSimpleIcon, NoteIcon, PlusIcon, TrashIcon, XCircleIcon } from "@phosphor-icons/react";
 import { readWorkRecords, writeSection } from "../project/projectWorkRecords.js";
-import { activeDrafts, addProofItem, kindLabel, newProofId, PROOF_KINDS, proofCoverage, proofItems, proofScope, removeProofItem, REQUIRED_PROOF_KINDS, saveErrorMessage } from "../project/proofRecords.js";
+import { activeDrafts, addProofItem, kindLabel, MAX_TEXT_CHARS, newProofId, PROOF_KINDS, proofCoverage, proofItems, proofScope, removeProofItem, REQUIRED_PROOF_KINDS, saveErrorMessage } from "../project/proofRecords.js";
 import { screenshotToDataUrl } from "../project/proofImage.js";
 import { useProjectTaskDrafts } from "./useProjectTaskDrafts.js";
 import "./ProjectProofPanels.css";
@@ -29,8 +29,31 @@ export function KindChecks({ task }) {
   })}</span>;
 }
 
+/** In-app viewer for a saved screenshot: browsers refuse to open data: URLs in a new tab. */
+function ScreenshotViewer({ item, onClose }) {
+  const closeRef = useRef(null);
+  useEffect(() => {
+    const previous = document.activeElement;
+    closeRef.current?.focus();
+    const onKey = (event) => { if (event.key === "Escape") { event.preventDefault(); onClose(); } else if (event.key === "Tab") { event.preventDefault(); closeRef.current?.focus(); } };
+    document.addEventListener("keydown", onKey);
+    return () => { document.removeEventListener("keydown", onKey); previous?.focus?.(); };
+  }, [onClose]);
+  const title = item.label || "Screenshot";
+  return <div className="proof-viewer-layer" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+    <div className="proof-viewer" role="dialog" aria-modal="true" aria-label={title}>
+      <header><strong>{title}</strong><button ref={closeRef} type="button" onClick={onClose}>Close</button></header>
+      <img src={item.value} alt={title} />
+    </div>
+  </div>;
+}
+
 function ProofValue({ item }) {
-  if (item.format === "image") return <a className="proof-thumb" href={item.value} target="_blank" rel="noreferrer"><img src={item.value} alt={item.label || "Screenshot"} /></a>;
+  const [viewing, setViewing] = useState(false);
+  if (item.format === "image") return <>
+    <button type="button" className="proof-thumb" aria-label={`View ${item.label || "screenshot"} full size`} onClick={() => setViewing(true)}><img src={item.value} alt={item.label || "Screenshot"} /></button>
+    {viewing && <ScreenshotViewer item={item} onClose={() => setViewing(false)} />}
+  </>;
   if (item.format === "link") return <a className="proof-link" href={item.value} target="_blank" rel="noreferrer noopener"><LinkSimpleIcon aria-hidden="true" />{item.value}</a>;
   if (item.value.length <= 160 && !item.value.includes("\n")) return <p className="proof-text">{item.value}</p>;
   return <details className="proof-pasted"><summary>Show pasted text ({item.value.split("\n").length} lines)</summary><pre>{item.value}</pre></details>;
@@ -38,10 +61,16 @@ function ProofValue({ item }) {
 
 function ProofItem({ item, onRemove, busy }) {
   const Icon = KIND_ICONS[item.kind] ?? NoteIcon;
-  const extra = item.kind === "test" ? ` · ${item.outcome === "passed" ? "passed" : "failed"}${item.merged ? " on the merged code" : ""}` : item.kind === "skip" ? ` · ${NEEDS[item.covers]?.toLowerCase()} not needed` : "";
+  const [confirming, setConfirming] = useState(false);
+  const title = item.label || kindLabel(item.kind);
+  const extra = item.kind === "test" ? `${item.outcome === "passed" ? "passed" : "failed"}${item.merged ? " on the merged code" : ""}` : item.kind === "skip" ? `${NEEDS[item.covers]?.toLowerCase()} not needed` : "";
+  // The kind is already the heading when no title was given, so it is not repeated.
+  const what = [item.label ? kindLabel(item.kind) : "", extra].filter(Boolean).join(" · ");
   return <li className={`proof-item kind-${item.kind}`}>
-    <header><Icon aria-hidden="true" /><strong>{item.label || kindLabel(item.kind)}</strong><small>{kindLabel(item.kind)}{extra} · {item.addedBy} · {when(item.addedAt)}</small>
-      <button type="button" className="proof-quiet" disabled={busy} onClick={onRemove} aria-label={`Remove ${item.label || kindLabel(item.kind)}`}><TrashIcon aria-hidden="true" />Remove</button></header>
+    <header><Icon aria-hidden="true" /><strong><bdi>{title}</bdi></strong><small>{what ? `${what} · ` : ""}<bdi>{item.addedBy}</bdi> · {when(item.addedAt)}</small>
+      {confirming
+        ? <span className="proof-confirm" role="group" aria-label={`Remove ${title}?`}><button type="button" className="proof-quiet is-danger" disabled={busy} onClick={() => { setConfirming(false); onRemove(); }}>Yes, remove</button><button type="button" className="proof-quiet" onClick={() => setConfirming(false)}>Keep</button></span>
+        : <button type="button" className="proof-quiet" disabled={busy} onClick={() => setConfirming(true)} aria-label={`Remove ${title}`}><TrashIcon aria-hidden="true" />Remove</button>}</header>
     <ProofValue item={item} />
   </li>;
 }
@@ -59,6 +88,9 @@ function AddProofForm({ taskId, onSave, onCancel, readImage }) {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const activeFormat = formats.includes(format) ? format : formats[0];
+  const firstRef = useRef(null);
+  useEffect(() => { firstRef.current?.focus(); }, []);
+  const dirty = Boolean(value || label);
   const chooseKind = (next) => { setKind(next); setValue(""); setError(""); setFormat(PROOF_KINDS.find((entry) => entry.id === next).formats[0]); };
 
   async function pickImage(file) {
@@ -80,10 +112,12 @@ function AddProofForm({ taskId, onSave, onCancel, readImage }) {
   }
 
   const fieldId = (name) => `proof-${taskId}-${name}`;
-  return <form className="proof-form" onSubmit={submit} aria-label={`Add proof to ${taskId}`}>
+  // Esc closes an untouched form; typed proof is only discarded with Cancel.
+  const onKeyDown = (event) => { if (event.key === "Escape" && !dirty) { event.preventDefault(); onCancel(); } };
+  return <form className="proof-form" onSubmit={submit} onKeyDown={onKeyDown} aria-label={`Add proof to ${taskId}`}>
     <div className="proof-form-row">
       <label htmlFor={fieldId("kind")}>What are you adding?</label>
-      <select id={fieldId("kind")} value={kind} onChange={(event) => chooseKind(event.target.value)}>{PROOF_KINDS.map((entry) => <option key={entry.id} value={entry.id}>{entry.label}</option>)}</select>
+      <select ref={firstRef} id={fieldId("kind")} value={kind} onChange={(event) => chooseKind(event.target.value)}>{PROOF_KINDS.map((entry) => <option key={entry.id} value={entry.id}>{entry.label}</option>)}</select>
     </div>
     {formats.length > 1 && <fieldset className="proof-form-row proof-choice"><legend>How</legend>{formats.map((entry) => <label key={entry}><input type="radio" name={fieldId("format")} value={entry} checked={activeFormat === entry} onChange={() => { setFormat(entry); setValue(""); }} />{FORMAT_LABELS[entry]}</label>)}</fieldset>}
     {kind === "skip" && <div className="proof-form-row"><label htmlFor={fieldId("covers")}>Which proof is not needed?</label><select id={fieldId("covers")} value={covers} onChange={(event) => setCovers(event.target.value)}>{REQUIRED_PROOF_KINDS.map((entry) => <option key={entry} value={entry}>{NEEDS[entry]}</option>)}</select></div>}
@@ -91,7 +125,8 @@ function AddProofForm({ taskId, onSave, onCancel, readImage }) {
       <small>Large images are shrunk to about 400 KB and kept in this browser only.</small>
       {value && <img className="proof-preview" src={value} alt="Screenshot preview" />}</div>}
     {activeFormat === "link" && <div className="proof-form-row"><label htmlFor={fieldId("link")}>Link</label><input id={fieldId("link")} type="url" inputMode="url" placeholder="https://" value={value} maxLength={2000} onChange={(event) => setValue(event.target.value)} /></div>}
-    {activeFormat === "text" && <div className="proof-form-row"><label htmlFor={fieldId("text")}>{kind === "skip" ? "Why is it not needed?" : kind === "test" ? "Test output" : kind === "diff" ? "Code change (diff)" : "Note"}</label><textarea id={fieldId("text")} rows={kind === "note" || kind === "skip" ? 3 : 7} value={value} maxLength={20000} onChange={(event) => setValue(event.target.value)} /></div>}
+    {activeFormat === "text" && <div className="proof-form-row"><label htmlFor={fieldId("text")}>{kind === "skip" ? "Why is it not needed?" : kind === "test" ? "Test output" : kind === "diff" ? "Code change (diff)" : "Note"}</label><textarea id={fieldId("text")} rows={kind === "note" || kind === "skip" ? 3 : 7} value={value} aria-describedby={fieldId("count")} onChange={(event) => setValue(event.target.value)} />
+      <small id={fieldId("count")} className={value.length > MAX_TEXT_CHARS ? "proof-count is-over" : "proof-count"}>{value.length.toLocaleString()} / {MAX_TEXT_CHARS.toLocaleString()} characters{value.length > MAX_TEXT_CHARS ? " — too long to save; link to the full output instead" : ""}</small></div>}
     {kind === "test" && <fieldset className="proof-form-row proof-choice"><legend>Result</legend>
       <label><input type="radio" name={fieldId("outcome")} checked={outcome === "passed"} onChange={() => setOutcome("passed")} />Passed</label>
       <label><input type="radio" name={fieldId("outcome")} checked={outcome === "failed"} onChange={() => setOutcome("failed")} />Failed</label>
@@ -112,7 +147,12 @@ export function ProjectEvidencePanel({ project, records, onWorkspace, store, sto
   const items = proofItems(sections);
   const coverage = useMemo(() => proofCoverage(scope, items), [scope, items]);
   const titles = useMemo(() => new Map(activeDrafts(drafts.ledger).concat(drafts.ledger?.tasks ?? []).map((task) => [task.id, task.title])), [drafts.ledger]);
-  const [openTask, setOpenTask] = useState(null);
+  // Several forms may be open at once so opening one task never discards proof typed for another.
+  const [openTasks, setOpenTasks] = useState(() => new Set());
+  const isOpen = (taskId) => openTasks.has(taskId);
+  const setOpen = (taskId, open) => setOpenTasks((current) => { const next = new Set(current); if (open) next.add(taskId); else next.delete(taskId); return next; });
+  const addButtons = useRef(new Map());
+  const closeForm = (taskId) => { setOpen(taskId, false); queueMicrotask(() => addButtons.current.get(taskId)?.focus()); };
   const [message, setMessage] = useState({ text: "", error: false });
   const orphanIds = Object.keys(items).filter((id) => !scope.taskIds.includes(id));
 
@@ -132,7 +172,7 @@ export function ProjectEvidencePanel({ project, records, onWorkspace, store, sto
     let next;
     try { next = addProofItem(current(), taskId, item, scope); } catch (cause) { return cause.message; }
     const problem = save(next, `Proof saved to ${taskId}.`);
-    if (!problem) setOpenTask(null);
+    if (!problem) closeForm(taskId);
     return problem;
   };
   const remove = (taskId, item) => { save(removeProofItem(current(), taskId, item.id, scope), `Removed “${item.label || kindLabel(item.kind)}” from ${taskId}.`); };
@@ -141,9 +181,10 @@ export function ProjectEvidencePanel({ project, records, onWorkspace, store, sto
 
   return <section className="proof-panel" aria-label="Task proof">
     <header className="proof-panel-head">
-      <div><h2>Proof for each task</h2><p>{drafts.busy && !drafts.ledger ? "Reading your tasks…" : scopeSentence(scope)} Each task needs a screenshot, a code change and a passing test — or a short reason one is not needed.</p></div>
+      <div><h2>Proof for each task</h2><p>{drafts.busy && !drafts.ledger ? "Reading your tasks…" : scopeSentence(scope)} Each task needs a screenshot, a code change and a passing test — or a short reason one is not needed. A task with only reasons and no real proof counts as waived, not complete.</p></div>
       <dl className="proof-tally" aria-label="Proof coverage">
         <div><dt>Complete</dt><dd>{coverage.complete}</dd></div>
+        {coverage.waived > 0 && <div><dt>Waived</dt><dd>{coverage.waived}</dd></div>}
         <div><dt>Partial</dt><dd>{coverage.partial}</dd></div>
         <div><dt>No proof</dt><dd>{coverage.none}</dd></div>
       </dl>
@@ -157,10 +198,10 @@ export function ProjectEvidencePanel({ project, records, onWorkspace, store, sto
         <header>
           <span className="proof-task-title"><code>{task.taskId}</code><strong>{titles.get(task.taskId) ?? "Task not in the current Ledger"}</strong></span>
           <KindChecks task={task} />
-          <button type="button" className="proof-add" aria-label={`Add proof to ${task.taskId}`} aria-expanded={openTask === task.taskId} onClick={() => setOpenTask(openTask === task.taskId ? null : task.taskId)}><PlusIcon aria-hidden="true" />Add proof</button>
+          <button type="button" ref={(node) => { if (node) addButtons.current.set(task.taskId, node); else addButtons.current.delete(task.taskId); }} className="proof-add" aria-label={`Add proof to ${task.taskId}`} aria-expanded={isOpen(task.taskId)} onClick={() => setOpen(task.taskId, !isOpen(task.taskId))}><PlusIcon aria-hidden="true" />Add proof</button>
         </header>
         {(items[task.taskId] ?? []).length > 0 && <ul className="proof-items">{items[task.taskId].map((item) => <ProofItem key={item.id} item={item} onRemove={() => remove(task.taskId, item)} />)}</ul>}
-        {openTask === task.taskId && <AddProofForm taskId={task.taskId} onSave={add(task.taskId)} onCancel={() => setOpenTask(null)} readImage={readImage} />}
+        {isOpen(task.taskId) && <AddProofForm taskId={task.taskId} onSave={add(task.taskId)} onCancel={() => closeForm(task.taskId)} readImage={readImage} />}
       </li>)}
     </ol>
     {orphanIds.length > 0 && <details className="proof-orphans"><summary>Proof kept for {orphanIds.length} task{orphanIds.length === 1 ? "" : "s"} no longer in the plan</summary>
