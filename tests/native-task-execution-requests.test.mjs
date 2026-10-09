@@ -1,3 +1,4 @@
+import "./helpers/hermetic-env.mjs";
 import {createHash} from 'node:crypto';
 import test from 'node:test';import assert from 'node:assert/strict';
 import {mkdtemp,mkdir,readdir,readFile,writeFile} from 'node:fs/promises';import path from 'node:path';import os from 'node:os';

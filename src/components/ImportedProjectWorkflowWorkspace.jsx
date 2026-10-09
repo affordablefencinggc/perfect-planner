@@ -177,7 +177,7 @@ export function ImportedProjectWorkflowWorkspace({
     </header>
 
     {workspace === "ledger" && <Suspense fallback={<p role="status">Opening task drafts…</p>}><TaskDraftLedger project={activeProject} /></Suspense>}
-    {workspace === "plan" && <Suspense fallback={<p role="status">Opening the saved task map…</p>}><TaskDraftMap project={activeProject} onWorkspace={onWorkspace} /></Suspense>}
+    {workspace === "plan" && <Suspense fallback={<p role="status">Opening the saved task map…</p>}><TaskDraftMap project={activeProject} records={records} onWorkspace={onWorkspace} /></Suspense>}
 
     {workspacePanels[workspace] && (() => { const FeaturePanel = workspacePanels[workspace]; return <Suspense fallback={<p role="status">Opening this step…</p>}><FeaturePanel project={activeProject} records={records} onWorkspace={onWorkspace} onSelect={onSelect} /></Suspense>; })()}
 

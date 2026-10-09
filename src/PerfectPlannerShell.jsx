@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {useAgentSessionObservations} from './runtime/useAgentSessionObservations.js';
 import {DeveloperNotes} from './components/DeveloperNotes.jsx';
 import {BrowserInputMarkers,useBrowserInputMarkerControl} from './components/BrowserInputMarkers.jsx';
@@ -68,6 +68,10 @@ const ConnectAgentDrawer = lazy(() => import("./components/ConnectAgentDrawer.js
 import { ProjectTruthGate } from "./components/ProjectTruthGate.jsx";
 import { ViewModeToggle } from "./components/ViewModeToggle.jsx";
 import { ViewModeContext, useViewModeState } from "./project/viewMode.js";
+import { AppSettingsContext, TEXT_SIZES, useAppSettings, useAppSettingsState } from "./settings/appSettings.js";
+import { GearSixIcon } from "@phosphor-icons/react";
+import "./settings/settings.css";
+const SettingsWorkspace = lazy(() => import("./settings/SettingsWorkspace.jsx").then((module) => ({ default: module.SettingsWorkspace })));
 import { DEMO_ONLY_REASON, DemoOnlyReason, DemoSampleBadge } from "./demo/DemoSampleNotice.jsx";
 const loadRuntimeTools = (name) => import("./components/RuntimeConnectionsPanel.jsx")
   .then((module) => ({ default: module[name] })).catch(() => ({ default: RuntimeToolsUnavailable }));
@@ -228,11 +232,13 @@ const workspaceContext = {
     unlock: "All required proof must be accepted.",
   },
 };
-function readInitialWorkspace() {
+function readInitialWorkspace(settings) {
   const requested = new URLSearchParams(window.location.search).get(
     "workspace",
   );
-  return workspaceOrder.includes(requested) ? requested : "home";
+  if (workspaceOrder.includes(requested)) return requested;
+  if (settings?.startPage === "last" && workspaceOrder.includes(settings.lastWorkspace)) return settings.lastWorkspace;
+  return "home";
 }
 function readInitialPhaseFocus() {
   const requested = new URLSearchParams(window.location.search).get("phase");
@@ -382,6 +388,21 @@ function stageForWorkspace(workspace) {
   );
 }
 
+// The header wraps on narrow windows, so the workspace below follows its real height.
+function useHeaderHeightVariable(headerRef) {
+  useLayoutEffect(() => {
+    const header = headerRef.current;
+    const root = document.documentElement;
+    if (!header) return undefined;
+    const apply = () => root.style.setProperty("--app-header-height", `${Math.ceil(header.getBoundingClientRect().height)}px`);
+    apply();
+    if (typeof ResizeObserver !== "function") return undefined;
+    const observer = new ResizeObserver(apply);
+    observer.observe(header);
+    return () => { observer.disconnect(); root.style.removeProperty("--app-header-height"); };
+  }, [headerRef]);
+}
+
 function TopBar({
   workspace,
   onWorkspace,
@@ -397,7 +418,9 @@ function TopBar({
   plannerConnection,
   onCheckPlannerConnection,
   onDisconnectPlannerConnection,
+  onOpenSettings,
 }) {
+  const { settings: appSettings } = useAppSettings();
   const activeStage = stageForWorkspace(workspace);
   const activeProject = projectContext.activeProject;
   const demoMode = isDemoProject(activeProject);
@@ -412,6 +435,8 @@ function TopBar({
   const [agentDrawerOpen, setAgentDrawerOpen] = useState(false);
   const openAgentDrawer = () => { setOpenMenu(null); setAgentDrawerOpen(true); };
   const menuTriggerRef = useRef(null);
+  const headerRef = useRef(null);
+  useHeaderHeightVariable(headerRef);
   const menuPopoverRef = useRef(null);
   let runtimeCapabilityMatrix = null;
   if (activeProject) {
@@ -528,7 +553,7 @@ function TopBar({
     setOpenMenu(null);
   };
   return (
-    <header className="topbar">
+    <header className="topbar" ref={headerRef}>
       <BrowserInputMarkers key={browserInput.scope} enabled={browserInput.enabled} scope={browserInput.scope} onDisable={()=>browserInput.setEnabled(false)}/>
       <div className="topbar-primary">
         <button
@@ -590,7 +615,7 @@ function TopBar({
                   ? "workspace-tab active"
                   : "workspace-tab"
               }
-              onClick={() => onWorkspace(stage.workspaces[0])}
+              onClick={() => onWorkspace(appSettings.stageEntry[stage.id] ?? stage.workspaces[0])}
             >
               <small>{stage.number}</small>
               {stage.label}
@@ -918,6 +943,20 @@ function TopBar({
                           <small>
                             Download a redacted identity and evidence snapshot
                           </small>
+                        </span>
+                        <ArrowRightIcon />
+                      </button>
+                      <button
+                        className="more-actions-settings"
+                        onClick={() => {
+                          setOpenMenu(null);
+                          onOpenSettings?.();
+                        }}
+                      >
+                        <GearSixIcon weight="fill" />
+                        <span>
+                          <strong>Settings</strong>
+                          <small>Fine-tune every stage, feature and agent default</small>
                         </span>
                         <ArrowRightIcon />
                       </button>
@@ -1379,7 +1418,7 @@ function RepositoryDrawer({
             onWorkspace(demoMode ? "blueprint" : "structure");
           }}
         >
-          <PlusIcon /> {demoMode ? "New demo plan" : "Add project"}
+          <PlusIcon /> {demoMode ? "Open demo blueprint" : "Add project"}
         </button>
         <button
           className="soft-button"
@@ -1954,6 +1993,7 @@ function PlanWorkspace({
 }) {
   const [briefOpen, setBriefOpen] = useState(false);
   const [briefCopied, setBriefCopied] = useState(false);
+  const [briefCopyFailed, setBriefCopyFailed] = useState(false);
   const [nodeFilter, setNodeFilter] = useState("all");
   const briefRef = useRef(null);
   const canvasRef = useRef(null);
@@ -2035,6 +2075,7 @@ function PlanWorkspace({
               onClick={() => {
                 setBriefOpen((value) => !value);
                 setBriefCopied(false);
+                setBriefCopyFailed(false);
               }}
               aria-expanded={briefOpen}
             >
@@ -2112,11 +2153,18 @@ function PlanWorkspace({
                   <span>Ledger: 27 sources · 17 commitments · 4 NO-GO</span>
                   <button
                     onClick={async () => {
-                      await navigator.clipboard?.writeText(handoffText);
-                      setBriefCopied(true);
+                      try {
+                        if (!navigator.clipboard?.writeText) throw new Error("clipboard unavailable");
+                        await navigator.clipboard.writeText(handoffText);
+                        setBriefCopyFailed(false);
+                        setBriefCopied(true);
+                      } catch {
+                        setBriefCopied(false);
+                        setBriefCopyFailed(true);
+                      }
                     }}
                   >
-                    {briefCopied ? "Copied" : "Copy handoff"}
+                    {briefCopied ? "Copied" : briefCopyFailed ? "Copy failed — select the text above" : "Copy handoff"}
                   </button>
                 </footer>
               </section>
@@ -2637,7 +2685,7 @@ function WorkspaceContextBar({
           <CaretRightIcon />
           <strong>{workspaceLabels[workspace] ?? "Project Home"}</strong>
         </div>
-        {subpages.length > 1 && stage.id !== "coordinate" && (
+        {subpages.length > 1 && (
           <WorkspacePageNavigation stage={stage} workspace={workspace} onWorkspace={onWorkspace} />
         )}
       </div>
@@ -3301,7 +3349,16 @@ function IndexWorkspace({ onOpen, onClose }) {
       <div className="index-body">
         <aside className="index-alpha" aria-label="Alphabetical index">
           {Object.keys(grouped).map((letter) => (
-            <a key={letter} href={`#index-${letter}`}>
+            <a
+              key={letter}
+              href={`#index-${letter}`}
+              onClick={(event) => {
+                event.preventDefault();
+                document
+                  .getElementById(`index-${letter}`)
+                  ?.scrollIntoView?.({ block: "start", behavior: "smooth" });
+              }}
+            >
               {letter}
               <small>{grouped[letter].length}</small>
             </a>
@@ -3509,18 +3566,23 @@ function BuildWorkspace({ collisionGate, onWorkspace }) {
         <section className="build-next-action">
           <header>
             <WarningIcon />
-            <strong>Why work cannot start</strong>
+            <strong>
+              {collisionGate.ready
+                ? "Collision order recorded"
+                : "Why work cannot start"}
+            </strong>
           </header>
           <p>
-            Two workers can reach the same planned surface. The planner must
-            record who goes first, what the second worker waits for, and whether
-            the second package must be replanned.
+            {collisionGate.ready
+              ? "Every collision has an authoritative order. Claiming is no longer blocked by collisions."
+              : "Two workers can reach the same planned surface. The planner must record who goes first, what the second worker waits for, and whether the second package must be replanned."}
           </p>
           <button
             className="primary-button"
             onClick={() => onWorkspace("collision")}
           >
-            Resolve before claim <ArrowRightIcon />
+            {collisionGate.ready ? "View ledgered orders" : "Resolve before claim"}{" "}
+            <ArrowRightIcon />
           </button>
         </section>
       </div>
@@ -3653,7 +3715,10 @@ function AllocationWorkspace({ onSelect, collisionGate, onOpenCollision }) {
           <div className="timeline-row" key={row.name}>
             <button
               className="worker-cell"
+              disabled={!row.assignments.length}
+              title={row.assignments.length ? undefined : "No packages assigned to this worker"}
               onClick={() =>
+                row.assignments.length &&
                 onSelect({
                   id: row.assignments[0].id,
                   title: row.assignments[0].label,
@@ -4362,6 +4427,13 @@ function EvidenceWorkspace({ selectedId, onSelect, zoom, onZoom }) {
                 <button
                   key={scale}
                   className={calendarScale === scale ? "active" : ""}
+                  disabled={scale !== "Days"}
+                  title={
+                    scale === "Days"
+                      ? undefined
+                      : `Not available yet: the sample journey only has hour-level times for 02 Sep 2026, so ${scale} has nothing to show`
+                  }
+                  aria-pressed={calendarScale === scale}
                   onClick={() => setCalendarScale(scale)}
                 >
                   {scale}
@@ -5129,9 +5201,11 @@ function OpsDock({
         {open ? <CaretDownIcon /> : <CaretUpIcon />}
         <span>Operations</span>
         <span className="ops-status-explained" title={operationalBlockerCount ? `Blocked: ${collisionGate?.authorityReason ?? "The collision check is not connected."} Work cannot be cleared until it runs.` : undefined}>
-          <StatusChip status={errorCount || operationalBlockerCount ? "blocked" : "unverified"}>
-            {errorCount} diagnostic errors{operationalBlockerCount ? " · collision check not connected" : ""} · task outcomes unverified
+          <StatusChip status={errorCount ? "blocked" : "verified"}>
+            {errorCount ? `${errorCount} diagnostic ${errorCount === 1 ? "error" : "errors"}` : "No diagnostic errors"}
           </StatusChip>
+          {operationalBlockerCount > 0 && <StatusChip status="risk">collision check not connected</StatusChip>}
+          <StatusChip status="queued">task outcomes unverified</StatusChip>
         </span>
         <span className="ops-mini-status">
           <GitBranchIcon />{" "}
@@ -5498,17 +5572,30 @@ function PerfectPlannerShellCore({
   diagnosticSession,
 }) {
   const viewMode = useViewModeState();
+  const appSettings = useAppSettingsState();
+  const settings = appSettings.settings;
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const activeProject = projectContext.activeProject;
   const demoMode = isDemoProject(activeProject);
   const projectWorkflowReady = Boolean(activeProject) && !["stale", "unavailable"].includes(activeProject.state);
-  const [workspace, setWorkspace] = useState(readInitialWorkspace);
+  const [workspace, setWorkspace] = useState(() => readInitialWorkspace(appSettings.settings));
   const startupLocationApplied=useRef(false);
   const [leftOpen, setLeftOpen] = useState(false);
   const [rightOpen, setRightOpen] = useState(false);
   const [inspectorSide, setInspectorSide] = useState("right");
   const [phaseFocus, setPhaseFocus] = useState(readInitialPhaseFocus);
-  const [opsOpen, setOpsOpen] = useState(false);
-  const [opsTab, setOpsTab] = useState("logs");
+  const [opsOpen, setOpsOpen] = useState(() => appSettings.settings.opsDockOpenOnLaunch);
+  const [opsTab, setOpsTab] = useState(() => appSettings.settings.opsDockTab);
+  const updateSettings = appSettings.update;
+  useEffect(() => {
+    if (workspaceOrder.includes(workspace)) updateSettings({ lastWorkspace: workspace });
+  }, [workspace, updateSettings]);
+  useEffect(() => {
+    const root = document.documentElement;
+    const scale = TEXT_SIZES[settings.textSize] ?? 1;
+    root.style.zoom = scale === 1 ? "" : String(scale);
+    return () => { root.style.zoom = ""; };
+  }, [settings.textSize]);
   const [selected, setSelected] = useState(() =>
     isDemoProject(projectContext.activeProject) ? phases[2].nodes[0] : null,
   );
@@ -5784,6 +5871,7 @@ function PerfectPlannerShellCore({
       setOpsOpen(true);
       return;
     }
+    setSettingsOpen(false);
     const nextPhase = nextWorkspace === "plan" ? null : phaseFocus;
     if (projectContext.activeProjectId)
       projectContext.selectProject(projectContext.activeProjectId, {
@@ -5908,7 +5996,7 @@ function PerfectPlannerShellCore({
   const showToast = (message, severity = "neutral") => {
     window.clearTimeout(toastTimer.current);
     setToast({ message, severity: ["success", "warning", "error"].includes(severity) ? severity : "neutral" });
-    toastTimer.current = window.setTimeout(() => setToast(null), 6000);
+    if (settings.toastSeconds > 0) toastTimer.current = window.setTimeout(() => setToast(null), settings.toastSeconds * 1000);
   };
 
   const exportDiagnostics = async () => {
@@ -6002,9 +6090,12 @@ function PerfectPlannerShellCore({
 
   return (
     <ViewModeContext.Provider value={viewMode}>
+    <AppSettingsContext.Provider value={appSettings}>
     <div
       className={`app-shell workspace-${workspace} ${opsOpen ? "ops-is-open" : ""}`}
       data-view-mode={viewMode.mode}
+      data-theme={settings.theme}
+      data-reduce-motion={settings.reduceMotion ? "true" : "false"}
     >
       <TopBar
         workspace={workspace}
@@ -6024,11 +6115,18 @@ function PerfectPlannerShellCore({
         plannerConnection={plannerConnection}
         onCheckPlannerConnection={checkPlannerConnection}
         onDisconnectPlannerConnection={disconnectPlannerConnection}
+        onOpenSettings={() => setSettingsOpen(true)}
       />
       <main className="app-main">
         {demoMode && <DemoSampleBadge />}
-        <div className={`workspace-stage${stageForWorkspace(workspace)?.id === "coordinate" ? " workspace-stage-coordinate" : ""}`} key={workspace}>
-          {stageForWorkspace(workspace)?.id === "coordinate" && <WorkspacePageNavigation stage={stageForWorkspace(workspace)} workspace={workspace} onWorkspace={navigateWorkspace} />}
+        {settingsOpen && (
+          <div className="settings-overlay">
+            <Suspense fallback={<p role="status" className="workspace-loading">Opening settings…</p>}>
+              <SettingsWorkspace onWorkspace={navigateWorkspace} onClose={() => setSettingsOpen(false)} onToast={showToast} />
+            </Suspense>
+          </div>
+        )}
+        <div className="workspace-stage" key={workspace}>
           {workspace === "home" && (
             <ProjectHomeWorkspace
               collisionGate={collisionGate}
@@ -6346,7 +6444,16 @@ function PerfectPlannerShellCore({
         />
       )}
 
-      <DeveloperNotes project={activeProject}/>
+      {settings.developerNotesVisible && <DeveloperNotes project={activeProject}/>}
+      <button
+        type="button"
+        className="settings-launcher"
+        aria-current={settingsOpen ? "page" : undefined}
+        aria-pressed={settingsOpen}
+        onClick={() => setSettingsOpen((open) => !open)}
+      >
+        <GearSixIcon weight="fill" aria-hidden="true" /> Settings
+      </button>
       <OpsDock
         onRuntimeLoadError={() => recordDiagnostic("runtime", "error", "Connection tools could not be downloaded. No connection check was run.", { ...diagnosticScopeRef.current, adapter: "runtime-tools" })}
         onGitInventoryEvent={(event) => recordDiagnostic("git", event.severity, event.message, { adapter: "native-git-inventory", projectId: event.projectId, projectGeneration: event.generation, requestId: event.requestId, payload: event.payload })}
@@ -6376,6 +6483,7 @@ function PerfectPlannerShellCore({
         </div>
       )}
     </div>
+    </AppSettingsContext.Provider>
     </ViewModeContext.Provider>
   );
 }
