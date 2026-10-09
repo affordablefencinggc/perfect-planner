@@ -1,11 +1,10 @@
-import { spawn } from "node:child_process";
 import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { surfacesOverlap } from "../../src/engine/collisionEngine.js";
-import { NO_CWD_SEARCH_ENV } from "../exec/index";
 import { ensureRequiredIgnores, privatePaths } from "./ignores";
+import { runNpm } from "./npm";
 import { git, GitError, runGit } from "./git";
 import { isWithin, lines, realDir, samePath, toRepoPath } from "./platform";
 import { type Actor, type LedgerPort, WORKTREES_ACTOR } from "./ports";
@@ -23,8 +22,13 @@ export interface WorktreeManagerOptions {
   maxParallel?: number;
   /** Inclusive dev-server port range handed out one per worktree. */
   ports?: [number, number];
-  /** "auto" runs `npm ci --prefer-offline` when the worktree has a package-lock.json; false skips; a function replaces it. */
+  /**
+   * "auto" runs `npm ci --prefer-offline --ignore-scripts` when the worktree has a package-lock.json,
+   * through Node with no shell and an npm never taken from the project; false skips; a function replaces it.
+   */
   install?: "auto" | false | Installer;
+  /** Let "auto" run packages' install scripts. Only a person turns this on; default false. */
+  allowInstallScripts?: boolean;
   /** Shared npm cache directory, passed as npm_config_cache. */
   npmCache?: string;
   /** Install the commit-time secret scan in each worktree (default true). */
@@ -76,6 +80,7 @@ export class WorktreeManager {
   private readonly portRange: [number, number];
   private readonly install: "auto" | false | Installer;
   private readonly npmCache?: string;
+  private readonly allowInstallScripts: boolean;
   private readonly secretScan: boolean;
   private readonly now: () => Date;
   private commonDir?: string;
@@ -89,6 +94,7 @@ export class WorktreeManager {
     this.portRange = options.ports ?? [5200, 5999];
     this.install = options.install ?? "auto";
     this.npmCache = options.npmCache;
+    this.allowInstallScripts = options.allowInstallScripts ?? false;
     this.secretScan = options.secretScan ?? true;
     this.now = options.now ?? (() => new Date());
   }
@@ -336,14 +342,14 @@ export class WorktreeManager {
     if (this.install === false) return;
     if (typeof this.install === "function") return this.install(worktreePath);
     if (!existsSync(path.join(worktreePath, "package-lock.json"))) return;
-    // cmd.exe must not pick up an npm.cmd planted in the worktree.
-    const env = { ...process.env, ...(this.npmCache ? { npm_config_cache: this.npmCache } : {}), ...NO_CWD_SEARCH_ENV };
-    await new Promise<void>((resolve, reject) => {
-      // Fixed command string; a shell is needed to run npm.cmd on Windows.
-      const child = spawn("npm ci --prefer-offline --no-audit --no-fund", { cwd: worktreePath, env, shell: true, windowsHide: true, stdio: "ignore" });
-      child.on("error", reject);
-      child.on("close", (code) => (code === 0 ? resolve() : reject(new WorktreeError(`npm ci failed in ${path.basename(worktreePath)} (exit ${code}).`))));
-    });
+    // npm comes from beside Node or PATH, never from the project or its worktrees, and runs without a shell.
+    const { code, output } = await runNpm(["ci", "--prefer-offline", "--no-audit", "--no-fund"], {
+      cwd: worktreePath,
+      protect: [this.repoRoot, this.worktreeRoot, worktreePath],
+      env: this.npmCache ? { npm_config_cache: this.npmCache } : {},
+      allowInstallScripts: this.allowInstallScripts,
+    }).catch((error: Error) => ({ code: -1, output: error.message }));
+    if (code !== 0) throw new WorktreeError(`npm ci failed in ${path.basename(worktreePath)} (exit ${code}): ${output.trim().split(/\r?\n/).slice(-3).join(" ")}`);
   }
 }
 
