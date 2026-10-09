@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { surfacesOverlap } from "../../src/engine/collisionEngine.js";
 import { ensureRequiredIgnores, privatePaths } from "./ignores";
-import { INSTALL_SCRIPTS_HINT, runNpm } from "./npm";
+import { INSTALL_SCRIPTS_HINT, NPM_CONFIG_HINT, runNpm } from "./npm";
 import { git, GitError, runGit } from "./git";
 import { isWithin, lines, realDir, samePath, toRepoPath } from "./platform";
 import { type Actor, type LedgerPort, WORKTREES_ACTOR } from "./ports";
@@ -350,7 +350,7 @@ export class WorktreeManager {
       allowInstallScripts: this.allowInstallScripts,
     }).catch((error: Error) => ({ code: -1, output: error.message }));
     if (code !== 0) {
-      const hint = this.allowInstallScripts ? "" : ` ${INSTALL_SCRIPTS_HINT}`;
+      const hint = `${this.allowInstallScripts ? "" : ` ${INSTALL_SCRIPTS_HINT}`} ${NPM_CONFIG_HINT}`;
       throw new WorktreeError(`npm ci failed in ${path.basename(worktreePath)} (exit ${code}): ${output.trim().split(/\r?\n/).slice(-3).join(" ")}${hint}`);
     }
   }

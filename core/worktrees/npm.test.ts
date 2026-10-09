@@ -80,11 +80,12 @@ describe("npm for worktree installs", () => {
     expect(existsSync(marker)).toBe(false);
   }, SLOW);
 
-  it("names the person-only switch when an install fails with scripts skipped", async () => {
+  it("names the person-only switch and the ignored npm settings when an install fails", async () => {
     const repo = await makeRepo({ "package.json": "{ not json", "package-lock.json": JSON.stringify(LOCK) });
     cleanups.push(repo.cleanup);
     const ledger = await memoryLedger();
     const manager = new WorktreeManager({ repoRoot: repo.root, ledger, ports: [43300, 43399] });
     await expect(manager.create({ taskId: "T-2", actor: person })).rejects.toThrow(/allowInstallScripts/);
+    await expect(manager.create({ taskId: "T-3", actor: person })).rejects.toThrow(/registry login and proxy/);
   }, SLOW);
 });

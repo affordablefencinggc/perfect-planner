@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, u
 import os from "node:os";
 import path from "node:path";
 import { git, runGit } from "../worktrees/git";
-import { INSTALL_SCRIPTS_HINT, runNpm } from "../worktrees/npm";
+import { INSTALL_SCRIPTS_HINT, NPM_CONFIG_HINT, runNpm } from "../worktrees/npm";
 import { ensureRequiredIgnores, PRIVATE_DIR, privatePaths, stagedPrivatePaths } from "../worktrees/ignores";
 import { lines, realDir, samePath } from "../worktrees/platform";
 import { isAuthoritative } from "../ledger/index";
@@ -462,7 +462,7 @@ async function cleanDependencies(repoRoot: string, integrationBranch: string, ca
   try {
     const install = await runNpm(args, { cwd: candidate, protect: [repoRoot, checkout, candidate], timeoutMs, allowInstallScripts });
     if (install.code === 0) return {};
-    const hint = allowInstallScripts ? "" : ` ${INSTALL_SCRIPTS_HINT}`;
+    const hint = `${allowInstallScripts ? "" : ` ${INSTALL_SCRIPTS_HINT}`} ${NPM_CONFIG_HINT}`;
     return { failure: `A clean dependency install in the merge candidate failed (exit ${install.code}): ${oneLine(install.output.trim().split(/\r?\n/).slice(-3).join(" "))}.${hint}` };
   } catch (error) {
     return { failure: `A clean dependency install in the merge candidate could not start: ${(error as Error).message}` };
