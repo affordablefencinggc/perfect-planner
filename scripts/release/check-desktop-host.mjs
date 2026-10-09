@@ -12,7 +12,8 @@
 //   5. close its stdin, as the shell does when the app quits, and check that it stopped.
 //   node scripts/release/check-desktop-host.mjs [desktop-host folder]
 // Prints a JSON summary; exits non-zero on any failure. No secret is printed.
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import { tmpdir } from "node:os";
@@ -120,6 +121,12 @@ export function pathWithoutNode(env) {
   return { key, value: kept.join(path.delimiter) };
 }
 
+/** This process's environment with no Node on PATH, as for a person who never installed one. */
+function noNodeEnv() {
+  const { key, value } = pathWithoutNode(process.env);
+  return { [key]: value };
+}
+
 /**
  * The loop end to end against the running service, as the person (HTTP with the window's
  * session) and a worker (the app's MCP JSON, on the bundled Node) do it.
@@ -208,6 +215,26 @@ export async function runLoop(origin, headers, work, appNode) {
   steps.merged = done.status === "done" && git(repo, "show", "main:src/save.js").includes("saveNotes");
   if (!steps.merged) throw new Error(`The task did not finish: ${done.status}/${done.stage}.`);
   steps.tokenFileRemoved = !existsSync(d.tokenFile);
+
+  // The pre-push scan the app installed in the project (the bundled hook, on the bundled Node):
+  // a clean push goes through, a push carrying a secret is refused.
+  const remote = path.join(work, "remote.git");
+  execFileSync("git", ["init", "-q", "--bare", remote]);
+  git(repo, "remote", "add", "origin", remote);
+  const push = (branch) => spawnSync("git", ["push", "-q", "origin", branch], { cwd: repo, encoding: "utf8", env: { ...process.env, ...noNodeEnv() } });
+  const clean = push("main");
+  steps.cleanPushAllowed = clean.status === 0;
+  if (!steps.cleanPushAllowed) throw new Error(`The installed pre-push scan refused a clean push: ${clean.stderr.trim().slice(0, 400)}`);
+  git(repo, "checkout", "-q", "-b", "leak");
+  // Built at run time so no key-shaped text sits in this file.
+  const planted = `AKIA${Array.from(randomBytes(16), (b) => "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"[b % 32]).join("")}`;
+  writeFileSync(path.join(repo, "config.js"), `export const awsKeyId = "${planted}";\n`);
+  git(repo, "add", "-A");
+  git(repo, "commit", "-q", "--no-verify", "-m", "Add config");
+  const leak = push("leak");
+  steps.secretPushRefused = leak.status !== 0 && !/ERR_MODULE_NOT_FOUND|Cannot find module|not found/i.test(leak.stderr);
+  if (!steps.secretPushRefused) throw new Error(`The installed pre-push scan did not refuse a planted secret (exit ${leak.status}): ${leak.stderr.trim().slice(0, 400)}`);
+  git(repo, "checkout", "-q", "main");
   return steps;
 }
 

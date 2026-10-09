@@ -98,14 +98,18 @@ export function secretPosture(input: PostureInput): Posture {
 
 const SHIM_MARK = "# Perfect Planner: whole-branch secret scan before any push (layer 3).";
 
+/** A path for sh: forward slashes, single-quoted so nothing in it ($, backticks) is expanded. */
+const shQuote = (value: string) => `'${value.replace(/\\/g, "/").replace(/'/g, `'\\''`)}'`;
+
 /**
  * A git hook shim that runs the pre-push scan. Git runs hooks through sh on
  * every platform (Git for Windows ships one), so the same text works on
- * Windows, macOS and Linux. Paths use forward slashes.
+ * Windows, macOS and Linux. The desktop app's own Node (PP_NODE_BINARY) runs
+ * it when set, so a person without Node can still push.
  */
-export function prePushShim(hookScriptPath: string): string {
-  const path = hookScriptPath.replace(/\\/g, "/").replace(/"/g, '\\"');
-  return `#!/bin/sh\n${SHIM_MARK}\nexec node "${path}" "$@"\n`;
+export function prePushShim(hookScriptPath: string, env: NodeJS.ProcessEnv = process.env): string {
+  const node = env.PP_NODE_BINARY ? shQuote(env.PP_NODE_BINARY) : "node";
+  return `#!/bin/sh\n${SHIM_MARK}\nexec ${node} ${shQuote(hookScriptPath)} "$@"\n`;
 }
 
 async function hooksDir(run: CommandRunner, cwd: string): Promise<string> {
