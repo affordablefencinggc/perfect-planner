@@ -373,9 +373,9 @@ export class JevReviewer implements SettledAnswerer {
     const result: ReviewResult = chosen && confident
       ? { verdict: "approve", notes: [], reason: `The plan settles ${question.q}: ${chosen}`, confidence: answer.confidence }
       : { verdict: "escalate", notes: [], reason: `The plan does not clearly settle ${question.q}; it goes to the main chat`, confidence: answer.confidence };
-    this.record(question.task, "question", result, { called, refs: [question.q], summary: chosen && confident ? `Jev: the plan settles ${question.q}` : `Jev: ${question.q} needs the main chat` });
+    const verdict = this.record(question.task, "question", result, { called, refs: [question.q], summary: chosen && confident ? `Jev: the plan settles ${question.q}` : `Jev: ${question.q} needs the main chat` });
     this.warnIfNeeded();
     if (!chosen || !confident) return null;
-    return { answer: chosen, reason: `The approved plan settles this (Jev, confidence ${answer.confidence!.toFixed(2)})`, refs: [], actor: { kind: "jev", id: "jev", model: called.model } };
+    return { answer: chosen, reason: `The approved plan settles this (Jev, confidence ${answer.confidence!.toFixed(2)})`, refs: [verdict.n], actor: { kind: "jev", id: "jev", model: called.model } };
   }
 }
