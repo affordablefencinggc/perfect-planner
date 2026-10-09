@@ -12,7 +12,7 @@ import {
 } from "./series";
 
 const owner = { kind: "person" as const, id: "owner" };
-const agent = { kind: "agent" as const, id: "claude-code", model: "m1" };
+const gate = { kind: "system" as const, id: "gate" };
 
 function fresh(): Ledger {
   return Ledger.openSync(new MemoryStore(), { now: () => new Date("2026-10-09T00:00:00Z") });
@@ -96,7 +96,7 @@ describe("highestNumber / nextNumber", () => {
     const ledger = fresh();
     ledger.append({ actor: owner, type: "plan.approved", subject: "P-1", summary: "plan one", evidence: [], refs: [] });
     ledger.append({ actor: owner, type: "plan.approved", subject: "P-2", summary: "plan two", evidence: [], refs: [] });
-    ledger.append({ actor: agent, type: "task.created", subject: "T-1", summary: "first task", evidence: [], refs: [] });
+    ledger.append({ actor: gate, type: "task.created", subject: "T-1", summary: "first task", evidence: [], refs: [] });
     expect(highestNumber(ledger.entries(), "L")).toBe(3);
     expect(nextNumber(ledger.entries(), "L")).toBe("L-000004");
     expect(highestNumber(ledger.entries(), "P")).toBe(2);
@@ -135,7 +135,7 @@ describe("highestNumber / nextNumber", () => {
 describe("task attempts", () => {
   function withTask(): Ledger {
     const ledger = fresh();
-    ledger.append({ actor: agent, type: "task.created", subject: "T-14", summary: "login page", evidence: [], refs: [] });
+    ledger.append({ actor: gate, type: "task.created", subject: "T-14", summary: "login page", evidence: [], refs: [] });
     return ledger;
   }
 
