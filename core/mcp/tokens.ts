@@ -12,10 +12,21 @@ export interface Grant {
   person: string;
   /** Worker tokens only: the one task the token covers. */
   task?: string;
+  /**
+   * The model this agent runs, set by the person when they issue the token.
+   * It is what the ledger records and what Jev's independence check trusts;
+   * a model the agent declares itself in hello is recorded as unverified.
+   */
+  model?: string;
   revoked?: boolean;
 }
 
 const digest = (token: string) => createHash("sha256").update(token, "utf8").digest("hex");
+
+/** A short, stable, non-secret id for a token, so an agent keeps its id across reconnects. */
+export function tokenId(token: string): string {
+  return digest(token).slice(0, 8);
+}
 
 export class TokenStore {
   private readonly grants = new Map<string, Grant>();

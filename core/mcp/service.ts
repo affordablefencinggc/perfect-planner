@@ -5,12 +5,11 @@
 // service checks who may call what and then writes through the ledger, which
 // owns the entry rules and the gate rules other modules register; when the
 // ledger refuses, the agent gets the ledger's reason back.
-import { randomBytes } from "node:crypto";
 import { LedgerError, type Actor, type EntryDraft, type Ledger, type LedgerEntry } from "../ledger/index";
 import { Relay } from "../relay/relay";
 import { attemptLabel, foldBoard, type TaskView } from "./board";
 import { lookup } from "../lookup/index";
-import { TokenStore, type Grant } from "./tokens";
+import { TokenStore, tokenId, type Grant } from "./tokens";
 import { TOOL_INFO, TOOL_INPUTS, type ToolInput, type ToolName } from "./tools";
 
 export type AgentRole = "main" | "worker" | "observer";
@@ -115,12 +114,19 @@ export class AgentService {
     for (const existing of this.agents.values()) {
       if (existing.token === token && existing.role === "worker") return this.welcome(existing);
     }
+    // Ids are derived from the token, not random, so a reconnect (or a restart with
+    // the same token) keeps the agent's id and the tasks it holds.
+    const slug = input.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40) || "agent";
+    const id = `${slug}-${tokenId(token)}`;
+    const known = this.agents.get(id);
+    if (known && known.token === token) return this.welcome(known);
     let role: AgentRole;
     if (grant.role === "worker") role = "worker";
     else if (!this.mains.has(grant.person)) role = "main";
     else role = "observer";
-    const id = `${input.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "agent"}-${randomBytes(3).toString("hex")}`;
-    const record = { id, name: input.name, person: grant.person, role, grant, token, ...(input.model ? { model: input.model } : {}), ...(grant.task ? { task: grant.task } : {}) };
+    // The person-set model wins; a self-declared one is kept but marked unverified.
+    const model = grant.model ?? (input.model ? `unverified:${input.model}` : undefined);
+    const record = { id, name: input.name, person: grant.person, role, grant, token, ...(model ? { model } : {}), ...(grant.task ? { task: grant.task } : {}) };
     this.agents.set(id, record);
     if (role === "main") this.mains.set(grant.person, id);
     return this.welcome(record);
@@ -242,6 +248,31 @@ export class AgentService {
     });
     this.tokens.revokeTask(task);
     return { entry: entry.n, status: blocked ? "blocked" : "open" };
+  }
+
+  /**
+   * After a restart, tasks may still be held by agents that never checked in
+   * again. Releases every claimed task whose holder is not connected now.
+   */
+  releaseOrphanedHolds(by: Actor, reason: string): string[] {
+    const released: string[] = [];
+    for (const task of this.board().values()) {
+      if (task.owner && task.status === "claimed" && !this.agents.has(task.owner)) {
+        this.write({ actor: by, type: "task.progress", subject: task.id, summary: `Released from ${task.owner}, which is not connected`, reason, data: { released: true } });
+        released.push(task.id);
+      }
+    }
+    return released;
+  }
+
+  /**
+   * The person answers a question in Perfect Planner itself. Unlike the main
+   * chat's answer, this is a decision: it gets a D number and answers the same
+   * question from any of this person's workers later.
+   */
+  decide(person: Actor, q: string, text: string): { q: string; decision: string | null; worker: string } {
+    if (person.kind !== "person") throw new ToolError("FORBIDDEN", "Only a person makes decisions.");
+    return this.relay.answer(person, person.id, q, text);
   }
 
   /** Owner control (spec §4.5): stop every worker at once. */
