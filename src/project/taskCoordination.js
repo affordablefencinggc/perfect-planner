@@ -103,6 +103,44 @@ export function evaluateTaskCollisions(ledger) {
 }
 
 /**
+ * Display lines for one collision's files: one line per overlapping path and
+ * severity, naming each other path once. A folder claimed against several files
+ * inside it is stored once per file (the stored list keeps decision signatures
+ * stable); this merges those for reading. Letter case is ignored when merging
+ * and the first spelling seen is shown.
+ */
+export function overlapFileLines(files) {
+  const lines = new Map();
+  for (const file of Array.isArray(files) ? files : []) {
+    const path = typeof file?.path === "string" ? file.path : "";
+    if (!path) continue;
+    const severity = file.severity === "hard-stop" ? "hard-stop" : "ordered";
+    const key = `${path.toLowerCase()}|${severity}`;
+    if (!lines.has(key)) lines.set(key, { path, severity, seen: new Set([path.toLowerCase()]), paths: [] });
+    const line = lines.get(key);
+    for (const other of Array.isArray(file.paths) ? file.paths : []) {
+      if (typeof other !== "string" || line.seen.has(other.toLowerCase())) continue;
+      line.seen.add(other.toLowerCase());
+      line.paths.push(other);
+    }
+  }
+  return [...lines.values()]
+    .map(({ path, severity, paths }) => ({ path, severity, paths: paths.sort((a, b) => a.localeCompare(b)) }))
+    .sort((a, b) => a.path.localeCompare(b.path) || (a.severity === b.severity ? 0 : a.severity === "hard-stop" ? -1 : 1));
+}
+
+/** The distinct strings in a list, compared without letter case; the first spelling is kept. */
+export function uniquePaths(paths) {
+  const seen = new Set(), result = [];
+  for (const path of Array.isArray(paths) ? paths : []) {
+    if (typeof path !== "string" || seen.has(path.toLowerCase())) continue;
+    seen.add(path.toLowerCase());
+    result.push(path);
+  }
+  return result;
+}
+
+/**
  * Keeps only decisions that still apply: the same overlap, against the same two
  * task scopes. A "split" decision is kept while the pair still overlaps, because
  * it only settles the overlap once the scopes are edited apart.

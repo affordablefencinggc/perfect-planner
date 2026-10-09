@@ -1,3 +1,4 @@
+import "./browser/scriptedIntakeBoot.js";
 import React from "react";
 import { createRoot } from "react-dom/client";
 import { PerfectPlannerShell } from "./PerfectPlannerShell.jsx";

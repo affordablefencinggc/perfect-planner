@@ -1,7 +1,8 @@
 import { projectAuthorityKinds, validateProjectSession } from "./projectSession.js";
-import { deriveDiscoveryReview } from "./discoveryReviewModel.js";
+import { deriveDiscoveryReview, discoveryAreaCounts } from "./discoveryReviewModel.js";
 import { effectivePlanAuthority } from "./planApproval.js";
 import { overlapReviewText, recordOverlapReview } from "./taskCoordination.js";
+import { allocationByTask } from "./workRecordReaders.js";
 
 export const PROJECT_HOME_MODEL_SCHEMA_VERSION = 1;
 
@@ -60,13 +61,10 @@ function summarizeCensus(project) {
 // A recorded user review of every open area for this exact scan resolves the discovery gaps.
 const discoveryReviewed = (project, records) => deriveDiscoveryReview(project, records).state === "recorded";
 
+// Home follows the same review as "Review what we found": every standard area
+// (missing ones count as unanswered) that is not fully observed needs an answer.
 function discoveryNeedsReview(discovery, reviewed = false) {
-  if (!discovery || reviewed) return false;
-  return discovery.counts.observed === 0
-    || discovery.counts.signals > 0
-    || discovery.counts.unanswered > 0
-    || discovery.categories.length === 0
-    || discovery.categories.some((category) => category.state !== "observed");
+  return Boolean(discovery) && !reviewed;
 }
 
 function summarizeDiscovery(project, records = null) {
@@ -77,11 +75,16 @@ function summarizeDiscovery(project, records = null) {
   else if (discovery?.state === "unavailable") recordedState = "unavailable";
   else if (discoveryNeedsReview(discovery, review?.state === "recorded")) recordedState = "review";
   else if (discovery) recordedState = "available";
+  // Counted in areas, the same unit as "Review what we found". Signal and
+  // unanswered areas the user has already answered no longer count.
+  const areas = review ? discoveryAreaCounts(review) : null;
   return {
     state: effectiveFactState(project?.state, recordedState),
-    observed: discovery?.counts.observed ?? null,
-    signals: discovery?.counts.signals ?? null,
-    unanswered: discovery?.counts.unanswered ?? null,
+    unit: "areas",
+    observed: areas?.observed ?? null,
+    signals: areas?.signals ?? null,
+    unanswered: areas?.unanswered ?? null,
+    findingCounts: discovery ? { observed: discovery.counts.observed, signals: discovery.counts.signals, unanswered: discovery.counts.unanswered } : null,
     categoryCount: discovery?.categories.length ?? null,
     censusDigest: discovery?.censusDigest ?? null,
     generatedAt: discovery?.generatedAt ?? null,
@@ -108,6 +111,29 @@ function summarizeOverlaps(project, records = null) {
     text: stale ? "The project folder changed since tasks were checked for overlaps. Check them again on the Collision page." : headline ?? "No overlapping files found.",
     lines: lines.filter((line, index) => review.items[index].state !== "decided"),
   };
+}
+
+// Records that only the formal saved-plan check needs. Building itself needs
+// the plan approved by the person, overlaps decided and owners named.
+const PARENT_KINDS = ["architecture", "folder", "component"];
+const PAGE_NAMES = { blueprint: "Blueprint", structure: "Structure", components: "Components", plan: "Plan", collision: "Collision", allocation: "Allocation", build: "Build", ledger: "Ledger" };
+const PARENT_PAGES = { architecture: "Blueprint", folder: "Structure", component: "Components" };
+const listIds = (ids) => ids.length <= 6 ? ids.join(", ") : `${ids.slice(0, 6).join(", ")} and ${ids.length - 6} more`;
+
+/** True when the person's plan approval is current but the architecture, folder or component records are not all approved. */
+function buildPath(project, planStatus) {
+  return planStatus?.state === "recorded" && !PARENT_KINDS.every((kind) => project.authorities?.[kind]?.state === "authoritative");
+}
+
+/** Owners for the approved tasks, read from the Allocation page's saved record. */
+function summarizeOwners(project, records, planStatus) {
+  const taskIds = planStatus?.record?.taskIds ?? [];
+  const data = records?.sections?.allocation?.data ?? null;
+  if (!data || typeof data !== "object") return { state: "unavailable", missing: taskIds };
+  if (data.censusDigest && project?.census?.digest && data.censusDigest !== project.census.digest) return { state: "stale", missing: taskIds };
+  const owners = allocationByTask(records.sections);
+  const missing = taskIds.filter((id) => !owners.get(id)?.owner);
+  return { state: missing.length ? "review" : "available", missing };
 }
 
 function summarizeAuthorities(project) {
@@ -186,8 +212,9 @@ function demoModel(project) {
   });
 }
 
-function collectBlockers(project, records = null) {
+function collectBlockers(project, records = null, planStatus = null) {
   const blockers = [];
+  const building = buildPath(project, planStatus);
   const registration = project.registration;
   const census = project.census;
   const discovery = project.discovery;
@@ -204,12 +231,15 @@ function collectBlockers(project, records = null) {
     if (discovery.state === "stale") blockers.push(blocker("discovery-stale", "discovery", "stale", "The discovery snapshot is stale."));
     if (discovery.state === "unavailable") blockers.push(blocker("discovery-unavailable", "discovery", "unavailable", "The discovery snapshot is unavailable."));
     if (discovery.counts.observed === 0) blockers.push(blocker("discovery-observations-missing", "discovery", "review", "The discovery snapshot contains no observed project facts."));
-    if (discovery.counts.signals > 0) blockers.push(blocker("discovery-signals-unreviewed", "discovery", "review", `${discovery.counts.signals} discovery signal${discovery.counts.signals === 1 ? " needs" : "s need"} review.`));
-    if (discovery.counts.unanswered > 0) blockers.push(blocker("discovery-questions-unanswered", "discovery", "review", `${discovery.counts.unanswered} discovery categor${discovery.counts.unanswered === 1 ? "y is" : "ies are"} unanswered.`));
+    const areas = discoveryAreaCounts(deriveDiscoveryReview(project, records));
+    if (areas.signals > 0) blockers.push(blocker("discovery-signals-unreviewed", "discovery", "review", `${areas.signals} discovery area${areas.signals === 1 ? " has" : "s have"} possible matches to check.`));
+    if (areas.unanswered > 0) blockers.push(blocker("discovery-questions-unanswered", "discovery", "review", `${areas.unanswered} discovery area${areas.unanswered === 1 ? " is" : "s are"} unanswered.`));
     if (discovery.categories.length === 0) blockers.push(blocker("discovery-categories-missing", "discovery", "review", "No discovery categories are recorded."));
   }
 
   for (const kind of projectAuthorityKinds) {
+    // On the build path these records are optional (named in the summary instead).
+    if (building && PARENT_KINDS.includes(kind)) continue;
     const authority = project.authorities[kind];
     if (!authority) blockers.push(blocker(`authority-${kind}-missing`, kind, "unavailable", `No saved ${kind} record is available.`));
     else if (authority.state === "unavailable") blockers.push(blocker(`authority-${kind}-unavailable`, kind, "unavailable", `The saved ${kind} record is unavailable.`));
@@ -220,6 +250,12 @@ function collectBlockers(project, records = null) {
   const overlaps = summarizeOverlaps(project, records);
   if (overlaps.state === "stale") blockers.push(blocker("collisions-stale", "collision", "stale", overlaps.text));
   else if (overlaps.state === "review") blockers.push(blocker("collisions-undecided", "collision", "review", [`${overlaps.text}.`, ...overlaps.lines].join(" ")));
+  else if (building && planStatus.state === "recorded" && overlaps.state === "unavailable") blockers.push(blocker("collisions-unchecked", "collision", "unavailable", "The approved tasks have not been checked for overlapping files on the Collision page."));
+  if (building && planStatus.state === "recorded") {
+    const owners = summarizeOwners(project, records, planStatus);
+    if (owners.state === "stale") blockers.push(blocker("allocation-stale", "allocation", "stale", "Owners were saved for an earlier folder scan. Confirm them again on the Allocation page."));
+    else if (owners.missing.length) blockers.push(blocker("allocation-owners-missing", "allocation", owners.state === "unavailable" ? "unavailable" : "review", `No owner confirmed on the Allocation page for ${listIds(owners.missing)}.`));
+  }
   return blockers;
 }
 
@@ -241,6 +277,38 @@ function planStage(authority, planStatus) {
   return {
     stage: { id: "plan", state: "review", label: "Tasks changed since approval" },
     nextAction: action("reapprove-plan", "Review and approve the plan", "plan", planStatus.detail),
+  };
+}
+
+// The plan approved by the person, overlaps decided and owners named: enough
+// to start tracking work on the Build board.
+function buildPathStage(project, records, planStatus) {
+  if (planStatus.state !== "recorded") return planStage(project.authorities.plan, planStatus);
+  const overlaps = summarizeOverlaps(project, records);
+  if (overlaps.state === "unavailable") return {
+    stage: { id: "collision", state: "review", label: "Overlap check required" },
+    nextAction: action("check-overlaps", "Check overlaps", "collision", "Plan approved. Check whether any approved tasks change the same files before work starts."),
+  };
+  if (overlaps.state === "stale") return {
+    stage: { id: "collision", state: "stale", label: "Overlap check out of date" },
+    nextAction: action("check-overlaps", "Check overlaps again", "collision", overlaps.text),
+  };
+  if (overlaps.state === "review") return {
+    stage: { id: "collision", state: "review", label: "Overlaps need a decision" },
+    nextAction: action("decide-overlaps", "Decide overlaps", "collision", [`${overlaps.text}.`, ...overlaps.lines].join(" ")),
+  };
+  const owners = summarizeOwners(project, records, planStatus);
+  if (owners.state === "stale") return {
+    stage: { id: "allocation", state: "stale", label: "Owners out of date" },
+    nextAction: action("assign-owners", "Confirm owners", "allocation", "Owners were saved for an earlier folder scan. Confirm them again."),
+  };
+  if (owners.missing.length) return {
+    stage: { id: "allocation", state: "review", label: "Owners needed" },
+    nextAction: action("assign-owners", "Name owners", "allocation", `No owner confirmed yet for ${listIds(owners.missing)}.`),
+  };
+  return {
+    stage: { id: "build-ready", state: "planned", label: "Plan approved · ready to build" },
+    nextAction: action("open-build", "Open the Build board", "build", "Every approved task has its overlaps decided and an owner. Track each task's status on the Build board."),
   };
 }
 
@@ -286,6 +354,8 @@ function nextStage(project, records = null, planStatus = null) {
     nextAction: action("review-discovery", "Review discovery gaps", "structure", "Resolve signals, unanswered categories, and missing observations."),
   };
 
+  if (buildPath(project, planStatus)) return buildPathStage(project, records, planStatus);
+
   for (const kind of projectAuthorityKinds) {
     const authority = project.authorities[kind];
     const workspace = kind === "architecture" ? "blueprint" : kind === "folder" ? "structure" : kind === "component" ? "components" : "plan";
@@ -319,12 +389,19 @@ function nextStage(project, records = null, planStatus = null) {
   };
 }
 
-function summaryMessage(project, stage) {
+function summaryMessage(project, stage, nextAction) {
   if (project.state === "unavailable") return "Project facts are unavailable; last-known values cannot be presented as current.";
   if (project.state === "stale") return "Project facts are stale and cannot promote work until refreshed.";
   if (stage.id === "ready") return "Registration, folder scan, discovery, and required records are current for this project revision.";
-  if (project.state === "generated") return "Generated project evidence exists, but unresolved review or authority work blocks promotion.";
-  if (project.state === "authoritative") return "The session is marked approved, but required evidence gaps still block promotion.";
+  if (stage.id === "build-ready") {
+    const optional = PARENT_KINDS.filter((kind) => project.authorities?.[kind]?.state !== "authoritative");
+    return `Plan approved by you, every overlap decided and every task has an owner, so work can start on the Build board.${optional.length ? ` Optional: the ${optional.join(", ")} record${optional.length === 1 ? " is" : "s are"} not saved yet (${optional.map((kind) => PARENT_PAGES[kind]).join(", ")}); they are only needed for the saved-plan check.` : ""}`;
+  }
+  if (stage.id === "promotion") return "Every planning step is recorded. Confirm the project is ready to finish setting it up.";
+  if (project.state === "generated" || project.state === "authoritative") {
+    const where = nextAction?.workspace ? ` on the ${PAGE_NAMES[nextAction.workspace] ?? nextAction.workspace} page` : "";
+    return `Not ready to build yet. Next step: ${nextAction.label}${where} (${stage.label}).`;
+  }
   return "Imported project evidence is registered; missing or unreviewed facts remain unavailable.";
 }
 
@@ -343,7 +420,7 @@ export function deriveProjectHomeModel(session, records = null) {
   const plan = effectivePlanAuthority(validated, records);
   const project = plan.status ? { ...validated, authorities: { ...validated.authorities, plan: plan.authority } } : validated;
   const { stage, nextAction } = nextStage(project, records, plan.status);
-  const blockers = collectBlockers(project, records);
+  const blockers = collectBlockers(project, records, plan.status);
   if (project.state === "stale") blockers.unshift(blocker("project-stale", "project", "stale", "The active ProjectSession is stale."));
   if (project.state === "unavailable") blockers.unshift(blocker("project-unavailable", "project", "unavailable", "The active project session record is unavailable."));
   if (stage.id === "promotion") blockers.push(blocker("project-promotion-pending", "project", "review", "Every planning step is recorded, but nobody has confirmed the project is ready yet."));
@@ -355,7 +432,7 @@ export function deriveProjectHomeModel(session, records = null) {
     binding: bindingFor(project),
     stage,
     summary: {
-      message: summaryMessage(project, stage),
+      message: summaryMessage(project, stage, nextAction),
       registration: summarizeRegistration(project),
       census: summarizeCensus(project),
       discovery: summarizeDiscovery(project, records),

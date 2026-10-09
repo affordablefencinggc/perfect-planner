@@ -1,0 +1,145 @@
+import { describe, it, expect } from "vitest";
+import { Ledger, MemoryStore } from "../ledger/index";
+import type { Actor } from "../ledger/index";
+import { installNumberingRules } from "../numbering/index";
+import { buildMindMap, linkNodes } from "./mindmap";
+import { FINAL_TASK_KEY, buildRoadmap, roadmapTasks, writeRoadmap } from "./roadmap";
+import type { Area, PlanningAnswer, Roadmap } from "./types";
+
+const ans = (area: Area, slug: string, text: string, extra: Partial<PlanningAnswer> = {}): PlanningAnswer => ({
+  questionId: `${area}.${slug}`,
+  area,
+  q: `Question about ${area}`,
+  choice: "custom",
+  text,
+  ...extra,
+});
+
+const ANSWERS: PlanningAnswer[] = [
+  ans("stack", "shell", "Tauri + React"),
+  ans("data", "store", "SQLite on the device"),
+  ans("auth", "method", "Email magic link"),
+  ans("money", "payments", "Stripe"),
+  ans("ai", "provider", "Jev"),
+  ans("offline", "mode", "Offline-first"),
+  ans("scale", "users", "Hundreds", { spike: { task: "T-9", due: "2026-11-01", risk: "unknown load" } }),
+  ans("testing", "suite", "Vitest"),
+  ans("platforms", "targets", "Desktop and web"),
+];
+
+// task.created comes from a person or the system, never an agent (ledger "Who may write what").
+const actor: Actor = { kind: "person", id: "looplet-spare" };
+const map = buildMindMap("A planner", ANSWERS);
+
+describe("buildRoadmap", () => {
+  const roadmap = buildRoadmap(map, { owner: "dan" });
+  const tasks = roadmapTasks(roadmap);
+  const byKey = new Map(tasks.map((t) => [t.key, t]));
+
+  it("keeps the five phases in order", () => {
+    expect(roadmap.phases.map((p) => p.id)).toEqual(["foundation", "core", "integrations", "hardening", "release"]);
+  });
+
+  it("puts nodes in the right phases", () => {
+    expect(byKey.get("K-component-app-shell")!.phase).toBe("foundation");
+    expect(byKey.get("K-data-data-store")!.phase).toBe("foundation");
+    expect(byKey.get("K-component-sign-in")!.phase).toBe("foundation");
+    expect(byKey.get("K-component-web-screens")!.phase).toBe("core");
+    expect(byKey.get("K-component-sync-engine")!.phase).toBe("core");
+    expect(byKey.get("K-integration-payments")!.phase).toBe("integrations");
+    expect(byKey.get("K-risk-edit-conflicts")!.phase).toBe("hardening");
+    expect(byKey.get("K-risk-open-scale-users")!.phase).toBe("hardening");
+    expect(byKey.get("K-component-test-suite")!.phase).toBe("release");
+    expect(roadmap.phases.at(-1)!.tasks.at(-1)!.title).toBe("Cut the first release");
+  });
+
+  it("gives every task an owner, a testable done-when and a change kind", () => {
+    for (const t of tasks) {
+      expect(t.owner).toBe("dan");
+      expect(t.doneWhen.length).toBeGreaterThan(20);
+      expect(t.doneWhen).toMatch(/npm test|a test /);
+      expect(["feature", "fix"]).toContain(t.change);
+    }
+    expect(byKey.get("K-risk-edit-conflicts")!.change).toBe("fix");
+    expect(byKey.get("K-integration-payments")!.change).toBe("feature");
+    expect(buildRoadmap(map).phases[0]!.tasks[0]!.owner).toBe("unassigned");
+  });
+
+  it("only depends on earlier tasks, so it is acyclic", () => {
+    const index = new Map(tasks.map((t, i) => [t.key, i]));
+    for (const t of tasks) for (const d of t.dependsOn) expect(index.get(d)!).toBeLessThan(index.get(t.key)!);
+    expect(byKey.get("K-screen-sign-in-screen")!.dependsOn).toContain("K-component-sign-in");
+    expect(byKey.get("K-integration-payments")!.dependsOn).toContain("K-component-app-shell");
+    expect(byKey.get(FINAL_TASK_KEY)!.dependsOn).toHaveLength(tasks.length - 1);
+  });
+
+  it("follows cross-links to foundation tasks", () => {
+    const linked = buildRoadmap(linkNodes(map, "integration-payments", "component-sign-in"));
+    const payments = roadmapTasks(linked).find((t) => t.key === "K-integration-payments")!;
+    expect(payments.dependsOn).toContain("K-component-sign-in");
+  });
+
+  it("is deterministic and keeps empty phases", () => {
+    expect(buildRoadmap(map, { owner: "dan" })).toEqual(roadmap);
+    const empty = buildRoadmap(buildMindMap("x", []));
+    expect(empty.phases).toHaveLength(5);
+    expect(empty.phases.slice(0, 4).every((p) => p.tasks.length === 0)).toBe(true);
+    expect(empty.phases[4]!.tasks.map((t) => t.key)).toEqual([FINAL_TASK_KEY]);
+  });
+});
+
+describe("writeRoadmap", () => {
+  it("writes task.created entries numbered T-1.. with dependsOn mapped", async () => {
+    const ledger = await Ledger.open(new MemoryStore());
+    installNumberingRules(ledger);
+    const roadmap = buildRoadmap(map, { owner: "dan" });
+    const tasks = roadmapTasks(roadmap);
+    const numbers = writeRoadmap(ledger, actor, roadmap);
+    const created = ledger.entries().filter((e) => e.type === "task.created");
+    expect(created).toHaveLength(tasks.length);
+    expect(created.map((e) => e.subject)).toEqual(tasks.map((_, i) => `T-${i + 1}`));
+    expect(numbers[tasks[0]!.key]).toBe("T-1");
+    expect(numbers[FINAL_TASK_KEY]).toBe(`T-${tasks.length}`);
+
+    const signInScreen = created.find((e) => e.data?.key === "K-screen-sign-in-screen")!;
+    expect(signInScreen.summary).toBe("Build the Sign-in screen");
+    expect(signInScreen.refs).toEqual([]);
+    expect(signInScreen.data).toMatchObject({
+      change: "feature",
+      phase: "foundation",
+      owner: "dan",
+      node: "screen-sign-in-screen",
+      source: "planning",
+      dependsOn: [numbers["K-component-sign-in"]],
+    });
+    expect(typeof signInScreen.data!.doneWhen).toBe("string");
+    for (const e of created) for (const d of e.data!.dependsOn as string[]) expect(d).toMatch(/^T-\d+$/);
+  });
+
+  it("continues numbering after existing tasks", async () => {
+    const ledger = await Ledger.open(new MemoryStore());
+    installNumberingRules(ledger);
+    ledger.append({ actor, type: "task.created", subject: "T-1", summary: "Existing task", data: { change: "fix" } });
+    const numbers = writeRoadmap(ledger, actor, buildRoadmap(buildMindMap("x", [])));
+    expect(numbers[FINAL_TASK_KEY]).toBe("T-2");
+  });
+
+  it("writes nothing for an empty roadmap", async () => {
+    const ledger = await Ledger.open(new MemoryStore());
+    const empty: Roadmap = { phases: [{ id: "foundation", title: "Foundation", tasks: [] }] };
+    expect(writeRoadmap(ledger, actor, empty)).toEqual({});
+    expect(ledger.entries()).toHaveLength(0);
+  });
+
+  it("writes dependencies first and refuses unknown dependencies before writing", async () => {
+    const ledger = await Ledger.open(new MemoryStore());
+    const task = (key: string, dependsOn: string[]) => ({
+      key, title: key, phase: "core" as const, owner: "o", doneWhen: "a test proves it", node: "root", change: "feature" as const, dependsOn,
+    });
+    const swapped: Roadmap = { phases: [{ id: "core", title: "Core", tasks: [task("K-b", ["K-a"]), task("K-a", [])] }] };
+    expect(writeRoadmap(ledger, actor, swapped)).toEqual({ "K-a": "T-1", "K-b": "T-2" });
+    const bad: Roadmap = { phases: [{ id: "core", title: "Core", tasks: [task("K-c", ["K-missing"])] }] };
+    expect(() => writeRoadmap(ledger, actor, bad)).toThrow(/unknown/);
+    expect(ledger.entries()).toHaveLength(2);
+  });
+});

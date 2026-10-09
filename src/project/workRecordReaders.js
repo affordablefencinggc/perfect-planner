@@ -2,7 +2,7 @@
 // its own section shape, so these readers accept the plausible forms and return
 // empty results (never invented values) when a shape is not recognised.
 
-import { resolutionState } from "./taskCoordination.js";
+import { resolutionState, uniquePaths } from "./taskCoordination.js";
 
 const list = (value) => Array.isArray(value) ? value : [];
 const text = (value) => typeof value === "string" && value.trim() ? value.trim() : null;
@@ -52,13 +52,15 @@ export function recordedCollisions(sections) {
     const pair = ids.length ? ids : [text(item?.left), text(item?.right), text(item?.a), text(item?.b)].filter(Boolean);
     const paths = list(item?.paths ?? item?.files).map((p) => typeof p === "string" ? p : text(p?.path)).filter(Boolean);
     if (text(item?.path)) paths.push(item.path.trim());
+    // A folder overlapping several files inside it is stored once per file; name it once.
+    const distinctPaths = uniquePaths(paths);
     const decision = String(item?.resolution ?? item?.decision ?? item?.state ?? item?.status ?? "").toLowerCase();
     // The Collision page saves decisions beside the list, keyed by collision; a decision
     // only counts while it still matches that collision's current signature.
     const saved = text(item?.key) && data.resolutions && typeof data.resolutions === "object" ? data.resolutions[item.key] : null;
     const state = Boolean(saved) && Array.isArray(item?.tasks) ? resolutionState(item, saved) : "open";
     const decided = state === "decided";
-    return { taskIds: pair, paths, resolved: item?.resolved === true || RESOLVED.has(decision) || decided, note: text(item?.note) ?? text(item?.resolutionNote) ?? (decided && saved.choice === "order" ? `${saved.first} goes first` : state === "split-pending" ? "split chosen; file scopes still overlap" : null) };
+    return { taskIds: pair, paths: distinctPaths, first: decided && saved.choice === "order" ? text(saved.first) : null, resolved: item?.resolved === true || RESOLVED.has(decision) || decided, note: text(item?.note) ?? text(item?.resolutionNote) ?? (decided && saved.choice === "order" ? `${saved.first} goes first` : state === "split-pending" ? "split chosen; file scopes still overlap" : null) };
   }).filter((item) => item.taskIds.length);
 }
 
