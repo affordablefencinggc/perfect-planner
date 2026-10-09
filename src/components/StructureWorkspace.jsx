@@ -305,6 +305,11 @@ export function StructureWorkspace({
   const mapLoading = ["registering", "scanning", "analyzing"].includes(
     intake.state,
   );
+  // A registered project keeps only its scan summary. Show it instead of an empty intake until a live scan replaces it.
+  const savedScan = imported && !intake.census && Number.isSafeInteger(activeProject.census?.fileCount) ? activeProject.census : null;
+  const savedCounts = savedScan && activeProject.discovery?.censusDigest === savedScan.digest ? activeProject.discovery.counts : null;
+  const savedScanText = savedScan ? `Scanned earlier: ${savedScan.fileCount} ${savedScan.fileCount === 1 ? "file" : "files"}. Scan again to see live details.` : "";
+  const shownIntakeState = savedScan && intake.state === "idle" ? "inventory-ready" : intake.state;
   const comparison = useMemo(
     () => {
       if (!intake.gaps) return { review: null, stale: false };
@@ -1029,22 +1034,26 @@ export function StructureWorkspace({
           </span>
           <span>
             <b>
-              {structureTree.integrity?.accepted
-                ? (intake.census?.fileCount ?? 0)
-                : 0}
+              {savedScan
+                ? savedScan.fileCount
+                : structureTree.integrity?.accepted
+                  ? (intake.census?.fileCount ?? 0)
+                  : 0}
             </b>
             <small>
-              {structureTree.state === "invalid"
-                ? "accepted files"
-                : "indexed files"}
+              {savedScan
+                ? "indexed files · earlier scan"
+                : structureTree.state === "invalid"
+                  ? "accepted files"
+                  : "indexed files"}
             </small>
           </span>
           <span>
-            <b>{discoveryMap.counts.observed}</b>
+            <b>{savedCounts ? savedCounts.observed : discoveryMap.counts.observed}</b>
             <small>observed facts</small>
           </span>
           <span>
-            <b>{discoveryMap.counts.signals}</b>
+            <b>{savedCounts ? savedCounts.signals : discoveryMap.counts.signals}</b>
             <small>review signals</small>
           </span>
         </div>
@@ -1095,8 +1104,8 @@ export function StructureWorkspace({
               <small>Select → approve → index → map → review</small>
             </span>
           </button>
-          <span className={`intake-state ${intake.state}`}>
-            {intake.state.replaceAll("-", " ")}
+          <span className={`intake-state ${shownIntakeState}`}>
+            {savedScan && intake.state === "idle" ? "scanned earlier" : intake.state.replaceAll("-", " ")}
           </span>
         </header>
         {openSections.intake && (
@@ -1120,7 +1129,7 @@ export function StructureWorkspace({
                   className={workspaceIntakeStageState(
                     intake.state === "analysis-refused"
                       ? "scanning"
-                      : intake.state,
+                      : shownIntakeState,
                     index,
                   )}
                 >
@@ -1129,6 +1138,7 @@ export function StructureWorkspace({
                 </li>
               ))}
             </ol>
+            {savedScan && !canRemember && <p role="status">{savedScanText}</p>}
             <div
               className="folder-drop-zone"
               onDragOver={(event) => event.preventDefault()}
@@ -1340,7 +1350,9 @@ export function StructureWorkspace({
               <strong>App discovery map</strong>
               <small>
                 {folderPreview && !intake.census ? `Folder preview · ${folderPreview.fileCount} source-file paths · content not verified` : discoveryMap.state === "empty"
-                  ? intake.census && structureTree.integrity?.accepted
+                  ? savedScan
+                    ? savedScanText
+                    : intake.census && structureTree.integrity?.accepted
                     ? `No files observed in this folder scan · ${intake.census.skipped?.length ?? 0} entries skipped · not proof the folder is empty`
                     : "Empty until a folder is indexed · headings are questions, not answers"
                   : discoveryMap.state === "invalid"
