@@ -42,6 +42,8 @@ export function connectLineProblem(line: string, here: string, platform: NodeJS.
   const p = windows ? path.win32 : path.posix;
   if (/[\r\n]/.test(line)) return "It must be one line.";
   if (/pp_[cw]_/.test(line)) return "It contains a key. Never paste keys; copy a fresh line from Connect agent.";
+  // PowerShell also ends a single-quoted string at the curly quotes U+2018-U+201B.
+  if (/[\u2018-\u201b]/.test(line)) return "It contains a curly quote, which PowerShell treats as the end of a quoted path.";
   const quoted = windows ? "'((?:[^']|'')*)'" : "'((?:[^']|'\\\\'')*)'";
   const unquote = (value: string) => (windows ? value.replaceAll("''", "'") : value.replaceAll("'\\''", "'"));
   const first = windows ? `(?:node|& ${quoted})` : `(?:node|${quoted})`;
@@ -49,6 +51,8 @@ export function connectLineProblem(line: string, here: string, platform: NodeJS.
   const match = shape.exec(line.trim());
   if (!match) return "It is not the shape Connect agent shows: node, connect.mjs, the bridge address and the token file, nothing else.";
   const [, node, program, , , tokenFile] = match as unknown as [string, string | undefined, string, string | undefined, string, string];
+  // Defence in depth: no shell metacharacter inside any quoted part, whatever the shell.
+  for (const part of [node, program, tokenFile]) if (part !== undefined && /[;|&<>$`]/.test(part)) return "A quoted path contains a shell character (; | & < > $ or `).";
   if (node !== undefined && unquote(node) !== bundledNodePath(here, platform)) return "The Node program is not the one that ships with Perfect Planner.";
   if (unquote(program) !== p.join(here, "connect.mjs")) return "The program is not Perfect Planner's own connect.mjs.";
   const file = unquote(tokenFile);

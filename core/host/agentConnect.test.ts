@@ -27,6 +27,9 @@ describe("connect line", () => {
     expect(connectArgsProblem(["http://127.0.0.1:5555", "\\\\host\\share\\C-1.token"], "win32")).toMatch(/this computer/);
     expect(connectArgsProblem(["http://127.0.0.1:5555", "//host/share/C-1.token"], "win32")).toMatch(/this computer/);
     expect(connectArgsProblem(["http://127.0.0.1:5555", "//host/share/C-1.token"], "linux")).toMatch(/this computer/);
+    for (const unc of ["\\/host/s/x.token", "/\\host\\s\\x.token", "\\??\\UNC\\host\\s\\x.token", "\\\\?\\UNC\\host\\s\\x.token"]) {
+      expect(connectArgsProblem(["http://127.0.0.1:5555", unc], "win32")).toMatch(/this computer/);
+    }
   });
 
   it("refuses characters cmd.exe would expand or split on Windows", () => {
@@ -101,5 +104,22 @@ describe("the line check the skill follows", () => {
     expect(validateConnectLine(`& & '${bundledNodePath(winHere, "win32")}' ${rest}`, { connectProgram: winProgram, platform: "win32" })).toMatch(/shape/);
     expect(validateConnectLine(`'desktop-host/node' '${unixHere}/connect.mjs' http://127.0.0.1:5555 '${unixToken}'`, { connectProgram: `${unixHere}/connect.mjs`, platform: "linux" })).toMatch(/Node program/);
     expect(validateConnectLine(`node '${unixHere}/connect.mjs' http://127.0.0.1:5555 '${unixToken}'`, { connectProgram: `${unixHere}/connect.mjs`, platform: "linux" })).toBeNull();
+  });
+
+  it("refuses network token paths in any slash mix, curly quotes, and shell characters inside quoted parts", () => {
+    const winProgram = `${winHere}\\connect.mjs`;
+    const line = (token: string) => `node '${winProgram}' http://127.0.0.1:5555 '${token}'`;
+    for (const unc of ["\\/host/s/x.token", "/\\host\\s\\x.token", "\\??\\UNC\\host\\s\\x.token", "//host/s/x.token"]) {
+      expect(connectLineProblem(line(unc), winHere, "win32")).toMatch(/network/);
+    }
+    for (const curly of ["\u2018", "\u2019", "\u201a", "\u201b"]) {
+      expect(connectLineProblem(line(`C:\\a${curly}; calc; ${curly}b.token`), winHere, "win32")).toMatch(/curly quote/);
+      expect(connectLineProblem(`node '${unixHere}/connect.mjs' http://127.0.0.1:5555 '/tmp/a${curly}b.token'`, unixHere, "linux")).toMatch(/curly quote/);
+    }
+    for (const bad of [";", "|", "&", "<", ">", "$", "`"]) {
+      expect(connectLineProblem(line(`C:\\a${bad}b.token`), winHere, "win32")).toMatch(/shell character/);
+      expect(connectLineProblem(`node '${unixHere}/connect.mjs' http://127.0.0.1:5555 '/tmp/a${bad}b.token'`, unixHere, "linux")).toMatch(/shell character/);
+    }
+    expect(connectLineProblem(line(winToken), winHere, "win32")).toBeNull();
   });
 });
