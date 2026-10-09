@@ -599,17 +599,19 @@ describe("the pinned owner key", () => {
     expect(refusal(() => claimOwnership(ledger, owner, "Looplet Spare"))).toMatch(/no pinned owner/);
     expect(refusal(() => addMember(ledger, owner, { person: "mia", name: "Mia", role: "helper" }))).toMatch(/no pinned owner/);
     expect(refusal(() => shareDoc(ledger, owner, { title: "Spec", path: "docs/spec.md" }))).toMatch(/no pinned owner/);
-    expect(peopleView(ledger).members).toEqual([]);
+    expect(() => peopleView(ledger)).toThrow(expect.objectContaining({ code: "NO_OWNER_KEY" }));
   });
 
-  it("shows no roster when a project is reopened without its ownerKey", async () => {
+  it("refuses loudly when a project is reopened without its ownerKey", async () => {
     const { store, ownerKey } = pinned();
     const writer = await openPeopleLedger(store, { now: clock(), ownerKey });
     claimOwnership(writer, owner, "Looplet Spare");
     addMember(writer, owner, { person: "mia", name: "Mia", role: "helper" });
     writer.close();
     const unpinned = await Ledger.open(store, { readOnly: true });
-    expect(peopleView(unpinned).members).toEqual([]);
+    expect(() => peopleView(unpinned)).toThrow(expect.objectContaining({ code: "NO_OWNER_KEY" }));
+    expect(buildPeopleView(unpinned.entries(), {}).members).toEqual([]);
+    await expect(openPeopleLedger(store, { readOnly: true })).rejects.toMatchObject({ code: "NO_OWNER_KEY" });
     const repinned = await Ledger.open(store, { readOnly: true, ownerKey });
     expect(peopleView(repinned).members.map((m) => m.person)).toEqual(["looplet-spare", "mia"]);
   });

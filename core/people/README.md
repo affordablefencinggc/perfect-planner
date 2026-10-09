@@ -67,7 +67,9 @@ const ledger = await openPeopleLedger(new FileStore(projectRoot), { keys, ownerK
 `ownerKey` is the owner's key id the app keeps outside the ledger (see
 core/ledger "The owner"). The roster's owner is `ledger.owner`; without
 `ownerKey` there is no owner, so nobody can start the roster, enrol helpers,
-change roles or share documents, and `peopleView(ledger)` shows no members.
+change roles or share documents. `openPeopleLedger` and `peopleView(ledger)`
+throw `PeopleError` `NO_OWNER_KEY` for a ledger opened without `ownerKey`,
+so a caller that forgets it fails loudly instead of seeing an empty roster.
 Read views with `peopleView(ledger)`, or `buildPeopleView(entries, { owner:
 ledger.owner })`.
 
