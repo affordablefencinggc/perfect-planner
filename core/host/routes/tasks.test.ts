@@ -70,7 +70,7 @@ describe("tasks routes", () => {
     expect(fs.existsSync(d.worktree)).toBe(true);
     expect(d.brief).toContain("T-1");
     expect(d.brief).toContain("propose_test");
-    expect(d.setup).toContain(`connect.mjs" ${d.bridgeUrl} ${d.token}`);
+    expect(d.setup).toContain(`connect.mjs" --agent claude ${d.bridgeUrl} ${d.token}`);
     expect((await tasks()).tasks[0]).toMatchObject({ stage: "needs-test", worktree: { branch: "pp/T-1" }, dispatch: { model: "claude-sonnet" } });
     expect(JSON.stringify((await tasks()))).not.toContain(d.token);
 

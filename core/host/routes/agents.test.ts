@@ -20,7 +20,7 @@ afterEach(async () => stop());
 const connect = async (body: unknown = {}) => {
   const res = await hostCall(base, "POST", "/agents/connect?project=demo", body);
   expect(res.status).toBe(200);
-  return res.body.result as { connection: string; person: string; bridgeUrl: string; token: string; claudeCode: string; json: string; agentPath: string };
+  return res.body.result as { connection: string; person: string; bridgeUrl: string; token: string; claudeCode: string; lines: Record<string, string>; json: string; agentPath: string };
 };
 
 describe("agents routes", () => {
@@ -30,7 +30,13 @@ describe("agents routes", () => {
     expect(result.person).toBe("owner");
     expect(result.bridgeUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
     expect(result.token).toMatch(/^pp_c_/);
-    expect(result.claudeCode).toBe(`node "${result.agentPath.replace(/agent\.mjs$/, "connect.mjs")}" ${result.bridgeUrl} ${result.token}`);
+    const script = result.agentPath.replace(/agent\.mjs$/, "connect.mjs");
+    expect(result.claudeCode).toBe(`node "${script}" --agent claude ${result.bridgeUrl} ${result.token}`);
+    expect(result.lines).toEqual({
+      claude: result.claudeCode,
+      gemini: `node "${script}" --agent gemini ${result.bridgeUrl} ${result.token}`,
+      codex: `node "${script}" --agent codex ${result.bridgeUrl} ${result.token}`,
+    });
     expect(result.agentPath.endsWith(path.join("dist", "core-host", "agent.mjs"))).toBe(true);
     const json = JSON.parse(result.json);
     expect(json.mcpServers["perfect-planner-core"]).toEqual({ command: "node", args: [result.agentPath], env: { PP_BRIDGE_URL: result.bridgeUrl, PP_AGENT_TOKEN: result.token } });
@@ -109,7 +115,7 @@ describe("agent entry path", () => {
   });
 
   it("quotes the path in the command", () => {
-    expect(setupFor("http://127.0.0.1:1", "pp_c_x", "C:\\a b\\agent.mjs").claudeCode).toBe('node "C:\\a b\\connect.mjs" http://127.0.0.1:1 pp_c_x');
+    expect(setupFor("http://127.0.0.1:1", "pp_c_x", "C:\\a b\\agent.mjs").claudeCode).toBe('node "C:\\a b\\connect.mjs" --agent claude http://127.0.0.1:1 pp_c_x');
   });
 });
 

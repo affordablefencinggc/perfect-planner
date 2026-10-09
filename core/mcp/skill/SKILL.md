@@ -13,7 +13,8 @@ merges in the app; you never can, and you never try.
 ## 1. Connect
 
 Check whether the `perfect-planner-core` tools are available to you (for example
-`mcp__perfect-planner-core__hello`).
+`mcp__perfect-planner-core__hello` in Claude Code, or `hello` from the
+`perfect-planner-core` server in Gemini CLI and Codex CLI).
 
 **They are available:** go to step 2.
 
@@ -21,14 +22,16 @@ Check whether the `perfect-planner-core` tools are available to you (for example
 
 1. If the user pasted a line that starts with `node` and contains `connect.mjs`
    (or `claude mcp add perfect-planner-core`), run it yourself in the project
-   folder with your shell tool. It registers the server for this folder and
-   replaces an older registration, so it is safe to run again.
+   folder with your shell tool. It registers the server with the agent named
+   after `--agent` (claude, gemini or codex) and replaces an older
+   registration, so it is safe to run again.
 2. If they did not, ask them for exactly this, in one message:
    "In Perfect Planner, click **Connect agent**, then **Connect agent** again in
    the panel, and paste the line it shows here."
 3. After the line has run, the tools appear only in a new session. Tell the user:
-   "Done. Restart Claude Code in this folder (or run /mcp and reconnect
-   perfect-planner-core), then say: check in with Perfect Planner."
+   "Done. Restart your agent (Claude Code, Gemini CLI or Codex CLI) in this
+   folder, then say: check in with Perfect Planner." Gemini CLI asks whether
+   to trust the folder on start; it loads the server only in a trusted folder.
    Then stop.
 
 Never print, log, commit or repeat the token (`pp_c_…` or `pp_w_…`) back to the
@@ -42,7 +45,7 @@ restarted or the person disconnected you. Ask for a fresh connect line (step 1.2
 Call `hello` once, with your name and the model you run:
 
 ```
-hello({ name: "Claude Code", model: "<your model id>" })
+hello({ name: "<your agent: Claude Code, Gemini CLI or Codex CLI>", model: "<your model id>" })
 ```
 
 The answer tells you your `role`:

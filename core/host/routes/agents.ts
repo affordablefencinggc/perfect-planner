@@ -14,6 +14,7 @@ import { randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import type { AgentRecord, AgentService } from "../../mcp/index";
 import type { CoreProject } from "../project";
+import { AGENT_KINDS, type AgentKind } from "../agentKinds";
 import { HttpError, type Router } from "../router";
 import { localPersonId } from "./people";
 
@@ -104,11 +105,11 @@ export function agentEntryPath(from: string = fileURLToPath(import.meta.url)): {
 const quote = (value: string) => `"${value.replaceAll('"', '\\"')}"`;
 
 /**
- * The one line for Claude Code: connect.mjs (next to the agent entry) registers the server for the
- * folder it runs in, replacing an older registration, and installs the perfect-planner-connect skill.
+ * The one line per agent: connect.mjs (next to the agent entry) registers the server with that agent's
+ * CLI for the folder it runs in, replacing an older registration, and installs the perfect-planner-connect skill.
  */
-export function connectLine(bridgeUrl: string, token: string, entry: string): string {
-  return `node ${quote(entry.replace(/agent\.mjs$/, "connect.mjs"))} ${bridgeUrl} ${token}`;
+export function connectLine(bridgeUrl: string, token: string, entry: string, agent: AgentKind = "claude"): string {
+  return `node ${quote(entry.replace(/agent\.mjs$/, "connect.mjs"))} --agent ${agent} ${bridgeUrl} ${token}`;
 }
 
 /** Installs only the skill, user-wide; no token, so it is safe to show at any time. */
@@ -117,9 +118,9 @@ export function skillLine(entry: string): string {
 }
 
 export function setupFor(bridgeUrl: string, token: string, entry: string) {
-  const claudeCode = connectLine(bridgeUrl, token, entry);
+  const lines = Object.fromEntries(AGENT_KINDS.map((agent) => [agent, connectLine(bridgeUrl, token, entry, agent)])) as Record<AgentKind, string>;
   const json = JSON.stringify({ mcpServers: { [AGENT_SERVER_NAME]: { command: "node", args: [entry], env: { PP_BRIDGE_URL: bridgeUrl, PP_AGENT_TOKEN: token } } } }, null, 2);
-  return { claudeCode, json };
+  return { claudeCode: lines.claude, lines, json };
 }
 
 function viewAgents(project: CoreProject): { agents: AgentView[]; connections: ConnectionView[] } {
@@ -187,6 +188,7 @@ export function registerAgentRoutes(router: Router): void {
       agentPath: entry.path,
       agentBuilt: entry.built,
       claudeCode: setup.claudeCode,
+      lines: setup.lines,
       json: setup.json,
       ...(entry.built ? {} : { warning: "The agent program is not built yet. Run npm run build:core-host in the Perfect Planner folder before pasting this." }),
     };
