@@ -8,7 +8,7 @@ import { installClauseRules } from "../lookup/index";
 import { TestGate, gateRule, type GatePolicy } from "../gate/index";
 import { AgentService } from "../mcp/index";
 import type { HostKeys } from "./keys";
-import { createOwnerPin, readOwnerPin, type OwnerPin } from "./owner";
+import { readOwnerPin, rememberedGenesis, rememberFolder, writeOwnerPin, type OwnerPin } from "./owner";
 import { DEFAULT_LOCAL_PERSON } from "./routes/people";
 import { installNumberingRules } from "../numbering/index";
 import { installPeopleRules } from "../people/index";
@@ -106,29 +106,52 @@ export async function excludePrivateFolder(dir: string): Promise<string[]> {
 }
 
 /**
- * The owner key to open with. A signed pin is used. A project nobody has written to as a person yet
- * gets one now: the local person's key, made by the app. A ledger that already has person entries but
- * no pin (from before pinning) opens with no owner rather than taking the owner from its own file.
+ * The owner key to open with (core/host/owner.ts). A signed pin for this ledger's genesis is used. A ledger
+ * nobody has written to as a person opens with this device's person key, which the host pins on the first
+ * write from the person's window. A ledger with person entries but no usable pin opens with no owner, and
+ * a folder whose ledger was deleted or swapped is reported, never treated as new.
  */
-function ownerPinFor(baseRoot: string, key: string, root: string, keys: HostKeys): OwnerPin {
-  const pin = readOwnerPin(baseRoot, key, root, keys);
-  if (pin.state === "pinned") return pin;
-  const written = new FileStore(root).load().entries.some((e) => e.actor?.kind === "person");
-  if (!written) {
-    // Nobody has written here as a person, so an earlier pin protects nothing: a pin whose key this
-    // device lost (a restart with throwaway keys, a new OS profile) or that fails its check is replaced.
-    const made = createOwnerPin(baseRoot, key, root, keys, `person:${DEFAULT_LOCAL_PERSON}`, new Date(), pin.state !== "missing");
-    return pin.state === "missing" || made.state !== "created" ? made : { ...made, reason: `Pinned a new owner: ${pin.reason ?? "the earlier pin could not be used"}` };
+function ownerPinFor(baseRoot: string, root: string, keys: HostKeys): OwnerPin {
+  const entries = new FileStore(root).load().entries;
+  const genesis = entries[0]?.hash;
+  const remembered = rememberedGenesis(baseRoot, root, keys);
+  if (remembered && remembered !== genesis) {
+    return { state: "replaced", ...(genesis ? { genesis } : {}), reason: genesis ? "This folder's ledger was swapped for another one since this computer last opened it." : "This folder's ledger was deleted since this computer last opened it." };
   }
-  if (pin.state === "missing") return { state: "missing", reason: "This computer has no owner record for this project: it was made on another computer, or before Perfect Planner recorded owners." };
-  return pin;
+  if (genesis) {
+    const pin = readOwnerPin(baseRoot, genesis, keys);
+    if (pin.state === "pinned") {
+      if (!remembered) rememberFolder(baseRoot, root, genesis, keys);
+      return pin;
+    }
+    if (entries.some((e) => e.actor?.kind === "person")) {
+      return pin.state === "missing" ? { state: "missing", genesis, reason: "This computer has no owner record for this project: it was made on another computer, or before Perfect Planner recorded owners." } : pin;
+    }
+  }
+  const principal = `person:${DEFAULT_LOCAL_PERSON}`;
+  const ownerKey = keys.ownerKeyFor(principal);
+  if (!ownerKey) return { state: "unavailable", reason: "This device has no key store, so the project has no owner." };
+  return { state: "new", ownerKey, principal, ...(genesis ? { genesis } : {}) };
+}
+
+/**
+ * Pins a new project's owner after a write from the person's own window (host.ts): the ledger now has a
+ * genesis, and the pin for it is signed and kept in the app's data folder.
+ */
+export function pinOwnerAfterWrite(baseRoot: string, project: CoreProject, keys: HostKeys): void {
+  const owner = project.owner;
+  const genesis = project.entries()[0]?.hash;
+  if (owner.state !== "new" || !owner.ownerKey || !owner.principal || !genesis) return;
+  if (writeOwnerPin(baseRoot, project.root, genesis, keys, owner.ownerKey, owner.principal)) {
+    project.owner = { ownerKey: owner.ownerKey, principal: owner.principal, state: "pinned", genesis };
+  }
 }
 
 export function openCoreProject(baseRoot: string, key: string, override: string | undefined, keys: HostKeys): CoreProject {
   const root = projectRootFor(baseRoot, key, override);
   fs.mkdirSync(root, { recursive: true });
   keys.ensureSystemKey();
-  const owner = ownerPinFor(baseRoot, key, root, keys);
+  const owner = ownerPinFor(baseRoot, root, keys);
   const ledger = Ledger.openSync(new FileStore(root), { keys, ...(owner.ownerKey ? { ownerKey: owner.ownerKey } : {}) });
   // The same rules every core module assumes: numbering (D-/Q-/T-/R- subjects), clauses, people, planning gates.
   installNumberingRules(ledger);

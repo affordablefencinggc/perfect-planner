@@ -25,7 +25,7 @@
       }
     ],
     "security": {
-      "capabilities": ["main-read-only", "main-collision-authority", "main-bundled-mcp", "main-git-inventory", "main-native-drafts", "main-agent-observation", "main-check-setup", "main-task-results", "main-core-launch"],
+      "capabilities": ["main-read-only", "main-collision-authority", "main-bundled-mcp", "main-git-inventory", "main-native-drafts", "main-agent-observation", "main-check-setup", "main-task-results", "main-core-launch", "main-jev-keychain"],
       "csp": {
         "default-src": ["'self'", "customprotocol:", "asset:"],
         "connect-src": ["ipc:", "http://ipc.localhost"],

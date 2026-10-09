@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { ArrowRightIcon, CheckCircleIcon, SealCheckIcon, WarningIcon } from "@phosphor-icons/react";
-import { inspectTaskDraft, sameTaskDraftBinding } from "../project/taskDraftLedger.js";
+import { sameTaskDraftBinding } from "../project/taskDraftLedger.js";
+import { overlapReview, overlapReviewText } from "../project/taskCoordination.js";
 import { activePlanTasks, planApprovalStatus } from "../project/planApproval.js";
 import { usePlanApproval } from "../project/usePlanApproval.js";
 import "./PlanApprovalStep.css";
@@ -18,7 +19,11 @@ export function PlanApprovalStep({ project, records, onWorkspace, store }) {
   const { ledger, digest, error, loading, binding, approve } = usePlanApproval(project, records, { store, watch: false });
   const [busy, setBusy] = useState(false), [notice, setNotice] = useState(""), [failure, setFailure] = useState("");
   const tasks = useMemo(() => activePlanTasks(ledger?.tasks), [ledger]);
-  const missing = useMemo(() => { try { return ledger ? inspectTaskDraft(ledger).findings : []; } catch { return []; } }, [ledger]);
+  // Overlaps are decided on the Collision page; they are not missing task details.
+  const collisionData = records?.sections?.collisions?.data ?? null;
+  const overlaps = useMemo(() => (ledger ? overlapReview(ledger, collisionData) : null), [ledger, collisionData]);
+  const missing = overlaps?.otherFindings ?? [];
+  const overlapText = overlapReviewText(overlaps);
   if (!binding) return null;
 
   const projectBlocked = ["stale", "unavailable"].includes(project.state);
@@ -61,6 +66,7 @@ export function PlanApprovalStep({ project, records, onWorkspace, store }) {
         {tasks.length > SHOWN && <li className="more">+{tasks.length - SHOWN} more in the Ledger</li>}
       </ol>}
       {missing.length > 0 && <details className="plan-approval-step-missing"><summary>{plural(missing.length, "task detail")} still missing</summary><p>You can approve now, but these gaps stay visible until the tasks are completed in the Ledger.</p><ul>{missing.slice(0, 6).map((item, index) => <li key={index}>{item.detail}</li>)}</ul></details>}
+      {overlapText.headline && <details className="plan-approval-step-missing" aria-label="Plan overlaps"><summary>{overlapText.headline}</summary><p>{overlaps.settled === overlaps.total ? "Every overlap between tasks has a decision on the Collision page." : "Tasks that change the same files need a decision on the Collision page. A split only counts once the two tasks’ file scopes no longer overlap."}</p><ul>{overlapText.lines.slice(0, 8).map((line) => <li key={line}>{line}</li>)}</ul>{overlaps.total > 8 && <p>+{overlaps.total - 8} more on the Collision page.</p>}{overlaps.splitPending > 0 && <button type="button" className="soft-button" onClick={() => onWorkspace?.("ledger")}>Edit file scopes in the Ledger <ArrowRightIcon aria-hidden="true" /></button>}{overlaps.open > 0 && <button type="button" className="soft-button" onClick={() => onWorkspace?.("collision")}>Decide overlaps on the Collision page <ArrowRightIcon aria-hidden="true" /></button>}</details>}
 
       {failure && <p role="alert" className="plan-approval-step-error">{failure}</p>}
       {notice && <p role="status">{notice}</p>}

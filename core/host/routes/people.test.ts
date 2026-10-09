@@ -63,6 +63,13 @@ describe("people routes", () => {
     expect(res.body.result).not.toHaveProperty("starter");
   });
 
+  it("lets only the pinned owner of a new project become its first person", async () => {
+    const other = await call("POST", "/people/members", { person: "mallory", name: "Mallory", role: "owner" });
+    expect(other.status).toBe(422);
+    const view = (await call("GET", "/people")).body.result;
+    expect(view).toMatchObject({ firstRun: true, starter: "owner" });
+  });
+
   it("refuses a first person who is not the owner", async () => {
     const res = await call("POST", "/people/members", { person: "eli", name: "Eli", role: "helper" });
     expect(res.status).toBe(422);

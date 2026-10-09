@@ -7,7 +7,7 @@ import { LedgerError } from "../ledger/index";
 import { startBridge, ToolError, type Bridge } from "../mcp/index";
 import { PeopleError } from "../people/index";
 import { asPersonRequest, hostKeys, type HostKeys } from "./keys";
-import { excludePrivateFolder, openCoreProject, projectKey, projectRootFor, type CoreProject } from "./project";
+import { excludePrivateFolder, openCoreProject, pinOwnerAfterWrite, projectKey, projectRootFor, type CoreProject } from "./project";
 import { HttpError, Router } from "./router";
 import { PersonSessions } from "./session";
 import { registerRoutes } from "./routes/index";
@@ -161,6 +161,8 @@ export class CoreHost {
       const call = () => match.handler({ path, params: match.params, query: url.searchParams, body, project, host: this });
       // A person's POST may make their signing key on first use (keys.ts); nothing else can.
       const result = await (method === "POST" ? asPersonRequest(call) : call());
+      // A new project's owner is pinned only after a write from the person's own window.
+      if (method === "POST") pinOwnerAfterWrite(this.options.root, project, this.keys);
       send(200, { ok: true, result: result ?? null });
     } catch (error) {
       if (error instanceof HttpError) return send(error.status, { ok: false, code: error.code, message: error.message });
@@ -174,6 +176,8 @@ export class CoreHost {
 
   async close(): Promise<void> {
     for (const bridge of this.bridges.values()) await (await bridge).close().catch(() => undefined);
+    // Wait for the git runs started at open (exclude, protection) so none outlives the host in the project folder.
+    for (const project of this.projects.values()) await Promise.allSettled([project.ready, project.protection]);
     for (const project of this.projects.values()) project.ledger.close();
     this.bridges.clear();
     this.projects.clear();
