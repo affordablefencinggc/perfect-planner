@@ -320,3 +320,16 @@ describe("clausesAt vs planClauses", () => {
     expect(planClauses(ledger.entries(), "P-4")).toBeUndefined();
   });
 });
+
+describe("review fixes", () => {
+  it("keeps a fenced code block as one clause, even with # lines inside", () => {
+    const blocks = numberMarkdown("## 1. Setup\n\nRun this:\n\n```sh\n# not a heading\nnpm test\n```\n\nThen check.\n");
+    expect(blocks.map((b) => [b.clause, b.kind])).toEqual([
+      ["1", "heading"],
+      ["1.1", "paragraph"],
+      ["1.2", "paragraph"],
+      ["1.3", "paragraph"],
+    ]);
+    expect(blocks[2].text).toContain("# not a heading");
+  });
+});
