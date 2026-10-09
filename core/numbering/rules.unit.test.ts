@@ -209,8 +209,11 @@ describe("installNumberingRules: removal", () => {
   it("lifts the rules when the returned function is called", () => {
     const ledger = open();
     const remove = installNumberingRules(ledger);
-    expect(refusalCode(() => ledger.append(taskCreated("T-5")))).toBe("RULE");
+    const decision = { actor: owner, type: "decision.made" as const, subject: "D-1", summary: "answer", reason: "why", evidence: [], refs: [], data: { question: "Q-9" } };
+    expect(refusalCode(() => ledger.append(decision))).toBe("RULE");
     remove();
-    expect(ledger.append(taskCreated("T-5")).subject).toBe("T-5");
+    expect(ledger.append(decision).subject).toBe("D-1");
+    // The ledger itself still enforces the series, with or without these rules.
+    expect(refusalCode(() => ledger.append(taskCreated("T-5")))).toBe("RULE");
   });
 });

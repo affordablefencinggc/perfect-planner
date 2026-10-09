@@ -146,8 +146,27 @@ export function numberMarkdown(markdown: string): NumberedBlock[] {
     blocks.push({ clause: `${parent.number}.${parent.children}`, kind, text });
   };
 
+  let fence: string | undefined;
+  let code: string[] = [];
   for (const raw of markdown.split(/\r?\n/)) {
     const line = raw.trimEnd();
+    // A fenced code block is one clause, whatever its lines look like.
+    const fenceMark = /^\s*(```|~~~)/.exec(line)?.[1];
+    if (fence) {
+      code.push(raw);
+      if (fenceMark === fence) {
+        push("paragraph", code.join("\n"));
+        fence = undefined;
+        code = [];
+      }
+      continue;
+    }
+    if (fenceMark) {
+      flushParagraph();
+      fence = fenceMark;
+      code = [raw];
+      continue;
+    }
     const heading = /^(#{1,6})\s+(.*)$/.exec(line);
     const item = /^\s*(?:[-*+]|\d+[.)])\s+(.*)$/.exec(line);
     if (heading) {
@@ -180,6 +199,7 @@ export function numberMarkdown(markdown: string): NumberedBlock[] {
     }
   }
   flushParagraph();
+  if (fence) push("paragraph", code.join("\n"));
   return blocks;
 }
 
