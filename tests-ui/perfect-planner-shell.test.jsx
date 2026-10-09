@@ -158,7 +158,9 @@ describe("Perfect Planner shell interaction and accessibility", () => {
     }
     await user.click(screen.getByRole("button", { name: /2 demo agents/ }));
     expect(await screen.findByRole("region", { name: "Runtime and connections" })).toBeTruthy();
-    expect(await screen.findByRole("region", { name: "Connect your agent" })).toBeTruthy();
+    const connectCard = await screen.findByRole("region", { name: "Connect your agent" });
+    expect(connectCard.textContent).not.toMatch(/Antigravity/);
+    expect(connectCard.textContent).toMatch(/Use Connect agent in the top bar instead/);
     expect(window.location.search).toContain("workspace=ledger");
   });
 
@@ -456,5 +458,40 @@ describe("Perfect Planner shell interaction and accessibility", () => {
     window.history.replaceState({}, "", "/?workspace=plan"); document.documentElement.lang = "en"; document.title = "Perfect Planner"; renderDemoShell();
     const result = await axe.run(document, { rules: { "color-contrast": { enabled: false } } });
     expect(result.violations.filter((item) => ["serious", "critical"].includes(item.impact))).toEqual([]);
+  });
+});
+
+describe("Demo project index", () => {
+  test("has a named search, pressed-state filters, neutral sample chips, and pins an exact ID match", async () => {
+    window.history.replaceState({}, "", "/?workspace=index");
+    renderDemoShell();
+    const index = await screen.findByRole("region", { name: "Project index" });
+    const search = within(index).getByRole("searchbox", { name: "Search the project index" });
+    const filters = within(index).getByRole("group", { name: "Index categories" });
+    expect(within(filters).getByRole("button", { name: /^All/ }).getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(within(filters).getByRole("button", { name: /^Outcome/ }));
+    expect(within(filters).getByRole("button", { name: /^Outcome/ }).getAttribute("aria-pressed")).toBe("true");
+    expect(within(filters).getByRole("button", { name: /^All/ }).getAttribute("aria-pressed")).toBe("false");
+    expect(index.querySelector(".index-entry .status-verified")).toBeNull();
+    fireEvent.click(within(filters).getByRole("button", { name: /^All/ }));
+    fireEvent.change(search, { target: { value: "b07" } });
+    const entries = [...index.querySelectorAll(".index-entry")];
+    expect(entries.length).toBeGreaterThan(1);
+    expect(entries[0].querySelector("code").textContent).toBe("B07");
+    expect(within(index).getByRole("region", { name: "Exact ID match" })).toBeTruthy();
+    expect(entries.filter((entry) => entry.querySelector("code").textContent === "B07")).toHaveLength(1);
+  });
+
+  test("Escape clears the search first, then closes the index", async () => {
+    window.history.replaceState({}, "", "/?workspace=index");
+    renderDemoShell();
+    const index = await screen.findByRole("region", { name: "Project index" });
+    const search = within(index).getByRole("searchbox", { name: "Search the project index" });
+    fireEvent.change(search, { target: { value: "P3" } });
+    fireEvent.keyDown(search, { key: "Escape" });
+    expect(search.value).toBe("");
+    expect(screen.getByRole("region", { name: "Project index" })).toBeTruthy();
+    fireEvent.keyDown(search, { key: "Escape" });
+    expect(await screen.findByRole("region", { name: "Project Home workspace" })).toBeTruthy();
   });
 });

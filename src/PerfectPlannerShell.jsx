@@ -3276,17 +3276,48 @@ function IndexWorkspace({ onOpen, onClose }) {
     "All",
     ...new Set(projectIndexEntries.map((entry) => entry.kind)),
   ];
+  const needle = query.trim().toLowerCase();
   const filtered = projectIndexEntries.filter((entry) => {
     const matchesKind = kind === "All" || entry.kind === kind;
     const haystack =
       `${entry.id} ${entry.term} ${entry.kind} ${entry.locator} ${entry.description}`.toLowerCase();
-    return matchesKind && haystack.includes(query.trim().toLowerCase());
+    return matchesKind && haystack.includes(needle);
   });
-  const grouped = filtered.reduce((groups, entry) => {
+  // An exact ID such as "B07" is pinned above the alphabetical register instead of
+  // landing under its term's letter, where it could rank last.
+  const exact = needle ? filtered.filter((entry) => entry.id.toLowerCase() === needle) : [];
+  const grouped = filtered.filter((entry) => !exact.includes(entry)).reduce((groups, entry) => {
     const letter = entry.term[0].toUpperCase();
     (groups[letter] ??= []).push(entry);
     return groups;
   }, {});
+
+  const renderEntry = (entry) => (
+    <button
+      type="button"
+      className="index-entry"
+      key={`${entry.kind}-${entry.id}`}
+      onClick={() => onOpen(entry)}
+    >
+      <span>
+        <code>{entry.id}</code>
+        {/* Sample kinds are labels, not verified results: green is reserved for verified success. */}
+        <StatusChip status="ready">{entry.kind}</StatusChip>
+      </span>
+      <span>
+        <strong>{entry.term}</strong>
+        <small>{entry.description}</small>
+        <em>{entry.locator}</em>
+      </span>
+      <span className="index-entry-proof">
+        <small>
+          <strong>{entry.completion}% complete</strong>
+          <em>by {entry.worker}</em>
+        </small>
+        <ArrowRightIcon />
+      </span>
+    </button>
+  );
 
   return (
     <section className="workspace index-workspace" aria-label="Project index">
@@ -3343,8 +3374,17 @@ function IndexWorkspace({ onOpen, onClose }) {
           <label className="index-search">
             <MagnifyingGlassIcon />
             <input
+              type="search"
+              aria-label="Search the project index"
               value={query}
               onChange={(event) => setQuery(event.target.value)}
+              onKeyDown={(event) => {
+                // Escape clears a search first; with nothing typed it closes the index.
+                if (event.key !== "Escape") return;
+                event.preventDefault();
+                if (query) setQuery("");
+                else onClose?.();
+              }}
               placeholder="Find an ID, term, worker, dependency, or source…"
             />
           </label>
@@ -3359,7 +3399,9 @@ function IndexWorkspace({ onOpen, onClose }) {
             {kinds.map((item) => (
               <button
                 key={item}
+                type="button"
                 className={kind === item ? "active" : ""}
+                aria-pressed={kind === item}
                 onClick={() => setKind(item)}
               >
                 {item}
@@ -3393,6 +3435,15 @@ function IndexWorkspace({ onOpen, onClose }) {
           ))}
         </aside>
         <div className="index-register">
+          {exact.length > 0 && (
+            <section className="index-letter-group" aria-label="Exact ID match">
+              <div className="index-letter">
+                <strong>ID</strong>
+                <span>Exact match</span>
+              </div>
+              <div className="index-entries">{exact.map(renderEntry)}</div>
+            </section>
+          )}
           {Object.entries(grouped).map(([letter, entries]) => (
             <section
               className="index-letter-group"
@@ -3404,34 +3455,7 @@ function IndexWorkspace({ onOpen, onClose }) {
                 <span>{entries.length} terms</span>
               </div>
               <div className="index-entries">
-                {entries.map((entry) => (
-                  <button
-                    className="index-entry"
-                    key={`${entry.kind}-${entry.id}`}
-                    onClick={() => onOpen(entry)}
-                  >
-                    <span>
-                      <code>{entry.id}</code>
-                      <StatusChip
-                        status={entry.kind === "Outcome" ? "verified" : "ready"}
-                      >
-                        {entry.kind}
-                      </StatusChip>
-                    </span>
-                    <span>
-                      <strong>{entry.term}</strong>
-                      <small>{entry.description}</small>
-                      <em>{entry.locator}</em>
-                    </span>
-                    <span className="index-entry-proof">
-                      <small>
-                        <strong>{entry.completion}% complete</strong>
-                        <em>by {entry.worker}</em>
-                      </small>
-                      <ArrowRightIcon />
-                    </span>
-                  </button>
-                ))}
+                {entries.map(renderEntry)}
               </div>
             </section>
           ))}
