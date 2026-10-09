@@ -42,10 +42,15 @@ import { folderPlanGuidance } from '../engine/folderPlanGuidance.js';
 // Home's button bumps this token; remembering the last one used stops a remount from reopening the picker.
 let consumedAutoStartToken = 0;
 const LAST_NATIVE_FOLDER_KEY = "perfect-planner:last-folder:v1";
+// Off by default: a chosen folder waits for "Approve read-only scan". Set to "1" to start scans on pick.
+export const SKIP_SCAN_APPROVAL_KEY = "perfect-planner:skip-scan-approval:v1";
+function readSkipScanApproval() {
+  try { return localStorage.getItem(SKIP_SCAN_APPROVAL_KEY) === "1"; } catch { return false; }
+}
 const readyMessage = (mode) =>
   mode === "browser"
-    ? "Choose your app folder and the scan starts straight away."
-    : "Choose your app folder, or type its full path, and the scan starts straight away.";
+    ? "Choose your app folder, then approve the read-only scan."
+    : "Choose your app folder, or type its full path, then approve the read-only scan.";
 
 // The desktop app remembers the last scanned path; the browser keeps folder handles in IndexedDB instead.
 function readLastNativeFolder() {
@@ -211,6 +216,7 @@ export function StructureWorkspace({
   onProjectUnavailable,
   onDiagnostic,
   autoStartIntakeToken = 0,
+  skipScanApproval,
   workspaceAdapter = defaultWorkspaceAdapter,
 }) {
   const projectContext = useOptionalProject();
@@ -250,6 +256,7 @@ export function StructureWorkspace({
     gaps: null,
     message: readyMessage(workspaceAdapter.mode),
   });
+  const scanStartsOnPick = skipScanApproval ?? readSkipScanApproval();
   const tokenRef = useRef(null);
   const discoveryPanelRef = useRef(null);
   const scanAbortRef = useRef(null);
@@ -779,7 +786,7 @@ export function StructureWorkspace({
       if (scanRunRef.current === runId) scanAbortRef.current = null;
     }
   };
-  const reconnectFolder = async (projectId = activeProject?.projectId) => {
+  const reconnectFolder = async (projectId = activeProject?.projectId, { askFirst = false } = {}) => {
     if (!projectId || mapLoading || typeof workspaceAdapter.reconnectRememberedFolder !== "function") return;
     setFolderAccess((state) => ({ ...state, busy: true, error: "" }));
     let receipt;
@@ -798,7 +805,8 @@ export function StructureWorkspace({
     }
     setFolderAccess((state) => ({ ...state, busy: false, error: "" }));
     setRootPath(receipt.selectedPath);
-    await connectFolder(receipt.selectedPath);
+    if (askFirst) awaitScanApproval(receipt.selectedPath);
+    else await connectFolder(receipt.selectedPath);
     if (typeof workspaceAdapter.rememberedFolder === "function")
       Promise.resolve(workspaceAdapter.rememberedFolder(projectId)).then((access) => {
         setFolderAccess((state) => state.projectId === projectId ? { ...state, access } : state);
@@ -809,11 +817,21 @@ export function StructureWorkspace({
     if (workspaceAdapter.mode !== "browser") {
       beginFolderSelection();
       setRootPath(lastFolder.path);
-      connectFolder(lastFolder.path);
+      awaitScanApproval(lastFolder.path);
       return;
     }
-    reconnectFolder(lastFolder.projectId);
+    reconnectFolder(lastFolder.projectId, { askFirst: true });
   };
+  // A chosen folder waits for "Approve read-only scan" unless scans are set to start on pick.
+  function awaitScanApproval(path) {
+    if (scanStartsOnPick) return connectFolder(path);
+    setIntake((current) => ({
+      ...current,
+      state: "selected",
+      message: `Ready to scan ${projectLabelFromRoot(path) || "this folder"}. The scan only reads files; nothing is run or moved.`,
+    }));
+    return undefined;
+  }
   const openLaunchFolder = () =>
     chooseFolder(() => workspaceAdapter.selectLaunchFolder());
   const beginFolderSelection = () => {
@@ -874,7 +892,7 @@ export function StructureWorkspace({
     }
     beginFolderSelection();
     setRootPath(path);
-    connectFolder(path);
+    awaitScanApproval(path);
   };
   const chooseFolder = async (select = () => workspaceAdapter.selectWorkspaceFolder()) => {
     if (mapLoading) return;
@@ -907,9 +925,8 @@ export function StructureWorkspace({
         }));
         return;
       }
-      // Picking the folder is the approval: the read-only scan starts at once.
       setRootPath(receipt.selectedPath);
-      await connectFolder(receipt.selectedPath);
+      await awaitScanApproval(receipt.selectedPath);
     } catch (error) {
       if (selectionRunRef.current !== runId) return;
       const message =
@@ -1183,6 +1200,15 @@ export function StructureWorkspace({
                 >
                   <FolderIcon /> Choose app folder
                 </button>
+                {rootPath && intake.state === "selected" && !mapLoading && (
+                  <button
+                    type="button"
+                    className="primary-button approve-scan-button"
+                    onClick={() => connectFolder()}
+                  >
+                    <ShieldCheckIcon /> Approve read-only scan
+                  </button>
+                )}
                 {lastFolder && !(canRemember && lastFolder.projectId === activeProject.projectId) && (
                   <button
                     type="button"
@@ -1202,7 +1228,7 @@ export function StructureWorkspace({
                     disabled={mapLoading}
                     title={launchFolder.path ?? launchFolder.name}
                   >
-                    Scan {launchFolder.name}
+                    Use launch folder · {launchFolder.name}
                   </button>
                 )}
               </span>

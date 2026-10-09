@@ -1842,3 +1842,20 @@
   gap: 0;
   font-size: 8px;
 }
+.one-click-intake .approve-scan-button {
+  padding: 12px 22px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+}
+.one-click-intake .choose-folder-button:has(+ .approve-scan-button) {
+  background: #fff;
+  color: var(--ink);
+  border-color: var(--line-strong);
+}
+.one-click-intake .approve-scan-button svg {
+  width: 16px;
+  height: 16px;
+  color: inherit;
+}

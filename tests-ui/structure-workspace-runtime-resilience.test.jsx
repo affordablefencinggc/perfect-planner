@@ -87,6 +87,7 @@ function createControlledAdapter({
 
 async function chooseFolder(user) {
   await user.click(screen.getByRole("button", { name: "Choose app folder" }));
+  await user.click(await screen.findByRole("button", { name: "Approve read-only scan" }));
 }
 
 beforeEach(() => {

@@ -16,7 +16,7 @@ function blocked(reason, input = {}) {
 
 export function assessWorkspaceIntake({ selectedPath = "", registration = null, census = null, gaps = null, contractAssessment = null } = {}) {
   if (!selectedPath) return Object.freeze({ state: "idle", step: 0, reason: "Choose one app folder.", mutationAuthorized: false });
-  if (!registration) return Object.freeze({ state: "selected", step: 1, reason: "Folder chosen. Starting the read-only scan.", mutationAuthorized: false });
+  if (!registration) return Object.freeze({ state: "selected", step: 1, reason: "Folder chosen. Approve the read-only scan to start.", mutationAuthorized: false });
   if (registration.authoritative !== true || registration.access !== "metadata-read-only") return blocked("Workspace registration is not authoritative metadata-only access.");
   if (!census) return Object.freeze({ state: "scanning", step: 2, reason: "The chosen folder is being indexed.", mutationAuthorized: false });
   if (census.authoritative !== true || census.contentReturned !== false) return blocked("Workspace census is not authoritative metadata-only evidence.");

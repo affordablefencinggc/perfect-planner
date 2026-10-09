@@ -2,13 +2,13 @@ import React from "react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { StructureWorkspace } from "../src/components/StructureWorkspace.jsx";
+import { SKIP_SCAN_APPROVAL_KEY, StructureWorkspace } from "../src/components/StructureWorkspace.jsx";
 
 beforeEach(() => {
   vi.stubGlobal("fetch", vi.fn(async () => ({ ok: false, status: 503, json: async () => ({ error: "Local registry unavailable in test mode" }) })));
   vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: true })));
 });
-afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); localStorage.removeItem(SKIP_SCAN_APPROVAL_KEY); });
 
 const root = "a".repeat(64);
 const picked = "browser://picked-app/0123456789abcdef01234567";
@@ -27,18 +27,39 @@ function adapterWith(overrides = {}) {
   };
 }
 
-describe("one-click folder intake", () => {
-  test("one click on Choose app folder registers, scans and captures the project with no other press", async () => {
+describe("folder intake with an adjacent approval", () => {
+  test("Choose app folder then the adjacent Approve read-only scan registers, scans and captures the project", async () => {
     const user = userEvent.setup();
     const adapter = adapterWith();
     const onProjectCaptured = vi.fn();
     render(<StructureWorkspace workspaceAdapter={adapter} onProjectCaptured={onProjectCaptured} />);
     await user.click(screen.getByRole("button", { name: "Choose app folder" }));
+    expect(adapter.registerWorkspaceReadOnly).not.toHaveBeenCalled();
+    await user.click(await screen.findByRole("button", { name: "Approve read-only scan" }));
     await waitFor(() => expect(onProjectCaptured).toHaveBeenCalledTimes(1));
     expect(adapter.registerWorkspaceReadOnly).toHaveBeenCalledTimes(1);
     expect(adapter.registerWorkspaceReadOnly).toHaveBeenCalledWith(expect.objectContaining({ rootPath: picked, explicitUserApproval: true }));
     expect(adapter.censusRegisteredWorkspace).toHaveBeenCalledTimes(1);
-    expect(screen.queryByRole("button", { name: /Approve read-only analysis/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Approve read-only scan" })).toBeNull();
+  });
+
+  test("with the skip-approval setting on, picking the folder starts the scan", async () => {
+    const user = userEvent.setup();
+    const adapter = adapterWith();
+    const onProjectCaptured = vi.fn();
+    render(<StructureWorkspace workspaceAdapter={adapter} onProjectCaptured={onProjectCaptured} skipScanApproval />);
+    await user.click(screen.getByRole("button", { name: "Choose app folder" }));
+    await waitFor(() => expect(onProjectCaptured).toHaveBeenCalledTimes(1));
+    expect(adapter.registerWorkspaceReadOnly).toHaveBeenCalledWith(expect.objectContaining({ rootPath: picked, explicitUserApproval: true }));
+  });
+
+  test("the skip-approval setting is read from local storage and is off by default", async () => {
+    const user = userEvent.setup();
+    localStorage.setItem(SKIP_SCAN_APPROVAL_KEY, "1");
+    const adapter = adapterWith();
+    render(<StructureWorkspace workspaceAdapter={adapter} />);
+    await user.click(screen.getByRole("button", { name: "Choose app folder" }));
+    await waitFor(() => expect(adapter.registerWorkspaceReadOnly).toHaveBeenCalledTimes(1));
   });
 
   test("cancelling the picker registers and reads nothing", async () => {
@@ -53,7 +74,7 @@ describe("one-click folder intake", () => {
     expect(onProjectCaptured).not.toHaveBeenCalled();
   });
 
-  test("Use last folder reconnects the remembered project and then scans it", async () => {
+  test("Use last folder reconnects the remembered project and scans it after approval", async () => {
     const user = userEvent.setup();
     const adapter = adapterWith({
       lastFolder: vi.fn(async () => ({ projectId: "proj_last", name: "Looplet" })),
@@ -63,13 +84,15 @@ describe("one-click folder intake", () => {
     render(<StructureWorkspace workspaceAdapter={adapter} onProjectCaptured={onProjectCaptured} />);
     await user.click(await screen.findByRole("button", { name: "Use last folder · Looplet" }));
     expect(adapter.reconnectRememberedFolder).toHaveBeenCalledWith("proj_last");
+    expect(adapter.registerWorkspaceReadOnly).not.toHaveBeenCalled();
+    await user.click(await screen.findByRole("button", { name: "Approve read-only scan" }));
     await waitFor(() => expect(onProjectCaptured).toHaveBeenCalledTimes(1));
     expect(adapter.registerWorkspaceReadOnly).toHaveBeenCalledWith(expect.objectContaining({ rootPath: "browser://Looplet/abc123", explicitUserApproval: true }));
     expect(adapter.censusRegisteredWorkspace).toHaveBeenCalledTimes(1);
     expect(adapter.selectWorkspaceFolder).not.toHaveBeenCalled();
   });
 
-  test("the launch folder gets a Scan button that selects it and then scans", async () => {
+  test("the launch folder gets a button that selects it and scans after approval", async () => {
     const user = userEvent.setup();
     const adapter = adapterWith({
       launchFolder: vi.fn(async () => ({ name: "my-launch-app" })),
@@ -77,8 +100,9 @@ describe("one-click folder intake", () => {
     });
     const onProjectCaptured = vi.fn();
     render(<StructureWorkspace workspaceAdapter={adapter} onProjectCaptured={onProjectCaptured} />);
-    await user.click(await screen.findByRole("button", { name: "Scan my-launch-app" }));
+    await user.click(await screen.findByRole("button", { name: "Use launch folder · my-launch-app" }));
     expect(adapter.selectLaunchFolder).toHaveBeenCalledTimes(1);
+    await user.click(await screen.findByRole("button", { name: "Approve read-only scan" }));
     await waitFor(() => expect(onProjectCaptured).toHaveBeenCalledTimes(1));
     expect(adapter.registerWorkspaceReadOnly).toHaveBeenCalledWith(expect.objectContaining({ rootPath: "browser://my-launch-app/0123456789abcdef01234567", explicitUserApproval: true }));
     expect(adapter.selectWorkspaceFolder).not.toHaveBeenCalled();

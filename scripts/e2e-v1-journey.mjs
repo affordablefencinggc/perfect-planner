@@ -303,9 +303,10 @@ async function main() {
       await page.expectText("E2E Notes App");
     });
     await journey(page, at, step);
-    await step("one-click-folder-scan", async () => {
+    await step("launch-folder-scan", async () => {
       await page.goto(at("structure"));
-      await page.click({ role: "button", name: re("^Scan notes-app") });
+      await page.click({ role: "button", name: re("^Use launch folder · notes-app") });
+      await page.click({ role: "button", name: "Approve read-only scan" });
       await page.expectText("3 files indexed");
       await page.expectText(/notes-app/);
     });

@@ -27,6 +27,7 @@ describe("Structure workspace intake and connection map", () => {
     };
     const {container}=render(<StructureWorkspace workspaceAdapter={workspaceAdapter} onProjectCaptured={onProjectCaptured}/>);
     await user.click(screen.getByRole("button",{name:"Choose app folder"}));
+    await user.click(await screen.findByRole("button", { name: "Approve read-only scan" }));
     expect(await screen.findByText(/Folder preview · 1 source-file paths · content not verified/)).toBeTruthy();
     expect(container.querySelector(".workspace-structure-tree")).toBeTruthy();
     expect(onProjectCaptured).not.toHaveBeenCalled();
@@ -44,6 +45,7 @@ describe("Structure workspace intake and connection map", () => {
     };
     render(<StructureWorkspace workspaceAdapter={workspaceAdapter} />);
     await user.click(screen.getByRole("button", { name: "Choose app folder" }));
+    await user.click(await screen.findByRole("button", { name: "Approve read-only scan" }));
     expect(await screen.findByText("No files observed in this folder scan · 1 entries skipped · not proof the folder is empty")).toBeTruthy();
     expect(screen.getByRole("region", { name: "Empty app discovery canvas", exact: true }).textContent).toBe("");
     expect(screen.queryByText(/Empty until a folder is indexed/)).toBeNull();
@@ -81,6 +83,7 @@ describe("Structure workspace intake and connection map", () => {
     };
     render(<StructureWorkspace workspaceAdapter={workspaceAdapter} />);
     await user.click(screen.getByRole("button", { name: "Choose app folder" }));
+    await user.click(await screen.findByRole("button", { name: "Approve read-only scan" }));
     const map = screen.getByRole("region", { name: "Progressive app discovery map" });
     await screen.findByText("Vite build configuration", {}, { timeout: 6_000 });
     expect(map.textContent).toContain("Vite build configuration");
@@ -107,7 +110,7 @@ describe("Structure workspace intake and connection map", () => {
     expect(onDiagnostic.mock.calls.filter(([source, severity]) => source === 'workspace' && severity === 'error')).toHaveLength(1);
   });
 
-  test("picking a folder is the approval: one click registers with explicit approval and scans", async () => {
+  test("choosing a folder reads nothing until the adjacent Approve read-only scan is pressed", async () => {
     const user = userEvent.setup();
     const calls = [];
     const workspaceAdapter = {
@@ -118,9 +121,14 @@ describe("Structure workspace intake and connection map", () => {
     render(<StructureWorkspace workspaceAdapter={workspaceAdapter} />);
     await user.click(screen.getByRole("button", { name: "Choose app folder" }));
     expect(workspaceAdapter.selectWorkspaceFolder).toHaveBeenCalledTimes(1);
+    // Choosing reads nothing: the scan waits for the separate approval right next to the picker.
+    const approve = await screen.findByRole("button", { name: "Approve read-only scan" });
+    expect(screen.getByText(/Ready to scan sample-app/)).toBeTruthy();
+    expect(workspaceAdapter.registerWorkspaceReadOnly).not.toHaveBeenCalled();
+    expect(workspaceAdapter.censusRegisteredWorkspace).not.toHaveBeenCalled();
+    await user.click(approve);
     await waitFor(() => expect(workspaceAdapter.registerWorkspaceReadOnly).toHaveBeenCalledTimes(1));
     expect(workspaceAdapter.registerWorkspaceReadOnly).toHaveBeenCalledWith(expect.objectContaining({ rootPath: "C:\\repos\\sample-app", explicitUserApproval: true }));
-    expect(screen.queryByRole("button", { name: /Approve read-only analysis/ })).toBeNull();
   });
 
   test("cancelling the picker reads nothing", async () => {
