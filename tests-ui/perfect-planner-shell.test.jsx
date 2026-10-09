@@ -280,6 +280,20 @@ describe("Perfect Planner shell interaction and accessibility", () => {
     expect(screen.getByRole("textbox", { name: "Operations copy tray" }).value).toBe(copied);
   });
 
+  test("opening Operations never takes focus back from a control already focused inside it", async () => {
+    window.history.replaceState({}, "", "/?workspace=home");
+    createRuntimeEventLedger({ storage: window.localStorage }).append({projectId:DEMO_PROJECT_ID,generation:1,adapter:"fixture",source:"mcp",severity:"error",eventId:"evt_focus_keep",message:"Focus fixture",payload:{detail:"x"}});
+    // Hold animation frames so the open-focus frame runs after the user has already moved focus, as on a slow runner.
+    const frames=[];vi.stubGlobal("requestAnimationFrame",(callback)=>{frames.push(callback);return frames.length;});vi.stubGlobal("cancelAnimationFrame",()=>{});
+    try {
+      const user=userEvent.setup();renderDemoShell();
+      await user.click(screen.getByRole("button",{name:/Operations/}));
+      const box=screen.getByRole("checkbox",{name:"Queue evt_focus_keep for copying"});
+      box.focus();act(()=>{frames.splice(0).forEach((callback)=>callback(0));});
+      expect(document.activeElement).toBe(box);
+    } finally { vi.unstubAllGlobals(); }
+  });
+
   test("event selection is separate from disclosure and preserves filtered selections and edited tray text", async () => {
     window.history.replaceState({}, "", "/?workspace=home");
     const ledger = createRuntimeEventLedger({ storage: window.localStorage });

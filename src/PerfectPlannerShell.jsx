@@ -5275,8 +5275,11 @@ function OpsDock({
     } else if (!wasOpen.current) {
       setPanelHeight((height) => clampPanelHeight(height));
       // Opened from elsewhere (e.g. More actions): focus the active view instead of losing focus to the page.
+      // Never steal focus the user already moved into the console before this frame ran.
       const frame = globalThis.requestAnimationFrame?.(() => {
-        if (!handleRef.current?.contains(document.activeElement)) document.querySelector("#operations-panel .ops-tabs .active")?.focus();
+        const active = document.activeElement;
+        if (handleRef.current?.contains(active) || document.getElementById("operations-panel")?.contains(active)) return;
+        document.querySelector("#operations-panel .ops-tabs .active")?.focus();
       });
       wasOpen.current = open;
       return () => { if (frame != null) globalThis.cancelAnimationFrame?.(frame); };
