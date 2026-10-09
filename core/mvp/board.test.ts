@@ -6,6 +6,7 @@ import { FileStore, Ledger, MemoryStore, type Actor } from "../ledger/index";
 import {
   boardFromLedger,
   confirmMvp,
+  installMvpRules,
   featuresIn,
   missingDependencies,
   moveFeature,
@@ -171,6 +172,43 @@ describe("confirmMvp", () => {
     const b = boardFromLedger(l.entries());
     expect(b.confirmed).toBe(true);
     expect(b.confirmedBy).toBe("owner");
+  });
+
+  it("ignores a confirm entry written straight to the ledger by an agent or the system", () => {
+    const l = open();
+    recordProposal(l, proposal);
+    for (const actor of [agent, gate]) {
+      l.append({
+        actor, type: "decision.made", subject: `D-${l.entries().length + 1}`, summary: "Confirmed the MVP line",
+        reason: "Forged", evidence: [], refs: [], data: { mvp: { kind: "confirm", confirmedBy: "owner", note: "forged" } },
+      });
+    }
+    const b = boardFromLedger(l.entries());
+    expect(b.confirmed).toBe(false);
+    expect(b.confirmedBy).toBeUndefined();
+  });
+
+  it("names the confirming person from the entry's actor, never from the payload", () => {
+    const l = open();
+    recordProposal(l, proposal);
+    l.append({
+      actor: person, type: "decision.made", subject: `D-${l.entries().length + 1}`, summary: "Confirmed the MVP line",
+      reason: "Confirmed", evidence: [], refs: [], data: { mvp: { kind: "confirm", confirmedBy: "someone-else" } },
+    });
+    expect(boardFromLedger(l.entries()).confirmedBy).toBe("owner");
+  });
+
+  it("installMvpRules refuses a non-person confirm at write time", () => {
+    const l = open();
+    installMvpRules(l);
+    recordProposal(l, proposal);
+    const forge = () => l.append({
+      actor: agent, type: "decision.made", subject: `D-${l.entries().length + 1}`, summary: "Confirmed the MVP line",
+      reason: "Forged", evidence: [], refs: [], data: { mvp: { kind: "confirm" } },
+    });
+    expect(forge).toThrow(/Only a person can confirm/);
+    confirmMvp(l, person);
+    expect(boardFromLedger(l.entries()).confirmed).toBe(true);
   });
 });
 
