@@ -163,6 +163,7 @@ describe("planning routes", () => {
     expect((await hostCall(base, "POST", `/planning/answer${P}`, { q: open.q, text: "Decided: export to PDF only" })).status).toBe(200);
     const changed = (await hostCall(base, "GET", `/planning${P}`)).body.result;
     expect(changed.approval).toMatchObject({ current: false, canApprove: true, message: expect.stringMatching(/changed since it was approved/) });
+    expect(changed.approval).toMatchObject({ upToDate: false, changedSinceApproval: true });
     const again = await hostCall(base, "POST", `/planning/approve${P}`, { fingerprint: changed.fingerprint });
     expect(again.body.result.plan).toBe("P-2");
     expect(again.body.result.tasks).toEqual({});

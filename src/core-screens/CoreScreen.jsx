@@ -42,7 +42,7 @@ function ReadOnlyNotice() {
   if (usePersonSession()) return null;
   return (
     <p className="core-readonly" role="note">
-      <LockSimpleIcon aria-hidden="true" /> This window can only read. To make changes, open a new one-time link: press Enter in the terminal running Perfect Planner (l and Enter with npm run dev), then open the link it prints.
+      <LockSimpleIcon aria-hidden="true" /> This window can only read. To make changes, open a new one-time link: press Enter in the terminal running Perfect Planner (l and Enter with npm run dev), or restart it, then open the link it prints.
     </p>
   );
 }

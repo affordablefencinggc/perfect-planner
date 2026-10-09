@@ -39,9 +39,21 @@ export async function claimLaunch(base: string, launch: string): Promise<{ statu
   return { status: res.status, cookie: (res.headers.get("set-cookie") ?? "").split(";")[0] || undefined, csrf: body.result?.csrf };
 }
 
-export async function startTestHost(options: { projectRootOverride?: string } = {}): Promise<{ host: CoreHost; base: string; dir: string; stop: () => Promise<void> }> {
+/** A project with no owner key on this device: the app's key store makes no owner key (owner state "unavailable"). */
+class UnownedKeys extends HostKeys {
+  override ownerKeyFor(): string | undefined {
+    return undefined;
+  }
+}
+
+/**
+ * A test host with memory keys. The owner is pinned the way the app does it: on the first write from
+ * the person's window (core/host/owner.ts). Pass { owned: false } for a project with no owner key here.
+ */
+export async function startTestHost({ owned = true, ...options }: { projectRootOverride?: string; owned?: boolean } = {}): Promise<{ host: CoreHost; base: string; dir: string; stop: () => Promise<void> }> {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "pp-core-host-"));
-  const h = createCoreHost({ root, bridge: true, ...options, keys: new HostKeys(new MemoryKeyProvider({ autoCreate: false })) });
+  const inner = new MemoryKeyProvider({ autoCreate: false });
+  const h = createCoreHost({ root, bridge: true, ...options, keys: owned ? new HostKeys(inner) : new UnownedKeys(inner) });
   const s = http.createServer((req, res) => h.middleware(req, res, () => { res.statusCode = 404; res.end(); }));
   await new Promise<void>((resolve) => s.listen(0, "127.0.0.1", resolve));
   const url = `http://127.0.0.1:${(s.address() as AddressInfo).port}/api/core`;
