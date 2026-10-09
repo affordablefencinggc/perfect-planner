@@ -7,7 +7,7 @@ import { LedgerError } from "../ledger/index";
 import { startBridge, ToolError, type Bridge } from "../mcp/index";
 import { PeopleError } from "../people/index";
 import { asPersonRequest, hostKeys, type HostKeys } from "./keys";
-import { excludePrivateFolder, openCoreProject, pinOwnerAfterWrite, projectKey, projectRootFor, type CoreProject } from "./project";
+import { excludePrivateFolder, openCoreProject, pinOwnerAfterWrite, projectKey, projectRootFor, type CoreProject, type OwnerKeySource } from "./project";
 import { HttpError, Router } from "./router";
 import { PersonSessions } from "./session";
 import { registerRoutes } from "./routes/index";
@@ -28,6 +28,8 @@ export interface CoreHostOptions {
   bridge?: boolean;
   /** Signing keys for person and system entries. Default: the OS keychain (PP_CORE_KEYS=memory for throwaway keys). */
   keys?: HostKeys;
+  /** Supplies each project's owner key instead of the app's signed pin (core/host/owner.ts). Tests and embedders only. */
+  ownerKey?: OwnerKeySource;
 }
 
 /** The host's key provider type (kept for callers of the older name). */
@@ -88,7 +90,7 @@ export class CoreHost {
   project(key: string): CoreProject {
     let project = this.projects.get(key);
     if (!project) {
-      project = openCoreProject(this.options.root, key, this.options.projectRootOverride, this.keys);
+      project = openCoreProject(this.options.root, key, this.options.projectRootOverride, this.keys, this.options.ownerKey);
       this.projects.set(key, project);
     }
     return project;

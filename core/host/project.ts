@@ -147,11 +147,24 @@ export function pinOwnerAfterWrite(baseRoot: string, project: CoreProject, keys:
   }
 }
 
-export function openCoreProject(baseRoot: string, key: string, override: string | undefined, keys: HostKeys): CoreProject {
+/**
+ * Supplies a project's owner key id in place of the app's signed pin (CoreHostOptions.ownerKey). The
+ * app itself never passes one: its supplier is the pin above. Undefined: the project opens unowned.
+ */
+export type OwnerKeySource = (project: { key: string; root: string }) => string | undefined;
+
+function ownerFromSource(source: OwnerKeySource, key: string, root: string, keys: HostKeys): OwnerPin {
+  const ownerKey = source({ key, root });
+  if (!ownerKey) return { state: "missing", reason: "No owner key was supplied for this project." };
+  const principal = keys.trustedKeys().find((k) => k.keyId === ownerKey)?.principal;
+  return principal ? { state: "pinned", ownerKey, principal } : { state: "key-missing", ownerKey, reason: `The owner's key ${ownerKey} is not on this device.` };
+}
+
+export function openCoreProject(baseRoot: string, key: string, override: string | undefined, keys: HostKeys, ownerKeyFor?: OwnerKeySource): CoreProject {
   const root = projectRootFor(baseRoot, key, override);
   fs.mkdirSync(root, { recursive: true });
   keys.ensureSystemKey();
-  const owner = ownerPinFor(baseRoot, root, keys);
+  const owner = ownerKeyFor ? ownerFromSource(ownerKeyFor, key, root, keys) : ownerPinFor(baseRoot, root, keys);
   const ledger = Ledger.openSync(new FileStore(root), { keys, ...(owner.ownerKey ? { ownerKey: owner.ownerKey } : {}) });
   // The same rules every core module assumes: numbering (D-/Q-/T-/R- subjects), clauses, people, planning gates.
   installNumberingRules(ledger);

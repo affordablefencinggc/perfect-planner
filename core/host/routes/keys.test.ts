@@ -123,6 +123,24 @@ describe("project owner pin", () => {
   });
 });
 
+describe("ownerKey source (CoreHostOptions.ownerKey)", () => {
+  it("replaces the pin when given: a supplied key owns the project, none leaves it unowned", async () => {
+    const keys = new HostKeys(new MemoryKeyProvider({ autoCreate: false }));
+    const ownerKey = keys.ownerKeyFor("person:owner")!;
+    const base = fs.mkdtempSync(path.join(ctx.dir, "source-"));
+    const owned = openCoreProject(base, "a", undefined, keys, () => ownerKey);
+    expect(owned.owner).toMatchObject({ state: "pinned", ownerKey, principal: "person:owner" });
+    expect(owned.ledger.ownerKeyPinned).toBe(true);
+    const unowned = openCoreProject(base, "b", undefined, keys, () => undefined);
+    expect(unowned.owner.state).toBe("missing");
+    expect(unowned.ledger.ownerKeyPinned).toBe(false);
+    // Nothing is written to app data for a supplied owner.
+    expect(fs.existsSync(path.join(base, "owners"))).toBe(false);
+    for (const project of [owned, unowned]) project.ledger.close();
+    await Promise.allSettled([owned.ready, owned.protection, unowned.ready, unowned.protection]);
+  });
+});
+
 describe("POST /keys/rotate", () => {
   it("rotates through the ledger: the old key vouches for the new one, then is retired; only the person can do it", async () => {
     const first = personWrite("Save notes");

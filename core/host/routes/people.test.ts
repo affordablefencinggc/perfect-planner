@@ -77,7 +77,9 @@ describe("people routes", () => {
       expect(view).toMatchObject({ firstRun: false, ownerMissing: true });
       expect(view).not.toHaveProperty("starter");
       const add = await hostCall(unowned.base, "POST", "/people/members?project=p1", { person: "owner", name: "Riley", role: "owner" });
-      expect(add.status).toBe(422);
+      // The host refuses every person write without a usable owner, before the ledger is asked.
+      expect(add.status).toBe(409);
+      expect(add.body.code).toBe("NO_OWNER");
     } finally {
       await unowned.stop();
     }
