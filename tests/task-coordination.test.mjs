@@ -2,7 +2,7 @@ import "./helpers/hermetic-env.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { emptyTaskDraftLedger, updateTaskDraft } from "../src/project/taskDraftLedger.js";
-import { buildAllocationRecord, buildCollisionRecord, collisionStatus, createResolution, evaluateTaskCollisions, suggestedWaves, taskSnapshot } from "../src/project/taskCoordination.js";
+import { allocationStatus, assignmentErrors, buildAllocationRecord, buildCollisionRecord, collisionStatus, createResolution, evaluateTaskCollisions, normalizeAssignment, ownerKind, suggestedWaves, taskSnapshot, waveConflicts } from "../src/project/taskCoordination.js";
 import { deriveWorkRecordReceipt } from "../src/project/workRecordReceipts.js";
 
 const binding = { projectId: "pp_coord_test", rootIdentity: "a".repeat(64), censusDigest: "b".repeat(64) };
@@ -65,7 +65,7 @@ test("collision receipts stay unanswered when nothing is recorded and never clai
   assert.match(evaluation.detail, /1 task could not be checked/);
   const clearance = deriveWorkRecordReceipt("BUILD-CLEARANCE", sections(record), { project });
   assert.equal(clearance.state, "review");
-  assert.match(clearance.detail, /1 of 1 must-not-overlap conflict still needs a decision/);
+  assert.match(clearance.detail, /2 of 2 overlaps still need a decision/);
   const stale = deriveWorkRecordReceipt("COL-EVALUATION", sections(record), { project: { census: { digest: "c".repeat(64) } } });
   assert.equal(stale.state, "stale");
 });
@@ -92,4 +92,42 @@ test("owner receipts need an owner and wave for every task in the checked task l
   const other = buildCollisionRecord({ ledger: ledgerOf(task("Other", [["write", "a.js"]])), censusDigest: binding.censusDigest });
   assert.equal(deriveWorkRecordReceipt("ALLOC-OWNERS", sections(other, full), { project }).state, "stale");
   assert.equal(deriveWorkRecordReceipt("ALLOC-OWNERS", sections(), { project }), null);
+});
+
+test("one rule: an undecided 'needs an order' pair counts as undecided and keeps clearance in review", () => {
+  const record = buildCollisionRecord({ ledger: ledgerOf(task("A", [["write", "src/x.js"]]), task("B", [["read", "src/x.js"]])), censusDigest: binding.censusDigest });
+  assert.equal(record.collisions[0].severity, "ordered");
+  const status = collisionStatus(record);
+  assert.equal(status.openHardStops, 0);
+  assert.equal(status.open, 1);
+  const clearance = deriveWorkRecordReceipt("BUILD-CLEARANCE", sections(record), { project });
+  assert.equal(clearance.state, "review");
+  assert.match(clearance.detail, /1 of 1 overlap still needs a decision/);
+  const decided = { ...record, resolutions: { [record.collisions[0].key]: createResolution(record.collisions[0], "order", "T0001") } };
+  assert.equal(collisionStatus(decided).open, 0);
+  assert.equal(deriveWorkRecordReceipt("BUILD-CLEARANCE", sections(decided), { project }).state, "recorded");
+});
+
+test("assignment validation refuses bad waves, over-long owners and a bare 'agent:'", () => {
+  for (const wave of ["0", "-3", "1.5", "1000", "abc"]) assert.match(assignmentErrors({ owner: "Ana", wave }).wave, /whole number from 1 to 999/, wave);
+  assert.deepEqual(assignmentErrors({ owner: "Ana", wave: "3" }), {});
+  assert.deepEqual(assignmentErrors({ owner: "", wave: "" }), {}, "empty fields stay 'missing', they are not errors");
+  assert.match(assignmentErrors({ owner: "x".repeat(5000) }).owner, /at most 120 characters \(this one is 5000\)/);
+  assert.match(assignmentErrors({ owner: "agent:" }).owner, /Name the agent/);
+  assert.match(assignmentErrors({ owner: " Agent :  " }).owner, /Name the agent/);
+  assert.equal(normalizeAssignment({ owner: "agent:" }).owner, "");
+  assert.equal(ownerKind("agent:"), null);
+  assert.equal(ownerKind("agent: builder"), "agent");
+  assert.equal(allocationStatus({ taskIds: ["T0001"], assignments: { T0001: { owner: "agent:", wave: 1 } } }).missing, 1, "older saved 'agent:' rows are not owners");
+});
+
+test("waves that contradict a dependency or a recorded order are reported", () => {
+  const base = ledgerOf(task("A", [["write", "src/x.js"]]), task("B", [["write", "src/x.js"]]), task("C", []));
+  const withDep = updateTaskDraft(base, { ...base.tasks[2], dependsOn: ["T0001"] });
+  const record = buildCollisionRecord({ ledger: withDep, censusDigest: binding.censusDigest });
+  const decided = { ...record, resolutions: { [record.collisions[0].key]: createResolution(record.collisions[0], "order", "T0002") } };
+  const conflicts = waveConflicts(withDep, decided, { T0001: { wave: "1" }, T0002: { wave: "1" }, T0003: { wave: "1" } });
+  assert.deepEqual(conflicts.map((item) => `${item.before}>${item.taskId}`).sort(), ["T0001>T0003", "T0002>T0001"]);
+  assert.deepEqual(waveConflicts(withDep, decided, { T0001: { wave: "2" }, T0002: { wave: "1" }, T0003: { wave: "3" } }), []);
+  assert.deepEqual(waveConflicts(withDep, decided, { T0001: { wave: "" }, T0002: { wave: "1" } }), [], "a missing wave is not a contradiction");
 });

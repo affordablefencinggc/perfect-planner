@@ -30,9 +30,9 @@ function clearance(sections, { project } = {}) {
   if (found.stale) return STALE;
   const { status } = found;
   if (!status.checked) return { state: "review", detail: "No task lists the files it changes yet, so overlaps cannot be cleared." };
-  if (status.openHardStops) return { state: "review", detail: `${status.openHardStops} of ${plural(status.hardStops, "must-not-overlap conflict")} still ${status.openHardStops === 1 ? "needs" : "need"} a decision.` };
+  if (status.open) return { state: "review", detail: `${status.open} of ${plural(status.total, "overlap")} still ${status.open === 1 ? "needs" : "need"} a decision.` };
   if (status.unchecked) return { state: "review", detail: `Every conflict found has a decision, but ${plural(status.unchecked, "task")} could not be checked.` };
-  return { state: "recorded", detail: status.hardStops ? `All ${plural(status.hardStops, "must-not-overlap conflict")} have a decision.` : `No must-not-overlap conflicts among ${plural(status.checked, "checked task")}.` };
+  return { state: "recorded", detail: status.total ? `All ${plural(status.total, "overlap")} have a decision.` : `No overlaps among ${plural(status.checked, "checked task")}.` };
 }
 
 export const receiptDerivers = Object.freeze({

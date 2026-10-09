@@ -35,7 +35,8 @@ export function allocationByTask(sections) {
   const source = data.tasks ?? data.owners ?? data.assignments ?? data.byTask ?? data.allocations ?? data;
   const result = new Map();
   for (const [id, item] of keyed(source)) {
-    const owner = text(item.owner) ?? text(item.ownerName) ?? text(item.assignee) ?? text(item.name);
+    const named = text(item.owner) ?? text(item.ownerName) ?? text(item.assignee) ?? text(item.name);
+    const owner = named && /^agent\s*:\s*$/i.test(named) ? null : named;
     const wave = item.wave ?? item.order ?? item.sequence ?? item.round ?? null;
     result.set(id, { owner, wave: Number.isFinite(wave) || text(wave) ? wave : null });
   }
