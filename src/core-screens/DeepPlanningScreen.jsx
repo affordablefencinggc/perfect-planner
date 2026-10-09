@@ -167,9 +167,15 @@ function ApprovePanel({ data, resource }) {
         {refusal && <p className="planning-refusal" role="alert">{refusal}</p>}
         {done && <p className="planning-done" role="status">{done}</p>}
       </div>
-      <button type="button" className="core-button primary" onClick={approve} disabled={busy}>
-        <SealCheckIcon aria-hidden="true" /> {busy ? "Approving…" : "Approve plan"}
-      </button>
+      {data.approval.upToDate ? (
+        <button type="button" className="core-button" disabled>
+          <SealCheckIcon aria-hidden="true" /> Approved
+        </button>
+      ) : (
+        <button type="button" className="core-button primary" onClick={approve} disabled={busy}>
+          <SealCheckIcon aria-hidden="true" /> {busy ? "Approving…" : data.approval.changedSinceApproval ? "Approve changed plan" : "Approve plan"}
+        </button>
+      )}
     </div>
   );
 }

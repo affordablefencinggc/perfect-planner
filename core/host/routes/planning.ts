@@ -110,7 +110,7 @@ function entryNumbers(entries: readonly LedgerEntry[]): Map<string, { asked?: st
 function approvals(entries: readonly LedgerEntry[]) {
   return entries
     .filter((e) => e.type === "plan.approved")
-    .map((e) => ({ plan: e.subject, entry: e.n, at: e.at, by: e.actor.id, summary: e.summary }));
+    .map((e) => ({ plan: e.subject, entry: e.n, at: e.at, by: e.actor.id, summary: e.summary, fingerprint: typeof e.data?.fingerprint === "string" ? e.data.fingerprint : undefined }));
 }
 
 function blockerMessage(open: string[]): string {
@@ -154,8 +154,12 @@ function overview(project: CoreProject) {
     questions: questions.filter((q) => q.area === area).map((q) => ({ ...questionView(q, numbers), why: why.get(q.q) ?? "" })),
   })).filter((a) => a.questions.length > 0);
   const answered = questions.filter((q) => q.status !== "open").length;
+  const fingerprint = planFingerprint(state.idea, areas);
+  const approvedAs = approvals(entries).at(-1)?.fingerprint;
+  // Approved and unchanged since: nothing left to approve (trial finding F8).
+  const upToDate = approvedAs !== undefined && approvedAs === fingerprint;
   return {
-    fingerprint: planFingerprint(state.idea, areas),
+    fingerprint,
     started: questions.length > 0,
     idea: state.idea,
     signals: state.profile?.signals ?? [],
@@ -165,8 +169,18 @@ function overview(project: CoreProject) {
     blockers: questions.filter((q) => open.includes(q.q)).map((q) => ({ q: q.q, id: q.id, area: q.area, areaTitle: AREA_TITLES[q.area], text: q.text, recommendation: q.recommendation })),
     areas,
     approval: {
-      canApprove: questions.length > 0 && open.length === 0,
-      message: questions.length === 0 ? "Start with your idea first; there is nothing to approve yet." : open.length ? blockerMessage(open) : "Every blocking question is settled. The plan can be approved.",
+      canApprove: questions.length > 0 && open.length === 0 && !upToDate,
+      upToDate,
+      changedSinceApproval: approvedAs !== undefined && !upToDate,
+      message: questions.length === 0
+        ? "Start with your idea first; there is nothing to approve yet."
+        : open.length
+          ? blockerMessage(open)
+          : upToDate
+            ? "This plan is approved and has not changed since."
+            : approvedAs !== undefined
+              ? "The plan changed since it was approved. Review it, then approve the new version."
+              : "Every blocking question is settled. The plan can be approved.",
       approved: approvals(entries),
     },
   };
@@ -296,7 +310,9 @@ export function registerPlanningRoutes(router: Router): void {
     const open = openBlockers(entries);
     if (open.length) throw new HttpError(409, "BLOCKERS_OPEN", blockerMessage(open));
     // Bound to the plan the person is looking at: a changed plan needs a fresh look.
-    requireFingerprint(body, overview(project).fingerprint, "plan");
+    const shown = overview(project);
+    requireFingerprint(body, shown.fingerprint, "plan");
+    if (shown.approval.upToDate) throw new HttpError(409, "ALREADY_APPROVED", "This plan is already approved and has not changed since.");
     const actor = actorFor(project);
     const already = writtenTasks(entries).size > 0;
     // The ledger's planning rule refuses this too if a blocker is open (LedgerError -> 422).
@@ -305,7 +321,7 @@ export function registerPlanningRoutes(router: Router): void {
       type: "plan.approved",
       summary: `Plan approved: ${(state.idea ?? "deep planning").replace(/\s+/g, " ").slice(0, 100)}`,
       refs: ["plan"],
-      data: { source: "planning", idea: state.idea, answered: state.session.questions().filter((q) => q.status !== "open").length },
+      data: { source: "planning", idea: state.idea, answered: state.session.questions().filter((q) => q.status !== "open").length, fingerprint: shown.fingerprint },
     });
     let tasks: Record<string, string> = {};
     if (!already) {

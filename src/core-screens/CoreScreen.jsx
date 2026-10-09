@@ -41,7 +41,7 @@ function ReadOnlyNotice() {
   if (usePersonSession()) return null;
   return (
     <p className="core-readonly" role="note">
-      <LockSimpleIcon aria-hidden="true" /> This window can only read. To make changes, open Perfect Planner from the one-time link its launcher printed.
+      <LockSimpleIcon aria-hidden="true" /> This window can only read. To make changes, open a one-time link from the terminal running Perfect Planner: press Enter there for a new one, or restart it.
     </p>
   );
 }
