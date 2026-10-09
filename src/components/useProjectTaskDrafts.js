@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { taskDraftBinding } from "../project/taskDraftLedger.js";
 import { createTaskDraftStore } from "../project/taskDraftStore.js";
+import { recordTaskDraftPresence } from "../project/taskDraftPresence.js";
 
 /** Read-only live view of a project's saved task drafts (the Ledger). */
 export function useProjectTaskDrafts(project, providedStore) {
@@ -16,7 +17,10 @@ export function useProjectTaskDrafts(project, providedStore) {
       setState((current) => ({ ...current, busy: true }));
       try {
         const ledger = await store.read(binding);
-        if (alive && request === sequence.current) setState({ ledger, error: "", busy: false });
+        if (!alive || request !== sequence.current) return;
+        // Keeps the plan sign-off receipt comparing against the tasks shown here.
+        if (ledger?.binding?.projectId === binding.projectId) recordTaskDraftPresence(binding.projectId, ledger);
+        setState({ ledger, error: "", busy: false });
       } catch (error) {
         if (alive && request === sequence.current) setState((current) => ({ ...current, error: error?.message || "Task drafts could not be read.", busy: false }));
       }

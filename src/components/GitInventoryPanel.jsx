@@ -20,7 +20,8 @@ export default function GitInventoryPanel({ activeProject, onCopy, onEvent, runt
   useEffect(() => { controller.current?.setProject(activeProject); }, [activeProject]);
   const r = snapshot.result;
   const registration = activeProject?.registration;
-  const current = r && r.projectId === activeProject?.projectId && r.generation === activeProject?.generation && r.workspaceId === registration?.workspaceId && r.registryRevision === registration?.registryRevision && r.rootIdentity === registration?.rootIdentity && r.expiresAt > Date.now();
+  // Generation is not compared: it advances on view changes, which do not change Git metadata.
+  const current = r && r.projectId === activeProject?.projectId && r.workspaceId === registration?.workspaceId && r.registryRevision === registration?.registryRevision && r.rootIdentity === registration?.rootIdentity && r.expiresAt > Date.now();
   const observation = current ? r.observation : null;
   return <section aria-label="Local branches and working copies" className="git-inventory-panel">
     <div className="git-inventory-actions">

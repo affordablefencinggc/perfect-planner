@@ -6,6 +6,8 @@ import userEvent from "@testing-library/user-event";
 import { BlueprintWorkspace } from "../src/components/BlueprintWorkspace.jsx";
 import { createDemoProjectSession } from "../src/demo/demoProject.js";
 import { createImportedProjectSession, createProjectSession } from "../src/project/projectSession.js";
+import { writeSection } from "../src/project/projectWorkRecords.js";
+import { nextDiscoveryReviewData } from "../src/project/discoveryReviewModel.js";
 
 const observedAt = "2026-09-04T03:00:00.000Z";
 
@@ -50,6 +52,24 @@ function importedProject() {
 afterEach(() => cleanup());
 
 describe("Blueprint workspace imported-project truth boundary", () => {
+  // Trial define-07: answers saved in Structure's discovery review count on Blueprint.
+  test("discovery answers saved for the current scan reduce the open count", () => {
+    localStorage.clear();
+    const project = importedProject();
+    let data = null;
+    for (const id of ["A02", "A03", "A04", "A05", "A06", "A07"]) data = nextDiscoveryReviewData(project, data, id, "not-applicable");
+    writeSection(project.projectId, "discoveryReview", data);
+    render(<BlueprintWorkspace activeProject={project} onSelect={vi.fn()} onOpenStructure={vi.fn()} />);
+    const facts = screen.getByRole("region", { name: "Observed project facts" }).textContent;
+    expect(facts).toContain("1 of 7 areas still need your answer");
+    expect(facts).not.toMatch(/open review questions/);
+    cleanup();
+    writeSection(project.projectId, "discoveryReview", nextDiscoveryReviewData(project, data, "A08", "confirmed"));
+    render(<BlueprintWorkspace activeProject={project} onSelect={vi.fn()} onOpenStructure={vi.fn()} />);
+    expect(screen.getByRole("region", { name: "Observed project facts" }).textContent).toContain("All 7 areas that needed a look have your answer.");
+    localStorage.clear();
+  });
+
   test("keeps the existing Demo blueprint when no real project or an explicit Demo project is supplied", () => {
     const props = { onSelect: vi.fn(), onOpenStructure: vi.fn() };
     const { container, rerender } = render(<BlueprintWorkspace {...props} />);
@@ -74,7 +94,7 @@ describe("Blueprint workspace imported-project truth boundary", () => {
     expect(screen.getByRole("region", { name: "Atlas App blueprint evidence" }).getAttribute("data-project-id")).toBe(project.projectId);
     expect(screen.getByRole("heading", { name: "Atlas App" })).toBeTruthy();
     expect(screen.getByRole("region", { name: "Observed project facts" }).textContent).toContain("42 files indexed");
-    expect(screen.getByRole("region", { name: "Observed project facts" }).textContent).toContain("17 open review questions · 6 areas without metadata findings");
+    expect(screen.getByRole("region", { name: "Observed project facts" }).textContent).toContain("1 observed · 1 signal7 of 7 areas still need your answer · 6 areas without metadata findings");
     expect(screen.getByRole("region", { name: "Observed project facts" }).textContent).toContain("2 skipped");
     expect(screen.getByRole("region", { name: "Observed project facts" }).textContent).toContain("4.0 KB hashed");
     expect(screen.getByRole("region", { name: "Observed project facts" }).textContent).toContain("bbbbbbbbbbbb…");

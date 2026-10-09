@@ -140,6 +140,7 @@ describe("project-scoped Runtime & Connections surface", () => {
 
   test("an allowed MCP context preference remains unavailable without a receipt", async () => {
     const user = userEvent.setup();
+    window.localStorage.setItem("perfect-planner.mcp-context-allowed.v1", "true");
     const project = importedProject();
     renderShell({ project });
     const panel = await openRuntimePanel(user);

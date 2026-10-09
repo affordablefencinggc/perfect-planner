@@ -128,7 +128,7 @@ p.connect-agent-warn { margin: 0; padding: 6px 10px; background: var(--amber-sof
 .connect-agent-section h3 { display: flex; align-items: center; gap: 6px; margin: 0; font: 700 12px var(--mono); }
 .connect-agent-section p { margin: 0; font-size: 13px; line-height: 1.45; }
 .connect-agent-section ul { margin: 0; padding-left: 18px; display: grid; gap: 6px; font-size: 12.5px; line-height: 1.45; }
-.connect-agent-section code { font: 11px var(--mono); background: var(--canvas); padding: 0 3px; border-radius: 3px; word-break: break-all; }
+.connect-agent-section code { font: 11px var(--mono); background: var(--canvas); padding: 0 3px; border-radius: 3px; overflow-wrap: anywhere; }
 .connect-agent-tools { list-style: none; padding-left: 0 !important; }
 .connect-agent-tools li {
   display: grid;

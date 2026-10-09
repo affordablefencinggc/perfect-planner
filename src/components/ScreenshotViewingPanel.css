@@ -6,3 +6,5 @@
 .screenshot-viewing-panel textarea { min-height:5rem; resize:vertical; }
 .screenshot-viewing-panel .screenshot-viewing-confirm { grid-template-columns:auto 1fr; align-items:start; }
 .screenshot-viewing-panel button { justify-self:start; padding:.6rem .9rem; }
+.screenshot-viewing-panel .screenshot-viewing-hint { margin:0; font-size:.85rem; color:#7a5313; }
+.screenshot-viewing-panel .screenshot-viewing-error { margin:0; padding:.5rem .7rem; border:1px solid #c16c65; border-radius:.4rem; background:#fff0ef; color:#922f2d; }

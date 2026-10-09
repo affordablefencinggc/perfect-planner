@@ -29,3 +29,4 @@
 .discovery-review-error{padding:10px 12px;border-left:3px solid var(--red);background:var(--red-soft);font:12px/1.5 var(--mono)}
 .discovery-review-footnote{margin-top:12px}
 @media(max-width:600px){.discovery-review-panel{padding:14px}.discovery-review-panel>ol{grid-template-columns:1fr}}
+.discovery-review-evidence{overflow-wrap:anywhere}

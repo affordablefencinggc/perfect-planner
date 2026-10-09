@@ -8,10 +8,13 @@ import path from "node:path";
 export const NO_CWD_SEARCH_ENV = { NoDefaultCurrentDirectoryInExePath: "1" } as const;
 
 /**
- * True for a local drive-letter path (`C:\\` or `C:/`). Every other Windows spelling is refused:
- * `\\\\server\\share`, `\\\\?\\UNC\\...`, `\\??\\UNC\\...` and device paths can all reach a network share.
+ * On Windows, true only for a local drive-letter path (C:\ or C:/). Refuses every network and device
+ * spelling: \\server, //server, mixed slashes, \\?\UNC\, \??\UNC\, \\.\ and drive-relative \dir.
+ * Use it for any path the core will run or trust on Windows.
  */
-export const isLocalWindowsPath = (file: string) => /^[A-Za-z]:[\\/]/.test(file);
+export function isLocalWindowsPath(file: string): boolean {
+  return /^[A-Za-z]:[\\/]/.test(file);
+}
 
 /** Filesystem calls findExecutable makes; tests inject them to stand in for links to network shares. */
 export interface ExecutableIo {

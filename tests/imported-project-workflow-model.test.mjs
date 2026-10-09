@@ -3,6 +3,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { deriveImportedProjectWorkflowModel } from "../src/project/importedProjectWorkflowModel.js";
+import { workflowNextAction } from "../src/project/workflowNextAction.js";
+import { assessCompletion } from "../src/engine/proofEngine.js";
+import { ownerSummary } from "../src/project/integritySummary.js";
 import { createProjectEntityId } from "../src/project/projectIds.js";
 import { createImportedProjectSession, createProjectSession, projectAuthorityKinds, withProjectState } from "../src/project/projectSession.js";
 
@@ -145,4 +148,28 @@ test("rejects unsupported routes and Demo sessions instead of falling back", () 
   const project = importedProject();
   assert.throws(() => deriveImportedProjectWorkflowModel(project, "release"), /Unsupported imported-project workspace/);
   assert.throws(() => deriveImportedProjectWorkflowModel({ ...project, kind: "demo", state: "demo" }, "plan"));
+});
+
+test("proof pages with no tasks send people to plan tasks instead of a dead end (proverel-21)", () => {
+  const open = [{ id: "PROOF-SCREENSHOT", label: "Screenshots", state: "unanswered", detail: "No screenshot has been added for any task yet." }];
+  assert.deepEqual(
+    { label: workflowNextAction("evidence", open, { taskCount: 0 }).label, workspace: workflowNextAction("evidence", open, { taskCount: 0 }).workspace },
+    { label: "Plan tasks in Ledger", workspace: "ledger" },
+  );
+  assert.equal(workflowNextAction("integrity", [{ id: "INT-PROOF", label: "Proof", state: "unanswered" }], { taskCount: 0 }).workspace, "ledger");
+  // Unknown or non-zero task counts keep the original routing.
+  assert.equal(workflowNextAction("evidence", open).label, "Review Screenshots");
+  assert.equal(workflowNextAction("evidence", open, { taskCount: 2 }).label, "Review Screenshots");
+  // An earlier requirement owned by another page still wins.
+  assert.equal(workflowNextAction("evidence", [{ id: "REC-CENSUS", label: "Scan", state: "unanswered" }, ...open], { taskCount: 0 }).workspace, "structure");
+});
+
+test("counts read as English for one and for zero (proverel-23)", () => {
+  const model = deriveImportedProjectWorkflowModel(importedProject(), "ledger");
+  const discovery = model.requirements.find((item) => item.id === "REC-DISCOVERY");
+  assert.match(discovery.detail, /^1 area found · 1 area to check · /);
+  assert.ok(assessCompletion({ items: [], openGates: 1 }).reasons.includes("1 collision gate remains open"));
+  assert.ok(assessCompletion({ items: [], openGates: 2 }).reasons.includes("2 collision gates remain open"));
+  assert.equal(ownerSummary(null, [], { tasks: [] }).text, "Owners are not assigned in Allocation yet.");
+  assert.equal(ownerSummary(null, ["T0001"], { tasks: [{ id: "T0001", owner: "" }] }).text, "Owners are not assigned in Allocation yet. The task draft does not name an owner.");
 });

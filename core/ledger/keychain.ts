@@ -232,6 +232,11 @@ export class KeychainKeyProvider implements KeyProvider {
     return [...this.principals().flatMap((principal) => this.publicKeys(principal)), ...this.pins()];
   }
 
+  signingKeys(): TrustedKey[] {
+    if (!this.state().available) return [];
+    return this.principals().flatMap((principal) => this.publicKeys(principal).filter((k) => !k.retired));
+  }
+
   /**
    * Trusts someone else's public key on this device only (the owner's key on
    * a helper's device), after the person checked its fingerprint.
