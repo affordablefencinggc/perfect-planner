@@ -30,11 +30,49 @@ export function projectKey(raw: string | null | undefined): string {
   return KEY.test(key) ? key : "default";
 }
 
+// The project's owner key id lives in the app's own folder, never in the ledger: anyone who can
+// write the ledger file could otherwise write its first person line and name themselves owner.
+function ownerFile(baseRoot: string, key: string): string {
+  return path.join(baseRoot, "owners", `${key}.json`);
+}
+
+export function readOwnerKey(baseRoot: string, key: string): string | undefined {
+  try {
+    const value = (JSON.parse(fs.readFileSync(ownerFile(baseRoot, key), "utf8")) as { ownerKey?: unknown }).ownerKey;
+    return typeof value === "string" && value ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function writeOwnerKey(baseRoot: string, key: string, ownerKey: string): void {
+  const file = ownerFile(baseRoot, key);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify({ ownerKey, at: new Date().toISOString() }, null, 2));
+}
+
+/**
+ * The owner key to open with, when one is pinned. Pinning happens once, from this app's own write:
+ * the key that signs a project's first person entry here is recorded as its owner key. A ledger that
+ * already has person entries but no pin (made before pinning existed) stays unpinned: guessing the
+ * owner from the ledger file itself is exactly what pinning is there to stop.
+ */
+function pinOwnerOnFirstPersonEntry(baseRoot: string, key: string, root: string, ledger: Ledger): void {
+  if (new FileStore(root).load().entries.some((e) => e.actor?.kind === "person")) return;
+  const stop = ledger.subscribe((entry) => {
+    if (entry.actor?.kind !== "person") return;
+    stop();
+    if (entry.sig?.key && !readOwnerKey(baseRoot, key)) writeOwnerKey(baseRoot, key, entry.sig.key);
+  });
+}
+
 export function openCoreProject(baseRoot: string, key: string, override: string | undefined, keys: HostKeys): CoreProject {
   const root = override ?? path.join(baseRoot, "projects", key);
   fs.mkdirSync(root, { recursive: true });
   keys.ensureSystemKey();
-  const ledger = Ledger.openSync(new FileStore(root), { keys });
+  const ownerKey = readOwnerKey(baseRoot, key);
+  const ledger = Ledger.openSync(new FileStore(root), { keys, ...(ownerKey ? { ownerKey } : {}) });
+  if (!ownerKey) pinOwnerOnFirstPersonEntry(baseRoot, key, root, ledger);
   // The same rules every core module assumes: numbering (D-/Q-/T-/R- subjects), clauses, people, planning gates.
   installNumberingRules(ledger);
   installClauseRules(ledger);

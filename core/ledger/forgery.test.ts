@@ -11,6 +11,7 @@ import {
   canonicalJson,
   hashEntry,
   isAuthoritative,
+  keyIdOf,
   type EntryDraft,
   type LedgerEntry,
 } from "./index";
@@ -129,9 +130,11 @@ describe("forged authority on disk", () => {
     forge(root, (entries) => {
       asPerson(entries[2]);
       const { hash: _h, sig: _s, ...rest } = entries[2] as LedgerEntry & { sig?: unknown };
+      const pub = rogue.publicKey.export({ format: "der", type: "spki" }).toString("base64");
       entries[2].sig = {
-        key: "k-rogue",
+        key: keyIdOf(pub),
         value: cryptoSign(null, Buffer.from(canonicalJson(rest)), rogue.privateKey).toString("base64"),
+        pub,
       };
     });
     const ledger = Ledger.openSync(new FileStore(root), { keys, readOnly: true });
@@ -185,13 +188,13 @@ describe("forged authority on disk", () => {
       } as unknown as LedgerEntry;
       const { hash: _h, ...unsigned } = trust;
       const signed = rogue.sign("person:owner", Buffer.from(canonicalJson(unsigned)));
-      trust.sig = { key: signed.keyId, value: signed.signature };
+      trust.sig = { key: signed.keyId, value: signed.signature, pub: rogueKey.publicKey };
       entries.push(trust);
       // Now an owner "answer" signed by the rogue key.
       asPerson(entries[2]);
       const { hash: _h2, sig: _s2, ...rest } = entries[2];
       const s = rogue.sign("person:owner", Buffer.from(canonicalJson(rest)));
-      entries[2].sig = { key: s.keyId, value: s.signature };
+      entries[2].sig = { key: s.keyId, value: s.signature, pub: rogueKey.publicKey };
     });
     const ledger = Ledger.openSync(new FileStore(root), { keys, readOnly: true });
     expect(ledger.status).toMatchObject({ ok: false, brokenAt: "L-000003", problem: "signature" });

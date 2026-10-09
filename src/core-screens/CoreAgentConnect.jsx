@@ -6,9 +6,9 @@ import { useCoreResource } from "./coreApi.js";
 import "./coreScreens.css";
 import "./CoreAgentConnect.css";
 
-// One-click Connect agent (core/host/routes/agents.ts). The token only ever
-// lives in this component's memory, inside the command shown once; it is never
-// written to storage and is dropped as soon as the agent checks in.
+// One-click Connect agent (core/host/routes/agents.ts). The token never reaches
+// this window: the app writes it to a file only this user can read, and the line
+// shown here names that file. The line is dropped once the agent checks in.
 export const CONNECT_POLL_MS = 1500;
 
 const ROLE_LABEL = { main: "Main chat", worker: "Worker", observer: "Read-only" };
@@ -37,7 +37,7 @@ function describeAgent(agent) {
 
 export function CoreAgentConnect() {
   const advanced = useAdvanced();
-  const [pending, setPending] = useState(null); // the connect response, token included
+  const [pending, setPending] = useState(null); // the connect response (no token in it)
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState(null);
   const [copied, setCopied] = useState(null);
@@ -50,7 +50,7 @@ export function CoreAgentConnect() {
   const linked = pending && data ? data.connections?.find((c) => c.id === pending.connection)?.agent : null;
   const checkedIn = linked ? agents.find((a) => a.id === linked) : null;
 
-  // Once the agent has checked in, forget the command (and the token in it).
+  // Once the agent has checked in, forget the command.
   useEffect(() => {
     if (!checkedIn) return;
     setJustConnected(checkedIn);
@@ -147,8 +147,9 @@ export function CoreAgentConnect() {
                 ))}
               </div>
               <p>
-                Open a terminal in the folder your agent will work in and paste this one line. It connects {choice.label} to Perfect Planner and teaches it the rules.
-                Then {choice.start} and say <strong>check in with Perfect Planner</strong>. Already in {choice.label}? Paste the line into the chat instead.
+                Open a terminal in the folder your agent will work in and paste this one line. It connects {choice.label} to Perfect Planner for that folder
+                and installs the Perfect Planner skill for {choice.label} on this computer. Then {choice.start} and say{" "}
+                <strong>check in with Perfect Planner</strong>. Already in {choice.label}? Paste the line into the chat; it shows you the line and runs it only after you say yes.
               </p>
               {choice.id === "codex" && <p className="core-muted">Codex keeps one Perfect Planner connection for the whole computer, so this replaces any earlier Codex connection.</p>}
               {pending.warning && <p className="core-agent-connect-warn">{pending.warning}</p>}
@@ -175,7 +176,7 @@ export function CoreAgentConnect() {
                 </div>
               </details>
               {copied && !copied.ok && <p className="core-agent-connect-warn">Copy did not work here. Select the text and copy it by hand.</p>}
-              <p className="core-muted">This command holds a private key for this agent. It is shown only now; keep it to yourself.</p>
+              <p className="core-muted">The line holds no key: it names a file on this computer that only you can read. Disconnecting deletes that file.</p>
             </div>
           )}
 

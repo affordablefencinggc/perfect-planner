@@ -28,8 +28,9 @@ interface Connection {
   id: string;
   person: string;
   issuedAt: string;
-  /** In memory only, for revoke. Never sent back after the connect response. */
+  /** In memory only, for revoke. Never sent to the app window; the agent reads it from tokenFile. */
   token: string;
+  tokenFile: string;
   revoked: boolean;
 }
 
@@ -102,25 +103,41 @@ export function agentEntryPath(from: string = fileURLToPath(import.meta.url)): {
   return { path: entry, built: fs.existsSync(entry) };
 }
 
-const quote = (value: string) => `"${value.replaceAll('"', '\\"')}"`;
+/** Single quotes in both shells, so nothing in a path ($(...), backticks, %VAR% in PowerShell) runs. */
+export const quoteFor = (windows: boolean) => (value: string) =>
+  windows ? `'${value.replaceAll("'", "''")}'` : `'${value.replaceAll("'", `'\\''`)}'`;
+
+const connectProgram = (entry: string) => entry.replace(/agent\.mjs$/, "connect.mjs");
 
 /**
  * The one line per agent: connect.mjs (next to the agent entry) registers the server with that agent's
- * CLI for the folder it runs in, replacing an older registration, and installs the perfect-planner-connect skill.
+ * CLI for the folder it runs in, replacing an older registration, and installs the perfect-planner-connect
+ * skill. It names the token file, never the token, so nothing secret lands in shell history, a chat
+ * transcript or any agent's config.
  */
-export function connectLine(bridgeUrl: string, token: string, entry: string, agent: AgentKind = "claude"): string {
-  return `node ${quote(entry.replace(/agent\.mjs$/, "connect.mjs"))} --agent ${agent} ${bridgeUrl} ${token}`;
+export function connectLine(bridgeUrl: string, tokenFile: string, entry: string, platform: NodeJS.Platform = process.platform, agent: AgentKind = "claude"): string {
+  const quote = quoteFor(platform === "win32");
+  return `node ${quote(connectProgram(entry))} --agent ${agent} ${bridgeUrl} ${quote(tokenFile)}`;
 }
 
 /** Installs only the skill, user-wide; no token, so it is safe to show at any time. */
-export function skillLine(entry: string): string {
-  return `node ${quote(entry.replace(/agent\.mjs$/, "connect.mjs"))} --skill-only`;
+export function skillLine(entry: string, platform: NodeJS.Platform = process.platform): string {
+  return `node ${quoteFor(platform === "win32")(connectProgram(entry))} --skill-only`;
 }
 
-export function setupFor(bridgeUrl: string, token: string, entry: string) {
-  const lines = Object.fromEntries(AGENT_KINDS.map((agent) => [agent, connectLine(bridgeUrl, token, entry, agent)])) as Record<AgentKind, string>;
-  const json = JSON.stringify({ mcpServers: { [AGENT_SERVER_NAME]: { command: "node", args: [entry], env: { PP_BRIDGE_URL: bridgeUrl, PP_AGENT_TOKEN: token } } } }, null, 2);
+export function setupFor(bridgeUrl: string, tokenFile: string, entry: string, platform: NodeJS.Platform = process.platform) {
+  const lines = Object.fromEntries(AGENT_KINDS.map((agent) => [agent, connectLine(bridgeUrl, tokenFile, entry, platform, agent)])) as Record<AgentKind, string>;
+  const json = JSON.stringify({ mcpServers: { [AGENT_SERVER_NAME]: { command: "node", args: [entry], env: { PP_BRIDGE_URL: bridgeUrl, PP_AGENT_TOKEN_FILE: tokenFile } } } }, null, 2);
   return { claudeCode: lines.claude, lines, json };
+}
+
+/** The token waits in a file only this OS user can read; the agent program reads it at start. */
+export function writeTokenFile(project: CoreProject, name: string, token: string): string {
+  const file = path.join(project.root, ".perfect-planner", "tokens", `${name}.token`);
+  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+  fs.rmSync(file, { force: true });
+  fs.writeFileSync(file, token, { mode: 0o600 });
+  return file;
 }
 
 function viewAgents(project: CoreProject): { agents: AgentView[]; connections: ConnectionView[] } {
@@ -175,15 +192,17 @@ export function registerAgentRoutes(router: Router): void {
     const bridge = await host.bridge(project);
     project.state.set(BRIDGE_URL, bridge.url);
     const token = project.service.tokens.issue({ role: "connect", person });
-    const conn: Connection = { id: `C-${randomBytes(4).toString("hex")}`, person, issuedAt: new Date().toISOString(), token, revoked: false };
+    const id = `C-${randomBytes(4).toString("hex")}`;
+    const tokenFile = writeTokenFile(project, `connect-${id}`, token);
+    const conn: Connection = { id, person, issuedAt: new Date().toISOString(), token, tokenFile, revoked: false };
     connections(project).set(conn.id, conn);
     const entry = agentEntryPath();
-    const setup = setupFor(bridge.url, token, entry.path);
+    const setup = setupFor(bridge.url, tokenFile, entry.path);
     return {
       connection: conn.id,
       person,
       bridgeUrl: bridge.url,
-      token,
+      tokenFile,
       serverName: AGENT_SERVER_NAME,
       agentPath: entry.path,
       agentBuilt: entry.built,
@@ -208,6 +227,7 @@ export function registerAgentRoutes(router: Router): void {
       project.service.tokens.revoke(conn.token);
       conn.revoked = true;
     }
+    fs.rmSync(conn.tokenFile, { force: true });
     return { connection: conn.id, revoked: true };
   });
 }

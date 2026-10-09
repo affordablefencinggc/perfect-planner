@@ -8,16 +8,16 @@ const CONNECT = {
   connection: "C-1",
   person: "owner",
   bridgeUrl: "http://127.0.0.1:5555",
-  token: TOKEN,
+  tokenFile: "/data/.perfect-planner/tokens/connect-C-1.token",
   agentPath: "/repo/dist/core-host/agent.mjs",
   agentBuilt: true,
-  claudeCode: `node "/repo/dist/core-host/connect.mjs" --agent claude http://127.0.0.1:5555 ${TOKEN}`,
+  claudeCode: "node '/repo/dist/core-host/connect.mjs' --agent claude http://127.0.0.1:5555 '/data/.perfect-planner/tokens/connect-C-1.token'",
   lines: {
-    claude: `node "/repo/dist/core-host/connect.mjs" --agent claude http://127.0.0.1:5555 ${TOKEN}`,
-    gemini: `node "/repo/dist/core-host/connect.mjs" --agent gemini http://127.0.0.1:5555 ${TOKEN}`,
-    codex: `node "/repo/dist/core-host/connect.mjs" --agent codex http://127.0.0.1:5555 ${TOKEN}`,
+    claude: "node '/repo/dist/core-host/connect.mjs' --agent claude http://127.0.0.1:5555 '/data/.perfect-planner/tokens/connect-C-1.token'",
+    gemini: "node '/repo/dist/core-host/connect.mjs' --agent gemini http://127.0.0.1:5555 '/data/.perfect-planner/tokens/connect-C-1.token'",
+    codex: "node '/repo/dist/core-host/connect.mjs' --agent codex http://127.0.0.1:5555 '/data/.perfect-planner/tokens/connect-C-1.token'",
   },
-  json: JSON.stringify({ mcpServers: { "perfect-planner-core": { command: "node", args: ["/repo/dist/core-host/agent.mjs"], env: { PP_BRIDGE_URL: "http://127.0.0.1:5555", PP_AGENT_TOKEN: TOKEN } } } }, null, 2),
+  json: JSON.stringify({ mcpServers: { "perfect-planner-core": { command: "node", args: ["/repo/dist/core-host/agent.mjs"], env: { PP_BRIDGE_URL: "http://127.0.0.1:5555", PP_AGENT_TOKEN_FILE: "/data/.perfect-planner/tokens/connect-C-1.token" } } } }, null, 2),
 };
 const MAIN = { id: "claude-code-ab12cd", name: "Claude Code", model: "claude-opus", role: "main", person: "owner", connection: "C-1", connectedAt: "2026-10-09T10:00:00Z" };
 const SKILL_LINE = 'node "/repo/dist/core-host/connect.mjs" --skill-only';
@@ -98,7 +98,7 @@ describe("CoreAgentConnect", () => {
     for (let i = 0; i < localStorage.length; i++) expect(localStorage.getItem(localStorage.key(i))).not.toContain(TOKEN);
   });
 
-  test("offers the same one line for Gemini CLI and Codex CLI, and remembers the pick without the token", async () => {
+  test("offers the same one line for Gemini CLI and Codex CLI, and remembers the pick", async () => {
     const writeText = vi.fn().mockResolvedValue();
     Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
     routeFetch({ "GET /agents": async () => ok(list()), "POST /agents/connect": async () => ok(CONNECT) });
@@ -118,7 +118,6 @@ describe("CoreAgentConnect", () => {
     expect(screen.getByLabelText("Codex CLI command").textContent).toBe(CONNECT.lines.codex);
     expect(screen.getByText(/one Perfect Planner connection for the whole computer/)).toBeTruthy();
     expect(localStorage.getItem("pp.connect.agent")).toBe("codex");
-    for (let i = 0; i < localStorage.length; i++) expect(localStorage.getItem(localStorage.key(i))).not.toContain(TOKEN);
   });
 
   test("lists agents with role badges and disconnects one", async () => {

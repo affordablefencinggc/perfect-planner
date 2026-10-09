@@ -5,7 +5,7 @@
 // kind of entry Deep planning writes, through the person's own request.
 import { isAuthoritative, type LedgerEntry } from "../../ledger/index";
 import { appendNumbered } from "../../numbering/index";
-import { openBlockers } from "../../planning/index";
+import { openBlockers, planningQuestions } from "../../planning/index";
 import { HttpError, type Router } from "../router";
 import { localPerson } from "./people";
 
@@ -47,11 +47,16 @@ export function registerPlanRoutes(router: Router): void {
 
   /**
    * POST /plan/approve { tasks?: [{ id, title }] }: the Plan page's approve.
-   * Writes plan.approved P-n in the person's name; refused while a blocking
-   * planning question is open (the ledger's planning rule refuses it too).
+   * Writes plan.approved P-n in the person's name; refused when there is nothing
+   * to approve, and while a blocking planning question is open (the ledger's
+   * planning rule refuses that too).
    */
   router.post("/plan/approve", ({ project, body }) => {
     const tasks = planTasks((body as { tasks?: unknown } | undefined)?.tasks);
+    // Approving nothing is not a plan: there must be tasks on the Plan page or a Deep planning session.
+    if (!tasks.length && !planningQuestions(project.entries()).length) {
+      throw new HttpError(409, "NOTHING_TO_APPROVE", "There is no plan to approve yet. Add tasks on the Plan page or start Deep planning first.");
+    }
     const open = openBlockers(project.entries());
     if (open.length) {
       throw new HttpError(409, "BLOCKERS_OPEN", open.length === 1
