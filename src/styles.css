@@ -8548,7 +8548,8 @@ code {
    a capability as available; only a current receipt can do that. */
 .runtime-connections-popover {
   width: min(760px, calc(100vw - 24px));
-  max-height: calc(100vh - 86px);
+  /* Opens below the two-row top bar (about 110px), so leave room for that and a margin. */
+  max-height: calc(100vh - 140px);
   overflow-y: auto;
   overscroll-behavior: contain;
 }
