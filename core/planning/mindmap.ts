@@ -201,7 +201,9 @@ export function buildMindMap(idea: string, answers: PlanningAnswer[]): MindMap {
   };
 
   for (const answer of sortAnswers(answers)) {
-    for (const spec of AREA_RULES[answer.area](answer)) place(spec, "root", answer.questionId, answer.fromRepo === true);
+    // A spike is an open question, not a decision: it adds only its risk node,
+    // never the area's components ("Framework: Spike T-1 due ..." as a task).
+    if (!answer.spike) for (const spec of AREA_RULES[answer.area](answer)) place(spec, "root", answer.questionId, answer.fromRepo === true);
     if (answer.spike) {
       place(
         {
