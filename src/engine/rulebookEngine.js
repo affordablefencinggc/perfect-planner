@@ -14,6 +14,15 @@ export const architectureTemplates = Object.freeze([
   { id: "ai-autopilot-control-plane", title: "Guarded AI autopilot control plane", version: 1, platforms: ["tauri", "electron", "web"], stages: ["brief", "trust-capabilities", "plans-collisions", "execution-proof", "human-review", "ci-merge", "release-handover"] },
 ]);
 
+export const architecturePlatformLabels = Object.freeze({
+  web: "Website in a browser",
+  pwa: "Installable web app (PWA)",
+  tauri: "Desktop app (Tauri)",
+  electron: "Desktop app (Electron)",
+  mobile: "Mobile app",
+  server: "Server or API",
+});
+
 export const useCaseRulebook = Object.freeze({
   "public-users": { questions: ["accessibilityTarget", "privacyBasis", "abuseModel", "supportModel"] },
   "money-motivated": { questions: ["unitEconomics", "billingFailurePolicy", "refundPolicy", "runwayThreshold"] },
@@ -65,7 +74,7 @@ export function recommendArchitectureTemplates(brief = {}) {
 export function evaluateArchitectureRulebook(input = {}) {
   const blockers = []; const warnings = []; const questions = []; const template = architectureTemplates.find((item) => item.id === input.templateId && item.version === Number(input.templateVersion ?? 1));
   if (!template) return { verdict: "BLOCKED", ready: false, planningBoundary: blueprintRulebookBoundary, template: null, blockers: ["Select an exact registered architecture template id and version after intake feasibility."], warnings, requiredQuestions: ["templateId", "templateVersion"], alternatives: recommendArchitectureTemplates(input.brief), executionMap: null };
-  const platform = String(input.platform ?? ""); if (!template.platforms.includes(platform)) blockers.push(`Template ${template.id}@${template.version} does not permit platform ${platform || "(blank)"}.`);
+  const platform = String(input.platform ?? ""); if (!platform) blockers.push(`Pick a platform for the ${template.title} template. Allowed: ${template.platforms.map((item) => architecturePlatformLabels[item] ?? item).join(", ")}.`); else if (!template.platforms.includes(platform)) blockers.push(`Template ${template.id}@${template.version} does not permit platform ${platform}.`);
   const answers = input.answers ?? {}; const useCases = unique(input.useCases ?? []);
   if (!useCases.length) questions.push("useCases");
   for (const useCase of useCases) { const rule = useCaseRulebook[useCase]; if (!rule) { blockers.push(`Unknown use case: ${useCase}.`); continue; } for (const question of rule.questions) if (!truthy(answers[question])) questions.push(`${useCase}:${question}`); }

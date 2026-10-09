@@ -121,3 +121,32 @@ test('concurrent review failure clears acknowledgments and never enables stale d
  expect(screen.getByLabelText('Keep these tasks as unapproved drafts for the current inventory').checked).toBe(false);
  expect(screen.getByRole('button',{name:'Save task draft'}).matches(':disabled')).toBe(true);
 });
+test('a refused file scope keeps the form editable with every value and shows the error beside File scope',async()=>{
+ const p=project('refused_scope'),store=memoryStore(p);render(<TaskDraftLedger project={p} store={withMemoryTaskSaveIntents(store)}/>);
+ await screen.findByText('No task drafts yet. Add the first task using the form.');
+ fill('Task title','Area claim');fill('Full description','Touch the core area.');fill('Proposed owner','Agent: core');
+ const scope=screen.getByLabelText(/^File scope/);fireEvent.change(scope,{target:{value:'write ../x'}});
+ fireEvent.click(screen.getByRole('button',{name:'Save task draft'}));
+ const inline=await screen.findByTestId('task-draft-claims-error');
+ expect(inline.textContent).toMatch(/relative paths/);
+ expect(screen.getAllByRole('alert').some(node=>/relative paths/.test(node.textContent))).toBe(true);
+ expect(scope.getAttribute('aria-invalid')).toBe('true');expect(scope.getAttribute('aria-describedby')).toBe(inline.id);
+ expect(scope.closest('fieldset').disabled).toBe(false);
+ expect(screen.queryByText('Editor operation finished or was interrupted. Review its retained outcome before continuing.')).toBeNull();
+ expect(screen.getByLabelText('Task title').value).toBe('Area claim');expect(screen.getByLabelText('Full description').value).toBe('Touch the core area.');
+ expect(screen.getByLabelText('Proposed owner').value).toBe('Agent: core');expect(scope.value).toBe('write ../x');
+ expect((await store.read()).revision).toBe(0);
+ fireEvent.change(scope,{target:{value:'write src/core/**\nread tests/core-*.test.mjs'}});
+ expect(screen.queryByTestId('task-draft-claims-error')).toBeNull();
+ fireEvent.click(screen.getByRole('button',{name:'Save task draft'}));
+ await screen.findByRole('button',{name:'Edit T0001'});
+ expect((await store.read()).tasks[0].claims).toEqual([{path:'src/core/**',access:'write'},{path:'tests/core-*.test.mjs',access:'read'}]);
+});
+test('a file scope line without read or write is refused inline without locking the form',async()=>{
+ const p=project('refused_access'),store=memoryStore(p);render(<TaskDraftLedger project={p} store={withMemoryTaskSaveIntents(store)}/>);
+ await screen.findByText('No task drafts yet. Add the first task using the form.');
+ fill('Task title','Bad line');const scope=screen.getByLabelText(/^File scope/);fireEvent.change(scope,{target:{value:'src/app.js'}});
+ fireEvent.click(screen.getByRole('button',{name:'Save task draft'}));
+ expect((await screen.findByTestId('task-draft-claims-error')).textContent).toMatch(/read or write/);
+ expect(scope.closest('fieldset').disabled).toBe(false);expect(scope.value).toBe('src/app.js');expect(screen.getByLabelText('Task title').value).toBe('Bad line');
+});
