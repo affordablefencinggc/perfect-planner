@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { ConnectAgentDrawer } from "../src/components/ConnectAgentDrawer.jsx";
@@ -137,5 +137,35 @@ describe("Connect agent drawer", () => {
     expect(screen.getByLabelText("Run once in a terminal setup text").textContent).toContain("<path-to-perfect-planner>/mcp/perfectPlannerMcpServer.mjs");
     expect(screen.getByText(/does not know where Perfect Planner is/)).toBeTruthy();
     expect(screen.getByText(/Replace the app data placeholder/)).toBeTruthy();
+  });
+});
+
+describe("Connect agent drawer focus stability", () => {
+  test("a parent re-render with a new inline onClose does not pull focus back to Close", async () => {
+    const user = userEvent.setup();
+    let bump;
+    function Rerendering() {
+      const [, setTick] = useState(0);
+      bump = () => setTick((tick) => tick + 1);
+      return <ConnectAgentDrawer open onClose={() => {}} setup={{ serverPath, registryRoot }} />;
+    }
+    render(<Rerendering />);
+    const dialog = screen.getByRole("dialog", { name: "Connect agent" });
+    await waitFor(() => expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "Close" })));
+    const codex = within(dialog).getByRole("tab", { name: "Codex" });
+    await user.click(codex);
+    expect(document.activeElement).toBe(codex);
+    act(() => bump());
+    act(() => bump());
+    expect(document.activeElement).toBe(codex);
+  });
+
+  test("without a project it points to choosing an app folder instead of Build", async () => {
+    const user = userEvent.setup();
+    const onWorkspace = vi.fn();
+    render(<ConnectAgentDrawer open onClose={() => {}} onWorkspace={onWorkspace} hasProject={false} setup={{ serverPath, registryRoot }} />);
+    expect(screen.queryByRole("button", { name: /Open Build/ })).toBeNull();
+    await user.click(screen.getByRole("button", { name: /Choose an app folder/ }));
+    expect(onWorkspace).toHaveBeenCalledWith("structure");
   });
 });
