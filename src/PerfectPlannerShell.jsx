@@ -5146,9 +5146,11 @@ function OpsDock({
         {open ? <CaretDownIcon /> : <CaretUpIcon />}
         <span>Operations</span>
         <span className="ops-status-explained" title={operationalBlockerCount ? `Blocked: ${collisionGate?.authorityReason ?? "The collision check is not connected."} Work cannot be cleared until it runs.` : undefined}>
-          <StatusChip status={errorCount || operationalBlockerCount ? "blocked" : "unverified"}>
-            {errorCount} diagnostic errors{operationalBlockerCount ? " · collision check not connected" : ""} · task outcomes unverified
+          <StatusChip status={errorCount ? "blocked" : "verified"}>
+            {errorCount ? `${errorCount} diagnostic ${errorCount === 1 ? "error" : "errors"}` : "No diagnostic errors"}
           </StatusChip>
+          {operationalBlockerCount > 0 && <StatusChip status="risk">collision check not connected</StatusChip>}
+          <StatusChip status="queued">task outcomes unverified</StatusChip>
         </span>
         <span className="ops-mini-status">
           <GitBranchIcon />{" "}

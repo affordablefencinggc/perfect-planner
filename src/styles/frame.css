@@ -226,3 +226,12 @@
   outline: 2px solid var(--blue-focus);
   outline-offset: 2px;
 }
+
+/* Operations bar: one chip per fact, so only a real error count reads red. */
+.app-shell .ops-status-explained {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
