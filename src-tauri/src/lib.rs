@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 compile_error!("Release builds require embedded assets. Use npm run tauri:build -- --no-bundle, not plain cargo build --release.");
 
 mod collision_authority;
+mod jev_keychain;
 mod native_mcp;
 #[cfg(windows)] mod native_agent_mcp;
 #[cfg(windows)] mod native_agent_setup;
@@ -143,6 +144,9 @@ pub fn run() {
             collision_authority::collision_authority_inspect,
             collision_authority::collision_authority_approve,
             collision_authority::collision_authority_commit,
+            jev_keychain::jev_key_status,
+            jev_keychain::jev_key_save,
+            jev_keychain::jev_key_clear,
         ])
         .run(tauri::generate_context!())
         .expect("error while running the Perfect Planner native shell");

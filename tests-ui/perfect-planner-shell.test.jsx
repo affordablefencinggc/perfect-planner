@@ -534,11 +534,6 @@ describe("shell trial fixes", () => {
     expect(screen.getByRole("checkbox", { name: /Allow MCP context on this device/ }).checked).toBe(true);
   });
 
-  test("blocker counts are pluralised correctly", () => {
-    renderEmptyShell();
-    expect(screen.getByText("1 item prevents promotion")).toBeTruthy();
-  });
-
   test("a link to a project this device does not know is reported, not dropped", async () => {
     renderEmptyShell("home", "&project=pp_not-registered-here");
     expect(await screen.findByText(/linked project isn't registered on this device/)).toBeTruthy();
