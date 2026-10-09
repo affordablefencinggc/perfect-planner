@@ -303,6 +303,12 @@ export class Ledger {
    */
   retireKey(person: Actor, keyId: string, reason: string): LedgerEntry {
     if (person?.kind !== "person") throw new LedgerError("BAD_ACTOR", "only a person can retire a key");
+    // Other devices only honour a retirement signed by a key they can know from the ledger.
+    const signer = this.keys?.trustedKeys().find((k) => k.principal === principalOf(person) && !k.retired)?.keyId;
+    const known = signer !== undefined && (signer === this.ownerKey || recordedKeys(this.list).some((k) => k.keyId === signer));
+    if (!known) {
+      throw new LedgerError("RULE", `this device's key ${signer ?? "(none)"} is not in the ledger yet, so other devices would ignore the retirement; use rotateKey, or trust this key first`);
+    }
     return this.append({ actor: person, type: "key.retired", subject: keyId, summary: `Retired key ${keyId}`, reason, data: { keyId } });
   }
 

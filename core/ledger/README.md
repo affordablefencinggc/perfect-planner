@@ -247,8 +247,9 @@ Every device that trusted the old key replays those two entries, so it
 trusts the new key from step 2. It also refuses anything the old key signs
 after step 4.
 
-Retiring a key by hand (`ledger.retireKey`) reaches only the devices that
-already trust the key that signs the retirement. The owner can retire a
+`ledger.retireKey` refuses to sign with a key the ledger does not record
+yet: no other device could know that key, so they would ignore the
+retirement. After a rotation, use `rotateKey`. The owner can retire a
 helper's key the same way, for example when they leave.
 
 Key trust is replayed in ledger order a fixed number of times:

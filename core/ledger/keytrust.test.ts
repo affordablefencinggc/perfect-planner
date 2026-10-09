@@ -291,10 +291,8 @@ describe("a retired key stops signing", () => {
   it("refuses entries a stolen, retired key signs after the retirement, and keeps the ones before", () => {
     const { root, ownerKeys } = project();
     const stolen = ownerKeys.copy();
-    const oldKey = keyOf(ownerKeys, "person:owner");
-    ownerKeys.rotateKey("person:owner");
     let ledger = Ledger.openSync(new FileStore(root), { ...pin(), keys: ownerKeys, now: clock("2026-10-09T04:00:00Z") });
-    const retire = ledger.retireKey(owner, oldKey.keyId, "Laptop stolen");
+    const retire = ledger.rotateKey(owner, "Laptop stolen").retired;
     ledger.close();
 
     // The thief's own ledger refuses to write with it, even trusting the new key...
@@ -404,5 +402,37 @@ describe("no owner without the project's owner key", () => {
     const pinned = Ledger.openSync(new FileStore(root), { ...pin(), keys: ownerKeys, ownerKey, readOnly: true });
     expect(pinned.owner).toBe("person:owner");
     expect(pinned.status.owner).toBe("person:owner");
+  });
+});
+
+// The reviewer's batch 5 sequence: retirement signed by a key rotated outside
+// the ledger, then the thief vouches for that key with the stolen one.
+describe("retiring with a key other devices cannot know", () => {
+  it("refuses retireKey after a rotation done outside the ledger", () => {
+    const { root, ownerKeys } = project();
+    const oldKey = keyOf(ownerKeys, "person:owner");
+    ownerKeys.rotateKey("person:owner");
+    const ledger = Ledger.openSync(new FileStore(root), { ...pin(), keys: ownerKeys, now: clock("2026-10-09T04:00:00Z") });
+    const error = thrown(() => ledger.retireKey(owner, oldKey.keyId, "Laptop stolen"));
+    expect(error.code).toBe("RULE");
+    expect(error.message).toContain("rotateKey");
+  });
+
+  it.each([5, 6, 7, 8])("refuses the thief's decisions on the helper's device at %i entries after rotateKey", (total) => {
+    const { root, ownerKeys, helperKeys } = project();
+    const stolen = ownerKeys.copy();
+    const ledger = Ledger.openSync(new FileStore(root), { ...pin(), keys: ownerKeys, now: clock("2026-10-09T04:00:00Z") });
+    ledger.rotateKey(owner, "Laptop stolen");
+    ledger.close();
+    const newKey = keyOf(ownerKeys, "person:owner");
+    appendSigned(root, stolen, owner, { type: "key.trusted", subject: newKey.keyId, summary: "trust", reason: "mine", data: { ...newKey } });
+    let count = 5;
+    while (count < total) {
+      appendSigned(root, stolen, owner, { type: "decision.made", subject: `D-${count}`, summary: "Ship without tests", reason: "Owner says" });
+      count += 1;
+    }
+    appendSigned(root, stolen, owner, { type: "decision.made", subject: "D-99", summary: "Ship without tests", reason: "Owner says" });
+    const view = Ledger.openSync(new FileStore(root), { ...pin(), keys: helperKeys, readOnly: true });
+    expect(view.entries().filter((e) => e.type === "decision.made").some((e) => isAuthoritative(e))).toBe(false);
   });
 });
