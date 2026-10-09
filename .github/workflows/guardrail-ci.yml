@@ -16,7 +16,8 @@ jobs:
   web-and-contracts:
     name: Web, contracts, MCP, and Sites (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 25
+    # Windows builds and runs the node suite far slower than Linux/macOS (measured ~25 min on main).
+    timeout-minutes: ${{ matrix.os == 'windows-latest' && 45 || 25 }}
     strategy:
       fail-fast: false
       matrix:
