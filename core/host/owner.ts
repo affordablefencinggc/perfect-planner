@@ -6,7 +6,7 @@
 // signature does not check out against this device's system key is ignored, so the project opens
 // with no owner (nobody can enrol helpers) and status says the pin was tampered with, instead of
 // trusting whoever wrote the file.
-import { createHash, createPublicKey, verify } from "node:crypto";
+import { createPublicKey, randomUUID, verify } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { HostKeys } from "./keys";
@@ -23,7 +23,9 @@ export interface OwnerPin {
 
 interface PinFile {
   project: string;
-  /** The ledger folder this pin is for (real path): a pin never carries over to another folder. */
+  /** The id kept in the project folder (projectIdOf): a pin follows the folder when it moves, never to another project. */
+  id: string;
+  /** Where the ledger was when the pin was made. A hint for people only; never checked. */
   ledger: string;
   ownerKey: string;
   principal: string;
@@ -40,13 +42,34 @@ export function ledgerFolder(root: string): string {
   }
 }
 
-/** One pin per project key and ledger folder, so pointing a project at a new folder starts a new owner. */
-export function ownerPinFile(baseRoot: string, key: string, root: string): string {
-  const folder = createHash("sha256").update(ledgerFolder(root)).digest("hex").slice(0, 16);
-  return path.join(baseRoot, "owners", `${key}-${folder}.json`);
+const ID_FILE = "project-id";
+const ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/**
+ * The project's own id, kept in its .perfect-planner/ folder (made on first open), so the owner pin
+ * survives moving or renaming the folder. Copying the folder copies the id, and with it the same owner.
+ */
+export function projectIdOf(root: string, create = true): string | undefined {
+  const file = path.join(root, ".perfect-planner", ID_FILE);
+  try {
+    const id = fs.readFileSync(file, "utf8").trim();
+    if (ID.test(id)) return id;
+  } catch {
+    // made below
+  }
+  if (!create) return undefined;
+  const id = randomUUID();
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, `${id}\n`);
+  return id;
 }
 
-const signed = (pin: Omit<PinFile, "sig">) => Buffer.from(JSON.stringify(["perfect-planner/owner-pin/2", pin.project, pin.ledger, pin.ownerKey, pin.principal, pin.at]));
+/** One pin per project key and project id. */
+export function ownerPinFile(baseRoot: string, key: string, root: string): string {
+  return path.join(baseRoot, "owners", `${key}-${projectIdOf(root)}.json`);
+}
+
+const signed = (pin: Omit<PinFile, "sig">) => Buffer.from(JSON.stringify(["perfect-planner/owner-pin/3", pin.project, pin.id, pin.ownerKey, pin.principal, pin.at]));
 
 /** Reads and checks the pin. Never trusts an unsigned or wrongly signed file. */
 export function readOwnerPin(baseRoot: string, key: string, root: string, keys: HostKeys): OwnerPin {
@@ -62,7 +85,7 @@ export function readOwnerPin(baseRoot: string, key: string, root: string, keys: 
   } catch {
     return { state: "tampered", reason: "The owner pin file cannot be read." };
   }
-  if (typeof pin.ownerKey !== "string" || typeof pin.principal !== "string" || typeof pin.at !== "string" || pin.project !== key || pin.ledger !== ledgerFolder(root) || typeof pin.sig?.key !== "string" || typeof pin.sig?.value !== "string") {
+  if (typeof pin.ownerKey !== "string" || typeof pin.principal !== "string" || typeof pin.at !== "string" || pin.project !== key || pin.id !== projectIdOf(root) || typeof pin.sig?.key !== "string" || typeof pin.sig?.value !== "string") {
     return { state: "tampered", reason: "The owner pin file is not signed by this app." };
   }
   const system = keys.systemKey(pin.sig.key);
@@ -87,7 +110,7 @@ export function readOwnerPin(baseRoot: string, key: string, root: string, keys: 
 export function createOwnerPin(baseRoot: string, key: string, root: string, keys: HostKeys, principal: string, now = new Date(), replace = false): OwnerPin {
   const ownerKey = keys.ownerKeyFor(principal);
   if (!ownerKey) return { state: "unavailable", reason: "This device has no key store, so the project has no owner." };
-  const body = { project: key, ledger: ledgerFolder(root), ownerKey, principal, at: now.toISOString() };
+  const body = { project: key, id: projectIdOf(root)!, ledger: ledgerFolder(root), ownerKey, principal, at: now.toISOString() };
   const sig = keys.signForApp(signed(body));
   if (!sig) return { state: "unavailable", reason: "This device has no key store, so the project has no owner." };
   const file = ownerPinFile(baseRoot, key, root);

@@ -11,6 +11,7 @@ import { excludePrivateFolder, openCoreProject, projectKey, projectRootFor, type
 import { HttpError, Router } from "./router";
 import { PersonSessions } from "./session";
 import { registerRoutes } from "./routes/index";
+import { syncJevPolicy } from "./routes/decisions";
 
 export const CORE_PREFIX = "/api/core";
 export { PERSON_COOKIE, CSRF_HEADER } from "./session";
@@ -44,6 +45,9 @@ export class CoreHost {
   constructor(private readonly options: CoreHostOptions) {
     this.keys = options.keys ?? hostKeys();
     registerRoutes(this.router);
+    // The person's own window asks for a one-time link for another window (POST, so it needs the
+    // window's cookie, CSRF token and Origin). A process without the person's session cannot get one.
+    this.router.post("/session/new-window", () => ({ launch: this.issueLaunch() }));
     this.router.get("/status", ({ project }) => ({
       project: project.key,
       ledger: project.ledger.status,
@@ -98,6 +102,7 @@ export class CoreHost {
     if (!this.projects.has(key)) await excludePrivateFolder(projectRootFor(this.options.root, key, this.options.projectRootOverride));
     const project = this.project(key);
     await project.ready;
+    await syncJevPolicy(project);
     return project;
   }
 

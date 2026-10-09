@@ -91,6 +91,22 @@ describe("project owner pin", () => {
     }
   });
 
+  it("follows the project when its folder is moved or renamed", async () => {
+    const before = path.join(ctx.dir, "first-place");
+    const opened = openCoreProject(ctx.dir, "keys", before, ctx.host.keys);
+    asPersonRequest(() => appendNumbered(opened.ledger, { actor: { kind: "person", id: "owner" }, type: "task.created", summary: "Save notes", data: { title: "Save notes" } }));
+    opened.ledger.close();
+    const after = path.join(ctx.dir, "renamed");
+    fs.renameSync(before, after);
+    const moved = openCoreProject(ctx.dir, "keys", after, ctx.host.keys);
+    try {
+      expect(moved.owner).toEqual({ ownerKey: opened.owner.ownerKey, principal: "person:owner", state: "pinned" });
+      expect(moved.ledger.owner).toBe("person:owner");
+    } finally {
+      moved.ledger.close();
+    }
+  });
+
   it("after a restart that lost this device's keys: an unwritten project gets a new owner, a written one says why it cannot change", async () => {
     const fresh = () => new HostKeys(new MemoryKeyProvider({ autoCreate: false }));
     ctx.host.project("keys");

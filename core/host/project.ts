@@ -5,7 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { FileStore, Ledger, type LedgerEntry } from "../ledger/index";
 import { installClauseRules } from "../lookup/index";
-import { TestGate, gateRule } from "../gate/index";
+import { TestGate, gateRule, type GatePolicy } from "../gate/index";
 import { AgentService } from "../mcp/index";
 import type { HostKeys } from "./keys";
 import { createOwnerPin, readOwnerPin, type OwnerPin } from "./owner";
@@ -24,6 +24,11 @@ export interface CoreProject {
   root: string;
   ledger: Ledger;
   service: AgentService;
+  /**
+   * The gate policy, shared by the ledger rule and the gate. requireJevTestReview is on while a Jev
+   * key is saved in Settings (host.ts syncs it on every request), so work waits for Jev's test review.
+   */
+  policy: GatePolicy;
   /** Whether the owner key this ledger was opened with is pinned and signed (core/host/owner.ts). */
   owner: OwnerPin;
   /** Done once .perfect-planner/ is in the repo's info/exclude (when the project folder is inside a git repo). */
@@ -115,7 +120,7 @@ function ownerPinFor(baseRoot: string, key: string, root: string, keys: HostKeys
     const made = createOwnerPin(baseRoot, key, root, keys, `person:${DEFAULT_LOCAL_PERSON}`, new Date(), pin.state !== "missing");
     return pin.state === "missing" || made.state !== "created" ? made : { ...made, reason: `Pinned a new owner: ${pin.reason ?? "the earlier pin could not be used"}` };
   }
-  if (pin.state === "missing") return { state: "missing", reason: "This project was started before owners were pinned, so it has no owner on this device." };
+  if (pin.state === "missing") return { state: "missing", reason: "This computer has no owner record for this project: it was made on another computer, or before Perfect Planner recorded owners." };
   return pin;
 }
 
@@ -132,8 +137,11 @@ export function openCoreProject(baseRoot: string, key: string, override: string 
   installPlanningRules(ledger);
   // Test first, on by default (spec 5.1): no claim until a person approved the test and it failed
   // on the current code, and only the gate writes task.done after the test passes on the merge.
-  ledger.addRule(gateRule());
-  const gate = new TestGate({ ledger });
+  const policy: GatePolicy = { requireJevTestReview: false };
+  ledger.addRule(gateRule(policy));
+  const gate = new TestGate({ ledger, requireJevTestReview: policy.requireJevTestReview });
+  // TestGate copies its policy; give it the shared object so the host's switch reaches the gate and the rule together.
+  Object.assign(gate, { policy });
   const service = new AgentService({ ledger, gate });
   // Shipping safety on for every project the app opens: the release rules hold before the first
   // review, and the whole-branch secret scan runs before every push (a non-git folder is reported).
@@ -141,5 +149,5 @@ export function openCoreProject(baseRoot: string, key: string, override: string 
   // this repeats it for direct callers, and every request waits for it.
   const ready = excludePrivateFolder(root).then(() => undefined);
   const protection = ready.then(() => protectRepository(ledger, root));
-  return { key, root, ledger, service, owner, ready, protection, state: new Map(), entries: () => ledger.entries() };
+  return { key, root, ledger, service, policy, owner, ready, protection, state: new Map(), entries: () => ledger.entries() };
 }

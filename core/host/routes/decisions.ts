@@ -56,6 +56,14 @@ export interface JevConnection {
 const statusCache = new Map<string, { at: number; value: JevConnection }>();
 const STATUS_TTL = 60_000;
 
+/**
+ * Jev's test review is required once Jev is set up (a key saved in Settings), and not before, so the
+ * loop runs without Jev. Called on every request; the key store's answer is cached for a minute.
+ */
+export async function syncJevPolicy(project: CoreProject): Promise<void> {
+  project.policy.requireJevTestReview = (await jevConnection(project)).connected;
+}
+
 async function jevConnection(project: CoreProject): Promise<JevConnection> {
   const cached = statusCache.get(project.key);
   if (cached && Date.now() - cached.at < STATUS_TTL) return cached.value;
