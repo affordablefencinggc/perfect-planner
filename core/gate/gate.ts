@@ -374,6 +374,8 @@ export function startRefusal(state: GateState): string | null {
   if (!state.approval) return `${id}'s test is waiting for the owner's approval.`;
   if (!state.baseline) return `${id}'s test has not been run on the current code yet.`;
   if (state.baseline.passed) return `${id}'s test already passes on the current code.`;
+  // Jev may review the test after the person approved it; open gaps stop work until Jev clears them.
+  if (state.jev?.verdict === "gaps") return `Jev found gaps in ${id}'s test: ${state.jev.gaps.join("; ")}. Jev has to clear them, or the test has to be redefined and approved again.`;
   return null;
 }
 
@@ -637,29 +639,10 @@ export class TestGate {
     const jev = options.jevVerdict;
     if (jev !== undefined) {
       if (!options.jev) throw new GateError("A Jev verdict needs the Jev actor (with its model).");
-      if (Array.isArray(jev)) {
-        const gaps = jev.map((gap) => oneLine(gap)).filter(Boolean);
-        if (!gaps.length) throw new GateError('A Jev verdict is "approve" or a non-empty list of gaps.');
-        verdict = this.ledger.append({
-          type: "review.verdict",
-          actor: GATE_ACTOR,
-          subject: taskId,
-          summary: `Jev found ${gaps.length} gap${gaps.length === 1 ? "" : "s"} in ${taskId}'s done-when test`,
-          reason: oneLine(gaps.join("; "), 500),
-          evidence: ["scope:test", "verdict:gaps", `definition:${definition.n}`, `reviewer:jev:${options.jev.id}`, ...gaps.map((gap) => `gap:${gap}`)],
-          data: { scope: "test", verdict: "gaps", test: definition.command, definition: definition.n, gaps, reviewer: options.jev },
-        });
-        return { ok: false, reason: `Jev found gaps in the test: ${gaps.join("; ")}`, verdict };
+      verdict = this.recordTestVerdict(taskId, definition, options.jev, jev);
+      if (evidenceValue(verdict, "verdict") === "gaps") {
+        return { ok: false, reason: `Jev found gaps in the test: ${(verdict.data?.gaps as string[]).join("; ")}`, verdict };
       }
-      if (jev !== "approve") throw new GateError('A Jev verdict is "approve" or a list of gaps.');
-      verdict = this.ledger.append({
-        type: "review.verdict",
-        actor: GATE_ACTOR,
-        subject: taskId,
-        summary: `Jev found no gaps in ${taskId}'s done-when test`,
-        evidence: ["scope:test", "verdict:approve", `definition:${definition.n}`, `reviewer:jev:${options.jev.id}`],
-        data: { scope: "test", verdict: "approve", test: definition.command, definition: definition.n, reviewer: options.jev },
-      });
     } else if (state.jev?.verdict === "gaps") {
       return { ok: false, reason: `Jev's open gaps on this test must be resolved first: ${state.jev.gaps.join("; ")}` };
     }
@@ -672,6 +655,44 @@ export class TestGate {
       data: { test: definition.command, definition: definition.n, pins, pin },
     });
     return { ok: true, entry, verdict };
+  }
+
+  /**
+   * Record Jev's review of the current test, before or after the person's approval. Gaps found after
+   * approval stop work (canStart, prove, merge) until Jev records "approve" or the test is redefined.
+   * Written by the gate, so it signs for any in-process caller: never expose it on an agent route.
+   */
+  reviewTest(taskId: string, jev: Actor, verdict: "approve" | string[]): Ok<{ entry: LedgerEntry }> | Refusal {
+    const state = this.state(taskId);
+    if (!state.definition) return { ok: false, reason: `${taskId} has no done-when test to review.` };
+    if (state.done || state.reopenedAs) return { ok: false, reason: `${taskId} is ${state.stage}.` };
+    if (jev.kind !== "jev") return { ok: false, reason: `Only Jev reviews a test here, not ${jev.kind} ${jev.id}.` };
+    return { ok: true, entry: this.recordTestVerdict(taskId, state.definition, jev, verdict) };
+  }
+
+  private recordTestVerdict(taskId: string, definition: NonNullable<GateState["definition"]>, jev: Actor, verdict: "approve" | string[]): LedgerEntry {
+    if (Array.isArray(verdict)) {
+      const gaps = verdict.map((gap) => oneLine(gap)).filter(Boolean);
+      if (!gaps.length) throw new GateError('A Jev verdict is "approve" or a non-empty list of gaps.');
+      return this.ledger.append({
+        type: "review.verdict",
+        actor: GATE_ACTOR,
+        subject: taskId,
+        summary: `Jev found ${gaps.length} gap${gaps.length === 1 ? "" : "s"} in ${taskId}'s done-when test`,
+        reason: oneLine(gaps.join("; "), 500),
+        evidence: ["scope:test", "verdict:gaps", `definition:${definition.n}`, `reviewer:jev:${jev.id}`, ...gaps.map((gap) => `gap:${gap}`)],
+        data: { scope: "test", verdict: "gaps", test: definition.command, definition: definition.n, gaps, reviewer: jev },
+      });
+    }
+    if (verdict !== "approve") throw new GateError('A Jev verdict is "approve" or a list of gaps.');
+    return this.ledger.append({
+      type: "review.verdict",
+      actor: GATE_ACTOR,
+      subject: taskId,
+      summary: `Jev found no gaps in ${taskId}'s done-when test`,
+      evidence: ["scope:test", "verdict:approve", `definition:${definition.n}`, `reviewer:jev:${jev.id}`],
+      data: { scope: "test", verdict: "approve", test: definition.command, definition: definition.n, reviewer: jev },
+    });
   }
 
   canStart(taskId: string): { ok: boolean; reason: string } {
@@ -950,7 +971,7 @@ export class TestGate {
 
   /**
    * Jev rejects the diff: record the verdict, reopen the task under its next attempt id, return that id (spec 5.5).
-   * Pass `verdict` (the ledger number of a review.verdict the reviewer already wrote, e.g. core/jev's signed one)
+   * Pass `verdict` (the ledger number of a rejection the reviewer already wrote, e.g. core/jev's signed one)
    * to cite it instead of writing another.
    */
   reject(taskId: string, reviewer: Actor, notes: string | string[], options: { verdict?: string } = {}): Ok<{ newTaskId: string; entries: LedgerEntry[] }> | Refusal {
@@ -965,23 +986,20 @@ export class TestGate {
     let verdict: LedgerEntry | undefined;
     if (options.verdict !== undefined) {
       verdict = this.ledger.entries().find((entry) => entry.n === options.verdict);
-      if (!verdict || verdict.type !== "review.verdict" || parseTaskId(verdict.subject).baseId !== state.baseId) {
-        throw new GateError(`${options.verdict} is not a review verdict on ${taskId}.`);
-      }
+      if (!verdict || verdict.type !== "review.verdict" || verdict.subject !== taskId) throw new GateError(`${options.verdict} is not a review verdict on ${taskId}.`);
+      if (evidenceValue(verdict, "scope") !== "diff" || evidenceValue(verdict, "verdict") !== "reject") throw new GateError(`${options.verdict} is not a rejection of ${taskId}'s diff.`);
     }
     const written: LedgerEntry[] = [];
-    if (!verdict) {
-      verdict = this.ledger.append({
-        type: "review.verdict",
-        actor: reviewer,
-        subject: taskId,
-        summary: `Diff for ${taskId} rejected`,
-        reason,
-        evidence: ["scope:diff", "verdict:reject", ...(state.worktree?.commit ? [`commit:${state.worktree.commit}`] : []), ...list.map((note) => `note:${note}`)],
-        data: { scope: "diff", verdict: "reject", notes: list },
-      });
-      written.push(verdict);
-    }
+    verdict ??= this.ledger.append({
+      type: "review.verdict",
+      actor: reviewer,
+      subject: taskId,
+      summary: `Diff for ${taskId} rejected`,
+      reason,
+      evidence: ["scope:diff", "verdict:reject", ...(state.worktree?.commit ? [`commit:${state.worktree.commit}`] : []), ...list.map((note) => `note:${note}`)],
+      data: { scope: "diff", verdict: "reject", notes: list },
+    });
+    if (verdict.n !== options.verdict) written.push(verdict);
     const reopened = this.ledger.append({
       type: "task.reopened",
       // The reviewer (often Jev) only gives the verdict; reopening is the gate's own act.

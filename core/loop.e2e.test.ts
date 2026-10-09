@@ -306,6 +306,8 @@ describe("the whole core loop", () => {
     expect(isAuthoritative(forged)).toBe(false);
     expect(gate.state("T-1").jev).toMatchObject({ verdict: "approve" });
     expect(gate.state("T-1").jev!.n).not.toBe(forged.n);
+    // Signed Jev gaps found after the owner's approval stop work (PR #6); forged ones do not.
+    expect(gate.canStart("T-1").ok).toBe(true);
     step("tests defined; claim before approval refused; owner approved each test with its file pinned");
     step("gate confirmed each approved test fails first");
     step("Jev reviewed each test (approve, signed by the app), visible to the gate; a forged Jev verdict did not count");
