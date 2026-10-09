@@ -3,12 +3,12 @@
 export const steps = [
   {
     name: "core-people-first-owner",
-    run: async (page, at) => {
+    run: async (page, at, { waitFor }) => {
       await page.goto(at("people"));
       await page.expectText("See who is on this project");
       await page.expectText("Add the first person");
       await page.type({ label: "Name" }, "Riley Owner");
-      await page.expectText(/riley-owner/);
+      await waitFor(() => page.run((h) => h.find({ label: "Person id" })?.value === "riley-owner"), { label: "person id riley-owner" });
       await page.click({ role: "button", name: "Add person" });
       await page.expectText("Riley Owner is now the owner of this project.");
       await page.expectText("Add helper");

@@ -29,11 +29,36 @@ function coreUrl(path, project) {
   return `${url.pathname}${url.search}`;
 }
 
-async function call(path, project, { method = "GET", body, fetchImpl = globalThis.fetch } = {}) {
+// Writes need the person cookie that GET /session hands to this app window (see core/host/host.ts).
+// One request per page load; a 401 PERSON_REQUIRED (the local service restarted) asks again once.
+let personSession = null;
+function ensurePersonSession(fetchImpl, renew = false) {
+  if (renew || !personSession) {
+    personSession = Promise.resolve()
+      .then(() => fetchImpl(`${CORE_API}/session`, { method: "GET", credentials: "same-origin", headers: { accept: "application/json" } }))
+      .then(() => true, () => { personSession = null; return false; });
+  }
+  return personSession;
+}
+
+async function call(path, project, options = {}) {
+  const { method = "GET", fetchImpl = globalThis.fetch } = options;
+  if (method !== "GET") await ensurePersonSession(fetchImpl);
+  try {
+    return await send(path, project, options);
+  } catch (error) {
+    if (method === "GET" || error?.code !== "PERSON_REQUIRED" || options.renewed) throw error;
+    await ensurePersonSession(fetchImpl, true);
+    return send(path, project, { ...options, renewed: true });
+  }
+}
+
+async function send(path, project, { method = "GET", body, fetchImpl = globalThis.fetch } = {}) {
   let response;
   try {
     response = await fetchImpl(coreUrl(path, project), {
       method,
+      credentials: "same-origin",
       headers: body === undefined ? { accept: "application/json" } : { accept: "application/json", "content-type": "application/json" },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });

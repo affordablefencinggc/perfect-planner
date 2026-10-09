@@ -9,7 +9,7 @@ export const steps = [
       await page.goto(at("planning"));
       await page.expectText("Start with your idea");
       await page.expectText(/Live web research is off/);
-      await page.type({ label: "Your idea" }, IDEA);
+      await page.type({ label: "~Your idea" }, IDEA);
       await page.click({ role: "button", name: "Start planning" });
       await page.expectText("Open blocking questions");
       await page.expectText(/questions answered/);
@@ -19,7 +19,7 @@ export const steps = [
   {
     name: "core-planning-refuses-tbd-and-early-approval",
     run: async (page) => {
-      await page.type({ label: "Your own answer" }, "TBD");
+      await page.type({ label: "~Your own answer" }, "TBD");
       await page.click({ role: "button", name: "Save answer" });
       await page.expectText(/"TBD" puts Q-\d+ off/);
       await page.expectText("Set a dated spike");

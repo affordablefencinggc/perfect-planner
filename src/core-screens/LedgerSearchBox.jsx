@@ -19,16 +19,24 @@ export function requestLedgerLookup(query) {
   try { window.dispatchEvent(new CustomEvent(LEDGER_LOOKUP_EVENT, { detail: { query: text } })); } catch { /* no window */ }
 }
 
+/** Reads the query handed over by the header box without using it up (a screen may mount twice). */
+export function peekLedgerLookup() {
+  let text = pendingQuery;
+  try { text = text ?? window.sessionStorage?.getItem(STORAGE_KEY) ?? null; } catch { /* storage blocked */ }
+  return text || null;
+}
+
+/** Marks the handed-over query as used. */
+export function clearLedgerLookup() {
+  pendingQuery = null;
+  try { window.sessionStorage?.removeItem(STORAGE_KEY); } catch { /* storage blocked */ }
+}
+
 /** Takes the query handed over by the header box, once. */
 export function takeLedgerLookup() {
-  let text = pendingQuery;
-  pendingQuery = null;
-  try {
-    const stored = window.sessionStorage?.getItem(STORAGE_KEY);
-    if (stored) text = text ?? stored;
-    window.sessionStorage?.removeItem(STORAGE_KEY);
-  } catch { /* storage blocked */ }
-  return text || null;
+  const text = peekLedgerLookup();
+  clearLedgerLookup();
+  return text;
 }
 
 /** "s3.2", "sec 3.2" and "section 3.2" become "§3.2" as people type. */

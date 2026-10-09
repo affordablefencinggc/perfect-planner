@@ -2,7 +2,7 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createCoreHost, type CoreHost } from "./index";
-import { startTestHost } from "./testing";
+import { hostCall, startTestHost } from "./testing";
 
 let dir: string;
 let host: CoreHost;
@@ -54,5 +54,36 @@ describe("core host", () => {
     const res = { end() {} } as unknown as http.ServerResponse;
     host.middleware({ url: "/api/other" } as http.IncomingMessage, res, () => { passed = true; });
     expect(passed).toBe(true);
+  });
+});
+
+describe("person-only writes", () => {
+  let stop: () => Promise<void>;
+  let url: string;
+  beforeEach(async () => {
+    const started = await startTestHost();
+    url = started.base;
+    stop = started.stop;
+  });
+  afterEach(async () => stop());
+
+  it("refuses a write without the person cookie, so an agent cannot approve a plan or mint a connect token over HTTP", async () => {
+    for (const route of ["/planning/approve", "/agents/connect", "/decisions/accept", "/people/members"]) {
+      const res = await hostCall(url, "POST", route, {}, { asAgent: true });
+      expect(res.status, route).toBe(401);
+      expect(res.body.code).toBe("PERSON_REQUIRED");
+    }
+  });
+
+  it("hands the cookie only to a same-origin fetch from the app window", async () => {
+    const plain = await fetch(`${url}/session`);
+    expect(plain.status).toBe(403);
+    expect(plain.headers.get("set-cookie")).toBeNull();
+    const app = await fetch(`${url}/session`, { headers: { "sec-fetch-site": "same-origin", "sec-fetch-mode": "cors" } });
+    expect(app.status).toBe(200);
+    const cookie = app.headers.get("set-cookie") ?? "";
+    expect(cookie).toMatch(/^pp_core_person=[\w-]{20,}; HttpOnly; SameSite=Strict; Path=\/api\/core$/);
+    const write = await fetch(`${url}/planning/start?project=p`, { method: "POST", headers: { cookie: cookie.split(";")[0]!, "content-type": "application/json" }, body: JSON.stringify({ idea: "A notes app that syncs" }) });
+    expect(write.status).toBe(200);
   });
 });

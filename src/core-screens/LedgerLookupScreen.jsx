@@ -10,7 +10,7 @@ import {
 } from "@phosphor-icons/react";
 import { AdvancedOnly, CoreError, CoreLoading, CoreScreen, useAdvanced } from "./CoreScreen.jsx";
 import { useCoreResource } from "./coreApi.js";
-import { LEDGER_LOOKUP_EVENT, takeLedgerLookup, withSectionSign } from "./LedgerSearchBox.jsx";
+import { LEDGER_LOOKUP_EVENT, clearLedgerLookup, peekLedgerLookup, takeLedgerLookup, withSectionSign } from "./LedgerSearchBox.jsx";
 import "./LedgerLookupScreen.css";
 
 const FALLBACK_EXAMPLES = ["P-1 §1.1", "R-1", "T-1", "D-1", "L-000001"];
@@ -334,7 +334,7 @@ export default function LedgerLookupScreen() {
   const recent = useCoreResource("/recent", { isEmpty: (d) => !d || !d.total });
   const verify = useCoreResource("/verify");
   const initial = useRef(undefined);
-  if (initial.current === undefined) initial.current = takeLedgerLookup() ?? "";
+  if (initial.current === undefined) initial.current = peekLedgerLookup() ?? "";
   const [value, setValue] = useState(initial.current);
   const [active, setActive] = useState(initial.current);
   const inputRef = useRef(null);
@@ -344,6 +344,9 @@ export default function LedgerLookupScreen() {
     setValue(q);
     setActive(q);
   }, []);
+
+  // The handed-over query is used up only once this screen has really mounted with it.
+  useEffect(() => { if (initial.current) clearLedgerLookup(); }, []);
 
   useEffect(() => {
     const onLookup = () => { const q = takeLedgerLookup(); if (q) open(q); };

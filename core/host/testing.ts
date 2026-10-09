@@ -6,12 +6,21 @@ import path from "node:path";
 import type { AddressInfo } from "node:net";
 import { createCoreHost, type CoreHost } from "./index";
 
+const personCookies = new Map<string, string>();
+
+/** Headers that make a request count as the person's own app window. */
+export function personHeaders(base: string): Record<string, string> {
+  const cookie = personCookies.get(base);
+  return cookie ? { cookie } : {};
+}
+
 export async function startTestHost(): Promise<{ host: CoreHost; base: string; dir: string; stop: () => Promise<void> }> {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "pp-core-host-"));
   const h = createCoreHost({ root, bridge: true });
   const s = http.createServer((req, res) => h.middleware(req, res, () => { res.statusCode = 404; res.end(); }));
   await new Promise<void>((resolve) => s.listen(0, "127.0.0.1", resolve));
   const url = `http://127.0.0.1:${(s.address() as AddressInfo).port}/api/core`;
+  personCookies.set(url, h.personCookie());
   return {
     host: h,
     base: url,
@@ -24,8 +33,9 @@ export async function startTestHost(): Promise<{ host: CoreHost; base: string; d
   };
 }
 
-/** GET/POST against the test host; returns { status, body }. */
-export async function hostCall(base: string, method: "GET" | "POST", route: string, body?: unknown): Promise<{ status: number; body: { ok: boolean; result?: any; code?: string; message?: string } }> {
-  const res = await fetch(`${base}${route}`, { method, ...(body === undefined ? {} : { headers: { "content-type": "application/json" }, body: JSON.stringify(body) }) });
+/** GET/POST against the test host as the person (pass asAgent to leave the person cookie off). */
+export async function hostCall(base: string, method: "GET" | "POST", route: string, body?: unknown, { asAgent = false }: { asAgent?: boolean } = {}): Promise<{ status: number; body: { ok: boolean; result?: any; code?: string; message?: string } }> {
+  const headers: Record<string, string> = { ...(asAgent ? {} : personHeaders(base)), ...(body === undefined ? {} : { "content-type": "application/json" }) };
+  const res = await fetch(`${base}${route}`, { method, headers, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
   return { status: res.status, body: (await res.json()) as { ok: boolean; result?: any; code?: string; message?: string } };
 }

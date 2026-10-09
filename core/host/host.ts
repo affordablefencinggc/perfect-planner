@@ -2,6 +2,7 @@
 // /api/core/*. Mounted by the Vite dev server (src/node/coreHostVitePlugin.mjs)
 // and by the production server (scripts/serve-local.mjs, from the bundle that
 // scripts/build-core-host.mjs writes). Loopback, same-origin callers only.
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { LedgerError } from "../ledger/index";
 import { startBridge, ToolError, type Bridge } from "../mcp/index";
@@ -11,6 +12,8 @@ import { HttpError, Router } from "./router";
 import { registerRoutes } from "./routes/index";
 
 export const CORE_PREFIX = "/api/core";
+/** HttpOnly cookie that marks a request as coming from the person's own app window. */
+export const PERSON_COOKIE = "pp_core_person";
 const MAX_BODY = 768 * 1024; // fits a 512 KB photo as base64
 
 export interface CoreHostOptions {
@@ -28,6 +31,8 @@ export class CoreHost {
   readonly router = new Router();
   private readonly projects = new Map<string, CoreProject>();
   private readonly bridges = new Map<string, Promise<Bridge>>();
+  /** Per-process secret behind the person cookie; never written anywhere. */
+  private readonly personSecret = randomBytes(32).toString("base64url");
 
   constructor(private readonly options: CoreHostOptions) {
     registerRoutes(this.router);
@@ -78,9 +83,23 @@ export class CoreHost {
     if (this.options.guard && !this.options.guard(req)) return send(403, { ok: false, code: "FORBIDDEN", message: "Only this app, on this computer, can use these APIs." });
     const path = url.pathname.slice(CORE_PREFIX.length) || "/";
     const method = (req.method ?? "GET").toUpperCase();
+    // Every write is made in the person's name, so it needs the person cookie the app window
+    // received from GET /session. Agents never get it: they act through the MCP tools, where the
+    // ledger records them as agents. (A process running as the same OS user can still read what
+    // the browser can; this keeps agent HTTP calls and other sites out, it is not a sandbox.)
+    if (method === "GET" && path === "/session") {
+      if (req.headers["sec-fetch-site"] !== "same-origin" || req.headers["sec-fetch-mode"] === "navigate") {
+        return send(403, { ok: false, code: "FORBIDDEN", message: "Open Perfect Planner in its own window to sign in as yourself." });
+      }
+      res.setHeader("set-cookie", `${PERSON_COOKIE}=${this.personSecret}; HttpOnly; SameSite=Strict; Path=${CORE_PREFIX}`);
+      return send(200, { ok: true, result: { person: true } });
+    }
     const match = this.router.match(method, path);
     if (match === null) return send(404, { ok: false, code: "NOT_FOUND", message: `Nothing at ${path}.` });
     if (match === "method") return send(405, { ok: false, code: "METHOD", message: `${method} is not allowed on ${path}.` });
+    if (method === "POST" && !this.isPerson(req)) {
+      return send(401, { ok: false, code: "PERSON_REQUIRED", message: "Only the person using Perfect Planner can do this. Agents act through the MCP tools." });
+    }
     try {
       const body = method === "POST" ? await readJson(req) : undefined;
       const project = this.project(projectKey(url.searchParams.get("project")));
@@ -94,6 +113,21 @@ export class CoreHost {
       }
       send(500, { ok: false, code: "ERROR", message: named?.message ? `Perfect Planner could not complete that: ${named.message}` : "Perfect Planner could not complete that." });
     }
+  }
+
+  /** True when the request carries this process's person cookie. */
+  isPerson(req: IncomingMessage): boolean {
+    const cookie = String(req.headers.cookie ?? "");
+    const value = cookie.split(";").map((part) => part.trim()).find((part) => part.startsWith(`${PERSON_COOKIE}=`))?.slice(PERSON_COOKIE.length + 1);
+    if (!value) return false;
+    const a = Buffer.from(value);
+    const b = Buffer.from(this.personSecret);
+    return a.length === b.length && timingSafeEqual(a, b);
+  }
+
+  /** For tests and in-process callers (the desktop shell): the cookie header a person request carries. */
+  personCookie(): string {
+    return `${PERSON_COOKIE}=${this.personSecret}`;
   }
 
   async close(): Promise<void> {

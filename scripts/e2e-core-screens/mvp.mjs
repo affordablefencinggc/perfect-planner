@@ -20,7 +20,7 @@ export const steps = [
       await page.click({ role: "button", name: "Move Share notes with a team later" });
       await page.type({ label: "~Why can it wait?" }, "Sharing can follow once writing works");
       await page.click({ role: "button", name: "Move" });
-      await page.expectText(re("Moved Share notes with a team to Beta"));
+      await page.expectText(new RegExp("Moved Share notes with a team to Beta", "i"));
       await page.expectText("Why later: Sharing can follow once writing works");
     },
   },
@@ -28,10 +28,10 @@ export const steps = [
     name: "core-mvp-confirm-line",
     run: async (page, at, { re }) => {
       await page.click({ role: "button", name: "Confirm MVP line" });
-      await page.expectText(re("Confirmed by .+ on"));
+      await page.expectText(new RegExp("Confirmed by .+ on", "i"));
       await page.expectText("When is the MVP done?");
       await page.reload();
-      await page.expectText(re("Confirmed by .+ on"));
+      await page.expectText(new RegExp("Confirmed by .+ on", "i"));
       await page.expectText("Why later: Sharing can follow once writing works");
     },
   },
