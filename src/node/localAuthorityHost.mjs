@@ -1,3 +1,4 @@
+import { realpathSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createCollisionAuthorityMiddleware } from "./collisionAuthorityHttp.mjs";
@@ -10,7 +11,10 @@ import { createTaskObservationHost } from "./taskObservationVitePlugin.mjs";
 
 // One composition of the local saving APIs, shared by the Vite dev server and the
 // production server (scripts/serve-local.mjs) so both save to the same place the same way.
-export const localAuthorityRoot = (env = process.env) => path.join(env.LOCALAPPDATA ?? os.tmpdir(), "PerfectPlannerCleanroom", "authority");
+// The temp fallback is canonicalised: on macOS it sits behind /var -> /private/var, which the
+// host-root guards would otherwise refuse as a redirected path and disable the planning ledger.
+const canonicalTemp = () => { try { return realpathSync.native(os.tmpdir()); } catch { return os.tmpdir(); } };
+export const localAuthorityRoot = (env = process.env) => path.join(env.LOCALAPPDATA ?? canonicalTemp(), "PerfectPlannerCleanroom", "authority");
 
 const planningLedgerUnavailable = (req, res, next) => {
   if (!String(req.url).startsWith("/api/planning-ledger/")) return next();

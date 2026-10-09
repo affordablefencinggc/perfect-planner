@@ -1,0 +1,21 @@
+export { runTestCommand, killTree, scrubbedEnv, isConclusiveFailure, TEST_ENV_ALLOW, DEFAULT_TIMEOUT_MS, type TestRunOptions, type TestRunResult, type TestRunner } from "./run";
+export {
+  TestGate,
+  GateError,
+  deriveState,
+  startRefusal,
+  gateRule,
+  parseTaskId,
+  attemptId,
+  nextAttemptId,
+  type GateState,
+  type TestOutcome,
+  type Phase,
+  type MergeOptions,
+  type ApproveOptions,
+  type LedgerReader,
+  type TestGateOptions,
+  type RunReport,
+  type Refusal,
+  type Ok,
+} from "./gate";
