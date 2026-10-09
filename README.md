@@ -9,7 +9,7 @@ A structured planning app: point it at a project folder, get a reviewed plan, an
    | Computer | File |
    |---|---|
    | Windows | `PerfectPlanner-…-windows-x64.setup.exe` (or `.msi` for managed installs) |
-   | macOS | `PerfectPlanner-…-macos-universal.dmg` |
+   | macOS | `PerfectPlanner-…-macos-arm64.dmg` (Apple silicon) or `…-macos-x64.dmg` (Intel) |
    | Linux | `.deb`, `.rpm` or `.AppImage` |
 
    Builds are not code-signed yet. On Windows, if SmartScreen appears, choose **More info**, then **Run anyway**. On macOS, right-click the app and choose **Open** the first time.

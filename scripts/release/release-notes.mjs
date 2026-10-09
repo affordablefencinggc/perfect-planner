@@ -28,7 +28,8 @@ process.stdout.write(`## Perfect Planner ${release}
 |---|---|
 | Windows (recommended) | ${pick(".setup.exe")} |
 | Windows (IT / managed installs) | ${pick(".msi")} |
-| macOS (Apple silicon and Intel) | ${pick(".dmg")} |
+| macOS (Apple silicon) | ${pick("-macos-arm64.dmg")} |
+| macOS (Intel) | ${pick("-macos-x64.dmg")} |
 | Linux (Ubuntu, Debian) | ${pick(".deb")} |
 | Linux (Fedora, RHEL) | ${pick(".rpm")} |
 | Linux (any, portable) | ${pick(".AppImage")} |

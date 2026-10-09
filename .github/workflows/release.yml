@@ -46,10 +46,15 @@ jobs:
             platform: windows-x64
             bundles: msi,nsis
             args: ""
+          # Two native DMGs: Tauri's universal bundler skips the planner-agent-helper sidecar.
           - os: macos-latest
-            platform: macos-universal
+            platform: macos-arm64
             bundles: dmg
-            args: --target universal-apple-darwin
+            args: --target aarch64-apple-darwin
+          - os: macos-latest
+            platform: macos-x64
+            bundles: dmg
+            args: --target x86_64-apple-darwin
           - os: ubuntu-22.04
             platform: linux-x64
             bundles: deb,rpm,appimage
@@ -86,9 +91,12 @@ jobs:
 
       - run: npm ci
 
+      # The truth report's proof runner refuses temp paths that are not canonical:
+      # Windows runners hand out 8.3 short names, macOS a /var -> /private/var symlink.
+      - name: Use a canonical temp dir
+        run: node scripts/prepare-native-ci-env.mjs
+
       - name: Build installers
-        # macOS's default temp dir sits behind the /var -> /private/var symlink,
-        # which the truth report's proof runner refuses as a root escape.
         env:
           TMPDIR: ${{ runner.temp }}
         run: npm run tauri -- build --ci --bundles ${{ matrix.bundles }} ${{ matrix.args }}
