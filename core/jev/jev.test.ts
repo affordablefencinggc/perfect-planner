@@ -2,7 +2,7 @@ import { inspect } from "node:util";
 import { describe, expect, it, vi } from "vitest";
 import { Ledger, MemoryStore, type Actor } from "../ledger/index";
 import { Relay } from "../relay/index";
-import { JevReviewer, MemoryKeyProvider, independenceProblem, SecretKey, checkDiff, createJevTransport, parseDiff, validateKey, type JevCallResult, type JevRequest } from "./index";
+import { JevReviewer, MemoryKeyProvider, independenceProblem, SecretKey, checkDiff, createJevTransport, parseDiff, redactSecrets, validateKey, type JevCallResult, type JevRequest } from "./index";
 
 const KEY = "ts_live_FAKE0123456789abcdef";
 
@@ -276,6 +276,65 @@ describe("nothing secret reaches TypeSafe", () => {
     for (const call of calls) {
       expect(JSON.stringify(call)).not.toContain(stripe);
       expect(JSON.stringify(call)).toContain("[redacted-secret]");
+    }
+  });
+});
+
+describe("whole secrets are redacted, not just their first line", () => {
+  // Fake key material: the shape of real PEM blocks, never a usable key.
+  const body = (tag: string) => [`${tag}BODYLINEONEaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`, `${tag}BODYLINETWObbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb`, `${tag}TAILcc==`];
+  const pem = (label: string, tag: string) => [`-----BEGIN ${label}-----`, ...body(tag), `-----END ${label}-----`].join("\n");
+  const KEYS = [pem("RSA PRIVATE KEY", "RSAFAKE"), pem("OPENSSH PRIVATE KEY", "SSHFAKE"), pem("EC PRIVATE KEY", "ECFAKE"), pem("PRIVATE KEY", "PKCSFAKE")];
+  const BODIES = ["RSAFAKE", "SSHFAKE", "ECFAKE", "PKCSFAKE"];
+
+  it("redacts every line of RSA, OpenSSH, EC and PKCS#8 private-key blocks", () => {
+    const out = redactSecrets(`before\n${KEYS.join("\nbetween\n")}\nafter`);
+    for (const tag of BODIES) expect(out).not.toContain(tag);
+    expect(out).toContain("before");
+    expect(out).toContain("between");
+    expect(out).toContain("after");
+  });
+
+  it("redacts a key block that is cut off before its END line", () => {
+    expect(redactSecrets(`log:\n${pem("RSA PRIVATE KEY", "CUTFAKE").split("\n").slice(0, 3).join("\n")}`)).not.toContain("CUTFAKE");
+  });
+
+  it("redacts a key block added in a diff, prefix and all", () => {
+    const added = pem("OPENSSH PRIVATE KEY", "DIFFFAKE").split("\n").map((l) => `+${l}`).join("\n");
+    expect(redactSecrets(`@@ -0,0 +1,5 @@\n${added}\n`)).not.toContain("DIFFFAKE");
+  });
+
+  it("redacts unquoted env assignments and JSON secret fields", () => {
+    const out = redactSecrets(`DB_PASSWORD=hunter2hunter2\nexport GITHUB_TOKEN=abcdefabcdef123\n{"apiKey": "zzzzzzzzzzzzzzzz", "client_secret":"yyyyyyyyyyyy"}`);
+    for (const leak of ["hunter2hunter2", "abcdefabcdef123", "zzzzzzzzzzzzzzzz", "yyyyyyyyyyyy"]) expect(out).not.toContain(leak);
+    expect(out).toContain("DB_PASSWORD=");
+    expect(out).toContain('"apiKey"');
+  });
+
+  it("flags an env-file password line in the fixed diff checks", () => {
+    const diff = `diff --git a/src/invoice/.env b/src/invoice/.env
+--- a/src/invoice/.env
++++ b/src/invoice/.env
+@@ -0,0 +1,1 @@
++DB_PASSWORD=hunter2hunter2
+`;
+    expect(checkDiff(parseDiff(diff), ["src/invoice/"])).toEqual([expect.objectContaining({ rule: "secret", line: 1 })]);
+  });
+
+  it("keeps key bodies, the test command and the task title out of every Jev request", async () => {
+    const { transport, calls } = fakeTransport(GOOD);
+    const reviewer = new JevReviewer({ ledger: newLedger(), transport });
+    const keyDiff = `diff --git a/src/invoice/k.pem b/src/invoice/k.pem
+--- a/src/invoice/k.pem
++++ b/src/invoice/k.pem
+@@ -0,0 +1,5 @@
+${pem("RSA PRIVATE KEY", "RSAFAKE").split("\n").map((l) => `+${l}`).join("\n")}
+`;
+    await reviewer.reviewDiff({ task: "T-1", clauses: TEST_INPUT.clauses, diff: keyDiff, testOutput: KEYS[1]!, allowedFiles: [], author: TEST_INPUT.author });
+    await reviewer.reviewTest({ ...TEST_INPUT, title: "Rotate DB_PASSWORD=titleleak123", test: { command: "API_TOKEN=commandleak123 npm test", source: KEYS[2]! } });
+    for (const call of calls) {
+      const sent = JSON.stringify(call);
+      for (const leak of [...BODIES, "titleleak123", "commandleak123"]) expect(sent).not.toContain(leak);
     }
   });
 });

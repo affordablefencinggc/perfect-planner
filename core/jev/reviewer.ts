@@ -220,9 +220,9 @@ export class JevReviewer implements SettledAnswerer {
     const request: JevRequest = {
       model: this.settings.model,
       state: {
-        task: { id: input.task, title: input.title },
+        task: { id: input.task, title: cut(input.title, 300) },
         clauses: input.clauses.map((c) => ({ ref: c.ref, text: cut(c.text, 2000) })),
-        test: { command: input.test.command, source: cut(input.test.source ?? "", MAX_TEXT) },
+        test: { command: cut(input.test.command, 2000), source: cut(input.test.source ?? "", MAX_TEXT) },
       },
       questions: {
         covers_clauses: {
