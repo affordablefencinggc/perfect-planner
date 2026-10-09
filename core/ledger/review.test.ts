@@ -8,6 +8,7 @@ import {
   LedgerError,
   MemoryStore,
   authorKind,
+  hashEntry,
   isAuthoritative,
   verifyChain,
   type EntryDraft,
@@ -259,7 +260,8 @@ describe("second round: locking, acknowledgements and torn writes", () => {
     expect(reopened.status.ok).toBe(true);
     expect(reopened.status.repaired).toMatch(/dropped an incomplete final line/);
     expect(fs.readdirSync(dir).some((f) => f.startsWith("torn-"))).toBe(true);
-    expect(reopened.append(draft()).n).toBe("L-000003");
+    // L-000003 is the system correction recording the repair.
+    expect(reopened.append(draft()).n).toBe("L-000004");
     reopened.close();
     expect(Ledger.openSync(new FileStore(root), { readOnly: true }).status.ok).toBe(true);
   });
@@ -273,9 +275,9 @@ describe("second round: locking, acknowledgements and torn writes", () => {
     const file = path.join(dir, fs.readdirSync(dir).find((f) => f.endsWith(".jsonl"))!);
     fs.writeFileSync(file, fs.readFileSync(file, "utf8").trimEnd());
     const reopened = Ledger.openSync(new FileStore(root), { now: clock("2026-10-09T04:00:00Z") });
-    expect(reopened.status).toMatchObject({ ok: true, entries: 1 });
+    expect(reopened.status).toMatchObject({ ok: true, entries: 2 });
     expect(reopened.status.repaired).toMatch(/completed L-000001/);
-    expect(reopened.append(draft()).n).toBe("L-000002");
+    expect(reopened.append(draft()).n).toBe("L-000003");
     reopened.close();
   });
 
@@ -301,5 +303,58 @@ describe("second round: locking, acknowledgements and torn writes", () => {
     ledger.append(draft());
     expect(ledger.get("L-000001")).toBeDefined();
     expect(code(() => ledger.append(draft({ type: "correction", corrects: "L-0000001", reason: "typo" })))).toBe("BAD_CORRECTS");
+  });
+});
+
+describe("third round: re-check findings", () => {
+  it("pins the rewritten entry when acknowledging a prev break", () => {
+    const store = new MemoryStore();
+    const first = Ledger.openSync(store, { now: clock() });
+    for (let i = 0; i < 4; i += 1) first.append(draft({ summary: `Step ${i + 1}` }));
+    first.close();
+    const rewrite = (summary: string) => {
+      const entry = JSON.parse(store.lines[1]) as LedgerEntry;
+      entry.summary = summary;
+      const { hash: _old, ...rest } = entry;
+      store.lines[1] = JSON.stringify({ ...rest, hash: hashEntry(rest as LedgerEntry) });
+    };
+    rewrite("Rewritten with a fresh hash");
+    const ledger = Ledger.openSync(store, { now: clock("2026-10-09T03:00:00Z") });
+    expect(ledger.status).toMatchObject({ ok: false, brokenAt: "L-000003", problem: "prev" });
+    ledger.acknowledgeBreak(person, "Seen");
+    ledger.close();
+    expect(Ledger.openSync(store).status.ok).toBe(true);
+    rewrite("Rewritten again after the acknowledgement");
+    expect(Ledger.openSync(store).status).toMatchObject({ ok: false, brokenAt: "L-000003" });
+  });
+
+  it("can acknowledge a break when HEAD is missing or stale", () => {
+    const store = new MemoryStore();
+    const first = Ledger.openSync(store, { now: clock() });
+    for (let i = 0; i < 3; i += 1) first.append(draft({ summary: `Step ${i + 1}` }));
+    first.close();
+    const entry = JSON.parse(store.lines[1]);
+    entry.summary = "edited";
+    store.lines[1] = JSON.stringify(entry);
+    store.head = undefined;
+    const ledger = Ledger.openSync(store, { now: clock("2026-10-09T03:00:00Z") });
+    expect(ledger.status.ok).toBe(false);
+    expect(ledger.acknowledgeBreak(person, "Seen").type).toBe("chain.acknowledged");
+    expect(ledger.append(draft()).n).toBe("L-000005");
+  });
+
+  it("records a torn-line repair in the ledger as a system correction", () => {
+    const root = tempRoot();
+    const ledger = Ledger.openSync(new FileStore(root), { now: clock() });
+    ledger.append(draft());
+    ledger.close();
+    const dir = path.join(root, ".perfect-planner", "ledger");
+    const file = path.join(dir, fs.readdirSync(dir).find((f) => f.endsWith(".jsonl"))!);
+    fs.appendFileSync(file, '{"n":"L-0000');
+    const reopened = Ledger.openSync(new FileStore(root), { now: clock("2026-10-09T04:00:00Z") });
+    const record = reopened.last()!;
+    expect(record).toMatchObject({ type: "correction", corrects: "L-000001", actor: { kind: "system" } });
+    expect(record.summary).toMatch(/Repaired the ledger file/);
+    reopened.close();
   });
 });

@@ -91,6 +91,18 @@ export class Ledger {
     }
     const ledger = new Ledger(store, loaded.entries, chain, acknowledged, writable, options.now ?? (() => new Date()), permissions);
     ledger.repaired = repaired;
+    if (repaired && chain.ok && last) {
+      // Leave a record in the ledger itself of what the repair did.
+      ledger.append({
+        actor: { kind: "system", id: "ledger" },
+        type: "correction",
+        subject: last.n,
+        summary: `Repaired the ledger file after a crash: ${repaired}`,
+        reason: "A write was cut short by a crash before it finished",
+        corrects: last.n,
+        data: { repaired },
+      });
+    }
     return ledger;
   }
 
@@ -177,6 +189,10 @@ export class Ledger {
     const broken = this.chain;
     const bad = this.get(broken.firstBad);
     if (!bad) throw new LedgerError("RULE", `${broken.firstBad} is not in the ledger; restore it from git before writing`);
+    const before = this.list[this.list.indexOf(bad) - 1];
+    // HEAD may be missing or stale when the chain is broken; the person has seen the files as they are.
+    const tip = this.last();
+    if (tip) this.store.resetHead({ n: tip.n, hash: tip.hash });
     const entry = this.write(
       {
         actor: person,
@@ -185,7 +201,14 @@ export class Ledger {
         summary: `Fingerprint break at ${broken.firstBad} acknowledged`,
         reason,
         // The hash pins what the person saw: editing the entry again is a new break.
-        data: { firstBad: broken.firstBad, hash: bad.hash, content: hashEntry(bad), problem: broken.problem, detail: broken.detail },
+        data: {
+          firstBad: broken.firstBad,
+          hash: bad.hash,
+          content: hashEntry(bad),
+          pins: broken.problem === "prev" && before ? [{ n: before.n, hash: before.hash, content: hashEntry(before) }] : [],
+          problem: broken.problem,
+          detail: broken.detail,
+        },
       },
       true,
     );
@@ -359,7 +382,7 @@ function assess(entries: readonly LedgerEntry[], permissions: PermissionTable): 
   for (const entry of entries) {
     if (permitted(permissions, entry.actor?.kind, entry.type)) continue;
     const acked = entries.some(
-      (e) => e.type === "chain.acknowledged" && e.actor?.kind === "person" && e.data?.firstBad === entry.n && acknowledgesExactly(e, entry),
+      (e) => e.type === "chain.acknowledged" && e.actor?.kind === "person" && e.data?.firstBad === entry.n && acknowledgesExactly(e, entry, entries),
     );
     if (acked) {
       acknowledged.push(entry.n);
