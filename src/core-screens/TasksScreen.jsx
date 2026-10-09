@@ -7,7 +7,9 @@ import "./TasksScreen.css";
 
 // Run the core loop from the app (core/host/routes/tasks.ts): start a worker on a task, approve
 // its test, check the work, approve the diff and merge. Every button is a person action through
-// the app window's own session; the worker only ever gets the token shown here once.
+// the app window's own session, and each approval names exactly what the person saw (the test entry,
+// the commit whose diff they read), so a worker changing it meanwhile makes the click stale. The
+// worker's token stays in a file; the commands only name that file.
 export const TASKS_POLL_MS = 2000;
 export const DEFAULT_WORKER_MODEL = "claude-sonnet-4-5";
 
@@ -181,7 +183,7 @@ function TaskCard({ task, project, act, busy, notice, dispatchFor, onDispatched,
           </span>
         )}
         {(task.stage === "test-proposed" || task.stage === "test-approved") && (
-          <button type="button" className="core-button primary" onClick={() => run("approve-test", `/tasks/${id}/approve-test`)} disabled={working || !task.worktree}>
+          <button type="button" className="core-button primary" onClick={() => run("approve-test", `/tasks/${id}/approve-test`, { test: task.test.entry })} disabled={working || !task.worktree}>
             {task.stage === "test-proposed" ? "Approve test" : "Run the test again"}
           </button>
         )}
@@ -191,10 +193,14 @@ function TaskCard({ task, project, act, busy, notice, dispatchFor, onDispatched,
         {(task.stage === "review-diff" || task.stage === "ready-to-merge") && (
           <>
             <button type="button" className="core-button" onClick={showDiff}>Show diff</button>
-            {task.stage === "review-diff" && <button type="button" className="core-button primary" onClick={() => run("approve-diff", `/tasks/${id}/approve-diff`)} disabled={working}>Approve diff</button>}
+            {task.stage === "review-diff" && (
+              <button type="button" className="core-button primary" onClick={() => run("approve-diff", `/tasks/${id}/approve-diff`, { commit: diff.commit })} disabled={working || !diff} title={diff ? undefined : "Read the diff first"}>
+                Approve diff{diff ? ` at ${String(diff.commit).slice(0, 12)}` : ""}
+              </button>
+            )}
             {task.stage === "review-diff" && <button type="button" className="core-button" onClick={() => setSendBack(true)}>Send back</button>}
             {task.stage === "ready-to-merge" && (
-              <button type="button" className="core-button primary" onClick={() => run("merge", `/tasks/${id}/merge`)} disabled={working}>
+              <button type="button" className="core-button primary" onClick={() => run("merge", `/tasks/${id}/merge`, { commit: task.diffApproval?.commit })} disabled={working}>
                 {working ? <SpinnerGapIcon aria-hidden="true" /> : <GitMergeIcon aria-hidden="true" />} Merge into {base}
               </button>
             )}
