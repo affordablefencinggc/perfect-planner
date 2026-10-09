@@ -65,7 +65,7 @@ test("remote status binds exact HTTPS identities and redacts credentials outside
   const capture = {}; const result = await fetchRemoteCiStatus(remoteRequest, boundary(capture));
   assert.equal(result.state, "green"); assert.equal(capture.url, "https://ci.example.invalid/v1/status");
   assert.equal(capture.options.redirect, "error");
-  assert.equal(capture.options.headers.authorization, "Bearer "+"transport-only-secret");
+  assert.equal(capture.options.headers.authorization, "Bearer transport-only-secret");
   assert.equal(JSON.parse(capture.options.body).credentialHandle, undefined);
   assert.equal(result.credential, "REDACTED"); assert.doesNotMatch(JSON.stringify(result), /transport-only-secret|secret:\/\//);
   assert.deepEqual(capture.identity, { handle: "secret://ci/fixture", providerId: "fixture", origin: "https://ci.example.invalid" });

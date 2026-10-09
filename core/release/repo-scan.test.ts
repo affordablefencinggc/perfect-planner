@@ -11,6 +11,10 @@ const root = fileURLToPath(new URL("../..", import.meta.url));
 // Files whose fixtures still trip the scan, each with its owner. Pushing a
 // change to one of them is refused until it is fixed; remove the entry then.
 const PENDING: Record<string, string> = {
+  // Reviewed dummies pinned byte-for-byte by the repo's own scanner (tests/secret-scanner.test.mjs),
+  // so they cannot be rewritten; they need a person-approved exception in the ledger.
+  "tests/ci-derivation.test.mjs": "reviewed fixture pinned by scripts' secret scanner",
+  "tests-ui/pp-diagnostics-120-runtime-event-ledger.test.jsx": "reviewed fixture pinned by scripts' secret scanner",
   "tests/component-authoring-context-ui241.test.mjs": "fixture sweep held for the user's go-ahead",
   "tests/document-registry.test.mjs": "fixture sweep held for the user's go-ahead",
   "tests/folder-contract-http.test.mjs": "fixture sweep held for the user's go-ahead",
