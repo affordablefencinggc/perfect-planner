@@ -217,32 +217,24 @@ Trusted keys come from two places:
   the ledger also covers what it signed earlier.
 
 Who may trust a key for a principal: that same person (a new device, a
-rotation, recovery), or the owner. A key the ledger already shows signing
+rotation, recovery), or the owner (only with `ownerKey`, below). A key the ledger already shows signing
 for one person cannot be trusted as another's.
 
-**The owner** is the person whose signed entry is the ledger's first person
-entry (`ledger.owner`, `ownerPrincipal`). It counts only when this device
-can verify that entry with its own or pinned keys. The keys may also come
-from that same person's own enrolments, but never from the owner's.
+**The owner** exists only when the app names it.
 
-- An unsigned first entry, or one signed with an unknown key, makes no one
-  owner.
-- That entry is also a `signature` break.
-- Anyone with file access can still write a ledger's first line, so the app
-  should also pass the project's owner key id, which it keeps outside the
-  ledger: `Ledger.open(store, { keys, ownerKey })`.
-- With `ownerKey`, the first person entry must be signed by exactly that
-  key. Otherwise it is a break on open, and `NOT_PERMITTED` when writing.
-- Changing the owner later would mean re-signing every entry after the
-  first one.
+- At project creation, the app makes the owner's key (`ensureKey`) and keeps
+  that key id outside the ledger, in project settings or the keychain.
+- On every open it passes the id: `Ledger.open(store, { keys, ownerKey })`.
+- The ledger's first person entry must be signed by exactly that key, and
+  the key must be trusted on this device. Otherwise it is a `signature`
+  break on open, and `NOT_PERMITTED` when writing.
+- Then `ledger.owner` and `status.owner` name the owner.
+  `ledger.ownerKeyPinned` and `ledger.pinnedOwnerKey` say whether a key was
+  passed, whether or not it checked out.
 
-This is enforced in two places:
-
-- At write time, anything else is `NOT_PERMITTED`.
-- On open, a `key.trusted` signed by anyone else trusts nothing.
-
-So a helper cannot make a key in the owner's name and use it. Roles beyond
-owner (`core/people`) do not widen this.
+Without `ownerKey` there is no owner, whoever wrote first. Each person can
+still trust and retire their own keys, but nobody can trust or retire
+another person's.
 
 **Rotation and stolen keys.** Call `ledger.rotateKey(person, reason)`. It
 works with any provider that can stage keys (`stageKey`, `activateKey`), and
@@ -257,8 +249,9 @@ Every device that trusted the old key replays those two entries, so it
 trusts the new key from step 2. It also refuses anything the old key signs
 after step 4.
 
-Retiring a key by hand (`ledger.retireKey`) reaches only the devices that
-already trust the key that signs the retirement. The owner can retire a
+`ledger.retireKey` refuses to sign with a key the ledger does not record
+yet: no other device could know that key, so they would ignore the
+retirement. After a rotation, use `rotateKey`. The owner can retire a
 helper's key the same way, for example when they leave.
 
 Key trust is replayed in ledger order a fixed number of times:
