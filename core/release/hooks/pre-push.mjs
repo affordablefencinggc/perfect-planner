@@ -8,7 +8,7 @@
 // Git feeds stdin lines: <local ref> <local sha> <remote ref> <remote sha>.
 // Findings are printed masked to stderr; any finding exits 1.
 // Testing modes: --scan-text <file> [allowlist.json]  (JSON findings), --rules,
-// --placeholder, --check-name <path>, --check-config <path>.
+// --placeholder, --field-word, --check-name <path>, --check-config <path>.
 //
 // This hook is a local, best-effort layer. The binding check is the review
 // gate's scanBranch with person-approved ledger fingerprints, plus GitHub push
@@ -67,6 +67,8 @@ const FORBIDDEN = [
   { id: "service-account-file", pattern: /^service-account.*\.json$/ },
 ];
 const ENV_TEMPLATE = /^\.env\.(?:example|sample|template)$/;
+const PLANNER_STATE = /(^|\/)\.perfect-planner\//i;
+const FIELD_WORD = /^(?:password|passwd|passphrase|secret|token|api[ _-]?key|client[ _-]?secret|credentials?)$/i;
 const PLACEHOLDER = /^(?:placeholder|changeme|x{3,}|<[^>]*>|\$\{[^}]*\}|\{\{[^}]*\}\}|process\.env\.[\w.]+|your[_-][\w-]*|example|dummy|test|redacted|\*{3,}|none|null|undefined|todo)$|^(?:secret:\/\/|keychain:|keyring:|vault:|dpapi:|op:\/\/|credentials:)/i;
 const CONFIG_NAME = /\.(?:ya?ml|ini|cfg|conf|properties|toml)$|^\.env(?:\..+)?$|^\.npmrc$|^dockerfile(?:\..+)?$|^docker-compose/;
 const NPMRC_TOKEN = /_authToken\s*=\s*(\S+)/;
@@ -95,6 +97,8 @@ function parseAllowlist(text) {
 
 function forbiddenRule(path) {
   if (path.replace(/\\/g, "/") === ALLOWLIST_PATH) return null;
+  // Perfect Planner's own state (ledger, worker tokens, briefs, keys) never leaves the machine.
+  if (PLANNER_STATE.test(path.replace(/\\/g, "/"))) return "planner-state";
   const name = baseName(path).toLowerCase();
   if (ENV_TEMPLATE.test(name)) return null;
   for (const r of FORBIDDEN) if (r.pattern.test(name)) return r.id;
@@ -129,6 +133,7 @@ function scanText(file, text, allow) {
         taken.push([valueStart, valueStart + value.length]);
         if (rule.nameGroup !== undefined && value.length < minLength(m[rule.nameGroup])) continue;
         if (PLACEHOLDER.test(value) || !/[A-Za-z]/.test(value)) continue;
+        if (rule.nameGroup !== undefined && FIELD_WORD.test(value)) continue;
         add(rule.id, value);
       }
     }
@@ -206,6 +211,10 @@ function main() {
       id: r.id, source: r.pattern.source, flags: r.pattern.flags,
       valueGroup: r.valueGroup ?? null, nameGroup: r.nameGroup ?? null, configOnly: r.configOnly === true,
     }))));
+    return 0;
+  }
+  if (args[0] === "--field-word") {
+    console.log(JSON.stringify({ source: FIELD_WORD.source, flags: FIELD_WORD.flags }));
     return 0;
   }
   if (args[0] === "--placeholder") {

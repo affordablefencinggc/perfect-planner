@@ -8,7 +8,7 @@ import { appendNumbered, installNumberingRules } from "../numbering/index";
 import { ALLOWLIST_PATH, approveSecretFinding, approvedFingerprints, fingerprintOf, parseAllowlist } from "./allowlist";
 import { checkPushProtection, enablePushProtection, type Fetcher } from "./pushProtection";
 import {
-  PLACEHOLDER, REQUIRED_IGNORES, SECRET_RULES, checkIgnoreList, isConfigLikeFile, isForbiddenFile, isPlaceholder, maskSecret, scanBranch, scanChange, scanText, withRequiredIgnores,
+  FIELD_WORD, PLACEHOLDER, REQUIRED_IGNORES, SECRET_RULES, checkIgnoreList, isConfigLikeFile, isForbiddenFile, isPlaceholder, maskSecret, scanBranch, scanChange, scanText, withRequiredIgnores,
 } from "./secrets";
 import type { CommandRunner } from "./types";
 
@@ -200,6 +200,23 @@ describe("forbidden files", () => {
 
   it("allows templates and ordinary files", () => {
     for (const p of [".env.example", ".env.sample", ".env.template", "id_rsa.pub", "src/env.ts", "package.json", ".gitignore"]) {
+      expect(isForbiddenFile(p), p).toBeNull();
+    }
+  });
+});
+
+describe("Perfect Planner's own state", () => {
+  it("refuses any path under .perfect-planner/, whatever it holds", () => {
+    for (const p of [
+      ".perfect-planner/ledger/ledger.jsonl", ".perfect-planner/worker-token", ".perfect-planner/briefs/T-3.md",
+      ".perfect-planner/keys/system.json", "apps/web/.perfect-planner/HEAD", ".Perfect-Planner\\ledger\\HEAD",
+    ]) expect(isForbiddenFile(p), p).toBe("planner-state");
+    const findings = scanChange([{ path: ".perfect-planner/notes.txt", added: 1, removed: 0, addedText: "hello\n" }]);
+    expect(findings.map((f) => f.rule)).toEqual(["planner-state"]);
+  });
+
+  it("still lets the reviewed allowlist file and look-alike names through", () => {
+    for (const p of [ALLOWLIST_PATH, "perfect-planner/README.md", "docs/.perfect-planner.md", "src/.perfect-planner-ui/x.ts"]) {
       expect(isForbiddenFile(p), p).toBeNull();
     }
   });
@@ -509,6 +526,24 @@ describe("hooks/pre-push.mjs stays in sync", () => {
     }
   });
 
+  it("lets a value that only names a field through, in the gate and the hook alike", () => {
+    const dir = mkdtempSync(join(tmpdir(), "pp-hook-"));
+    try {
+      const file = join(dir, "en.json");
+      // the reviewer's sample: a UI label, not a credential
+      const text = ['  "passwordLabel": "Password",', '  "tokenHeading": "Token",', '  "secretTitle": "Secret",', kv("password", " = ", "hunter2isnotsafe")].join("\n");
+      writeFileSync(file, text);
+      expect(scanText("src/i18n/en.json", '  "passwordLabel": "Password",')).toEqual([]);
+      expect(JSON.parse(node("--field-word"))).toEqual({ source: FIELD_WORD.source, flags: FIELD_WORD.flags });
+      const expected = scanText(file, text);
+      expect(expected.map((f) => f.line)).toEqual([4]);
+      const fromHook = JSON.parse(node("--scan-text", file)) as Array<{ line: number; fingerprint: string }>;
+      expect(fromHook.map((f) => [f.line, f.fingerprint])).toEqual(expected.map((f) => [f.line, f.fingerprint]));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("scans config-only unquoted rules identically", () => {
     const dir = mkdtempSync(join(tmpdir(), "pp-hook-"));
     try {
@@ -528,7 +563,7 @@ describe("hooks/pre-push.mjs stays in sync", () => {
   });
 
   it("uses the same forbidden-name decisions", () => {
-    for (const p of [".env", ".env.example", "a/x.pem", "id_rsa", "id_rsa.pub", "src/a.ts", "service-account-1.json"]) {
+    for (const p of [".env", ".env.example", "a/x.pem", "id_rsa", "id_rsa.pub", "src/a.ts", "service-account-1.json", ".perfect-planner/worker-token", "x/.perfect-planner/ledger/HEAD", ".perfect-planner/secret-allowlist.json", "perfect-planner/a.md"]) {
       expect(JSON.parse(node("--check-name", p)), p).toBe(isForbiddenFile(p));
     }
   });
