@@ -21,14 +21,18 @@ function isWithin(root, candidate) { const relative = path.relative(path.resolve
  */
 function isOwnerRecoveryTarget(target) {
   let text = `${target.pathname}${target.search}${target.hash}`;
-  try { text = decodeURIComponent(text); } catch { /* keep the raw form */ }
-  return /owner[-_]?recovery/i.test(text);
+  // Decode until stable (catches double encoding); an address that cannot be decoded fails closed.
+  for (let round = 0; round < 5; round += 1) {
+    let decoded; try { decoded = decodeURIComponent(text); } catch { return true; }
+    if (decoded === text) break; text = decoded;
+  }
+  return /owner[-_]?recovery/i.test(text.replace(/\+/g, " "));
 }
 function normalizedTarget(value) {
   let target; try { target = new URL(value); } catch { throw new Error("Screenshot target must be a valid URL."); }
   const localHttp = target.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(target.hostname);
   if (!(target.protocol === "https:" || localHttp) || target.username || target.password) throw new Error("Screenshot target must be credential-free HTTPS or localhost HTTP.");
-  if (isOwnerRecoveryTarget(target)) throw new Error("Screenshot target is an owner recovery screen, which shows a recovery code; it is never captured as evidence.");
+  if (isOwnerRecoveryTarget(target)) throw new Error("Screenshot target is an owner recovery screen (or cannot be decoded to rule one out); recovery codes are never captured as evidence.");
   return target.toString();
 }
 

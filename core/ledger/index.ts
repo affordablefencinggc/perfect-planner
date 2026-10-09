@@ -35,4 +35,4 @@ export {
   type OwnerChain,
   type RecoveryCheck,
 } from "./recovery";
-export { FileHeadWitness, MemoryHeadWitness, type HeadWitness, type WitnessedHead } from "./witness";
+export { FileHeadWitness, MemoryHeadWitness, witnessIdFor, type HeadWitness, type WitnessedHead } from "./witness";

@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { FileHeadWitness, FileStore, Ledger, MemoryKeyProvider, type HeadWitness } from "./index";
+import { FileHeadWitness, FileStore, Ledger, MemoryKeyProvider, witnessIdFor, type HeadWitness } from "./index";
 
 // Reviewer condition 1 (owner recovery): the ledger can be cut short from its
 // end together with its HEAD file, since both sit in the project folder. A copy
@@ -39,7 +39,7 @@ describe("the head copy kept outside the project", () => {
     const witness = new FileHeadWitness(temp("pp-appdata-"));
     const root = project(witness);
     const lines = fs.readFileSync(ledgerFile(root), "utf8").trim().split("\n").map((line) => JSON.parse(line));
-    expect(witness.read(lines[0].hash)).toEqual({ n: "L-000003", hash: lines[2].hash, entries: 3 });
+    expect(witness.read(witnessIdFor(lines[0].hash, new FileStore(root).description))).toEqual({ n: "L-000003", hash: lines[2].hash, entries: 3 });
   });
 
   it("shows a ledger cut short with its HEAD file as truncated", () => {
@@ -54,7 +54,8 @@ describe("the head copy kept outside the project", () => {
     expect(blind.status.ok).toBe(true);
     const seen = Ledger.openSync(new FileStore(root), { keys: new MemoryKeyProvider(), witness, readOnly: true });
     expect(seen.status).toMatchObject({ ok: false, problem: "truncated", brokenAt: "L-000003" });
-    expect(seen.status.detail).toMatch(/outside the project/);
+    expect(seen.status.detail).toMatch(/copy of the head this computer keeps for this folder/);
+    expect(seen.status.detail).not.toMatch(/remove|delete/);
   });
 
   it("shows a rewritten last entry when HEAD was rewritten to match", () => {
@@ -87,5 +88,34 @@ describe("the head copy kept outside the project", () => {
     const entry = ledger.append({ actor: agent, type: "task.progress", subject: "T-1", summary: "Stored anyway" });
     expect(ledger.get(entry.n)).toBeDefined();
     expect(ledger.status.witnessProblem).toMatch(/permission denied/);
+  });
+
+  it("keeps a separate copy for each copy of a project folder", () => {
+    const witness = new FileHeadWitness(temp("pp-appdata-"));
+    const a = project(witness);
+    const b = temp("pp-witness-copy-");
+    fs.cpSync(path.join(a, ".perfect-planner"), path.join(b, ".perfect-planner"), { recursive: true });
+    const first = Ledger.openSync(new FileStore(a), { keys: new MemoryKeyProvider(), witness });
+    first.append({ actor: agent, type: "task.progress", subject: "T-1", summary: "Only in the first copy" });
+    first.close();
+    const second = Ledger.openSync(new FileStore(b), { keys: new MemoryKeyProvider(), witness });
+    expect(second.status.ok).toBe(true);
+    second.append({ actor: agent, type: "task.progress", subject: "T-1", summary: "Only in the second copy" });
+    second.close();
+    expect(Ledger.openSync(new FileStore(a), { keys: new MemoryKeyProvider(), witness, readOnly: true }).status.ok).toBe(true);
+  });
+
+  it("reports an unreadable copy and never overwrites it", () => {
+    const dir = temp("pp-appdata-");
+    const witness = new FileHeadWitness(dir);
+    const root = project(witness);
+    const [file] = fs.readdirSync(dir);
+    fs.writeFileSync(path.join(dir, file), "{ not json");
+    const ledger = Ledger.openSync(new FileStore(root), { keys: new MemoryKeyProvider(), witness });
+    expect(ledger.status.ok).toBe(true);
+    expect(ledger.status.witnessProblem).toMatch(/cannot be read/);
+    ledger.append({ actor: agent, type: "task.progress", subject: "T-1", summary: "Four" });
+    expect(fs.readFileSync(path.join(dir, file), "utf8")).toBe("{ not json");
+    expect(ledger.status.witnessProblem).toMatch(/cannot be read/);
   });
 });

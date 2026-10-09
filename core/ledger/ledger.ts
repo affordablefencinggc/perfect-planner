@@ -1,7 +1,7 @@
 import { acknowledgesExactly, hashEntry, ledgerNumber, parseLedgerNumber, verifyWithAcknowledgements } from "./chain";
 import { checkRecoveryCode, deriveRecoveryKey, formatRecoveryCode, newRecoverySecret, ownerChain, parseRecoveryCode, recoveryStatement, type RecoveryCheck } from "./recovery";
 import type { LedgerStore } from "./store";
-import type { HeadWitness } from "./witness";
+import { witnessIdFor, type HeadWitness, type WitnessedHead } from "./witness";
 import {
   recordedKeys,
   keyFromData,
@@ -83,6 +83,8 @@ export class Ledger {
   /** Set only inside setRecoveryCode and recoverOwner: owner.* entries are never written through append. */
   private writingOwnerEntry = false;
   private witness?: HeadWitness;
+  private witnessId?: string;
+  private witnessFrozen = false;
   private witnessProblem?: string;
 
   private constructor(
@@ -141,12 +143,15 @@ export class Ledger {
       }
     }
     const witness = options.witness;
-    const witnessed = witness && loaded.entries.length ? readWitness(witness, loaded.entries[0].hash) : undefined;
+    // One copy per ledger folder: two copies of a project (a backup, a second clone) each keep their own.
+    const witnessId = loaded.entries.length ? witnessIdFor(loaded.entries[0].hash, store.description) : undefined;
+    const read = witness && witnessId ? readWitness(witness, witnessId) : undefined;
+    const witnessed = read?.head;
     if (witnessed && (chain.ok || chain.problem === "signature")) {
       const same = loaded.entries.find((entry) => entry.n === witnessed.n);
-      const where = `the copy of the head kept outside the project (${witness!.description})`;
+      const where = `the copy of the head this computer keeps for this folder (${witness!.description})`;
       if (loaded.entries.length < witnessed.entries || !same) {
-        chain = { ok: false, firstBad: witnessed.n, problem: "truncated", detail: `the ledger ends at ${last?.n ?? "nothing"} but ${where} says ${witnessed.n} was written; restore the missing entries, or, if an older copy was restored on purpose, remove that outside copy to accept it` };
+        chain = { ok: false, firstBad: witnessed.n, problem: "truncated", detail: `the ledger ends at ${last?.n ?? "nothing"} but ${where} says ${witnessed.n} was written; restore the missing entries from git or a backup before writing` };
       } else if (same.hash !== witnessed.hash) {
         chain = { ok: false, firstBad: witnessed.n, problem: "hash", detail: `${witnessed.n} differs from ${where}` };
       }
@@ -158,6 +163,12 @@ export class Ledger {
     const ledger = new Ledger(store, loaded.entries, chain, acknowledged, writable, options.now ?? (() => new Date()), permissions, keys, anchors, trust, options.ownerKey);
     ledger.repaired = repaired;
     ledger.witness = witness;
+    ledger.witnessId = witnessId;
+    if (read?.problem) {
+      // An unreadable copy is reported and left as it is, never overwritten.
+      ledger.witnessProblem = read.problem;
+      ledger.witnessFrozen = true;
+    }
     if (writable && chain.ok && last && (witnessed?.n !== last.n || witnessed?.hash !== last.hash)) ledger.updateWitness();
     if (repaired && chain.ok && last) {
       // Leave a record in the ledger itself of what the repair did, when this device can sign it.
@@ -190,9 +201,23 @@ export class Ledger {
       ...(this.trust.ownerKeyReplaced ? { ownerKeyReplaced: { ...this.trust.ownerKeyReplaced } } : {}),
       ...(this.repaired ? { repaired: this.repaired } : {}),
       ...(this.witnessProblem ? { witnessProblem: this.witnessProblem } : {}),
+      ...this.ownKeysRetired(),
     };
     if (this.chain.ok) return { ok: true, ...base };
     return { ok: false, ...base, brokenAt: this.chain.firstBad, problem: this.chain.problem, detail: this.chain.detail };
+  }
+
+  /** This device's own signing keys that an entry in the ledger retired (for example from another computer). */
+  private ownKeysRetired(): { ownKeysRetired?: { keyId: string; principal: string; n: string }[] } {
+    let own: TrustedKey[] = [];
+    try {
+      own = this.keys?.signingKeys?.() ?? [];
+    } catch {
+      return {};
+    }
+    const mine = own.filter((k) => this.trust.retired.has(k.keyId));
+    if (!mine.length) return {};
+    return { ownKeysRetired: mine.map((k) => ({ keyId: k.keyId, principal: k.principal, n: this.trust.retired.get(k.keyId)!.n })) };
   }
 
   close(): void {
@@ -344,9 +369,11 @@ export class Ledger {
    * the old key vouches for it (key.trusted, signed by the old key), the new
    * key becomes active, and it retires the old one (key.retired). Devices
    * that trusted the old key trust the new one from that entry, and refuse
-   * anything the old key signs after the retirement.
+   * anything the old key signs after the retirement. Every other key of
+   * the person still in force is retired as well, except those in `keep`,
+   * so a device key added with a stolen key does not outlive the rotation.
    */
-  rotateKey(person: Actor, reason: string): { trusted: LedgerEntry; retired: LedgerEntry } {
+  rotateKey(person: Actor, reason: string, options: { keep?: readonly string[] } = {}): { trusted: LedgerEntry; retired: LedgerEntry; others: LedgerEntry[] } {
     if (person?.kind !== "person") throw new LedgerError("BAD_ACTOR", "only a person can rotate their key");
     const keys = this.keys;
     if (!keys?.stageKey || !keys.activateKey) throw new LedgerError("NOT_SIGNED", "this device's key store cannot rotate keys");
@@ -361,9 +388,17 @@ export class Ledger {
     }
     keys.activateKey(principal, next.keyId);
     const previous = trusted.sig!.key;
-    // Only the key that vouched is retired; this person's keys on other devices keep working.
     const retired = this.retireKey(person, previous, `Key rotation: ${reason}`);
-    return { trusted, retired };
+    // Every other key of this person in force is retired too, unless the person listed it in
+    // `keep` after checking it: a device key a thief added with the stolen key must not survive.
+    const others: LedgerEntry[] = [];
+    const recorded = new Set(recordedKeys(this.list).map((k) => k.keyId));
+    for (const key of [...this.trusted.values()]) {
+      if (key.principal !== principal || key.keyId === next.keyId || !recorded.has(key.keyId)) continue;
+      if (this.trust.retired.has(key.keyId) || options.keep?.includes(key.keyId)) continue;
+      others.push(this.retireKey(person, key.keyId, `Key rotation: ${reason} (every other key of ${principal} stops; re-add trusted devices)`));
+    }
+    return { trusted, retired, others };
   }
 
   /** The project owner key id this ledger was opened with (OpenOptions.ownerKey), if any. */
@@ -395,6 +430,10 @@ export class Ledger {
     if (!this.chain.ok) {
       throw new LedgerError("CHAIN_BROKEN", `writes are stopped: ${this.chain.firstBad} failed the fingerprint check (${this.chain.problem}); acknowledge it first`);
     }
+    return this.makeRecoveryCode(person, reason);
+  }
+
+  private makeRecoveryCode(person: Actor, reason: string): { code: string; entry: LedgerEntry } {
     const principal = principalOf(person);
     if (!this.trust.owner || this.trust.owner !== principal) {
       throw new LedgerError("NOT_PERMITTED", "only the project's owner, on a computer that holds the owner key, can set a recovery code");
@@ -426,7 +465,39 @@ export class Ledger {
    * proves where the history starts, not that its end is all there).
    */
   checkRecoveryCode(typed: string): RecoveryCheck {
-    return checkRecoveryCode(this.list, typed);
+    const check = checkRecoveryCode(this.list, typed);
+    this.recoveryPrecheck();
+    return check;
+  }
+
+  /**
+   * What would stop a recovery, checked before a code is spent: a damaged
+   * file, or an owner entry that the owner's own keys do not verify. Entries
+   * signed by keys only the old computer knew (the gate, the watcher,
+   * helpers) are accepted as unverified: recovery does not need them, and
+   * the owner can trust those keys afterwards (trustKey). Returns the
+   * numbers of those unverified entries.
+   */
+  private recoveryPrecheck(): string[] {
+    if (!this.chain.ok && this.chain.problem !== "signature") {
+      throw new LedgerError("CHAIN_BROKEN", `the ledger is damaged at ${this.chain.firstBad} (${this.chain.problem}); restore it before recovering; the code was not used`);
+    }
+    const chain = ownerChain(this.list);
+    if (!chain) throw new LedgerError("RULE", "this ledger has no owner to recover");
+    const asOwner = keyTrust([...this.anchors, ...chain.keys.map((k) => ({ keyId: k.keyId, principal: chain.principal, publicKey: k.publicKey }))], this.list, {
+      ownerKey: chain.keys[0].keyId,
+    });
+    const unverified: string[] = [];
+    this.list.forEach((entry, index) => {
+      if (!needsSignature(entry.actor)) return;
+      const problem = signatureProblem(entry, asOwner.trusted, asOwner.retired, index);
+      if (!problem) return;
+      if (principalOf(entry.actor) === chain.principal) {
+        throw new LedgerError("CHAIN_BROKEN", `${entry.n} claims to be the owner's but the owner's keys do not verify it (${problem}); the recovery would not fix it, and the code was not used`);
+      }
+      unverified.push(entry.n);
+    });
+    return unverified;
   }
 
   /**
@@ -443,13 +514,9 @@ export class Ledger {
     typed: string,
     confirmedHead: { n: string; hash: string },
     reason: string,
-  ): { ownerKey: string; recovered: LedgerEntry; code: string; codeEntry: LedgerEntry } {
+  ): { ownerKey: string; recovered: LedgerEntry; code: string; codeEntry: LedgerEntry; unverified: string[] } {
     if (!this.writable) throw new LedgerError("READ_ONLY", `this ledger is read-only (${this.store.description})`);
     if (person?.kind !== "person") throw new LedgerError("BAD_ACTOR", "only a person can recover a project");
-    // Without the owner key, entries it signed show as unchecked signatures; anything worse must be fixed first.
-    if (!this.chain.ok && this.chain.problem !== "signature") {
-      throw new LedgerError("CHAIN_BROKEN", `the ledger is damaged at ${this.chain.firstBad} (${this.chain.problem}); restore it before recovering`);
-    }
     const last = this.last();
     if (!last || last.n !== confirmedHead?.n || last.hash !== confirmedHead?.hash) {
       throw new LedgerError("RULE", `the ledger's last entry is ${last?.n ?? "nothing"}, not the one that was confirmed; check it again before recovering`);
@@ -468,17 +535,8 @@ export class Ledger {
     const chain = ownerChain(this.list)!;
     if (check.ownerKeys.includes(mine.keyId)) throw new LedgerError("RULE", "this computer already holds an owner key; there is nothing to recover");
     if (chain.keys.some((k) => k.keyId === mine!.keyId)) throw new LedgerError("RULE", `this computer's key ${mine.keyId} was an owner key that was stopped; make a new key first`);
-    // Check the whole ledger as the owner's keys would see it before spending the code: a problem
-    // the recovery cannot fix (a tampered entry further on) must not cost the person their code.
-    const asOwner = assess(
-      this.list,
-      this.permissions,
-      [...this.anchors, ...chain.keys.map((k) => ({ keyId: k.keyId, principal: chain.principal, publicKey: k.publicKey }))],
-      chain.keys[0].keyId,
-    );
-    if (!asOwner.chain.ok) {
-      throw new LedgerError("CHAIN_BROKEN", `the ledger has a problem the recovery would not fix, at ${asOwner.chain.firstBad} (${asOwner.chain.detail}); the code was not used`);
-    }
+    // Check the whole ledger as the owner's keys would see it before spending the code.
+    const unverified = this.recoveryPrecheck();
     const secret = parseRecoveryCode(typed);
     const recoveryKey = deriveRecoveryKey(secret, chain.root);
     secret.fill(0);
@@ -512,16 +570,18 @@ export class Ledger {
     if (this.trust.owner !== principal) {
       throw new LedgerError("RULE", `the recovery entry ${recovered.n} was written but did not establish ownership: ${this.chain.ok ? "unknown reason" : this.chain.detail}`);
     }
-    const next = this.setRecoveryCode(person, "New code after recovery: the old one is spent");
-    return { ownerKey: mine.keyId, recovered, code: next.code, codeEntry: next.entry };
+    // Entries only the old computer could verify may still hold writes back; the new code is written regardless.
+    const next = this.makeRecoveryCode(person, "New code after recovery: the old one is spent");
+    return { ownerKey: mine.keyId, recovered, code: next.code, codeEntry: next.entry, unverified };
   }
 
   /** Records the head outside the project; a failure is shown in status, never thrown after a stored write. */
   private updateWitness(): void {
     const last = this.last();
-    if (!this.witness || !last) return;
+    if (!this.witness || !last || this.witnessFrozen) return;
+    this.witnessId ??= witnessIdFor(this.list[0].hash, this.store.description);
     try {
-      this.witness.write(this.list[0].hash, { n: last.n, hash: last.hash, entries: this.list.length });
+      this.witness.write(this.witnessId, { n: last.n, hash: last.hash, entries: this.list.length });
       this.witnessProblem = undefined;
     } catch (error) {
       this.witnessProblem = `could not update the copy of the head kept outside the project (${this.witness.description}): ${(error as Error).message}`;
@@ -849,11 +909,11 @@ function pinsEntry(ack: LedgerEntry, entry: LedgerEntry): boolean {
   return pins.some((pin) => pin.n === entry.n);
 }
 
-function readWitness(witness: HeadWitness, genesis: string) {
+function readWitness(witness: HeadWitness, id: string): { head?: WitnessedHead; problem?: string } {
   try {
-    return witness.read(genesis);
-  } catch {
-    return undefined;
+    return { head: witness.read(id) };
+  } catch (error) {
+    return { problem: `the copy of the head this computer keeps for this folder (${witness.description}) cannot be read, so it was not compared or updated: ${(error as Error).message}` };
   }
 }
 

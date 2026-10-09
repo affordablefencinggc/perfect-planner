@@ -7,6 +7,7 @@ import {
   MemoryStore,
   hashEntry,
   isAuthoritative,
+  recordedKeys,
   signedBytes,
   type LedgerEntry,
 } from "./index";
@@ -350,12 +351,14 @@ describe("owner recovery after the review of 22a6d34", () => {
     outsider.createKey("person:owner");
     const tampered = handWritten([...store.load().entries], outsider, { type: "decision.made", subject: "D-5", summary: "Inserted", reason: "x" });
     const pc = newComputer(new MemoryStore(tampered));
-    const check = pc.ledger.checkRecoveryCode(code);
-    const error = thrown(() => pc.ledger.recoverOwner(owner, code, { n: check.head.n, hash: check.head.hash }, "New PC"));
+    // Checking the code already says so (review LOW: it used to say the code opens the project).
+    expect(thrown(() => pc.ledger.checkRecoveryCode(code)).message).toMatch(/code was not used/);
+    const last = tampered.at(-1)!;
+    const error = thrown(() => pc.ledger.recoverOwner(owner, code, { n: last.n, hash: last.hash }, "New PC"));
     expect(error.code).toBe("CHAIN_BROKEN");
     expect(error.message).toMatch(/code was not used/);
     expect(pc.ledger.entries()).toHaveLength(tampered.length);
-    expect(pc.ledger.checkRecoveryCode(code).owner).toBe("person:owner");
+    expect(ownerChain(pc.ledger.entries())!.recovery).toBeDefined();
   });
 
   it.each(["old pin", "current pin"])("F: a rotated first computer (%s) stops signing once another computer recovers", (which) => {
@@ -366,9 +369,85 @@ describe("owner recovery after the review of 22a6d34", () => {
     const pin = which === "old pin" ? ownerKey : current;
     const old = Ledger.openSync(new MemoryStore([...pc.store.load().entries]), { keys, ownerKey: pin });
     expect(old.status.ownerKeyReplaced).toEqual({ n: result.recovered.n, keyId: result.ownerKey });
+    expect(old.status.ownKeysRetired?.map((k) => k.keyId)).toEqual([current]);
     const error = thrown(() => old.append({ actor: owner, type: "decision.made", subject: "D-2", summary: "Still mine", reason: "x" }));
     expect(error.code).toBe("NOT_SIGNED");
     expect(error.message).toMatch(/recovered on another computer/);
+  });
+});
+
+// Review of #32 at b3781aa (merge after fix): one HIGH, two MED, two LOW.
+describe("owner recovery after the review of b3781aa", () => {
+  it("HIGH: recovers a project whose gate and helper entries only the old computer could verify", () => {
+    const keys = new MemoryKeyProvider({ autoCreate: false });
+    const ownerKey = keys.createKey("person:owner").keyId;
+    keys.createKey("system");
+    keys.createKey("person:helper");
+    const store = new MemoryStore();
+    const ledger = Ledger.openSync(store, { keys, ownerKey, now: clock("2026-10-09T01:00:00Z") });
+    ledger.append({ actor: owner, type: "decision.made", subject: "D-1", summary: "Ship it", reason: "Planned" });
+    ledger.append({ actor: { kind: "system", id: "gate" }, type: "test.passed", subject: "T-1", summary: "Gate ran the tests", data: { test: "npm test" } });
+    ledger.append({ actor: helper, type: "task.progress", subject: "T-1", summary: "Helper note" });
+    const { code } = ledger.setRecoveryCode(owner, "Project created");
+    ledger.close();
+    const pc = newComputer(store);
+    const result = recover(pc.ledger, code);
+    expect(result.unverified).toEqual(["L-000002", "L-000003"]);
+    expect(pc.ledger.owner).toBe("person:owner");
+    expect(isAuthoritative(pc.ledger.get("L-000001")!)).toBe(true);
+    expect(isAuthoritative(pc.ledger.get("L-000002")!)).toBe(false);
+    // The owner then checks and trusts the old computer's gate key, and the ledger checks out again.
+    const gate = recordedKeys(pc.ledger.entries()).find((k) => k.principal === "system")!;
+    pc.ledger.trustKey(owner, gate, "The old computer's gate (fingerprint checked)");
+    const helperKey = recordedKeys(pc.ledger.entries()).find((k) => k.principal === "person:helper")!;
+    pc.ledger.trustKey(owner, helperKey, "The helper's key (fingerprint checked)");
+    expect(pc.ledger.status.ok).toBe(true);
+    expect(isAuthoritative(pc.ledger.get("L-000002")!)).toBe(true);
+  });
+
+  it("MED: a rotation retires a device key a thief added with the stolen key, so the thief cannot set a code", () => {
+    const { keys, ownerKey, store } = project();
+    const stolen = keys.copy();
+    const thiefDevice = new MemoryKeyProvider({ autoCreate: false });
+    const added = thiefDevice.createKey("person:owner");
+    const thief = Ledger.openSync(store, { keys: stolen, ownerKey });
+    thief.trustKey(owner, added, "My new laptop");
+    thief.close();
+    const ledger = Ledger.openSync(store, { keys, ownerKey });
+    const { others } = ledger.rotateKey(owner, "Laptop stolen");
+    ledger.close();
+    expect(others.map((e) => e.data!.keyId)).toContain(added.keyId);
+    let entries = [...store.load().entries];
+    expect(ownerChain(entries)!.active).not.toContain(added.keyId);
+    const secret = newRecoverySecret();
+    const theirs = deriveRecoveryKey(secret, ownerChain(entries)!.root);
+    entries = handWritten(entries, thiefDevice, {
+      type: "owner.recovery.set",
+      subject: theirs.keyId,
+      summary: "Thief's code",
+      reason: "x",
+      data: { root: ownerChain(entries)!.root, recoveryKeyId: theirs.keyId, recoveryPublicKey: theirs.publicKey },
+    });
+    expect(ownerChain(entries)!.recovery?.keyId).not.toBe(theirs.keyId);
+  });
+
+  it("MED: a rotation keeps the other keys the person listed, and tells the dropped device", () => {
+    const { keys, ownerKey, store } = project();
+    const laptop = new MemoryKeyProvider({ autoCreate: false });
+    const laptopKey = laptop.createKey("person:owner");
+    const desktop = new MemoryKeyProvider({ autoCreate: false });
+    const desktopKey = desktop.createKey("person:owner");
+    const ledger = Ledger.openSync(store, { keys, ownerKey });
+    ledger.trustKey(owner, laptopKey, "Laptop");
+    ledger.trustKey(owner, desktopKey, "Desktop");
+    const { others } = ledger.rotateKey(owner, "Yearly rotation", { keep: [laptopKey.keyId] });
+    ledger.close();
+    expect(others.map((e) => e.data!.keyId)).toEqual([desktopKey.keyId]);
+    expect(ownerChain(store.load().entries)!.active).toContain(laptopKey.keyId);
+    // Review LOW: the dropped desktop is told its key was retired.
+    desktop.pin(keys.trustedKeys().find((k) => k.keyId === ownerKey)!);
+    const onDesktop = Ledger.openSync(new MemoryStore([...store.load().entries]), { keys: desktop, ownerKey, readOnly: true });
+    expect(onDesktop.status.ownKeysRetired?.map((k) => k.keyId)).toEqual([desktopKey.keyId]);
   });
 });
 

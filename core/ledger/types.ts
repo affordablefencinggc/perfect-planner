@@ -120,7 +120,12 @@ export interface LedgerStatus {
    * owner.recovered entry: this computer can no longer sign as the owner.
    */
   ownerKeyReplaced?: { n: string; keyId: string };
-  /** Set when the copy of the head kept outside the project could not be updated. */
+  /**
+   * This device's active signing keys that the ledger retired, for example by
+   * a rotation or recovery on another computer: it can no longer sign with them.
+   */
+  ownKeysRetired?: { keyId: string; principal: string; n: string }[];
+  /** Set when the copy of the head kept outside the project could not be read or updated. */
   witnessProblem?: string;
   /** Set when opening repaired a torn final line left by a crash mid-write. */
   repaired?: string;

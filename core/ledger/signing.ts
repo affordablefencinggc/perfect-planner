@@ -15,6 +15,8 @@ export interface KeyProvider {
   state(): KeyState;
   /** Public keys this device trusts, including retired ones (verify only). */
   trustedKeys(): TrustedKey[];
+  /** The active keys this device signs with (not pins of other people's keys). */
+  signingKeys?(): TrustedKey[];
   /**
    * Signs with the principal's active key. Throws when the principal has no
    * key here or the key store is unavailable; never returns an empty signature.
@@ -355,6 +357,10 @@ export class MemoryKeyProvider implements KeyProvider {
 
   trustedKeys(): TrustedKey[] {
     return [...[...this.keys.values()].map((k) => ({ ...k.key })), ...this.retired.map((k) => ({ ...k })), ...this.pinned.map((k) => ({ ...k }))];
+  }
+
+  signingKeys(): TrustedKey[] {
+    return [...this.keys.values()].map((k) => ({ ...k.key }));
   }
 
   /** Another provider holding the same keys: a stolen copy, for tests. */

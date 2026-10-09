@@ -246,6 +246,11 @@ both built-in providers can:
 2. The old key vouches for it in a `key.trusted` entry.
 3. The new key becomes active.
 4. The new key retires the old one in a `key.retired` entry.
+5. Every other key of the person still in force is retired too, unless it
+   is listed in `rotateKey(person, reason, { keep })`. A device key that a
+   thief added with the stolen key must not outlive the rotation.
+   `status.ownKeysRetired` tells a dropped device that it can no longer
+   sign.
 
 Every device that trusted the old key replays those two entries, so it
 trusts the new key from step 2. It also refuses anything the old key signs
@@ -302,7 +307,12 @@ which goes with the keychain. So the owner gets a one-time code instead:
   ledger's genesis hash). Every owner key in force stops signing at that
   entry. The code is spent, and a new one is returned. Before spending the
   code, the whole ledger is checked as the owner's keys would see it. A
-  problem the recovery would not fix stops it, and the code stays unused.
+  problem the recovery would not fix stops it, and the code stays unused:
+  a damaged file, or an owner entry the owner's keys do not verify.
+  Entries signed by keys only the old computer knew are accepted as
+  unverified, for example the gate, the watcher or helpers.
+  `recoverOwner` returns their numbers in `unverified`. The owner then
+  checks those keys' fingerprints and trusts them with `trustKey`.
 - A computer still pinned to the old key opens with `status.ownerKeyReplaced`
   set and can no longer sign as the owner. The app shows a red "recovered on
   another computer" notice. If that was not the person, the old computer's
@@ -339,6 +349,8 @@ pins the keys it needs to read the others, after the fingerprint is checked.
   there. On a computer that keeps its app data, the `witness` open option
   (`FileHeadWitness`, a copy of the head in the app's data folder) shows a
   cut tail or a rewritten last entry, even when HEAD was changed to match.
+  Each copy of a project folder has its own copy of the head. An unreadable
+  copy is reported in `status.witnessProblem` and never overwritten.
   A same-user process can edit that copy too.
 - Anyone with write access to the files can append entries signed with
   keys nobody trusts. That stops writes until a person acknowledges the
