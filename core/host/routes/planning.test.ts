@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { hostCall, startTestHost } from "../testing";
+import { forgeEntry, hostCall, startTestHost } from "../testing";
 import type { CoreHost } from "../index";
 
 const IDEA = "Desktop invoice app with Stripe payments that works offline";
@@ -307,6 +307,16 @@ describe("planning routes", () => {
       const after = await hostCall(base, "POST", `/planning/tasks${P}`, { title: "Write the user guide" });
       expect(after.status).toBe(200);
     });
+  });
+
+  it("ignores a forged roadmap task: the roadmap stays unwritten", async () => {
+    await start();
+    const draft = (await hostCall(base, "GET", `/planning/roadmap${P}`)).body.result;
+    const first = draft.phases.flatMap((p: any) => p.tasks).find((t: any) => !t.own);
+    forgeEntry(host.project("plan"), { actor: { kind: "system", id: "planner" }, type: "task.created", subject: "T-99", summary: first.title, data: { source: "planning", key: first.key } });
+    const roadmap = (await hostCall(base, "GET", `/planning/roadmap${P}`)).body.result;
+    expect(roadmap.written).toBe(false);
+    expect(roadmap.phases.flatMap((p: any) => p.tasks).find((t: any) => t.key === first.key).task).toBeUndefined();
   });
 
   it("checks text for deferrals", async () => {

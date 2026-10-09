@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { hostCall, startTestHost } from "../testing";
+import { forgeEntry, hostCall, startTestHost } from "../testing";
 
 describe("summary route", () => {
   let ctx: Awaited<ReturnType<typeof startTestHost>>;
@@ -18,5 +18,11 @@ describe("summary route", () => {
     await hostCall(ctx.base, "POST", `/people/members${P}`, { person: "sam", name: "Sam", role: "helper" });
     const res = (await hostCall(ctx.base, "GET", `/summary${P}`)).body.result;
     expect(res).toMatchObject({ started: true, people: { members: 2, owner: "Riley Owner", ownerMissing: false } });
+  });
+
+  it("does not count a forged task", async () => {
+    await hostCall(ctx.base, "POST", `/people/members${P}`, { person: "owner", name: "Riley Owner", role: "owner" });
+    forgeEntry(ctx.host.project("sum"), { actor: { kind: "person", id: "owner" }, type: "task.created", subject: "T-1", summary: "Forged task" });
+    expect((await hostCall(ctx.base, "GET", `/summary${P}`)).body.result.plan.tasks).toBe(0);
   });
 });
