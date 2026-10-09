@@ -1,13 +1,16 @@
 import { acknowledgesExactly, hashEntry, ledgerNumber, parseLedgerNumber, verifyWithAcknowledgements } from "./chain";
 import type { LedgerStore } from "./store";
 import {
+  recordedKeys,
   keyFromData,
   markVerified,
+  mayTrustKeyFor,
+  keyTrust,
+  type KeyTrust,
   needsSignature,
   principalOf,
   signatureProblem,
   signedBytes,
-  trustedKeySet,
   type KeyProvider,
   type TrustedKey,
 } from "./signing";
@@ -39,6 +42,12 @@ export interface OpenOptions {
    * refuses person and system writes and cannot verify existing ones.
    */
   keys?: KeyProvider;
+  /**
+   * The project owner's key id, kept by the app outside the ledger (project
+   * settings, keychain). The ledger's first person entry must be signed by
+   * it, so nobody with file access can start a ledger as its owner.
+   */
+  ownerKey?: string;
   /** Clock for `at`; tests pass a fixed one. */
   now?: () => Date;
 }
@@ -61,6 +70,8 @@ export class Ledger {
   private readonly keys?: KeyProvider;
   private anchors: TrustedKey[];
   private trusted: Map<string, TrustedKey>;
+  private trust: KeyTrust;
+  private readonly ownerKey?: string;
 
   private constructor(
     store: LedgerStore,
@@ -72,7 +83,8 @@ export class Ledger {
     permissions: PermissionTable,
     keys: KeyProvider | undefined,
     anchors: TrustedKey[],
-    trusted: Map<string, TrustedKey>,
+    trust: KeyTrust,
+    ownerKey: string | undefined,
   ) {
     this.store = store;
     this.list = entries;
@@ -84,7 +96,9 @@ export class Ledger {
     this.permissions = permissions;
     this.keys = keys;
     this.anchors = anchors;
-    this.trusted = trusted;
+    this.trust = trust;
+    this.trusted = trust.trusted;
+    this.ownerKey = ownerKey;
   }
 
   /** Loads and re-checks the whole chain (spec §2.5), then takes the writer lock unless read-only. */
@@ -100,7 +114,7 @@ export class Ledger {
     const permissions = options.permissions ?? DEFAULT_PERMISSIONS;
     const keys = options.keys ?? store.defaultKeys;
     const anchors = readAnchors(keys);
-    let { chain, acknowledged, trusted } = assess(loaded.entries, permissions, anchors);
+    let { chain, acknowledged, trust } = assess(loaded.entries, permissions, anchors, options.ownerKey);
     if (chain.ok && loaded.parseError) {
       chain = { ok: false, firstBad: loaded.parseError.n, problem: "parse", detail: loaded.parseError.detail };
     }
@@ -118,7 +132,7 @@ export class Ledger {
       // A crash between writing the line and the head leaves the head behind; catch it up.
       store.resetHead({ n: last.n, hash: last.hash });
     }
-    const ledger = new Ledger(store, loaded.entries, chain, acknowledged, writable, options.now ?? (() => new Date()), permissions, keys, anchors, trusted);
+    const ledger = new Ledger(store, loaded.entries, chain, acknowledged, writable, options.now ?? (() => new Date()), permissions, keys, anchors, trust, options.ownerKey);
     ledger.repaired = repaired;
     if (repaired && chain.ok && last) {
       // Leave a record in the ledger itself of what the repair did, when this device can sign it.
@@ -142,7 +156,14 @@ export class Ledger {
 
   get status(): LedgerStatus {
     const head = this.last()?.n;
-    const base = { writable: this.writable, entries: this.list.length, head, acknowledged: [...this.acknowledged], ...(this.repaired ? { repaired: this.repaired } : {}) };
+    const base = {
+      writable: this.writable,
+      entries: this.list.length,
+      head,
+      acknowledged: [...this.acknowledged],
+      ...(this.trust.owner ? { owner: this.trust.owner } : {}),
+      ...(this.repaired ? { repaired: this.repaired } : {}),
+    };
     if (this.chain.ok) return { ok: true, ...base };
     return { ok: false, ...base, brokenAt: this.chain.firstBad, problem: this.chain.problem, detail: this.chain.detail };
   }
@@ -275,6 +296,54 @@ export class Ledger {
     return entry;
   }
 
+  /**
+   * A person stops one of their keys (or, the owner, anyone's) signing from
+   * here on: after a rotation, or when a key is lost or stolen. Entries the
+   * key signed before this point still count.
+   */
+  retireKey(person: Actor, keyId: string, reason: string): LedgerEntry {
+    if (person?.kind !== "person") throw new LedgerError("BAD_ACTOR", "only a person can retire a key");
+    // Other devices only honour a retirement signed by a key they can know from the ledger.
+    const signer = this.keys?.trustedKeys().find((k) => k.principal === principalOf(person) && !k.retired)?.keyId;
+    const known = signer !== undefined && (signer === this.ownerKey || recordedKeys(this.list).some((k) => k.keyId === signer));
+    if (!known) {
+      throw new LedgerError("RULE", `this device's key ${signer ?? "(none)"} is not in the ledger yet, so other devices would ignore the retirement; use rotateKey, or trust this key first`);
+    }
+    return this.append({ actor: person, type: "key.retired", subject: keyId, summary: `Retired key ${keyId}`, reason, data: { keyId } });
+  }
+
+  /**
+   * Rotates a person's key so every device follows: a new key is staged,
+   * the old key vouches for it (key.trusted, signed by the old key), the new
+   * key becomes active, and it retires the old one (key.retired). Devices
+   * that trusted the old key trust the new one from that entry, and refuse
+   * anything the old key signs after the retirement.
+   */
+  rotateKey(person: Actor, reason: string): { trusted: LedgerEntry; retired: LedgerEntry } {
+    if (person?.kind !== "person") throw new LedgerError("BAD_ACTOR", "only a person can rotate their key");
+    const keys = this.keys;
+    if (!keys?.stageKey || !keys.activateKey) throw new LedgerError("NOT_SIGNED", "this device's key store cannot rotate keys");
+    const principal = principalOf(person);
+    const next = keys.stageKey(principal);
+    let trusted: LedgerEntry;
+    try {
+      trusted = this.trustKey(person, next, `Key rotation: ${reason}`);
+    } catch (error) {
+      keys.discardStagedKey?.(principal);
+      throw error;
+    }
+    keys.activateKey(principal, next.keyId);
+    const previous = trusted.sig!.key;
+    // Only the key that vouched is retired; this person's keys on other devices keep working.
+    const retired = this.retireKey(person, previous, `Key rotation: ${reason}`);
+    return { trusted, retired };
+  }
+
+  /** Who owns this ledger as this device sees it, or undefined when it cannot tell. */
+  get owner(): string | undefined {
+    return this.trust.owner;
+  }
+
   private write(input: EntryDraft, acknowledging = false): LedgerEntry {
     if (!input || typeof input !== "object") throw new LedgerError("EMPTY_FIELD", "an entry is required");
     // Work on a frozen JSON copy: what is checked is what is hashed and stored,
@@ -313,12 +382,9 @@ export class Ledger {
     this.index.set(entry.n, this.list.length);
     this.list.push(entry);
     if (entry.sig) markVerified(entry);
-    if (entry.type === "key.trusted" || entry.type === "chain.acknowledged" || !this.chain.ok) {
-      // A newly trusted key can make earlier signatures check out; re-check everything.
-      const reassessed = assess(this.list, this.permissions, this.anchors);
-      this.chain = reassessed.chain;
-      this.acknowledged = reassessed.acknowledged;
-      this.trusted = reassessed.trusted;
+    if (entry.type.startsWith("key.") || entry.type === "chain.acknowledged" || !this.chain.ok || this.trust.owner === undefined) {
+      // A key change (or the first person entry) can change what checks out; re-check everything.
+      this.reassess();
     }
     for (const listener of this.listeners) {
       try {
@@ -331,7 +397,7 @@ export class Ledger {
   }
 
   /** Signs on behalf of a person or the system, or refuses: never stored unsigned. */
-  private signEntry(unsigned: Omit<LedgerEntry, "hash">): { key: string; value: string } {
+  private signEntry(unsigned: Omit<LedgerEntry, "hash">): { key: string; value: string; pub: string } {
     const principal = principalOf(unsigned.actor);
     if (!this.keys) {
       throw new LedgerError("NOT_SIGNED", `${unsigned.actor.kind} entries must be signed, and this ledger was opened without keys (${this.store.description})`);
@@ -344,13 +410,19 @@ export class Ledger {
     } catch (error) {
       throw new LedgerError("NOT_SIGNED", `cannot sign for ${principal}: ${(error as Error).message}`);
     }
-    const sig = { key: signed.keyId, value: signed.signature };
-    if (!this.trusted.has(sig.key)) {
+    if (!this.trusted.has(signed.keyId)) {
       // A key made since open (first use, or a rotation): pick up the device's keys again.
       this.anchors = readAnchors(this.keys);
-      this.trusted = trustedKeySet(this.anchors, this.list);
+      this.trust = keyTrust(this.anchors, this.list, { ownerKey: this.ownerKey });
+      this.trusted = this.trust.trusted;
     }
-    const problem = signatureProblem({ ...unsigned, sig, hash: "" } as LedgerEntry, this.trusted);
+    const pub = this.trusted.get(signed.keyId)?.publicKey;
+    if (!pub) throw new LedgerError("NOT_SIGNED", `${principal} signed with key ${signed.keyId}, which this device does not trust`);
+    const sig = { key: signed.keyId, value: signed.signature, pub };
+    if (unsigned.actor.kind === "person" && this.ownerKey && sig.key !== this.ownerKey && !this.list.some((e) => e.actor?.kind === "person")) {
+      throw new LedgerError("NOT_PERMITTED", `only the project owner's key ${this.ownerKey} may write this ledger's first person entry`);
+    }
+    const problem = signatureProblem({ ...unsigned, sig, hash: "" } as LedgerEntry, this.trusted, this.trust.retired, this.list.length);
     if (problem) throw new LedgerError("NOT_SIGNED", `the signature for ${principal} did not check out: ${problem}`);
     return sig;
   }
@@ -391,6 +463,7 @@ export class Ledger {
     if (draft.type === "task.done") this.checkDone(draft.subject.trim());
     if (draft.type === "test.approved") this.checkApproved(draft);
     if (draft.type === "key.trusted") this.checkKeyTrusted(draft);
+    if (draft.type === "key.retired") this.checkKeyRetired(draft);
     for (const rule of this.rules) {
       const refusal = rule(draft, this);
       if (refusal) throw new LedgerError("RULE", refusal);
@@ -460,6 +533,43 @@ export class Ledger {
     const key = keyFromData(draft.data);
     if (!key) throw new LedgerError("RULE", "key.trusted needs data.keyId, data.principal (person:<id> or system) and an Ed25519 data.publicKey that match");
     if (draft.subject.trim() !== key.keyId) throw new LedgerError("RULE", `key.trusted must be about the key itself, ${key.keyId}`);
+    // The first person entry makes its writer the owner; trusting a key may be that entry.
+    const owner = this.ownerFor(draft.actor);
+    if (!mayTrustKeyFor(principalOf(draft.actor), key.principal, owner)) {
+      throw new LedgerError("NOT_PERMITTED", `only ${key.principal.replace(/^person:/, "")} or the owner may trust a key for ${key.principal}`);
+    }
+    const bound = recordedKeys(this.list).find((k) => k.keyId === key.keyId);
+    if (bound && bound.principal !== key.principal) {
+      throw new LedgerError("RULE", `key ${key.keyId} already signs for ${bound.principal} in this ledger; it cannot be trusted as ${key.principal}`);
+    }
+  }
+
+  /** key.retired: the key's own person or the owner stops a key signing anything later. */
+  private checkKeyRetired(draft: EntryDraft): void {
+    if (draft.actor.kind !== "person") throw new LedgerError("NOT_PERMITTED", "only a person can retire a key");
+    const keyId = draft.data?.keyId;
+    const key = typeof keyId === "string" ? this.trusted.get(keyId) ?? recordedKeys(this.list).find((k) => k.keyId === keyId) : undefined;
+    if (!key) throw new LedgerError("RULE", "key.retired needs data.keyId, a key this ledger knows");
+    if (draft.subject.trim() !== key.keyId) throw new LedgerError("RULE", `key.retired must be about the key itself, ${key.keyId}`);
+    if (!mayTrustKeyFor(principalOf(draft.actor), key.principal, this.ownerFor(draft.actor))) {
+      throw new LedgerError("NOT_PERMITTED", `only ${key.principal.replace(/^person:/, "")} or the owner may retire a key of ${key.principal}`);
+    }
+    if (this.trust.retired.has(key.keyId)) throw new LedgerError("RULE", `key ${key.keyId} was already retired at ${this.trust.retired.get(key.keyId)!.n}`);
+  }
+
+  /** The owner, or, before any person entry, the person writing when their key is the pinned owner key. */
+  private ownerFor(actor: Actor): string | undefined {
+    if (this.trust.owner || !this.ownerKey || this.list.some((e) => e.actor?.kind === "person")) return this.trust.owner;
+    const own = this.trusted.get(this.ownerKey);
+    return own && own.principal === principalOf(actor) ? own.principal : undefined;
+  }
+
+  private reassess(): void {
+    const reassessed = assess(this.list, this.permissions, this.anchors, this.ownerKey);
+    this.chain = reassessed.chain;
+    this.acknowledged = reassessed.acknowledged;
+    this.trust = reassessed.trust;
+    this.trusted = reassessed.trust.trusted;
   }
 
   /** test.approved must approve a command that was defined for the same task. */
@@ -479,18 +589,23 @@ function assess(
   entries: readonly LedgerEntry[],
   permissions: PermissionTable,
   anchors: readonly TrustedKey[],
-): { chain: ChainResult; acknowledged: string[]; trusted: Map<string, TrustedKey> } {
-  const trusted = trustedKeySet(anchors, entries);
+  ownerKey?: string,
+): { chain: ChainResult; acknowledged: string[]; trust: KeyTrust } {
+  const trust = keyTrust(anchors, entries, { ownerKey });
+  const trusted = trust;
   // Mark every entry whose signature holds, whatever else is wrong: authority is per entry.
   const problems = new Map<LedgerEntry, string>();
-  for (const entry of entries) {
-    if (!needsSignature(entry.actor)) continue;
-    const problem = signatureProblem(entry, trusted);
+  entries.forEach((entry, index) => {
+    if (!needsSignature(entry.actor)) return;
+    const problem =
+      signatureProblem(entry, trust.trusted, trust.retired, index) ??
+      // A first person entry that is not the owner's breaks the ledger's root of trust.
+      (trust.ownerProblem?.n === entry.n ? trust.ownerProblem.detail : undefined);
     if (problem) problems.set(entry, problem);
     else markVerified(entry);
-  }
+  });
   const { result, acknowledged } = verifyWithAcknowledgements(entries);
-  if (!result.ok) return { chain: result, acknowledged, trusted };
+  if (!result.ok) return { chain: result, acknowledged, trust: trusted };
   for (const entry of entries) {
     if (permitted(permissions, entry.actor?.kind, entry.type)) continue;
     const acked = entries.some(
@@ -503,7 +618,7 @@ function assess(
     return {
       chain: { ok: false, firstBad: entry.n, problem: "permission", detail: `${entry.actor?.kind ?? "unknown"} ${entry.actor?.id ?? ""} may not write ${entry.type}` },
       acknowledged,
-      trusted,
+      trust: trusted,
     };
   }
   for (const entry of entries) {
@@ -523,9 +638,9 @@ function assess(
       acknowledged.push(entry.n);
       continue;
     }
-    return { chain: { ok: false, firstBad: entry.n, problem: "signature", detail: problem }, acknowledged, trusted };
+    return { chain: { ok: false, firstBad: entry.n, problem: "signature", detail: problem }, acknowledged, trust: trusted };
   }
-  return { chain: { ok: true }, acknowledged, trusted };
+  return { chain: { ok: true }, acknowledged, trust: trusted };
 }
 
 function pinsEntry(ack: LedgerEntry, entry: LedgerEntry): boolean {
