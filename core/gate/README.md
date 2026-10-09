@@ -31,6 +31,17 @@ approved again.
 `task.done` is written by the gate only (actor `system:gate`, with `data.approvedBy`
 naming the person who merged); `gateRule()` refuses it from anyone else.
 
+Jev can review the test before the person approves it (`approve(..., { jevVerdict })`,
+whose gaps refuse the approval) or afterwards (`reviewTest`). Gaps found after
+approval stop work: `canStart`, `prove` and `mergeAndVerify` refuse until Jev records
+"approve" or the test is redefined and approved again.
+
+`requireJevTestReview` (a `TestGate` option and `gateRule({ requireJevTestReview })`,
+default `false`) makes work wait until Jev has approved the current test, not only
+until open gaps are cleared. Decided policy (the owner's choice, 2026-10-09): Jev's
+test review is optional until a Jev key is configured and required after, so the app
+turns this on whenever Jev is set up.
+
 Redefining a test (a new `test.defined`) voids the baseline, Jev verdict and
 approval tied to the previous definition. A reopened attempt (`T-14.a2`)
 inherits the test, baseline and approval of earlier attempts; worktree and
@@ -52,7 +63,8 @@ await gate.prove(taskId, worktreePath)            // { ok, run, commit } | { ok:
 gate.approveDiff(taskId, reviewer, commit?)       // Jev or a person; default commit: last worktree run
 gate.approveMerge(taskId, person, commit?)        // the person's own signed entry; default commit: the approved diff
 await gate.mergeAndVerify(taskId, { repoRoot, branch, integrationBranch, actor, prepare? })
-gate.reject(taskId, reviewer, notes, { verdict? }) // { ok, newTaskId }; cites an existing verdict if given
+gate.reviewTest(taskId, jev, "approve" | gaps)    // Jev's test review, before or after approval; gaps stop work
+gate.reject(taskId, reviewer, notes, { verdict? }) // { ok, newTaskId }; verdict cites a signed diff rejection already written
 gate.assertCanFinish(taskId, headSha)             // throws GateError (mirror of the ledger's 2.4 check)
 gate.state(taskId)                                // GateState
 await runTestCommand(command, cwd, { timeoutMs }) // { passed, exitCode, timedOut, durationMs, outputTail }
@@ -87,8 +99,8 @@ in the test command or in package.json scripts, and every file the pinned test
 files import, followed transitively. That last rule includes the code under test
 when the test imports it directly, so such tasks always need a person's review.
 
-**Never expose `approveDiff` with a Jev reviewer or `approveMerge` on an MCP or
-agent route.** Both sign for any in-process caller: `approveDiff(taskId, jev)` is
+**Never expose `approveDiff` with a Jev reviewer, `reviewTest` or `approveMerge` on an
+MCP or agent route.** They sign for any in-process caller: `approveDiff(taskId, jev)` and `reviewTest` are
 written by the gate's own key, and `approveMerge(taskId, person)` is signed with
 that person's key, so whoever can call them approves. Only the app's own person-facing
 flows (the person approving in the UI, or the gate after it has Jev's verdict from
@@ -139,7 +151,7 @@ shell's exit code or its localised error message; exit 126/127, 9009 and cmd's
 | `review.verdict` | Jev on the test (`scope:test`, written by the gate), a diff approval or rejection (`scope:diff`), a person's merge approval (`scope:merge`) | `{ scope, verdict, ... }` |
 | `test.approved` | `approve` | `{ test, definition }` |
 | `merge.done`, `task.done` | `mergeAndVerify` pass | `{ commit, ... }` |
-| `task.reopened` | `reject`, written by the gate (system) | `{ attempt, notes, verdict }` |
+| `task.reopened` | `reject` | `{ attempt, notes }` |
 
 Evidence mirrors the data as `kind:value` strings (`test:`, `definition:`,
 `phase:`, `commit:`, `exit:`, `duration-ms:`).

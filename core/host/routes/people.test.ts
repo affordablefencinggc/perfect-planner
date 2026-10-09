@@ -63,6 +63,28 @@ describe("people routes", () => {
     expect(res.body.result).not.toHaveProperty("starter");
   });
 
+  it("lets only the pinned owner of a new project become its first person", async () => {
+    const other = await call("POST", "/people/members", { person: "mallory", name: "Mallory", role: "owner" });
+    expect(other.status).toBe(422);
+    const view = (await call("GET", "/people")).body.result;
+    expect(view).toMatchObject({ firstRun: true, starter: "owner" });
+  });
+
+  it("says the owner key is missing instead of offering a first person when this device has no owner key", async () => {
+    const unowned = await startTestHost({ owned: false });
+    try {
+      const view = (await hostCall(unowned.base, "GET", "/people?project=p1")).body.result;
+      expect(view).toMatchObject({ firstRun: false, ownerMissing: true });
+      expect(view).not.toHaveProperty("starter");
+      const add = await hostCall(unowned.base, "POST", "/people/members?project=p1", { person: "owner", name: "Riley", role: "owner" });
+      // The host refuses every person write without a usable owner, before the ledger is asked.
+      expect(add.status).toBe(409);
+      expect(add.body.code).toBe("NO_OWNER");
+    } finally {
+      await unowned.stop();
+    }
+  });
+
   it("refuses a first person who is not the owner", async () => {
     const res = await call("POST", "/people/members", { person: "eli", name: "Eli", role: "helper" });
     expect(res.status).toBe(422);

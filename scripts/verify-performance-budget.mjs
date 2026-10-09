@@ -8,8 +8,9 @@ import { gzipSync } from "node:zlib";
 export const PERFORMANCE_BUDGETS = Object.freeze({
   maxIndividualJavaScriptGzipBytes: 300 * 1024,
   // v1 (Oct 2026): totals raised for the seven on-demand imported-project panels; first-load limits unchanged.
-  // Core loop screens (Oct 2026): raised again for six on-demand core screens; first-load limits unchanged.
-  maxTotalJavaScriptGzipBytes: 512 * 1024,
+  // Core loop screens (Oct 2026): raised again for six on-demand core screens and main's
+  // one-click intake and settings panels; first-load limits unchanged.
+  maxTotalJavaScriptGzipBytes: 544 * 1024,
   maxIndividualStylesheetGzipBytes: 44 * 1024,
   // UI polish (Oct 2026): total raised for the page frame and per-screen polish layers; the per-file limit is unchanged.
   // Core loop screens (Oct 2026): raised for their on-demand stylesheets.

@@ -9,24 +9,27 @@ import { coreHostRoot } from "../src/node/coreHostVitePlugin.mjs";
 // Real users' homes, not the hermetic test profile (which itself lives under the temp folder).
 const HOME = "/home/riley";
 const MAC_HOME = "/Users/riley";
-const underTemp = (target) => {
+// Windows paths are checked with Windows rules, so the result does not depend on where this checkout sits.
+const underTemp = (target, platform) => {
+  if (platform === "win32") return path.win32.relative(path.win32.resolve("C:\\Windows\\Temp"), target).split("\\")[0] !== "..";
   const rel = path.relative(os.tmpdir(), target);
   return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
 };
 
 test("saved work and core ledgers live in the platform app-data folder, never the temp folder", () => {
   const cases = [
-    [{ HOME: MAC_HOME }, "darwin", path.join(MAC_HOME, "Library", "Application Support", "PerfectPlannerCleanroom", "authority")],
-    [{ HOME }, "linux", path.join(HOME, ".local", "share", "PerfectPlannerCleanroom", "authority")],
-    [{ HOME, XDG_DATA_HOME: "/data/riley" }, "linux", path.join("/data/riley", "PerfectPlannerCleanroom", "authority")],
-    [{ HOME, XDG_DATA_HOME: "relative/dir" }, "linux", path.join(HOME, ".local", "share", "PerfectPlannerCleanroom", "authority")],
-    [{ LOCALAPPDATA: "C:\\Users\\riley\\AppData\\Local" }, "win32", path.join("C:\\Users\\riley\\AppData\\Local", "PerfectPlannerCleanroom", "authority")],
+    [{ HOME: MAC_HOME }, "darwin", path.posix.join(MAC_HOME, "Library", "Application Support", "PerfectPlannerCleanroom", "authority")],
+    [{ HOME }, "linux", path.posix.join(HOME, ".local", "share", "PerfectPlannerCleanroom", "authority")],
+    [{ HOME, XDG_DATA_HOME: "/data/riley" }, "linux", path.posix.join("/data/riley", "PerfectPlannerCleanroom", "authority")],
+    [{ HOME, XDG_DATA_HOME: "relative/dir" }, "linux", path.posix.join(HOME, ".local", "share", "PerfectPlannerCleanroom", "authority")],
+    [{ LOCALAPPDATA: "C:\\Users\\riley\\AppData\\Local" }, "win32", path.win32.join("C:\\Users\\riley\\AppData\\Local", "PerfectPlannerCleanroom", "authority")],
   ];
   for (const [env, platform, expected] of cases) {
     const root = localAuthorityRoot(env, platform);
     assert.equal(root, expected, `${platform} ${JSON.stringify(env)}`);
-    assert.equal(underTemp(root), false, `${platform} root ${root} is under the temp folder`);
-    assert.equal(underTemp(coreHostRoot(root)), false, `${platform} core ledgers under the temp folder`);
+    assert.equal(underTemp(root, platform), false, `${platform} root ${root} is under the temp folder`);
+    // coreHostRoot joins with the host's own path rules, so it is checked only for the host's platform.
+    if (platform === process.platform) assert.equal(underTemp(coreHostRoot(root), platform), false, `${platform} core ledgers under the temp folder`);
   }
 });
 

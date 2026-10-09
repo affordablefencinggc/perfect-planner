@@ -80,6 +80,11 @@ export interface PeopleResult {
   firstRun: boolean;
   /** The person id whose key owns this project (pinned by the app); only they may become its owner. */
   starter?: string;
+  /**
+   * True when this device has no owner key for the project (lost, or not pinned yet): nobody can
+   * add people or share documents here, so the screen says so instead of offering "Add the first person".
+   */
+  ownerMissing?: boolean;
 }
 
 /** The person whose key the app pinned as this project's owner (core/host/owner.ts), if any. */
@@ -99,6 +104,15 @@ export function peopleViewOf(project: CoreProject) {
   return buildPeopleView(project.entries(), { owner: project.ledger.owner });
 }
 
+/**
+ * True when this device has no usable owner key for the project (lost, never pinned here, tampered,
+ * replaced): nobody can start the roster or share documents, so the screen says so instead of
+ * offering "Add the first person". A new project is not missing an owner: its key is pinned on the first write.
+ */
+export function ownerMissing(project: CoreProject): boolean {
+  return project.owner.state !== "pinned" && project.owner.state !== "new";
+}
+
 function peopleResult(project: CoreProject): PeopleResult {
   const view = peopleViewOf(project);
   const starter = pinnedOwnerId(project);
@@ -106,8 +120,9 @@ function peopleResult(project: CoreProject): PeopleResult {
     view,
     photos: photoSources(view, new FilePhotoStore(project.root)),
     me: view.owner?.person ?? DEFAULT_LOCAL_PERSON,
-    firstRun: view.members.length === 0,
-    ...(view.members.length === 0 && starter ? { starter } : {}),
+    firstRun: view.members.length === 0 && !ownerMissing(project),
+    ...(view.members.length === 0 && starter && !ownerMissing(project) ? { starter } : {}),
+    ...(ownerMissing(project) ? { ownerMissing: true } : {}),
   };
 }
 

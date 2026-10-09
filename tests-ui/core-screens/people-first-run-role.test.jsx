@@ -23,3 +23,16 @@ it("adds the second person as a helper, not a second owner", async () => {
   await vi.waitFor(() => expect(onAddMember).toHaveBeenCalledTimes(2));
   expect(onAddMember.mock.calls[1][0]).toMatchObject({ person: "sam-helper", role: "helper" });
 });
+
+// The host only accepts the project's pinned owner as the first person (OWNER_IS_PINNED otherwise),
+// so the first add uses that id, whatever name is typed.
+it("adds the first person under the project's pinned owner id", async () => {
+  const onAddMember = vi.fn(async () => {});
+  render(<PeoplePanel view={{ members: [], owner: null, docs: [] }} me="owner" starter="owner" now={() => new Date()} onAddMember={onAddMember} />);
+  fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Dana Lee" } });
+  expect(screen.getByLabelText("Person id").value).toBe("owner");
+  expect(screen.getByLabelText("Person id").readOnly).toBe(true);
+  fireEvent.click(screen.getByRole("button", { name: "Add person" }));
+  await vi.waitFor(() => expect(onAddMember).toHaveBeenCalledTimes(1));
+  expect(onAddMember.mock.calls[0][0]).toMatchObject({ person: "owner", name: "Dana Lee", role: "owner" });
+});
