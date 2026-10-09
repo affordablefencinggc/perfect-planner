@@ -104,8 +104,27 @@ with a `code` when a rule refuses the entry:
 | `BAD_CORRECTS` | `corrects` does not name an existing earlier entry, or a `correction` has no `corrects` |
 | `DONE_WITHOUT_PASS` | `task.done` unless the latest run of the task's approved test after its last `commit.observed` (or approval, or reopen) is a `test.passed` (§2.4) |
 | `CHAIN_BROKEN` | the chain failed verification on open and has not been acknowledged; all writes stop |
+| `NOT_PERMITTED` | the actor's kind may not write this entry type (see "Who may write what") |
 | `READ_ONLY` | the ledger was opened read-only, or another process holds the writer lock |
 | `RULE` | a rule registered with `ledger.addRule` refused it; also `test.approved` for a command never defined for that task, and `chain.acknowledged` written through `append` (use `acknowledgeBreak`) |
+
+### Who may write what
+
+Checked before every other rule, from `DEFAULT_PERMISSIONS` (or
+`Ledger.open(store, { permissions })`):
+
+| Actor kind | May write |
+|---|---|
+| `person` | any type (`core/people` narrows this per role: owner, helper, viewer) |
+| `system` (the gate, the git watcher) | any type except `chain.acknowledged` |
+| `agent` | `task.claimed`, `task.progress`, `task.blocked`, `task.proof`, `test.defined` (a proposal), and the relay: `question.asked`, `question.answered`, `decision.made` |
+| `jev` | `review.verdict`, `question.asked` |
+
+So approvals (`plan.approved`, `test.approved`, `release.*`), test results,
+`commit.observed`, `merge.done`, `task.created`, `task.done` and
+`task.reopened` never come from an agent or Jev: the gate writes results and
+done, a person approves. A helper's agent is limited by both this table and
+its person's role in `core/people`.
 
 Extra rules: `ledger.addRule((draft, ledger) => string | null)`; return a
 message to refuse. Sibling threads use this for gate rules (for example

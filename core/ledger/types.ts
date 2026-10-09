@@ -114,6 +114,7 @@ export type LedgerErrorCode =
   | "DONE_WITHOUT_PASS"
   | "CHAIN_BROKEN"
   | "READ_ONLY"
+  | "NOT_PERMITTED"
   | "RULE";
 
 export class LedgerError extends Error {
@@ -124,5 +125,31 @@ export class LedgerError extends Error {
     this.code = code;
   }
 }
+
+/**
+ * Which entry types each kind of actor may write. A person may write
+ * anything (core/people narrows that per role); the system actors (the gate
+ * and the git watcher) write test results, merges and done. Agents only
+ * claim, report, ask and attach proof; the main chat's relay answers are
+ * agent writes too (spec §4.1). Jev only records verdicts. Everything else,
+ * approvals, test results, done, releases, is refused to agents and Jev.
+ */
+export type PermissionTable = Readonly<Record<ActorKind, "any" | readonly EntryType[]>>;
+
+export const DEFAULT_PERMISSIONS: PermissionTable = {
+  person: "any",
+  system: "any",
+  agent: [
+    "task.claimed",
+    "task.progress",
+    "task.blocked",
+    "task.proof",
+    "test.defined",
+    "question.asked",
+    "question.answered",
+    "decision.made",
+  ],
+  jev: ["review.verdict", "question.asked"],
+};
 
 export const GENESIS_PREV = "0".repeat(64);
