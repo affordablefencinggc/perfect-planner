@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { asPersonRequest } from "../keys";
 import { hostCall, startTestHost } from "../testing";
 
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0, 0, 0]);
@@ -29,6 +30,18 @@ describe("people routes", () => {
     expect(res.body.result.me).toBe("dana");
     expect(res.body.result.firstRun).toBe(false);
     expect(res.body.result.view.owner.person).toBe("dana");
+  });
+
+  it("names the person who started the project as the only one who can become its owner", async () => {
+    expect((await call("POST", "/planning/start", { idea: "A notes app that syncs" })).status).toBe(200);
+    // Written as the person's own request would be (only that may make and use their key).
+    asPersonRequest(() => ctx.host.project("p1").ledger.append({ actor: { kind: "person", id: "owner" }, type: "task.created", subject: "T-1", summary: "Worked on before adding people" }));
+    const before = await call("GET", "/people");
+    expect(before.body.result).toMatchObject({ firstRun: true, starter: "owner" });
+    const res = await call("POST", "/people/members", { person: "owner", name: "Riley Owner", role: "owner" });
+    expect(res.status).toBe(200);
+    expect(res.body.result.view.owner).toMatchObject({ person: "owner", name: "Riley Owner" });
+    expect(res.body.result).not.toHaveProperty("starter");
   });
 
   it("refuses a first person who is not the owner", async () => {

@@ -63,7 +63,8 @@ const HOOK_SOURCE = fileURLToPath(new URL("./hooks/secret-scan.mjs", import.meta
  * (PP_NODE_BINARY), so the hook calls that one; git's sh wants forward slashes on Windows.
  */
 export function preCommitHook(env: NodeJS.ProcessEnv = process.env): string {
-  const node = env.PP_NODE_BINARY ? `"${env.PP_NODE_BINARY.replaceAll("\\", "/").replaceAll('"', '\\"')}"` : "node";
+  // Single quotes, so nothing in the path ($, backticks) is expanded by sh.
+  const node = env.PP_NODE_BINARY ? `'${env.PP_NODE_BINARY.replaceAll("\\", "/").replaceAll("'", `'\\''`)}'` : "node";
   return `#!/bin/sh\nexec ${node} "$(dirname "$0")/secret-scan.mjs"\n`;
 }
 

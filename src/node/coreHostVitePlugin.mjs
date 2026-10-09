@@ -20,6 +20,8 @@ export const coreHostVitePlugin = () => ({
       if (!host) {
         const { createCoreHost } = await server.ssrLoadModule("/core/host/index.ts");
         host = createCoreHost(coreHostOptions());
+        // npm run tauri:dev gives this host and the desktop shell the same one-time secret.
+        host.acceptDesktopLaunch();
       }
       return host;
     };
@@ -28,5 +30,14 @@ export const coreHostVitePlugin = () => ({
       load().then((loaded) => loaded.middleware(req, res, next), next);
     });
     server.httpServer?.once("close", () => { host?.close(); });
+    // The dev window proves it is the person's with a one-time launch secret (core/host/session.ts).
+    const printLaunch = async () => {
+      const address = server.httpServer?.address();
+      if (!address || typeof address === "string") return;
+      const loaded = await load();
+      server.config.logger.info(`  Perfect Planner (one-time link, can make changes): http://${address.address === "::1" ? "[::1]" : address.address}:${address.port}/#pp-launch=${loaded.issueLaunch()}`);
+    };
+    server.httpServer?.once("listening", () => { printLaunch().catch(() => undefined); });
+
   },
 });

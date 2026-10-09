@@ -12,6 +12,7 @@ import {
   type Feature, type FeatureStatus, type MvpAdvisor, type ScanResult, type ScannedFeature, type StageBoard, type StageId,
 } from "../../mvp/index";
 import { replayRoster } from "../../people/index";
+import { fingerprintOf, requireFingerprint } from "../fingerprint";
 import type { CoreProject } from "../project";
 import { HttpError, type Handler, type Router } from "../router";
 import { localPerson, localPersonId } from "./people";
@@ -96,6 +97,22 @@ function latestStaging(entries: readonly LedgerEntry[]): { entry: LedgerEntry; s
   return undefined;
 }
 
+/** A scan folder must sit inside the project folder: no absolute paths, no "..", no symlink out. */
+function insideProject(projectRoot: string, raw: string): string {
+  const bad = () => new HttpError(400, "BAD_PATH", "Choose a folder inside this project. Use a path like \"src\" or \"packages/app\", not a full path and not one that climbs out with \"..\".");
+  if (path.isAbsolute(raw) || path.win32.isAbsolute(raw) || raw.split(/[\\/]+/).includes("..")) throw bad();
+  const root = path.resolve(projectRoot);
+  const candidate = path.resolve(root, raw);
+  const outside = (rel: string) => rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel);
+  if (outside(path.relative(root, candidate))) throw bad();
+  try {
+    if (outside(path.relative(fs.realpathSync(root), fs.realpathSync(candidate)))) throw bad();
+  } catch (error) {
+    if (error instanceof HttpError) throw error; // a folder that does not exist is reported as NOT_A_FOLDER by the caller
+  }
+  return candidate;
+}
+
 function isDir(p: string): boolean {
   try { return fs.statSync(p).isDirectory(); } catch { return false; }
 }
@@ -130,12 +147,14 @@ function buildBoard(project: CoreProject, refresh = false) {
   const staged = latestStaging(entries);
   const board = boardFromLedger(entries);
   if (!staged || !board.proposalEntry) {
-    return { staged: false, stages: board.stages, features: [], confirmed: false };
+    return { staged: false, stages: board.stages, features: [], confirmed: false, fingerprint: undefined as string | undefined };
   }
   const { features, scannedAt, stale } = currentFeatures(project, staged, refresh);
   const byId = new Map(features.map((f) => [f.id, f]));
   const proposalEntry = entries.find((e) => e.n === board.proposalEntry);
   const proposalData = (proposalEntry?.data?.mvp ?? {}) as { summary?: string; proposedBy?: Actor };
+  // Jev's proposal is recorded by the system stager; who proposed it is kept in data.mvp.proposedBy.
+  const proposedBy = proposalData.proposedBy ?? proposalEntry?.actor;
   const placementOf = new Map(board.placements.map((p) => [p.feature, p]));
   const deps = missingDependencies(board, features);
   const depsOf = new Map(deps.map((d) => [d.feature, d.missing]));
@@ -194,8 +213,18 @@ function buildBoard(project: CoreProject, refresh = false) {
     return { n: e.n, subject: e.subject, kind: mvp?.kind ?? "staging", summary: e.summary, reason: e.reason, actor: e.actor, at: e.at };
   });
 
+  // What the person reviews, not when they looked: approvals are bound to this.
+  const fingerprint = fingerprintOf({
+    features: cards.map((c) => ({ id: c.id, name: c.name, status: c.status, stage: c.stage, reason: c.reason, onJourney: c.onJourney, dependsOn: c.dependsOn.map((d) => d.id) })),
+    stages: board.stages.map((s) => ({ id: s.id, name: s.name })),
+    journey: board.journey ?? null,
+    proposal: board.proposalEntry,
+    staging: staged.entry.n,
+  });
+
   return {
     staged: true,
+    fingerprint,
     mode: staged.staging.mode,
     goal: staged.staging.goal,
     stages: board.stages,
@@ -207,8 +236,8 @@ function buildBoard(project: CoreProject, refresh = false) {
     doneWhen: { ...done, todo },
     warnings,
     proposal: {
-      by: proposalEntry?.actor,
-      offline: isOffline(proposalData.proposedBy ?? proposalEntry?.actor),
+      by: proposedBy,
+      offline: isOffline(proposedBy),
       summary: proposalData.summary ?? proposalEntry?.summary ?? "",
       at: proposalEntry?.at,
       entry: board.proposalEntry,
@@ -278,7 +307,7 @@ async function stage(project: CoreProject, body: Record<string, unknown>) {
     const goal = readGoal(body.goal, false);
     let root = project.root;
     if (typeof body.path === "string" && body.path.trim()) {
-      const candidate = path.resolve(project.root, body.path.trim());
+      const candidate = insideProject(project.root, body.path.trim());
       if (!isDir(candidate)) throw new HttpError(422, "NOT_A_FOLDER", `${body.path.trim()} is not a folder on this computer, so nothing was scanned.`);
       root = candidate;
     } else if (body.path !== undefined && typeof body.path !== "string") {
@@ -356,6 +385,7 @@ export function registerMvpRoutes(router: Router): void {
   router.post("/mvp/confirm", guarded(({ project, ...req }) => {
     const b = body(req);
     const current = buildBoard(project);
+    if (current.staged && current.fingerprint) requireFingerprint(b, current.fingerprint, "MVP board");
     if (current.staged && "warnings" in current && current.warnings && current.warnings.length > 0) {
       throw new HttpError(422, "MISSING_DEPENDENCIES", `The MVP line cannot be confirmed yet: ${current.warnings.map((w) => w.message).join(" ")} Move those features into the MVP or move their dependents out.`);
     }

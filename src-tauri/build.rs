@@ -43,6 +43,7 @@ fn main() {
             "collision_authority_inspect",
             "collision_authority_approve",
             "collision_authority_commit",
+            "take_core_launch",
         ]),
     ))
     .expect("failed to build the Perfect Planner Tauri manifest");

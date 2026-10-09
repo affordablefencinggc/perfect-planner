@@ -147,7 +147,7 @@ function ApprovePanel({ data, resource }) {
     setRefusal(null);
     setDone(null);
     try {
-      const result = await resource.post("/planning/approve", {});
+      const result = await resource.post("/planning/approve", { fingerprint: data.fingerprint });
       const count = Object.keys(result.tasks ?? {}).length;
       setDone(count ? `Plan approved. ${count} roadmap tasks were added.` : "Plan approved again. The roadmap tasks were already added.");
     } catch (e) {

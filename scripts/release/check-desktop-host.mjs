@@ -2,8 +2,8 @@
 // Release check for the desktop app's bundled local service, run against the files an
 // installer ships (dist/desktop-host, or the installed app's desktop-host folder):
 //   1. start core-host/desktop.mjs with the bundled Node, the way the shell does;
-//   2. read its ready line and sign in as the person, the way the window does
-//      (claims the one-time launch link when the core host issues one);
+//   2. check that nothing without the window's one-time launch secret can write (forged headers,
+//      the old /session cookie, a guessed or replayed secret), then claim it as the window does;
 //   3. press Connect agent over HTTP and run the line it hands out (check-agent-connect.mjs);
 //   4. close its stdin, as the shell does when the app quits, and check that it stopped.
 //   node scripts/release/check-desktop-host.mjs [desktop-host folder]
@@ -36,19 +36,36 @@ function request(url, { method = "GET", headers = {}, body } = {}) {
   });
 }
 
-/** The person's credentials for writes, exactly as the app window gets them. */
+/**
+ * The person's credentials for writes, exactly as the app window gets them: claim the one-time
+ * launch secret from the window link (core/host/session.ts) for an HttpOnly cookie and a CSRF token.
+ */
 export async function personHeaders(origin, open) {
   const base = { origin, "sec-fetch-site": "same-origin", "sec-fetch-mode": "cors" };
-  const cookieOf = (res) => String([res.headers["set-cookie"] ?? []].flat()[0] ?? "").split(";")[0];
   const launch = new URL(open).hash.match(/pp-launch=([\w-]+)/)?.[1];
-  if (launch) {
-    const claim = await request(`${origin}/api/core/session/claim`, { method: "POST", headers: base, body: { launch } });
-    if (claim.status !== 200 || !claim.json?.result?.csrf) throw new Error(`Claiming the window link failed (${claim.status}).`);
-    return { ...base, cookie: cookieOf(claim), "x-pp-csrf": claim.json.result.csrf };
-  }
-  const session = await request(`${origin}/api/core/session`, { headers: base });
-  if (session.status !== 200) throw new Error(`Signing in as the person failed (${session.status}).`);
-  return { ...base, cookie: cookieOf(session) };
+  if (!launch) throw new Error("The window link carries no one-time launch secret.");
+  const claim = await request(`${origin}/api/core/session/claim`, { method: "POST", headers: base, body: { launch } });
+  if (claim.status !== 200 || !claim.json?.result?.csrf) throw new Error(`Claiming the window link failed (${claim.status}).`);
+  const cookie = String([claim.headers["set-cookie"] ?? []].flat()[0] ?? "").split(";")[0];
+  return { headers: { ...base, cookie, "x-pp-csrf": claim.json.result.csrf }, launch };
+}
+
+/**
+ * What any other local program can try against the service, all of which must be refused:
+ * a write with forged browser headers, the old GET /session cookie, a guessed launch secret,
+ * and (after the window claimed it) a replay of the real one.
+ */
+export async function refusedWithoutTheWindow(origin, replayLaunch) {
+  const forged = { origin, "sec-fetch-site": "same-origin", "sec-fetch-mode": "cors" };
+  const results = {};
+  results.forgedWrite = (await request(`${origin}/api/core/agents/connect?project=default`, { method: "POST", headers: forged, body: {} })).status;
+  const session = await request(`${origin}/api/core/session`, { headers: forged });
+  results.oldSessionCookie = session.headers["set-cookie"] ? "issued" : session.status;
+  results.guessedLaunch = (await request(`${origin}/api/core/session/claim`, { method: "POST", headers: forged, body: { launch: "A".repeat(43) } })).status;
+  if (replayLaunch) results.replayedLaunch = (await request(`${origin}/api/core/session/claim`, { method: "POST", headers: forged, body: { launch: replayLaunch } })).status;
+  const refused = Object.values(results).every((v) => typeof v === "number" && v >= 400);
+  if (!refused) throw new Error(`An unauthenticated caller got through: ${JSON.stringify(results)}`);
+  return results;
 }
 
 export async function checkDesktopHost(folder = path.join(projectRoot, "dist", "desktop-host"), { port = "0" } = {}) {
@@ -78,7 +95,9 @@ export async function checkDesktopHost(folder = path.join(projectRoot, "dist", "
     if (ready.event !== "ready" || !/^http:\/\/127\.0\.0\.1:\d+$/.test(ready.origin)) throw new Error(`Unexpected ready line event ${ready.event}.`);
     const page = await request(`${ready.origin}/`);
     if (page.status !== 200 || !/<div id="root"|<script/i.test(page.text)) throw new Error(`The app page did not load (${page.status}).`);
-    const headers = await personHeaders(ready.origin, ready.open);
+    const before = await refusedWithoutTheWindow(ready.origin);
+    const { headers, launch } = await personHeaders(ready.origin, ready.open);
+    const after = await refusedWithoutTheWindow(ready.origin, launch);
     const connect = await request(`${ready.origin}/api/core/agents/connect?project=default`, { method: "POST", headers, body: {} });
     if (connect.status !== 200 || !connect.json?.result?.claudeCode) throw new Error(`Connect agent failed (${connect.status}): ${connect.json?.message ?? ""}`);
     const agent = await checkAgentConnect(connect.json.result.claudeCode);
@@ -88,7 +107,7 @@ export async function checkDesktopHost(folder = path.join(projectRoot, "dist", "
     child.stdin.end();
     const stopped = await Promise.race([exited, new Promise((resolve) => setTimeout(() => resolve(null), 10_000))]);
     if (!stopped) throw new Error("The service did not stop when its stdin closed.");
-    return { ok: true, target: manifest.target, node: manifest.node.version, origin: ready.origin, launchLink: Boolean(new URL(ready.open).hash), agent: { skillAcceptsLine: agent.skillAcceptsLine, usesBundledNode: agent.registered.usesLineNode, checkedInAs: agent.checkedInAs, skillInstalled: agent.skillInstalled }, appListsAgent: true, stoppedWithStdin: true };
+    return { ok: true, target: manifest.target, node: manifest.node.version, origin: ready.origin, launchLink: true, refusedWithoutTheWindow: { before, after }, agent: { skillAcceptsLine: agent.skillAcceptsLine, usesBundledNode: agent.registered.usesLineNode, checkedInAs: agent.checkedInAs, skillInstalled: agent.skillInstalled }, appListsAgent: true, stoppedWithStdin: true };
   } finally {
     if (child.exitCode === null) child.kill();
     rmSync(data, { recursive: true, force: true });

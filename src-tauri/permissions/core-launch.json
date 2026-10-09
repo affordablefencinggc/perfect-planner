@@ -1,0 +1,11 @@
+{
+  "$schema": "../gen/schemas/schema.json",
+  "identifier": "allow-take-core-launch",
+  "description": "Allows the main window to take, once, the one-time launch secret the starting process gave this shell for the local core host. It accepts no input and grants no path, command, network target or mutation authority.",
+  "commands": {
+    "allow": [
+      "take_core_launch"
+    ],
+    "deny": []
+  }
+}

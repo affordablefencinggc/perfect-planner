@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { markVerified, needsSignature } from "../ledger/signing";
 import { Ledger, LedgerError, MemoryStore, type Actor, type EntryDraft, type LedgerEntry } from "../ledger/index";
 import { appendNumbered, installNumberingRules } from "../numbering/index";
 import {
@@ -448,10 +447,7 @@ describe("review fixes: authority comes from the ledger, not the payload", () =>
   /** Entries as a reader sees them: replay is pure over the list, so forged entries can be fed straight in. */
   function entry(n: number, actor: Actor, event: Record<string, unknown>): LedgerEntry {
     const num = `L-${String(n).padStart(6, "0")}`;
-    const e: LedgerEntry = { n: num, at: "2026-10-09T02:00:00Z", actor, type: "decision.made", subject: `D-${n}`, summary: "x", reason: "x", evidence: [], refs: [], data: people(event), prev: "0".repeat(64), hash: "0".repeat(64) };
-    // As if the ledger had checked a person's or the system's signature on open.
-    if (needsSignature(actor)) markVerified(e);
-    return e;
+    return { n: num, at: "2026-10-09T02:00:00Z", actor, type: "decision.made", subject: `D-${n}`, summary: "x", reason: "x", evidence: [], refs: [], data: people(event), prev: "0".repeat(64), hash: "0".repeat(64) };
   }
 
   it("refuses an agent that tries to write itself in as owner", () => {
@@ -471,8 +467,11 @@ describe("review fixes: authority comes from the ledger, not the payload", () =>
   });
 
   it("ignores people changes that the rules would have refused", () => {
+    // The owner's claim is a real, signed entry; the rest are hand-built and unsigned.
+    const real = open();
+    claimOwnership(real, owner, "Looplet Spare");
     const entries = [
-      entry(1, owner, { op: "member.added", person: "looplet-spare", name: "Looplet Spare", role: "owner" }),
+      ...real.entries(),
       entry(2, mia, { op: "member.added", person: "mia", name: "Mia", role: "helper" }),
       entry(3, ownersAgent, { op: "member.changed", person: "looplet-spare", role: "viewer" }),
       entry(4, stranger, { op: "member.removed", person: "looplet-spare" }),

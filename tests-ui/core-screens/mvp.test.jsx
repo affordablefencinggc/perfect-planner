@@ -16,6 +16,7 @@ const EMPTY = { staged: false, stages: STAGES, features: [], confirmed: false };
 const feature = (o) => ({ description: undefined, evidence: [], findings: [], dependsOn: [], userFacing: true, reason: "", onJourney: false, missingDependencies: [], ...o });
 const board = (o = {}) => ({
   staged: true,
+  fingerprint: "fp-board-1",
   mode: "existing",
   goal: "Write and share notes",
   stages: STAGES,
@@ -157,7 +158,7 @@ describe("MVP board", () => {
   test("confirm, then shows who and when; refusal is readable", async () => {
     let confirmed = false;
     let attempt = 0;
-    routeFetch({
+    const fn = routeFetch({
       "GET /mvp": () => ok(confirmed
         ? board({ confirmed: true, confirmation: { by: "owner", name: "You", at: "2026-10-09T11:00:00Z", entry: "L-000009", subject: "D-5" } })
         : board()),
@@ -175,6 +176,22 @@ describe("MVP board", () => {
     expect(done.textContent).toMatch(/by You on/);
     expect(screen.queryByRole("button", { name: "Confirm MVP line" })).toBeNull();
     expect(screen.getByText("When is the MVP done?")).toBeTruthy();
+    expect(bodyOf(fn, "POST", "/mvp/confirm")).toEqual({ fingerprint: "fp-board-1" });
+  });
+
+  test("a stale confirm reloads the board and shows the server's message", async () => {
+    let reads = 0;
+    const message = "The MVP board changed since you looked at it. Review the new version, then approve again.";
+    const fn = routeFetch({
+      "GET /mvp": () => { reads++; return ok(board({ fingerprint: reads > 1 ? "fp-board-2" : "fp-board-1" })); },
+      "POST /mvp/confirm": () => refuse(409, "STALE", message),
+    });
+    renderWith();
+    fireEvent.click(await screen.findByRole("button", { name: "Confirm MVP line" }));
+    expect((await screen.findByRole("alert")).textContent).toContain(message);
+    await waitFor(() => expect(reads).toBeGreaterThan(1));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm MVP line" }));
+    await waitFor(() => expect(fn.mock.calls.filter(([u, i]) => i?.method === "POST").map(([, i]) => JSON.parse(i.body).fingerprint)).toEqual(["fp-board-1", "fp-board-2"]));
   });
 
   test("Simple vs Advanced: ids, ledger numbers and evidence list", async () => {

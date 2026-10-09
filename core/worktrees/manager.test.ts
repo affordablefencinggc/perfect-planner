@@ -193,7 +193,11 @@ describe("preCommitHook", () => {
 
   it("runs it with the desktop app's own Node when there is one, in git sh's forward slashes", () => {
     expect(preCommitHook({ PP_NODE_BINARY: "C:\\Program Files\\Perfect Planner\\desktop-host\\node.exe" })).toBe(
-      '#!/bin/sh\nexec "C:/Program Files/Perfect Planner/desktop-host/node.exe" "$(dirname "$0")/secret-scan.mjs"\n',
+      '#!/bin/sh\nexec \'C:/Program Files/Perfect Planner/desktop-host/node.exe\' "$(dirname "$0")/secret-scan.mjs"\n',
     );
+  });
+
+  it("keeps a $ or a quote in the path literal", () => {
+    expect(preCommitHook({ PP_NODE_BINARY: "/opt/$(x)/it's/node" })).toBe(`#!/bin/sh\nexec '/opt/$(x)/it'\\''s/node' "$(dirname "$0")/secret-scan.mjs"\n`);
   });
 });

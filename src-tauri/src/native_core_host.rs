@@ -23,7 +23,6 @@ use tauri::{App, AppHandle, Manager, Url, WebviewWindow, WebviewWindowBuilder};
 
 const READY_TIMEOUT: Duration = Duration::from_secs(90);
 const STOP_GRACE: Duration = Duration::from_secs(5);
-const MIN_SYSTEM_NODE_MAJOR: u32 = 20;
 const LOG_FILE: &str = "desktop-host.log";
 
 /// What the shell keeps about the running service.
@@ -98,71 +97,37 @@ pub(crate) fn error_fragment(message: &str, node_missing: bool) -> String {
     out
 }
 
-/// `v22.3.0` -> 22
-pub(crate) fn node_major(version: &str) -> Option<u32> {
-    version.trim().strip_prefix('v')?.split('.').next()?.parse().ok()
-}
-
 pub(crate) struct Runtime {
     pub node: PathBuf,
     pub entry: PathBuf,
-    pub bundled: bool,
-}
-
-enum RuntimeError {
-    NodeMissing(String),
-    Broken(String),
 }
 
 const NODE_BINARY: &str = if cfg!(windows) { "node.exe" } else { "node" };
 
-fn locate_runtime(resources: &Path, data_dir: &Path) -> Result<Runtime, RuntimeError> {
+/// The service runs only on the Node the installer shipped, from the app's own read-only
+/// resources: never a copy in a user-writable folder and never whatever `node` is on PATH.
+fn locate_runtime(resources: &Path) -> Result<Runtime, String> {
     let base = resources.join("desktop-host");
     let entry = base.join("core-host").join("desktop.mjs");
-    if !entry.is_file() {
-        return Err(RuntimeError::Broken(format!("This copy of Perfect Planner is missing its local service ({}). Reinstall the app.", entry.display())));
+    let node = base.join(NODE_BINARY);
+    if !entry.is_file() || !std::fs::metadata(&node).map(|m| m.is_file() && m.len() > 0).unwrap_or(false) {
+        return Err(format!("This copy of Perfect Planner is missing its local service or its Node runtime ({}). Reinstall the app.", base.display()));
     }
-    let bundled = base.join(NODE_BINARY);
-    if std::fs::metadata(&bundled).map(|m| m.is_file() && m.len() > 0).unwrap_or(false) {
-        return Ok(Runtime { node: executable_copy(bundled, data_dir), entry, bundled: true });
+    if !is_executable(&node) {
+        return Err(format!("This copy of Perfect Planner was installed without permission to run its Node runtime ({}). Reinstall the app.", node.display()));
     }
-    // A build without its own runtime (a developer's no-bundle build): use Node from PATH if it is new enough.
-    let version = Command::new("node").arg("--version").stdin(Stdio::null()).stderr(Stdio::null()).output();
-    match version {
-        Ok(out) if out.status.success() && node_major(&String::from_utf8_lossy(&out.stdout)).is_some_and(|m| m >= MIN_SYSTEM_NODE_MAJOR) => {
-            Ok(Runtime { node: PathBuf::from("node"), entry, bundled: false })
-        }
-        Ok(out) if out.status.success() => Err(RuntimeError::NodeMissing(format!(
-            "Perfect Planner needs Node.js {MIN_SYSTEM_NODE_MAJOR} or newer; this computer has {}.",
-            String::from_utf8_lossy(&out.stdout).trim()
-        ))),
-        _ => Err(RuntimeError::NodeMissing("Perfect Planner could not find Node.js.".into())),
-    }
+    Ok(Runtime { node, entry })
 }
 
-/// Some Linux packages drop the executable bit on resources. Run a private copy then.
 #[cfg(unix)]
-fn executable_copy(bundled: PathBuf, data_dir: &Path) -> PathBuf {
+fn is_executable(path: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
-    let executable = std::fs::metadata(&bundled).map(|m| m.permissions().mode() & 0o111 != 0).unwrap_or(false);
-    if executable {
-        return bundled;
-    }
-    let copy = data_dir.join("runtime").join("node");
-    let fresh = std::fs::metadata(&copy).ok().zip(std::fs::metadata(&bundled).ok()).is_some_and(|(c, b)| c.len() == b.len());
-    if !fresh {
-        let _ = std::fs::create_dir_all(copy.parent().unwrap_or(data_dir));
-        if std::fs::copy(&bundled, &copy).is_err() {
-            return bundled;
-        }
-    }
-    let _ = std::fs::set_permissions(&copy, std::fs::Permissions::from_mode(0o755));
-    copy
+    std::fs::metadata(path).map(|m| m.permissions().mode() & 0o111 != 0).unwrap_or(false)
 }
 
 #[cfg(not(unix))]
-fn executable_copy(bundled: PathBuf, _data_dir: &Path) -> PathBuf {
-    bundled
+fn is_executable(_path: &Path) -> bool {
+    true
 }
 
 fn log_file(app: &AppHandle) -> Option<(PathBuf, std::fs::File)> {
@@ -178,9 +143,9 @@ fn log_file(app: &AppHandle) -> Option<(PathBuf, std::fs::File)> {
  * PP_DATA_DIR is Tauri's app_data_dir on every platform, the same folder the native commands use,
  * so the ledgers, owner pins and agent token files never split across two data folders.
  */
-pub(crate) fn service_env(runtime_node: &Path, bundled: bool, data_dir: &Path) -> Vec<(&'static str, Option<std::ffi::OsString>)> {
+pub(crate) fn service_env(runtime_node: &Path, data_dir: &Path) -> Vec<(&'static str, Option<std::ffi::OsString>)> {
     let mut env: Vec<(&'static str, Option<std::ffi::OsString>)> = ["NODE_OPTIONS", "NODE_PATH", "PP_PORT", "PP_CLIENT_DIR", "PP_CORE_PROJECT_ROOT", "PP_CORE_KEYS"].into_iter().map(|k| (k, None)).collect();
-    env.push(("PP_NODE_BINARY", bundled.then(|| runtime_node.as_os_str().to_owned())));
+    env.push(("PP_NODE_BINARY", Some(runtime_node.as_os_str().to_owned())));
     env.push(("PP_DATA_DIR", Some(data_dir.as_os_str().to_owned())));
     env
 }
@@ -193,7 +158,7 @@ fn spawn_service(runtime: &Runtime, data_dir: &Path, log: Option<std::fs::File>)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(log.map(Stdio::from).unwrap_or_else(Stdio::null));
-    for (key, value) in service_env(&runtime.node, runtime.bundled, data_dir) {
+    for (key, value) in service_env(&runtime.node, data_dir) {
         match value {
             Some(value) => command.env(key, value),
             None => command.env_remove(key),
@@ -252,10 +217,9 @@ fn start(app: AppHandle, window: WebviewWindow, splash: Url) {
     let (Ok(resources), Ok(data_dir)) = (app.path().resource_dir(), app.path().app_data_dir()) else {
         return fail("Perfect Planner could not find its own folders.", false);
     };
-    let runtime = match locate_runtime(&resources, &data_dir) {
+    let runtime = match locate_runtime(&resources) {
         Ok(runtime) => runtime,
-        Err(RuntimeError::NodeMissing(message)) => return fail(&message, true),
-        Err(RuntimeError::Broken(message)) => return fail(&message, false),
+        Err(message) => return fail(&message, false),
     };
     let log = logged.and_then(|(_, file)| file.try_clone().ok().map(|mut f| {
         let _ = writeln!(f, "--- Perfect Planner {} starting {} with {}", env!("CARGO_PKG_VERSION"), runtime.entry.display(), runtime.node.display());
@@ -263,7 +227,7 @@ fn start(app: AppHandle, window: WebviewWindow, splash: Url) {
     }));
     let mut child = match spawn_service(&runtime, &data_dir, log) {
         Ok(child) => child,
-        Err(error) => return fail(&format!("Perfect Planner could not start its local service: {error}."), !runtime.bundled),
+        Err(error) => return fail(&format!("Perfect Planner could not start its local service: {error}."), false),
     };
     let Some(stdout) = child.stdout.take() else { return fail("The local service has no output channel.", false) };
     let state = app.state::<CoreHostState>();
@@ -388,28 +352,33 @@ mod tests {
     #[test]
     fn the_service_gets_the_app_data_folder_and_a_clean_node_environment() {
         let data = Path::new("/home/u/.local/share/com.perfectplanner.desktop");
-        let env = service_env(Path::new("/opt/pp/desktop-host/node"), true, data);
+        let env = service_env(Path::new("/opt/pp/desktop-host/node"), data);
         let get = |k: &str| env.iter().find(|(key, _)| *key == k).map(|(_, v)| v.clone());
         assert_eq!(get("PP_DATA_DIR"), Some(Some(data.as_os_str().to_owned())));
         assert_eq!(get("PP_NODE_BINARY"), Some(Some("/opt/pp/desktop-host/node".into())));
         for removed in ["NODE_OPTIONS", "NODE_PATH", "PP_CORE_KEYS", "PP_CORE_PROJECT_ROOT"] {
             assert_eq!(get(removed), Some(None), "{removed}");
         }
-        assert_eq!(service_env(Path::new("node"), false, data).iter().find(|(k, _)| *k == "PP_NODE_BINARY").unwrap().1, None);
-    }
-
-    #[test]
-    fn reads_the_node_major_version() {
-        assert_eq!(node_major("v24.21.0\n"), Some(24));
-        assert_eq!(node_major("v18.0.0"), Some(18));
-        assert_eq!(node_major("24.0.0"), None);
     }
 
     #[test]
     fn a_bundle_without_its_service_is_reported_as_broken() {
         let dir = std::env::temp_dir().join(format!("pp-core-host-test-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&dir);
-        assert!(matches!(locate_runtime(&dir, &dir), Err(RuntimeError::Broken(_))));
+        assert!(locate_runtime(&dir).unwrap_err().contains("Reinstall"));
+        // A runtime without its execute permission is refused, never copied somewhere writable.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let host = dir.join("desktop-host");
+            std::fs::create_dir_all(host.join("core-host")).unwrap();
+            std::fs::write(host.join("core-host").join("desktop.mjs"), "").unwrap();
+            std::fs::write(host.join("node"), "binary").unwrap();
+            std::fs::set_permissions(host.join("node"), std::fs::Permissions::from_mode(0o644)).unwrap();
+            assert!(locate_runtime(&dir).unwrap_err().contains("without permission"));
+            std::fs::set_permissions(host.join("node"), std::fs::Permissions::from_mode(0o755)).unwrap();
+            assert_eq!(locate_runtime(&dir).unwrap().node, host.join("node"));
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

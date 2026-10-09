@@ -21,7 +21,7 @@
     "build:core-host": "node scripts/build-core-host.mjs",
     "build": "npm run build:client && node scripts/prepare-sites-build.mjs",
     "tauri": "tauri",
-    "tauri:dev": "tauri dev",
+    "tauri:dev": "node scripts/tauri-dev.mjs",
     "tauri:build": "tauri build",
     "test:native": "cargo test --manifest-path src-tauri/Cargo.toml",
     "test:retained-native": "node --test tests/native-retained-connection.integration.mjs",
