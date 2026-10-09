@@ -178,41 +178,36 @@ afterEach(() => {
 });
 
 describe("project Home consumes the project-home model", () => {
-  test("empty Home shows unavailable evidence, its blocker, and one selector action", async () => {
+  test("empty Home is a short screen: headline, Choose app folder, and a demo link", async () => {
     const user = userEvent.setup();
     const { container } = renderShell(registryWith());
 
-    await screen.findByRole("heading", {
-      name: "Bring in a real app to begin",
-    });
-    expect(container.querySelector(".project-home-truth")?.dataset.homeMode).toBe(
-      "empty",
-    );
-    expect(
-      screen.getByLabelText("Current project stage").textContent,
-    ).toContain("No project selected");
-    const summary = screen.getByRole("region", {
-      name: "Project evidence summary",
-    });
-    expect(summary.textContent).toContain("Unavailable");
-    expect(summary.textContent).not.toMatch(/\b0 files\b/);
-    expect(
-      within(screen.getByRole("region", { name: "Project blockers" })).getByText(
-        "project-missing",
-      ),
-    ).toBeTruthy();
+    await screen.findByRole("heading", { name: "Bring in a real app to begin" });
+    expect(container.querySelector(".project-home-truth")?.dataset.homeMode).toBe("empty");
+    expect(screen.queryByRole("region", { name: "Project evidence summary" })).toBeNull();
+    expect(screen.queryByRole("region", { name: "Project blockers" })).toBeNull();
+    expect(container.querySelectorAll(".project-home-empty-body button")).toHaveLength(2);
+    expect(screen.getByRole("button", { name: "Try the demo" })).toBeTruthy();
 
-    const next = expectOnlyModelAction(
-      container,
-      "select-project",
-      "Choose an app folder",
-    );
-    await user.click(next);
+    await user.click(screen.getByRole("button", { name: /Choose app folder/ }));
     expect(
-      await screen.findByRole("region", {
-        name: "Strict folder contract workspace",
-      }),
+      await screen.findByRole("region", { name: "Strict folder contract workspace" }),
     ).toBeTruthy();
+  });
+
+  test("with no folder imported, Home shows an approved core-loop plan instead of the folder prompt", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url) => String(url).startsWith("/api/core/plan?")
+        ? { ok: true, status: 200, json: async () => ({ ok: true, result: { approved: true, latest: { plan: "P-1", by: "owner" }, count: 1, tasks: [{ label: "T-1" }] } }) }
+        : { ok: false, status: 503, json: async () => ({ error: "Authority unavailable in Home test" }) }),
+    );
+    const { container } = renderShell(registryWith());
+
+    await screen.findByText("Your plan is approved and work is under way");
+    expect(screen.queryByRole("heading", { name: "Bring in a real app to begin" })).toBeNull();
+    expect(container.querySelector("[data-home-core-plan]")?.dataset.homeCorePlan).toBe("P-1");
+    expect(container.querySelector("[data-home-core-plan]")?.textContent).toContain("Plan P-1 approved by owner, 1 task on the board.");
   });
 
   test("imported Home binds the current census and does not invent discovery counts", async () => {
@@ -306,9 +301,9 @@ describe("project Home consumes the project-home model", () => {
     // Controlled positive service response: cached approval alone is not current.
     const originalFetch = globalThis.fetch;
     vi.stubGlobal("fetch", vi.fn(async (url, options) => {
-      if (String(url) === "/api/architecture-contract/session") return { ok: true, json: async () => ({ actor: "fixture-reviewer", token: "fixture-token" }) };
-      if (String(url) === "/api/folder-contract/session") return { ok: true, json: async () => ({ actor: "fixture-reviewer", token: "fixture-folder-token" }) };
-      if (String(url) === "/api/component-plans/session") return {ok:true,json:async()=>({actor:'fixture-reviewer',token:'fixture-component-token'})};
+      if (String(url) === "/api/architecture-contract/session") return { ok: true, json: async () => ({ actor: "fixture-reviewer", token: "fixture-" + "token" }) };
+      if (String(url) === "/api/folder-contract/session") return { ok: true, json: async () => ({ actor: "fixture-reviewer", token: "fixture-" + "folder-" + "token" }) };
+      if (String(url) === "/api/component-plans/session") return {ok:true,json:async()=>({actor:'fixture-reviewer',token:'fixture-' + 'component-' + 'token'})};
       if (String(url) === "/api/component-plans/authoring-context") {expect(JSON.parse(options.body).planId).toBe(project.projectId);return {ok:true,json:async()=>componentContext};}
       if (String(url) === "/api/folder-contract/inspect") {
         expect(JSON.parse(options.body).planId).toBe(project.projectId);

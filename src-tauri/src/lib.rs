@@ -7,6 +7,7 @@ compile_error!("Release builds require embedded assets. Use npm run tauri:build 
 
 mod collision_authority;
 mod core_launch;
+mod jev_keychain;
 mod native_mcp;
 #[cfg(windows)] mod native_agent_mcp;
 #[cfg(windows)] mod native_agent_setup;
@@ -147,6 +148,9 @@ pub fn run() {
             collision_authority::collision_authority_approve,
             collision_authority::collision_authority_commit,
             core_launch::take_core_launch,
+            jev_keychain::jev_key_status,
+            jev_keychain::jev_key_save,
+            jev_keychain::jev_key_clear,
         ])
         // The local service (core loop, Connect agent) starts with the app and stops with it.
         .setup(native_core_host::setup)

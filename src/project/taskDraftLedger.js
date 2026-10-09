@@ -1,4 +1,5 @@
 import { assertProjectId } from './projectIds.js';
+import { CLAIM_PATTERN_HELP, claimPatternProblem, claimPatternsOverlap, isClaimPattern } from '../engine/claimPatterns.js';
 
 const DIGEST = /^[a-f0-9]{64}$/;
 const TASK_ID = /^T\d{4,6}$/;
@@ -6,9 +7,10 @@ const validTaskId = value => typeof value === 'string' && TASK_ID.test(value) &&
 export const TASK_DRAFT_LIMIT = 500;
 export const TASK_DRAFT_BYTES = 1024 * 1024;
 export const TASK_DRAFT_IMPORT_BYTES = TASK_DRAFT_BYTES * 8;
-const fail = message => { throw new Error(message); };
-const text = (value, label, max, required = false) => {
-  if (typeof value !== 'string' || value.length > max || /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(value) || (required && !value.trim())) fail(`${label} is missing or too long.`);
+// `field` names the editor field a refusal belongs to, so the form can show it inline.
+const fail = (message, field) => { const error = new Error(message); if (field) error.field = field; throw error; };
+const text = (value, label, max, required = false, field) => {
+  if (typeof value !== 'string' || value.length > max || /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(value) || (required && !value.trim())) fail(`${label} is missing or too long.`, field);
   return value.trim();
 };
 const exact = (value, fields) => {
@@ -36,17 +38,20 @@ export function sameTaskDraftBinding(left, right) {
 export function validateDraftTask(input) {
   exact(input, ['id','title','description','owner','acceptance','recovery','claims','dependsOn','archived']);
   if (!validTaskId(input.id) || typeof input.archived!=='boolean') fail('Task identity is invalid.');
-  if (!Array.isArray(input.claims) || input.claims.length>64 || !Array.isArray(input.dependsOn) || input.dependsOn.length>64) fail('Task references exceed their limit.');
+  if (!Array.isArray(input.claims) || input.claims.length>64) fail('A task can list at most 64 file scope lines.', 'claims');
+  if (!Array.isArray(input.dependsOn) || input.dependsOn.length>64) fail('A task can depend on at most 64 tasks.', 'dependsOn');
   const claims=input.claims.map(claim=>{
     exact(claim,['path','access']);
-    const value=text(claim.path,'Relative file claim',240,true);
-    if (!['read','write'].includes(claim.access) || /[\\:*?<>|\u0000-\u001f]/.test(value) || value.startsWith('/') || value.split('/').some(part=>!part || part==='.' || part==='..')) fail('Claims must be relative paths using /, with no wildcards or parent traversal.');
+    const value=text(claim.path,'Relative file claim',240,true,'claims');
+    if (!['read','write'].includes(claim.access)) fail('Each file scope must start with read or write.', 'claims');
+    const problem=claimPatternProblem(value);
+    if (problem) fail(`Claims must be relative paths using /. "${value}": ${problem} ${CLAIM_PATTERN_HELP}`, 'claims');
     return {path:value,access:claim.access};
   });
-  if (new Set(claims.map(c=>c.path.toLowerCase())).size!==claims.length) fail('Each path may be claimed only once per task.');
-  const dependsOn=input.dependsOn.map(id=>{if(!validTaskId(id))fail('Dependency references must use task IDs.');return id;});
-  if (new Set(dependsOn).size!==dependsOn.length || dependsOn.includes(input.id)) fail('A task cannot depend on itself or repeat a dependency.');
-  return frozen({id:input.id,title:text(input.title,'Task title',160,true),description:text(input.description,'Description',8000),owner:text(input.owner,'Owner',120),acceptance:text(input.acceptance,'Acceptance criteria',8000),recovery:text(input.recovery,'Recovery plan',8000),claims,dependsOn,archived:input.archived});
+  if (new Set(claims.map(c=>c.path.toLowerCase())).size!==claims.length) fail('Each path may be claimed only once per task.', 'claims');
+  const dependsOn=input.dependsOn.map(id=>{if(!validTaskId(id))fail('Dependency references must use task IDs.', 'dependsOn');return id;});
+  if (new Set(dependsOn).size!==dependsOn.length || dependsOn.includes(input.id)) fail('A task cannot depend on itself or repeat a dependency.', 'dependsOn');
+  return frozen({id:input.id,title:text(input.title,'Task title',160,true,'title'),description:text(input.description,'Description',8000,false,'description'),owner:text(input.owner,'Owner',120,false,'owner'),acceptance:text(input.acceptance,'Acceptance criteria',8000,false,'acceptance'),recovery:text(input.recovery,'Recovery plan',8000,false,'recovery'),claims,dependsOn,archived:input.archived});
 }
 
 export function validateTaskDraftLedger(value) {
@@ -56,7 +61,7 @@ export function validateTaskDraftLedger(value) {
   if(!Array.isArray(value.tasks)||value.tasks.length>TASK_DRAFT_LIMIT)fail('Draft task limit reached.');
   const tasks=value.tasks.map(validateDraftTask), ids=new Set(tasks.map(t=>t.id));
   if(ids.size!==tasks.length || tasks.some(t=>Number(t.id.slice(1))>=value.nextTaskNumber))fail('Draft task identities are inconsistent.');
-  if(tasks.some(t=>t.dependsOn.some(id=>!ids.has(id))))fail('A dependency refers to a task outside this ledger.');
+  if(tasks.some(t=>t.dependsOn.some(id=>!ids.has(id))))fail('A dependency refers to a task outside this ledger.', 'dependsOn');
   const snapshot={...value,binding:{...value.binding},tasks};
   if(new TextEncoder().encode(JSON.stringify(snapshot)).length>TASK_DRAFT_BYTES)fail('Draft size limit reached. Existing revisions were not changed.');
   return frozen(snapshot);
@@ -126,13 +131,23 @@ export function inspectTaskDraft(ledger) {
   const remaining=new Set(active.map(t=>t.id));let changed=true;
   while(changed){changed=false;for(const id of remaining)if(byId.get(id).dependsOn.every(dep=>!remaining.has(dep))){remaining.delete(id);changed=true;}}
   if(remaining.size)findings.push({kind:'dependency-cycle',taskIds:[...remaining],detail:`Dependency cycle or tasks blocked by one: ${[...remaining].join(', ')}.`});
-  const byPath=new Map(), pairs=new Set();
-  for(const task of active)for(const claim of task.claims){const key=claim.path.toLowerCase();if(!byPath.has(key))byPath.set(key,[]);byPath.get(key).push({id:task.id,access:claim.access});}
-  const pair=(a,b)=>{if(a.id!==b.id&&(a.access==='write'||b.access==='write'))pairs.add([a.id,b.id].sort().join('|'));};
-  for(const [key,claims] of byPath){
+  const byPath=new Map(), patterns=[], all=[], pairs=new Set();
+  for(const task of active)for(const claim of task.claims){
+    const entry={id:task.id,access:claim.access,path:claim.path};all.push(entry);
+    // Plain paths use an exact/ancestor index; glob claims are compared by pattern intersection.
+    if(isClaimPattern(claim.path)){patterns.push(entry);continue;}
+    const key=claim.path.toLowerCase();if(!byPath.has(key))byPath.set(key,[]);byPath.get(key).push(entry);
+  }
+  const key=(a,b)=>[a.id,b.id].sort().join('|');
+  const pair=(a,b)=>{if(a.id!==b.id&&(a.access==='write'||b.access==='write'))pairs.add(key(a,b));};
+  for(const [path,claims] of byPath){
     for(let i=0;i<claims.length;i++)for(let j=i+1;j<claims.length;j++)pair(claims[i],claims[j]);
-    const parts=key.split('/');parts.pop();
+    const parts=path.split('/');parts.pop();
     while(parts.length){const ancestors=byPath.get(parts.join('/'))??[];for(const a of claims)for(const b of ancestors)pair(a,b);parts.pop();}
+  }
+  for(const glob of patterns)for(const other of all){
+    if(other===glob||other.id===glob.id||(glob.access==='read'&&other.access==='read')||pairs.has(key(glob,other)))continue;
+    if(claimPatternsOverlap(glob.path,other.path))pair(glob,other);
   }
   for(const value of [...pairs].sort()){const [left,right]=value.split('|');findings.push({kind:'file-overlap',taskIds:[left,right],detail:`${left} and ${right} overlap a planned file scope. Review isolation or execution order.`});}
   return frozen({findings,activeTasks:active.length,archivedTasks:tasks.length-active.length,executionAuthorized:false});

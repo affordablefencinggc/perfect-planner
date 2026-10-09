@@ -5,3 +5,4 @@ export { evidenceValue, GATE_ACTOR, WATCHER_ACTOR, WORKTREES_ACTOR, type LedgerP
 export { copyLocalSettings, placeholderSecrets, PLACEHOLDER } from "./settings";
 export { branchFor, TASK_ID, type WorktreeInfo } from "./types";
 export { ensureRequiredIgnores, PRIVATE_DIR, privatePaths, REQUIRED_IGNORES, stagedPrivatePaths } from "./ignores";
+export { ExecutableNotFoundError, findExecutable, gitExecutable, NO_CWD_SEARCH_ENV } from "../exec/index";

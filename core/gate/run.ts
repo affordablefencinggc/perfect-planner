@@ -126,7 +126,7 @@ export function killTree(child: ChildProcess): void {
   const pid = child.pid;
   if (pid === undefined) return;
   if (isWindows) {
-    const killer = spawn("taskkill", ["/pid", String(pid), "/T", "/F"], { windowsHide: true, shell: false, stdio: "ignore" });
+    const killer = spawn(path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "taskkill.exe"), ["/pid", String(pid), "/T", "/F"], { windowsHide: true, shell: false, stdio: "ignore" });
     killer.on("error", () => child.kill());
     return;
   }

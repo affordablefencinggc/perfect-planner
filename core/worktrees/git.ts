@@ -15,23 +15,26 @@ export interface GitOptions {
 }
 
 const baseEnv = (): NodeJS.ProcessEnv => {
-  const env: NodeJS.ProcessEnv = { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_PAGER: "cat", GIT_EDITOR: "true", LC_ALL: "C" };
+  const env: NodeJS.ProcessEnv = { ...process.env, ...NO_CWD_SEARCH_ENV, GIT_TERMINAL_PROMPT: "0", GIT_PAGER: "cat", GIT_EDITOR: "true", LC_ALL: "C" };
   // A hook or parent git process can export these; they would silently point us at another repo.
   for (const key of ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR"]) delete env[key];
   return env;
 };
 
-/** Run git without a shell. Never throws for a non-zero exit; see `git()` for that. */
+/**
+ * Run git without a shell, by its absolute path from PATH (never a git in the repo). Never throws for
+ * a non-zero exit; see `git()` for that.
+ */
 export function runGit(cwd: string, args: string[], options: GitOptions = {}): Promise<GitResult> {
   return new Promise((resolve, reject) => {
-    // git by absolute path, never one found in (or planted in) the repo it runs in (core/exec).
-    let executable: string;
+    let program: string;
     try {
-      executable = gitExecutable(cwd);
+      program = gitExecutable(cwd);
     } catch (error) {
-      return reject(error);
+      reject(error);
+      return;
     }
-    const child = spawn(executable, ["-c", "core.quotepath=off", ...args], { cwd, env: { ...baseEnv(), ...options.env, ...NO_CWD_SEARCH_ENV }, windowsHide: true, shell: false });
+    const child = spawn(program, ["-c", "core.quotepath=off", ...args], { cwd, env: { ...baseEnv(), ...options.env, ...NO_CWD_SEARCH_ENV }, windowsHide: true, shell: false });
     const out: Buffer[] = [];
     const err: Buffer[] = [];
     const timer = setTimeout(() => child.kill(), options.timeoutMs ?? 60_000);

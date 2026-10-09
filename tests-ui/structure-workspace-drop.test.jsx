@@ -24,17 +24,18 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
-test("captures the directory handle in the drop event and never auto-approves", async () => {
+test("drop captures the directory handle in the drop event and waits for approval before scanning", async () => {
   const pending = deferred(), handle = { kind: "directory" }, getHandle = vi.fn(() => pending.promise), runtime = adapter();
   render(<StructureWorkspace workspaceAdapter={runtime} />);
   drop([{ kind: "file", getAsFileSystemHandle: getHandle }]);
   expect(getHandle).toHaveBeenCalledTimes(1);
-  expect(screen.getByRole("button", { name: /Approve read-only analysis/ }).disabled).toBe(true);
+  expect(runtime.registerWorkspaceReadOnly).not.toHaveBeenCalled();
   await act(async () => pending.resolve(handle));
   await waitFor(() => expect(runtime.selectDroppedWorkspaceFolder).toHaveBeenCalledWith(handle));
-  expect(screen.getByPlaceholderText("Choose a folder above").value).toBe(receipt("dropped").selectedPath);
   expect(runtime.registerWorkspaceReadOnly).not.toHaveBeenCalled();
-  expect(runtime.censusRegisteredWorkspace).not.toHaveBeenCalled();
+  fireEvent.click(await screen.findByRole("button", { name: "Approve read-only scan" }));
+  await waitFor(() => expect(runtime.registerWorkspaceReadOnly).toHaveBeenCalledTimes(1));
+  expect(runtime.registerWorkspaceReadOnly).toHaveBeenCalledWith(expect.objectContaining({ rootPath: receipt("dropped").selectedPath, explicitUserApproval: true }));
 });
 
 test("refuses multiple drop items without obtaining any handle", async () => {
@@ -47,10 +48,12 @@ test("refuses multiple drop items without obtaining any handle", async () => {
 });
 
 test("unsupported browser drop offers picker instead of trusting a path", async () => {
-  render(<StructureWorkspace workspaceAdapter={adapter()} />);
+  const runtime = adapter();
+  render(<StructureWorkspace workspaceAdapter={runtime} />);
   drop([{ kind: "file" }]);
   expect(await screen.findByText(/This browser cannot grant folder access by drag-and-drop/)).toBeTruthy();
-  expect(screen.getByRole("button", { name: /Approve read-only analysis/ }).disabled).toBe(true);
+  expect(runtime.registerWorkspaceReadOnly).not.toHaveBeenCalled();
+  expect(runtime.censusRegisteredWorkspace).not.toHaveBeenCalled();
 });
 
 test("a late picker cannot overwrite a newer dropped selection", async () => {
@@ -58,18 +61,26 @@ test("a late picker cannot overwrite a newer dropped selection", async () => {
   render(<StructureWorkspace workspaceAdapter={runtime} />);
   fireEvent.click(screen.getByRole("button", { name: "Choose app folder" }));
   drop([{ kind: "file", getAsFileSystemHandle: () => Promise.resolve({ kind: "directory" }) }]);
-  await waitFor(() => expect(screen.getByPlaceholderText("Choose a folder above").value).toBe(receipt("dropped").selectedPath));
+  fireEvent.click(await screen.findByRole("button", { name: "Approve read-only scan" }));
+  await waitFor(() => expect(runtime.registerWorkspaceReadOnly).toHaveBeenCalledTimes(1));
+  expect(runtime.registerWorkspaceReadOnly.mock.calls[0][0].rootPath).toBe(receipt("dropped").selectedPath);
   await act(async () => pending.resolve(receipt("old-picker")));
-  expect(screen.getByPlaceholderText("Choose a folder above").value).toBe(receipt("dropped").selectedPath);
+  await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+  expect(screen.queryByRole("button", { name: "Approve read-only scan" })).toBeNull();
+  expect(runtime.registerWorkspaceReadOnly).toHaveBeenCalledTimes(1);
+  expect(runtime.registerWorkspaceReadOnly.mock.calls.some(([input]) => /old-picker/.test(input.rootPath))).toBe(false);
 });
 
-test("failed new selection cannot leave the old folder approved for analysis", async () => {
+test("failed new selection cannot leave the old folder selected or scanned again", async () => {
   const runtime = adapter();
   render(<StructureWorkspace workspaceAdapter={runtime} />);
   fireEvent.click(screen.getByRole("button", { name: "Choose app folder" }));
-  await waitFor(() => expect(screen.getByPlaceholderText("Choose a folder above").value).toBe(receipt("picker").selectedPath));
+  fireEvent.click(await screen.findByRole("button", { name: "Approve read-only scan" }));
+  await waitFor(() => expect(runtime.registerWorkspaceReadOnly).toHaveBeenCalledTimes(1));
   drop([{ kind: "file", getAsFileSystemHandle: () => Promise.reject(new Error("Permission lost")) }]);
   expect(await screen.findByText("Permission lost")).toBeTruthy();
-  expect(screen.getByPlaceholderText("Choose a folder above").value).toBe("");
-  expect(screen.getByRole("button", { name: /Approve read-only analysis/ }).disabled).toBe(true);
+  // No folder is set after the failure, so there is no "Scan again" for the old one.
+  expect(screen.queryByRole("button", { name: "Scan again" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Approve read-only scan" })).toBeNull();
+  expect(runtime.registerWorkspaceReadOnly).toHaveBeenCalledTimes(1);
 });

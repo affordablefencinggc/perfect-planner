@@ -19,6 +19,7 @@ const requiredFiles = Object.freeze([
   "src-tauri/capabilities/main-agent-observation.json",
   "src-tauri/capabilities/main-check-setup.json",
   "src-tauri/capabilities/main-task-results.json",
+  "src-tauri/capabilities/main-jev-keychain.json",
   "src-tauri/permissions/runtime-snapshot.json",
   "src-tauri/permissions/workspace-picker.json",
   "src-tauri/permissions/bundled-mcp.json",
@@ -28,6 +29,7 @@ const requiredFiles = Object.freeze([
   "src-tauri/src/main.rs",
   "src-tauri/src/native_mcp.rs",
   "src-tauri/src/native_git.rs",
+  "src-tauri/src/jev_keychain.rs",
   "src-tauri/src/workspace_census.rs",
   "src-tauri/src/workspace_picker.rs",
   "src-tauri/tauri.conf.json",
@@ -80,13 +82,14 @@ export async function inspectTauriTechnicalDebtSurface(workspaceRoot, files) {
   const security = config?.app?.security ?? {};
   const productionCsp = flattenCsp(security.csp);
 
-  if (!exactArray(security.capabilities, nativeCapabilities)) blockers.push("Desktop security must activate only the nine reviewed native capabilities.");
+  if (!exactArray(security.capabilities, nativeCapabilities)) blockers.push("Desktop security must activate only the ten reviewed native capabilities.");
   const addedPermissions = {
     'main-native-drafts': ['allow-inspect-native-draft-proposal', 'allow-read-native-draft-snapshot', 'allow-submit-native-draft-proposal'],
     'main-agent-observation': ['allow-inspect-agent-sessions', 'allow-read-agent-exchange-notes', 'allow-stop-project-agent-broker', 'allow-prepare-agent-pairing', 'allow-prepare-agent-plan-pairing', 'allow-prepare-agent-proposal-pairing'],
     'main-check-setup': ['allow-choose-native-check-setup', 'allow-prepare-native-checks', 'allow-inspect-native-checks', 'allow-review-native-checks', 'allow-recover-native-check-review', 'allow-execute-native-check', 'allow-recover-native-check-execution', 'allow-execute-native-task', 'allow-recover-native-task-execution'],
     'main-task-results': ['allow-inspect-native-task-result', 'allow-list-native-task-results', 'allow-read-native-task-result-page'],
     'main-core-launch': ['allow-take-core-launch'],
+    'main-jev-keychain': ['allow-jev-key-status', 'allow-jev-key-save', 'allow-jev-key-clear'],
   };
   for (const identifier of nativeCapabilities) {
     const value = parse(`src-tauri/capabilities/${identifier}.json`);
@@ -117,6 +120,9 @@ export async function inspectTauriTechnicalDebtSurface(workspaceRoot, files) {
   const mcpSource = contents.get("src-tauri/src/native_mcp.rs");
   const gitSource = contents.get("src-tauri/src/native_git.rs").split("#[cfg(test)]")[0];
   const cargoManifest = contents.get("src-tauri/Cargo.toml");
+  const keychainSource = contents.get("src-tauri/src/jev_keychain.rs").split("#[cfg(test)]")[0];
+  // The Jev key goes in once and never comes back out: status-only replies, Credential Manager only.
+  if (/std::fs::|std::process::|Command::new|reqwest::|tauri_plugin_|File::create|OpenOptions|CredentialBlob\s*\)|from_utf8|-> *Result<String|-> *String/.test(keychainSource) || !/CredWriteW/.test(keychainSource) || !/MAX_KEY_BYTES:\s*usize\s*=\s*512/.test(keychainSource)) blockers.push("Jev keychain must stay a bounded Credential Manager write/status/delete bridge that never returns the key.");
   const clientSource = contents.get("src/native/runtimeSnapshot.js");
   const censusClientSource = contents.get("src/native/workspaceCensus.js");
   const collisionClientSource = contents.get("src/native/collisionAuthority.js");

@@ -4,6 +4,7 @@ import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { surfacesOverlap } from "../../src/engine/collisionEngine.js";
+import { NO_CWD_SEARCH_ENV } from "../exec/index";
 import { ensureRequiredIgnores, privatePaths } from "./ignores";
 import { git, GitError, runGit } from "./git";
 import { isWithin, lines, realDir, samePath, toRepoPath } from "./platform";
@@ -345,7 +346,8 @@ export class WorktreeManager {
     if (this.install === false) return;
     if (typeof this.install === "function") return this.install(worktreePath);
     if (!existsSync(path.join(worktreePath, "package-lock.json"))) return;
-    const env = { ...process.env, ...(this.npmCache ? { npm_config_cache: this.npmCache } : {}) };
+    // cmd.exe must not pick up an npm.cmd planted in the worktree.
+    const env = { ...process.env, ...(this.npmCache ? { npm_config_cache: this.npmCache } : {}), ...NO_CWD_SEARCH_ENV };
     await new Promise<void>((resolve, reject) => {
       // Fixed command string; a shell is needed to run npm.cmd on Windows.
       const child = spawn("npm ci --prefer-offline --no-audit --no-fund", { cwd: worktreePath, env, shell: true, windowsHide: true, stdio: "ignore" });

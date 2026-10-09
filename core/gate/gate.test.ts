@@ -9,6 +9,7 @@ import { commitAll, makeRepo, memoryLedger, writeFiles } from "../worktrees/test
 import { TestGate, commandExists, deriveState, gateRule, isConclusiveFailure, nextAttemptId, runTestCommand, scrubbedEnv } from "./index";
 
 const OWNER: Actor = { kind: "person", id: "owner" };
+const GATE: Actor = { kind: "system", id: "gate" };
 const WORKER: Actor = { kind: "agent", id: "worker-1", model: "test-model" };
 const JEV: Actor = { kind: "jev", id: "jev", model: "test-model" };
 const SLOW = 60_000;
@@ -488,6 +489,53 @@ describe("TestGate", () => {
     expect(merged).toMatchObject({ ok: false, reason: expect.stringContaining(".perfect-planner/tokens/worker-1") });
     expect(await head(root, "main")).not.toBe(tip);
   }, SLOW);
+
+  it("Jev's gaps found after the person approved stop work until Jev clears them", async () => {
+    const { gate, ledger, worktree, addWorktree } = await approved();
+    expect(gate.canStart("T-1").ok).toBe(true);
+    expect(gate.reviewTest("T-1", WORKER, "approve")).toMatchObject({ ok: false, reason: expect.stringContaining("Only Jev") });
+    expect(gate.reviewTest("T-1", JEV, ["Misses the kill switch"]).ok).toBe(true);
+    expect(gate.canStart("T-1")).toMatchObject({ ok: false, reason: expect.stringContaining("Misses the kill switch") });
+    await addWorktree();
+    writeFiles(worktree, { "feature.txt": "enabled\n" });
+    await commitAll(worktree, "enable feature");
+    expect(await gate.prove("T-1", worktree)).toMatchObject({ ok: false, reason: expect.stringContaining("Misses the kill switch") });
+    // An unsigned entry claiming Jev's approval does not clear them.
+    const definition = gate.state("T-1").definition!.n;
+    ledger.append({ type: "review.verdict", actor: JEV, subject: "T-1", summary: "No gaps", evidence: ["scope:test", "verdict:approve", `definition:${definition}`], data: { scope: "test", verdict: "approve", definition } });
+    expect(gate.canStart("T-1").ok).toBe(false);
+    expect(gate.reviewTest("T-1", JEV, "approve").ok).toBe(true);
+    expect(gate.canStart("T-1").ok).toBe(true);
+  }, SLOW);
+
+  it("reject can cite the signed rejection already written instead of writing another", async () => {
+    const { gate, ledger } = await approved("T-14");
+    const other = ledger.append({ type: "review.verdict", actor: GATE, subject: "T-14", summary: "Looks fine", evidence: ["scope:diff", "verdict:approve"], data: { scope: "diff", verdict: "approve" } });
+    expect(() => gate.reject("T-14", JEV, "Missing error handling", { verdict: other.n })).toThrow(/not a rejection/);
+    const unsigned = ledger.append({ type: "review.verdict", actor: JEV, subject: "T-14", summary: "Diff rejected", evidence: ["scope:diff", "verdict:reject"], data: { scope: "diff", verdict: "reject" } });
+    expect(() => gate.reject("T-14", JEV, "Missing error handling", { verdict: unsigned.n })).toThrow(/signed/);
+    const verdict = ledger.append({ type: "review.verdict", actor: GATE, subject: "T-14", summary: "Diff rejected", evidence: ["scope:diff", "verdict:reject"], data: { scope: "diff", verdict: "reject" } });
+    const before = ledger.entries().length;
+    const result = gate.reject("T-14", JEV, "Missing error handling", { verdict: verdict.n });
+    expect(result).toMatchObject({ ok: true, newTaskId: "T-14.a2" });
+    expect(ledger.entries().length).toBe(before + 1);
+    expect(ledger.entries().at(-1)).toMatchObject({ type: "task.reopened", data: { verdict: verdict.n } });
+  });
+
+  it("with requireJevTestReview, work waits for Jev's signed approval of the test", async () => {
+    const { root, ledger } = await setup();
+    const gate = new TestGate({ ledger, timeoutMs: 30_000, requireJevTestReview: true });
+    ledger.addRule(gateRule({ requireJevTestReview: true }));
+    gate.define("T-1", COMMAND, WORKER);
+    expect(gate.approve("T-1", OWNER, { cwd: root }).ok).toBe(true);
+    expect((await gate.confirmFailsFirst("T-1", root)).ok).toBe(true);
+    expect(gate.canStart("T-1")).toMatchObject({ ok: false, reason: expect.stringContaining("Jev has not reviewed") });
+    expect(() => ledger.append({ type: "task.claimed", actor: WORKER, subject: "T-1", summary: "Claimed" })).toThrow(LedgerError);
+    expect(gate.reviewTest("T-1", JEV, "approve").ok).toBe(true);
+    expect(gate.canStart("T-1").ok).toBe(true);
+    // The default keeps Jev optional.
+    expect(new TestGate({ ledger }).canStart("T-1").ok).toBe(true);
+  });
 
   it("an unsigned Jev verdict on the test cannot clear the gaps Jev found", async () => {
     const { root, gate, ledger } = await setup();

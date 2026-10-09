@@ -9,6 +9,7 @@ import { registerPlanRoutes } from "./plan";
 import { registerPlanningRoutes } from "./planning";
 import { registerSearchRoutes } from "./search";
 import { registerTaskRoutes } from "./tasks";
+import { registerSummaryRoutes } from "./summary";
 
 export function registerRoutes(router: Router): void {
   registerPlanningRoutes(router);
@@ -20,4 +21,5 @@ export function registerRoutes(router: Router): void {
   registerTaskRoutes(router);
   registerPlanRoutes(router);
   registerKeyRoutes(router);
+  registerSummaryRoutes(router);
 }

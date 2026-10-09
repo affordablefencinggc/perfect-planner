@@ -67,6 +67,33 @@ export function isPlaceholder(value: string): boolean {
   return PLACEHOLDER.test(value);
 }
 
+/**
+ * Canary and sentinel strings that say they are not real ("must-not-leave",
+ * "do-not-retain-payload", "fake-key", "example_token"): tests and receipts use
+ * them to prove a secret was dropped.
+ */
+export const SENTINEL = /^(?:do[-_]?not|must[-_]?not|never|not[-_]a|fake|dummy|sample|example|placeholder|redacted)(?:[-_][a-z]+)+$/i;
+
+/** A placeholder or a self-describing sentinel: never a credential. */
+export function isStandIn(value: string): boolean {
+  return isPlaceholder(value) || SENTINEL.test(value);
+}
+
+/**
+ * A phrase of three or more lower-case words joined by "-", "_" or "."
+ * ("auth.session.token"). Assigned to a name that is not itself a secret name
+ * (TOKEN_KEY, a label field) it is a key name or label; assigned to PASSWORD,
+ * API_KEY or the like, or on an env line, it is a passphrase and still counts.
+ */
+export const WORD_PHRASE = /^[a-z]+(?:[-_.][a-z]+){2,}$/;
+
+// An env-style line: NAME=value with no spaces around "=", optionally exported.
+const ENV_LINE = /^\s*(?:export\s+|set\s+|setx\s+)?[A-Za-z_][A-Za-z0-9_]*=/;
+
+function phraseExempt(name: string | undefined, value: string, line: string): boolean {
+  return WORD_PHRASE.test(value) && !(name !== undefined && isSecretName(name)) && !ENV_LINE.test(line);
+}
+
 /** Minimum value length for a secret name: password/secret 8, key/token 12. */
 export function minValueLength(name: string): number {
   return /password|passwd|secret/i.test(name) ? 8 : 12;
@@ -124,7 +151,8 @@ export function findSecrets(file: string, line: string, options: { everywhere?: 
       if (taken.some(([a, b]) => valueStart >= a && valueStart < b)) continue;
       taken.push([valueStart, valueStart + value.length]);
       if (rule.nameGroup !== undefined && value.length < minValueLength(m[rule.nameGroup]!)) continue;
-      if (isPlaceholder(value) || !/[A-Za-z]/.test(value)) continue;
+      if (isStandIn(value) || !/[A-Za-z]/.test(value)) continue;
+      if (rule.nameGroup !== undefined && phraseExempt(m[rule.nameGroup], value, line)) continue;
       found.push({ rule: rule.id, description: rule.description, start: valueStart, end: valueStart + value.length, value, ...(rule.nameGroup !== undefined ? { name: m[rule.nameGroup]! } : {}) });
     }
   }
@@ -134,9 +162,8 @@ export function findSecrets(file: string, line: string, options: { everywhere?: 
 // ---------- redaction and the diff check ----------
 //
 // detectSecrets (one line of a known file, used by Jev's diff check) and
-// redactSecrets (any text) share every rule below. Redaction is broader in two
-// places only: long high-entropy runs and cookie values, which would turn
-// ordinary fixtures in a diff into rejections.
+// redactSecrets (any text) share every rule below. Redaction is broader in a
+// few places only: every cookie value, and plain words on `name: value` lines.
 
 export const REDACTED = "[redacted-secret]";
 
@@ -159,7 +186,7 @@ const VALUE_RULES: readonly ValueRule[] = [
   { id: "connection-string", description: "password in a connection string", pattern: /\b[a-z][a-z0-9+.-]*:\/\/[^\s:@/"'`]*:([^\s@/"'`]+)@/gi },
   { id: "mysql-password", description: "mysql -p password", pattern: /\b(?:mysql|mysqldump|mysqladmin|mariadb|mariadb-dump)\b[^\n]*?\s-p([^\s-][^\s]*)/gi },
   { id: "password-flag", description: "password on a command line", pattern: /--(?:password|passwd|pass|token|secret|api-key|apikey|auth-token)(?:=|\s+)([^\s"'`-][^\s"'`]*)/gi },
-  // curl -u user:password / --user user:password ("pass" counts: a real password can be a word)
+  // curl -u user:<password> or --user user:<password> ("pass" counts: a real password can be a word)
   { id: "curl-user", description: "password in curl -u", pattern: /\bcurl\b[^\n]*?\s(?:-u|--user)(?:\s+|=)["']?[^\s:"'$]+:([^\s"'$][^\s"']*)/gi, words: true },
   { id: "npm-token", description: "npm token", pattern: /\b(npm_[A-Za-z0-9]{36})\b/g },
   { id: "stripe-test-key", description: "Stripe test key", pattern: /\b([rs]k_test_[A-Za-z0-9]{16,})/g },
@@ -183,8 +210,10 @@ export function isSecretName(name: string): boolean {
   const words = nameWords(name);
   const last = words[words.length - 1];
   if (last === undefined) return false;
-  // A lone "pass" is usually a result ("PASS: 18/18"); DB_PASS and userPass are secrets.
-  if (last === "pass") return words.length > 1;
+  // A lone upper-case "PASS" is usually a result ("PASS: 18/18"); a lower-case
+  // "pass:" key, DB_PASS and userPass are secrets. Whole words only, so
+  // passthrough and bypass never match.
+  if (last === "pass") return words.length > 1 || name === "pass";
   if (SECRET_WORDS.has(last)) return true;
   return last === "key" && words.length > 1 && KEY_PAIRS.has(words[words.length - 2]!);
 }
@@ -199,16 +228,13 @@ const CODE_CHARS = /=>|[[\](){}<>]/;
 // Words that follow "token:" as a type or a keyword, not a value.
 const CODE_WORDS = new Set(["string", "number", "boolean", "bigint", "symbol", "object", "unknown", "any", "void", "never", "null", "undefined", "true", "false", "none", "nil", "await", "new", "this", "self", "typeof", "function", "async", "return", "const", "let", "var", "str", "int", "bytes", "buffer", "uint8array", "readonly", "optional"]);
 const IDENTIFIER_CHAIN = /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*$/;
-// An env-style line: NAME=value with no spaces around "=", optionally exported.
-const ENV_LINE = /^\s*(?:export\s+|set\s+|setx\s+)?[A-Za-z_][A-Za-z0-9_]*=/;
 // A whole line that is one `name: value` pair, as in YAML.
 const YAML_LINE = /^\s*(?:-\s+)?["']?[A-Za-z_][\w.-]*["']?\s*:\s*[^\s,;{}()]+\s*(?:#.*)?$/;
-const SHELL_FILE = /\.(?:sh|bash|zsh|ps1|psm1|bat|cmd|envrc)$|(?:^|\/)\.envrc$/i;
 
 type Mode = "redact" | "detect";
 
 function isLiteralSecret(name: string, value: string, quoted: boolean, context: { mode: Mode; envLine: boolean; configFile: boolean; yamlLine: boolean }): boolean {
-  if (value.length < 3 || value.includes(REDACTED) || isPlaceholder(value) || !/[A-Za-z0-9]/.test(value)) return false;
+  if (value.length < 3 || value.includes(REDACTED) || isStandIn(value) || !/[A-Za-z0-9]/.test(value)) return false;
   // In source code the diff check keeps the release scanner's minimum lengths, so
   // test strings ("forged") pass; configuration lines and redaction take any length.
   if (context.mode === "detect" && !context.envLine && !context.configFile && value.length < minValueLength(name)) return false;
@@ -220,8 +246,11 @@ function isLiteralSecret(name: string, value: string, quoted: boolean, context: 
   if (CODE_START.test(value) || CODE_CHARS.test(value) || CODE_WORDS.has(value.toLowerCase())) return false;
   if (!IDENTIFIER_CHAIN.test(value)) return true;
   // A bare identifier: code (token = value, token: string, a.b.c) unless the
-  // line is plainly configuration (DB_PASSWORD=letmein, password: hunter in YAML).
-  if (context.envLine || context.configFile) return !value.includes(".") || /\d/.test(value);
+  // line is plainly configuration (DB_PASSWORD=<word>, or password: <word> in YAML).
+  // On NAME=value lines a dotted value is a literal (API_KEY=blue.whale.sings.loud), not member access.
+  if (context.envLine) return true;
+  // In config files and on lone `name: value` lines, a dotted value is a literal too (passphrase: a.b.c).
+  if (context.configFile || context.yamlLine) return true;
   // Redaction also hides identifiers with digits ("hunter2"); plain words stay
   // unless the line is a lone `name: value` (YAML in a log or a paste).
   if (context.mode !== "redact" || value.includes(".") || /^[_$]/.test(value) || /[a-z][A-Z]/.test(value) || SECRET_WORDS.has(value.toLowerCase())) return false;
@@ -236,6 +265,18 @@ function entropy(s: string): number {
   return bits;
 }
 
+// Content digests and embedded files, never credentials: Subresource Integrity
+// values ("integrity": "sha512-<base64>", as in package-lock.json) and data: URIs
+// (base64 images in generated evidence). Long runs inside them are skipped; any
+// other rule still applies to the rest of the line.
+const BENIGN_BLOBS = [/\bsha(?:256|384|512)-[A-Za-z0-9+/]{40,}={0,2}/g, /\bdata:[\w.+-]+\/[\w.+-]+(?:;[\w.+-]+=[\w.+-]+)*;base64,[A-Za-z0-9+/]+={0,2}/g];
+
+function benignRanges(line: string): Array<[number, number]> {
+  const ranges: Array<[number, number]> = [];
+  for (const pattern of BENIGN_BLOBS) for (const m of line.matchAll(pattern)) ranges.push([m.index ?? 0, (m.index ?? 0) + m[0].length]);
+  return ranges;
+}
+
 // Long mixed-case-and-digit runs with high entropy: generated tokens nobody named.
 const LONG_RUN = /[A-Za-z0-9+_-]{32,}={0,2}/g;
 // A label glued to a hash ("SHA256468ca0...", "Overlay442fde...") is a digest, not a credential.
@@ -245,7 +286,7 @@ function looksGenerated(run: string): boolean {
   return /[a-z]/.test(run) && /[A-Z]/.test(run) && /[0-9]/.test(run) && entropy(run) >= 4;
 }
 
-// Cookie: a=1; b=2 and Set-Cookie: sid=...; Path=/
+// Cookie and Set-Cookie headers: <name>=<value> pairs, minus attributes like Path
 const COOKIE_HEADER = /\b(?:set-)?cookie\s*:\s*([^\n]+)/gi;
 const SESSION_COOKIE = /sess|sid|token|auth|jwt|login|remember/i;
 const COOKIE_ATTRIBUTES = new Set(["path", "domain", "expires", "max-age", "samesite", "secure", "httponly", "priority", "partitioned"]);
@@ -262,10 +303,9 @@ function scanLine(line: string, mode: Mode, file: string): SecretSpan[] {
   const add = (rule: string, description: string, start: number, end: number) => {
     if (end > start && !spans.some((s) => start < s.end && end > s.start)) spans.push({ rule, description, start, end });
   };
-  // Shell scripts count only their NAME=value lines as configuration; YAML, ini and .env files count every line.
+  // YAML, ini and .env files count every line as configuration; elsewhere only NAME=value lines do.
   const configFile = isConfigLikeFile(file);
-  const envLine = ENV_LINE.test(line) || (SHELL_FILE.test(file.replace(/\\/g, "/")) && /^\s*(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*=/.test(line));
-  const context = { mode, envLine, configFile, yamlLine: YAML_LINE.test(line) };
+  const context = { mode, envLine: false, configFile, yamlLine: YAML_LINE.test(line) };
 
   for (const f of findSecrets(file, line, { everywhere: mode === "redact" })) {
     // The scanner's generic rule matches any name containing a secret word; here the word must end the name.
@@ -275,7 +315,7 @@ function scanLine(line: string, mode: Mode, file: string): SecretSpan[] {
   for (const rule of VALUE_RULES) {
     for (const m of line.matchAll(rule.pattern)) {
       const value = m[1];
-      if (!value || isPlaceholder(value) || CODE_START.test(value) || value.includes(REDACTED) || !/[A-Za-z0-9]/.test(value) || (!rule.words && SECRET_WORDS.has(value.toLowerCase()))) continue;
+      if (!value || isStandIn(value) || CODE_START.test(value) || value.includes(REDACTED) || !/[A-Za-z0-9]/.test(value) || (!rule.words && SECRET_WORDS.has(value.toLowerCase()))) continue;
       const start = (m.index ?? 0) + m[0].lastIndexOf(value);
       add(rule.id, rule.description, start, start + value.length);
     }
@@ -284,7 +324,9 @@ function scanLine(line: string, mode: Mode, file: string): SecretSpan[] {
     const [, name, dq, sq, bare] = m;
     const value = dq ?? sq ?? bare ?? "";
     const secretName = isSecretName(name!) || (bare !== undefined && ENV_KEY_NAME.test(name!));
-    if (!secretName || !isLiteralSecret(name!, value, bare === undefined, context)) continue;
+    // Env-style only when this assignment itself opens the line as NAME=value (a minified "a=b,secret:c" is code).
+    const envLine = ENV_LINE.test(line.slice(m.index ?? 0)) && /^\s*(?:(?:export|set|setx)\s+)?$/.test(line.slice(0, m.index ?? 0));
+    if (!secretName || !isLiteralSecret(name!, value, bare === undefined, { ...context, envLine })) continue;
     const start = (m.index ?? 0) + m[0].lastIndexOf(value);
     add("secret-assignment", `value assigned to ${name}`, start, start + value.length);
   }
@@ -294,13 +336,16 @@ function scanLine(line: string, mode: Mode, file: string): SecretSpan[] {
     for (const pair of m[1]!.matchAll(/([^=;\s]+)=([^;\s]+)/g)) {
       const [, cookie, value] = pair;
       if (COOKIE_ATTRIBUTES.has(cookie!.toLowerCase())) continue;
-      if (mode === "detect" && !(SESSION_COOKIE.test(cookie!) && value!.length >= 8 && !isPlaceholder(value!) && !CODE_START.test(value!))) continue;
+      if (mode === "detect" && !(SESSION_COOKIE.test(cookie!) && value!.length >= 8 && !isStandIn(value!) && !CODE_START.test(value!))) continue;
       const start = base + (pair.index ?? 0) + pair[0].length - value!.length;
       add("cookie", "cookie value", start, start + value!.length);
     }
   }
-  if (mode === "redact") {
+  {
+    const benign = benignRanges(line);
     for (const m of line.matchAll(LONG_RUN)) {
+      const at = m.index ?? 0;
+      if (benign.some(([a, b]) => at >= a && at < b)) continue;
       if (looksGenerated(m[0])) add("high-entropy", "generated token", m.index ?? 0, (m.index ?? 0) + m[0].length);
     }
   }
