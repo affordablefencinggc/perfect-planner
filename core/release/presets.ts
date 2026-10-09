@@ -1,4 +1,4 @@
-import type { Actor, Ledger, LedgerEntry } from "../ledger/index";
+import { isAuthoritative, type Actor, type Ledger, type LedgerEntry } from "../ledger/index";
 import { nextNumber } from "../numbering/index";
 import type { Triage } from "./risk";
 import type { PresetName } from "./types";
@@ -60,11 +60,12 @@ export function needsDeepReview(preset: PresetName, triage: Triage): { deep: boo
 
 const PRESET_TOPIC = "review-preset";
 
-/** The preset in force: the latest decision.made with topic "review-preset", else Balanced. */
+/** The preset in force: the latest person's decision.made with topic "review-preset", else Balanced. */
 export function currentPreset(entries: readonly LedgerEntry[]): PresetName {
   for (let i = entries.length - 1; i >= 0; i--) {
     const entry = entries[i];
-    if (entry.type === "decision.made" && entry.data?.topic === PRESET_TOPIC && isPresetName(entry.data?.preset)) {
+    // Only a person's decision counts, never an agent's or the system's.
+    if (entry.type === "decision.made" && isAuthoritative(entry, { personOnly: true }) && entry.data?.topic === PRESET_TOPIC && isPresetName(entry.data?.preset)) {
       return entry.data.preset;
     }
   }
@@ -79,11 +80,27 @@ export function setPreset(ledger: Ledger, actor: Actor, preset: PresetName, reas
     actor,
     type: "decision.made",
     subject: nextNumber(ledger.entries(), "D"), // decisions take the next D- number
-
     summary: `Review preset set to ${PRESETS[preset].label}`,
     reason,
     evidence: [],
     refs: [],
     data: { topic: PRESET_TOPIC, preset },
+  });
+}
+
+/** Decisions about how much review and money the project spends; only a person may make them. */
+export const PERSON_ONLY_TOPICS: ReadonlySet<string> = new Set([PRESET_TOPIC, "budget"]);
+
+/**
+ * Refuses a review-preset or budget decision from anyone but a person, so an
+ * agent cannot switch review to Cheap or lift the budget cap by writing the
+ * entry itself. The readers ignore such entries too, for ledgers written
+ * before this rule was installed. Returns a function that removes the rule.
+ */
+export function installSettingsRule(ledger: Ledger): () => void {
+  return ledger.addRule((draft) => {
+    const topic = draft.data?.topic;
+    if (draft.type !== "decision.made" || typeof topic !== "string" || !PERSON_ONLY_TOPICS.has(topic)) return null;
+    return draft.actor.kind === "person" ? null : `Only a person can change the ${topic === "budget" ? "budget" : "review preset"}`;
   });
 }
