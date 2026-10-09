@@ -10,7 +10,8 @@ export const PERFORMANCE_BUDGETS = Object.freeze({
   // v1 (Oct 2026): totals raised for the seven on-demand imported-project panels; first-load limits unchanged.
   maxTotalJavaScriptGzipBytes: 480 * 1024,
   maxIndividualStylesheetGzipBytes: 44 * 1024,
-  maxTotalStylesheetGzipBytes: 56 * 1024,
+  // UI polish (Oct 2026): total raised for the page frame and per-screen polish layers; the per-file limit is unchanged.
+  maxTotalStylesheetGzipBytes: 72 * 1024,
   maxClientBytes: 14 * 1024 * 1024,
   maxClientFiles: 200, // raised from 160 when v1 feature panels moved to on-demand chunks
 });
