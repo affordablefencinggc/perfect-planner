@@ -19,10 +19,10 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
-use tauri::{App, AppHandle, Manager, Url, WebviewWindow, WebviewWindowBuilder};
+use tauri::{App, AppHandle, Manager, PhysicalPosition, PhysicalSize, Url, WebviewWindow, WebviewWindowBuilder};
 
 const READY_TIMEOUT: Duration = Duration::from_secs(90);
-const STOP_GRACE: Duration = Duration::from_secs(5);
+const STOP_GRACE: Duration = Duration::from_secs(2);
 const LOG_FILE: &str = "desktop-host.log";
 
 /// What the shell keeps about the running service.
@@ -209,6 +209,35 @@ fn show_error(window: &WebviewWindow, splash: &Url, message: &str, node_missing:
     let _ = window.navigate(url);
 }
 
+/// Where a window of `outer` pixels (title bar included) goes on a screen whose free area (no
+/// menu bar or dock) is `area` at `origin`: `None` when it already fits, else the smaller outer
+/// size, centred. The configured 1440x900 window is taller than a 1366x768 laptop screen, and
+/// macOS then leaves Settings and the left side of the app off screen.
+pub(crate) fn fitted(outer: (u32, u32), origin: (i32, i32), area: (u32, u32)) -> Option<((u32, u32), (i32, i32))> {
+    if area.0 == 0 || area.1 == 0 || (outer.0 <= area.0 && outer.1 <= area.1) {
+        return None;
+    }
+    let size = (outer.0.min(area.0), outer.1.min(area.1));
+    let centre = |start: i32, free: u32, used: u32| start + ((free - used) / 2) as i32;
+    Some((size, (centre(origin.0, area.0, size.0), centre(origin.1, area.1, size.1))))
+}
+
+fn fit_to_screen(window: &WebviewWindow, config: &tauri::utils::config::WindowConfig) {
+    let monitor = window.current_monitor().ok().flatten().or_else(|| window.primary_monitor().ok().flatten());
+    let (Some(monitor), Ok(outer), Ok(inner)) = (monitor, window.outer_size(), window.inner_size()) else { return };
+    let rect = monitor.work_area();
+    let Some((size, position)) = fitted((outer.width, outer.height), (rect.position.x, rect.position.y), (rect.size.width, rect.size.height)) else { return };
+    let frame = (outer.width.saturating_sub(inner.width), outer.height.saturating_sub(inner.height));
+    let content = PhysicalSize::new(size.0.saturating_sub(frame.0), size.1.saturating_sub(frame.1));
+    let scale = monitor.scale_factor();
+    // The configured minimum would stop the window shrinking; keep it only where the screen allows.
+    let min_w = config.min_width.map(|w| (w * scale) as u32).unwrap_or(0).min(content.width);
+    let min_h = config.min_height.map(|h| (h * scale) as u32).unwrap_or(0).min(content.height);
+    let _ = window.set_min_size(Some(PhysicalSize::new(min_w, min_h)));
+    let _ = window.set_size(content);
+    let _ = window.set_position(PhysicalPosition::new(position.0, position.1));
+}
+
 /// Builds the main window (with its navigation guard) and starts the service.
 pub(crate) fn setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
     let state = CoreHostState::default();
@@ -224,6 +253,7 @@ pub(crate) fn setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
         builder = builder.additional_browser_args(&args);
     }
     let window = builder.build()?;
+    fit_to_screen(&window, &config);
     app.manage(state);
     // `tauri dev` serves the core host from the Vite dev server (src/node/coreHostVitePlugin.mjs).
     if cfg!(dev) {
@@ -339,6 +369,16 @@ pub(crate) fn stop(app: &AppHandle) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_window_bigger_than_the_screen_shrinks_to_its_free_area_and_is_centred() {
+        assert_eq!(super::fitted((1440, 928), (0, 25), (1920, 1055)), None);
+        // 1024x768 Mac: 25px menu bar, dock at the bottom.
+        assert_eq!(super::fitted((1440, 928), (0, 25), (1024, 670)), Some(((1024, 670), (0, 25))));
+        assert_eq!(super::fitted((1440, 928), (0, 0), (1366, 728)), Some(((1366, 728), (0, 0))));
+        assert_eq!(super::fitted((1200, 928), (1920, 0), (1600, 860)), Some(((1200, 860), (2120, 0))));
+        assert_eq!(super::fitted((1440, 928), (0, 0), (0, 0)), None);
+    }
+
     #[test]
     fn webview2_args_keep_tauris_switches_and_add_the_documented_variable() {
         assert_eq!(super::webview2_browser_args(None), None);

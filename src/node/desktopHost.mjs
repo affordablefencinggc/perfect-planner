@@ -37,6 +37,7 @@ export function readyLine(started) {
   return `${JSON.stringify({ event: "ready", origin: new URL(started.url).origin, open })}\n`;
 }
 
+const STOP_LIMIT_MS = 1500;
 const stderrLogger = { log: (...a) => console.error(...a), info: (...a) => console.error(...a), warn: (...a) => console.error(...a), error: (...a) => console.error(...a) };
 
 /**
@@ -45,17 +46,26 @@ const stderrLogger = { log: (...a) => console.error(...a), info: (...a) => conso
  */
 export async function startDesktopHost({ env = process.env, here, input = process.stdin, output = process.stdout, logger = stderrLogger, onStop = () => process.exit(0) } = {}) {
   if (!env.PP_NODE_BINARY) env.PP_NODE_BINARY = process.execPath;
-  const started = await startLocalServer({ ...desktopHostConfig(env, here), logger });
-  let stopping = false;
+  // Watch stdin before starting: the app can quit while the service is still starting, and
+  // it only waits a moment before killing us. Closing never takes longer than STOP_LIMIT_MS.
+  let started = null, stopping = false, finished = false;
+  const finish = () => { if (!finished) { finished = true; onStop(); } };
   const stop = () => {
     if (stopping) return;
     stopping = true;
-    started.close().finally(onStop);
+    setTimeout(finish, STOP_LIMIT_MS).unref?.();
+    if (started) started.close().finally(finish);
   };
   input.on("end", stop);
   input.on("close", stop);
   input.on("error", stop);
   input.resume();
+  started = await startLocalServer({ ...desktopHostConfig(env, here), logger });
+  if (stopping) {
+    await started.close().catch(() => {});
+    finish();
+    return { ...started, stop };
+  }
   output.write(readyLine(started));
   logger.log(`[perfect-planner] Desktop service on ${started.url} (data in ${started.root})`);
   return { ...started, stop };

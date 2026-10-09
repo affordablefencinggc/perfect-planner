@@ -114,7 +114,8 @@ describe("Connect agent drawer", () => {
     const opener = screen.getByRole("button", { name: "Connect agent" });
     fireEvent.click(opener);
     const dialog = await screen.findByRole("dialog", { name: "Connect agent" });
-    expect(within(dialog).getByLabelText("Run once in a terminal setup text").textContent).toContain("perfectPlannerMcpServer.mjs");
+    expect(within(dialog).getByRole("heading", { name: "Connect an agent" })).toBeTruthy();
+    expect(within(dialog).queryByText(/<path-to-perfect-planner>|<Perfect Planner app data>/)).toBeNull();
     expect(window.location.search).toContain("workspace=structure");
     // The drawer is lazy-loaded; its key handler attaches in the same effect that moves focus
     // into it, so wait for that before pressing Escape (slower runners, e.g. macOS, lag here).
@@ -130,12 +131,17 @@ describe("Connect agent drawer", () => {
     window.localStorage.clear();
   }, 20000);
 
-  test("without a build-time path it shows a placeholder and tells the user what to fill in", async () => {
+  test("without both build-time paths it shows Connect agent only, never a line with placeholders", async () => {
     const user = userEvent.setup();
-    render(<Harness setup={{ serverPath: "", registryRoot: "" }} />);
-    await user.click(screen.getByRole("button", { name: "Connect agent" }));
-    expect(screen.getByLabelText("Run once in a terminal setup text").textContent).toContain("<path-to-perfect-planner>/mcp/perfectPlannerMcpServer.mjs");
-    expect(screen.getByText(/does not know where Perfect Planner is/)).toBeTruthy();
-    expect(screen.getByText(/Replace the app data placeholder/)).toBeTruthy();
+    for (const setup of [{ serverPath: "", registryRoot: "" }, { serverPath: "/home/dev/perfect-planner/mcp/perfectPlannerMcpServer.mjs", registryRoot: "" }]) {
+      const view = render(<Harness setup={setup} />);
+      await user.click(screen.getByRole("button", { name: "Connect agent" }));
+      const dialog = screen.getByRole("dialog", { name: "Connect agent" });
+      expect(within(dialog).queryByLabelText("Run once in a terminal setup text")).toBeNull();
+      expect(within(dialog).queryByRole("tablist")).toBeNull();
+      expect(dialog.textContent).not.toMatch(/<[^>]{1,80}>|\{\{[^}]*\}\}/);
+      expect(dialog.textContent).not.toMatch(/does not know where Perfect Planner is|Replace the app data placeholder/);
+      view.unmount();
+    }
   });
 });

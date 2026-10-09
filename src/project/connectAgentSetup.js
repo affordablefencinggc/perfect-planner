@@ -22,6 +22,11 @@ export function resolveAgentSetup({ serverPath, registryRoot } = {}) {
   return { serverPath: server ?? SERVER_PATH_PLACEHOLDER, registryRoot: registry ?? REGISTRY_PLACEHOLDER, serverPathKnown: Boolean(server), registryKnown: Boolean(registry) };
 }
 
+// The read-only server lines are only worth showing with both real paths in them. Installed
+// builds ship neither (the server is not in the bundle), so they show Connect agent alone and
+// never a line with <placeholders> a person would copy and run.
+export const readOnlySetupReady = (setup) => Boolean(setup?.serverPathKnown && setup?.registryKnown);
+
 const shellQuote = (value) => `"${value.replaceAll('"', '\\"')}"`;
 const tomlLiteral = (value) => (value.includes("'") ? JSON.stringify(value) : `'${value}'`);
 const jsonEntry = (setup, extra = {}) => ({ ...extra, command: "node", args: [setup.serverPath], env: { PERFECT_PLANNER_REGISTRY_ROOT: setup.registryRoot } });

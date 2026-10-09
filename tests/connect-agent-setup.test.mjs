@@ -5,7 +5,7 @@ import { readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { AGENT_TOOLS, REGISTRY_PLACEHOLDER, SERVER_PATH_PLACEHOLDER, buildAgentSnippets, copyText, resolveAgentSetup } from "../src/project/connectAgentSetup.js";
+import { AGENT_TOOLS, REGISTRY_PLACEHOLDER, SERVER_PATH_PLACEHOLDER, buildAgentSnippets, copyText, readOnlySetupReady, resolveAgentSetup } from "../src/project/connectAgentSetup.js";
 import { defaultRegistryRoot, mcpServerPath } from "../mcp/agentSetupPaths.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -25,6 +25,15 @@ test("missing build paths fall back to visible placeholders, never a guess", () 
   assert.equal(setup.serverPathKnown, false);
   assert.equal(setup.registryKnown, false);
   assert.deepEqual(resolveAgentSetup(), resolveAgentSetup({}));
+});
+
+test("installed builds without both real paths never show the read-only lines", () => {
+  assert.equal(readOnlySetupReady(resolveAgentSetup({})), false);
+  assert.equal(readOnlySetupReady(resolveAgentSetup({ serverPath: winPath })), false);
+  assert.equal(readOnlySetupReady(resolveAgentSetup({ registryRoot: "C:\\data" })), false);
+  assert.equal(readOnlySetupReady(resolveAgentSetup({ serverPath: winPath, registryRoot: "C:\\data" })), true);
+  const drawer = readFileSync(path.join(root, "src", "components", "ConnectAgentDrawer.jsx"), "utf8");
+  assert.match(drawer, /\{readOnlySetupReady\(setup\) && <>[\s\S]*connect-agent-tabpanel[\s\S]*Before you paste[\s\S]*<\/>\}/, "the snippet tabs sit behind the check");
 });
 
 test("every snippet carries the server path and registry folder in its own format", () => {

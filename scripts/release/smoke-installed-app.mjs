@@ -130,7 +130,7 @@ export async function smokeInstalledApp({ installer, out, installDir = "C:\\PP S
     summary.lineUsesBundledNode = line.startsWith(`& '${installDir}\\desktop-host\\node.exe'`);
     await client.screenshot(path.join(out, "2-connect-line.png"));
     // Anything a person might copy from the drawer must be ready to run; report leftover placeholders.
-    summary.drawerPlaceholders = await client.evaluate(`[...new Set((document.querySelector(".core-screen-connect")?.closest("[role=dialog], aside, section")?.innerText ?? document.body.innerText).match(/<[^>\\n]{1,80}>|\\{\\{[^}]*\\}\\}/g) ?? [])]`);
+    summary.drawerPlaceholders = await client.evaluate(`[...new Set((document.querySelector(".core-screen-connect")?.closest("[role=dialog]")?.innerText ?? document.body.innerText).match(/<[^>\\n]{1,80}>|\\{\\{[^}]*\\}\\}/g) ?? [])]`);
     const agent = await checkAgentConnect(line);
     summary.agent = { ranAsCopied: agent.ranAsCopied, skillAcceptsLine: agent.skillAcceptsLine, checkedInAs: agent.checkedInAs, registeredWithBundledNode: agent.registered.usesLineNode, skillInstalled: agent.skillInstalled };
     await until("the window to say the agent connected", () => client.evaluate(`document.querySelector(".core-screen-connect")?.innerText?.includes("Connected:")`), 30_000);
@@ -144,6 +144,7 @@ export async function smokeInstalledApp({ installer, out, installDir = "C:\\PP S
   summary.serviceStoppedWithApp = await until("the service to stop after the app was killed", async () => !(await reachable(`${SERVICE_ORIGIN}/`)), 30_000).then(() => true, () => false);
   if (!summary.serviceStoppedWithApp) throw new Error("The local service kept running after the app was killed.");
   if (!summary.lineUsesBundledNode) throw new Error("The connect line does not use the bundled Node.");
+  if (summary.drawerPlaceholders?.length) throw new Error(`The Connect agent drawer shows placeholders a person could copy: ${summary.drawerPlaceholders.join(" ")}`);
   summary.ok = true;
   return summary;
 }

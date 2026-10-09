@@ -139,3 +139,26 @@ test("pages the local service serves run in browser mode; the app's own pages st
   assert.notEqual(resolveWorkspaceAdapter(service).mode, "native");
   assert.equal(isTauriRuntime({ __TAURI_INTERNALS__: {} }), true, "no location: the existing native contract tests");
 });
+
+test("an app that quits while the service is still starting never leaves the service running", async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "pp-desktop-host-"));
+  try {
+    const here = path.join(dir, "core-host");
+    mkdirSync(here, { recursive: true });
+    mkdirSync(path.join(dir, "client"), { recursive: true });
+    writeFileSync(path.join(dir, "client", "index.html"), "<!doctype html><title>Perfect Planner</title>");
+    const input = new PassThrough();
+    const output = new PassThrough();
+    const quiet = { log() {}, info() {}, warn() {}, error() {} };
+    let stops = 0;
+    const env = { PP_PORT: "0", PP_DATA_DIR: path.join(dir, "data") };
+    const starting = startDesktopHost({ env, here, input, output, logger: quiet, onStop: () => { stops += 1; } });
+    input.end();
+    const host = await starting;
+    assert.equal(stops, 1, "stopped as soon as it finished starting");
+    assert.equal(output.read(), null, "no ready line for a window that is gone");
+    await assert.rejects(fetch(host.url));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

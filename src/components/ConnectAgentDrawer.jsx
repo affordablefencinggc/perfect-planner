@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { ArrowRightIcon, CheckCircleIcon, CopyIcon, InfoIcon, RobotIcon, XIcon } from "@phosphor-icons/react";
-import { AGENT_TOOLS, buildAgentSnippets, copyText, resolveAgentSetup } from "../project/connectAgentSetup.js";
+import { AGENT_TOOLS, buildAgentSnippets, copyText, readOnlySetupReady, resolveAgentSetup } from "../project/connectAgentSetup.js";
 import { CoreAgentConnect } from "../core-screens/CoreAgentConnect.jsx";
 import "./ConnectAgentDrawer.css";
 
@@ -64,6 +64,7 @@ export function ConnectAgentDrawer({ open, onClose, onWorkspace, setup: setupOve
 
         <div className="connect-agent-scroll">
           <CoreAgentConnect />
+          {readOnlySetupReady(setup) && <>
           <p className="connect-agent-lede">
             Let your coding agent read the apps you added to Perfect Planner. It can look, search and suggest tasks.
             It cannot change Perfect Planner, approve plans or edit your files through this connection.
@@ -99,8 +100,6 @@ export function ConnectAgentDrawer({ open, onClose, onWorkspace, setup: setupOve
           <section className="connect-agent-section" aria-label="Before you paste">
             <h3><InfoIcon /> Before you paste</h3>
             <ul>
-              {!setup.serverPathKnown && <li className="connect-agent-warn">This build does not know where Perfect Planner is on your computer. Replace <code>&lt;path-to-perfect-planner&gt;</code> with the folder you cloned, or start the app with <code>npm run dev</code> to fill it in.</li>}
-              {!setup.registryKnown && <li className="connect-agent-warn">Replace the app data placeholder with your Perfect Planner app data folder (on Windows: <code>%APPDATA%\com.perfectplanner.desktop\workspace-registry-v1</code>).</li>}
               <li>Run <code>npm install</code> in the Perfect Planner folder first. The server uses that folder's <code>node_modules</code> and needs Node.js 18 or newer.</li>
               <li>Your agent only sees app folders you have added in the Perfect Planner desktop app. If none are added, it will find an empty list.</li>
               <li>To try the server by hand, run <code>npm run --silent mcp</code>. It waits quietly for an agent to talk to it.</li>
@@ -114,6 +113,7 @@ export function ConnectAgentDrawer({ open, onClose, onWorkspace, setup: setupOve
             </ul>
             <p className="connect-agent-note">All of these only read. Task proposals come back to you to review and import in Ledger; nothing is added to your plan on its own.</p>
           </section>
+          </>}
 
           <section className="connect-agent-section" aria-label="Hand your plan to the agent">
             <h3>Hand your plan to the agent</h3>
