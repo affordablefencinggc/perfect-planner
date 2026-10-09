@@ -1,5 +1,6 @@
 // One open core project: its ledger (single writer, spec §2.6) and the agent
 // service that agents check in through. The host keeps one per project key.
+import { execFile } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { FileStore, Ledger, type LedgerEntry } from "../ledger/index";
@@ -7,9 +8,14 @@ import { installClauseRules } from "../lookup/index";
 import { TestGate, gateRule } from "../gate/index";
 import { AgentService } from "../mcp/index";
 import type { HostKeys } from "./keys";
+import { createOwnerPin, readOwnerPin, type OwnerPin } from "./owner";
+import { DEFAULT_LOCAL_PERSON } from "./routes/people";
 import { installNumberingRules } from "../numbering/index";
 import { installPeopleRules } from "../people/index";
 import { installPlanningRules } from "../planning/index";
+import { installReleaseRules, protectProject, type CommandRunner, type ProtectionReport } from "../release/index";
+import { ensureRequiredIgnores, PRIVATE_DIR } from "../worktrees/index";
+import { gitExecutable, NO_CWD_SEARCH_ENV } from "../exec/index";
 
 export interface CoreProject {
   /** Safe key from the client ("default" when none was given). */
@@ -18,6 +24,12 @@ export interface CoreProject {
   root: string;
   ledger: Ledger;
   service: AgentService;
+  /** Whether the owner key this ledger was opened with is pinned and signed (core/host/owner.ts). */
+  owner: OwnerPin;
+  /** Done once .perfect-planner/ is in the repo's info/exclude (when the project folder is inside a git repo). */
+  ready: Promise<void>;
+  /** Shipping safety (core/release protectProject): release rules on the ledger, pre-push scan in the repo. */
+  protection: Promise<ProtectionReport>;
   /** Per-screen scratch state that is not ledger truth (e.g. a planning session in progress). */
   state: Map<string, unknown>;
   entries(): readonly LedgerEntry[];
@@ -30,49 +42,89 @@ export function projectKey(raw: string | null | undefined): string {
   return KEY.test(key) ? key : "default";
 }
 
-// The project's owner key id lives in the app's own folder, never in the ledger: anyone who can
-// write the ledger file could otherwise write its first person line and name themselves owner.
-function ownerFile(baseRoot: string, key: string): string {
-  return path.join(baseRoot, "owners", `${key}.json`);
-}
+/**
+ * Runs git (and only what protectProject asks for) without a shell. git is started by absolute path
+ * with the current folder left out of the program search, never a git found in the user's repo (core/exec).
+ */
+export const runCommand: CommandRunner = (command, args, options) =>
+  new Promise((resolve) => {
+    let program = command;
+    try {
+      if (command === "git") program = gitExecutable(options?.cwd ?? process.cwd());
+    } catch (error) {
+      return resolve({ code: 127, stdout: "", stderr: (error as Error).message });
+    }
+    execFile(program, [...args], { cwd: options?.cwd, encoding: "utf8", windowsHide: true, maxBuffer: 4 * 1024 * 1024, env: { ...process.env, ...NO_CWD_SEARCH_ENV } }, (error, stdout, stderr) => {
+      const code = error ? (typeof (error as { code?: unknown }).code === "number" ? ((error as { code: number }).code) : 1) : 0;
+      resolve({ code, stdout: String(stdout ?? ""), stderr: String(stderr ?? (error ? error.message : "")) });
+    });
+  });
 
-export function readOwnerKey(baseRoot: string, key: string): string | undefined {
+/**
+ * protectProject for a folder, but only when the folder is itself the top of a git repository: a
+ * project folder that merely sits inside some other checkout must never get that checkout's hook.
+ */
+export async function protectRepository(ledger: Ledger, dir: string): Promise<ProtectionReport> {
+  await excludePrivateFolder(dir);
   try {
-    const value = (JSON.parse(fs.readFileSync(ownerFile(baseRoot, key), "utf8")) as { ownerKey?: unknown }).ownerKey;
-    return typeof value === "string" && value ? value : undefined;
-  } catch {
-    return undefined;
+    const top = await runCommand("git", ["rev-parse", "--show-toplevel"], { cwd: dir });
+    const real = (p: string) => fs.realpathSync.native(p);
+    if (top.code === 0 && top.stdout.trim() && real(top.stdout.trim()) === real(dir)) return await protectProject(ledger, { run: runCommand, cwd: dir });
+  } catch (error) {
+    installReleaseRules(ledger);
+    return { rules: "on", prePush: { state: "not-a-repo", reason: (error as Error).message } };
   }
+  installReleaseRules(ledger);
+  return { rules: "on", prePush: { state: "not-a-repo", reason: `${dir} is not the top of a git repository, so there is nothing to scan before a push.` } };
 }
 
-function writeOwnerKey(baseRoot: string, key: string, ownerKey: string): void {
-  const file = ownerFile(baseRoot, key);
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, JSON.stringify({ ownerKey, at: new Date().toISOString() }, null, 2));
+/** Folder whose .perfect-planner/ holds a project's ledger. */
+export function projectRootFor(baseRoot: string, key: string, override?: string): string {
+  return override ?? path.join(baseRoot, "projects", key);
 }
 
 /**
- * The owner key to open with, when one is pinned. Pinning happens once, from this app's own write:
- * the key that signs a project's first person entry here is recorded as its owner key. A ledger that
- * already has person entries but no pin (made before pinning existed) stays unpinned: guessing the
- * owner from the ledger file itself is exactly what pinning is there to stop.
+ * Keeps a folder's .perfect-planner/ (ledger, worker tokens, briefs, worktrees) out of git when the folder
+ * is inside a repository, so `git add -A` can never stage it (core/worktrees ensureRequiredIgnores).
+ * Never throws: a folder outside git has nothing to exclude.
  */
-function pinOwnerOnFirstPersonEntry(baseRoot: string, key: string, root: string, ledger: Ledger): void {
-  if (new FileStore(root).load().entries.some((e) => e.actor?.kind === "person")) return;
-  const stop = ledger.subscribe((entry) => {
-    if (entry.actor?.kind !== "person") return;
-    stop();
-    if (entry.sig?.key && !readOwnerKey(baseRoot, key)) writeOwnerKey(baseRoot, key, entry.sig.key);
-  });
+export async function excludePrivateFolder(dir: string): Promise<string[]> {
+  try {
+    const top = await runCommand("git", ["rev-parse", "--show-toplevel"], { cwd: dir });
+    if (top.code !== 0 || !top.stdout.trim()) return [];
+    const rel = path.relative(fs.realpathSync.native(top.stdout.trim()), fs.realpathSync.native(dir)).split(path.sep).join("/");
+    if (rel.startsWith("..")) return [];
+    return await ensureRequiredIgnores(dir, rel ? [`/${rel}/${PRIVATE_DIR}/`] : []);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * The owner key to open with. A signed pin is used. A project nobody has written to as a person yet
+ * gets one now: the local person's key, made by the app. A ledger that already has person entries but
+ * no pin (from before pinning) opens with no owner rather than taking the owner from its own file.
+ */
+function ownerPinFor(baseRoot: string, key: string, root: string, keys: HostKeys): OwnerPin {
+  const pin = readOwnerPin(baseRoot, key, root, keys);
+  if (pin.state === "pinned") return pin;
+  const written = new FileStore(root).load().entries.some((e) => e.actor?.kind === "person");
+  if (!written) {
+    // Nobody has written here as a person, so an earlier pin protects nothing: a pin whose key this
+    // device lost (a restart with throwaway keys, a new OS profile) or that fails its check is replaced.
+    const made = createOwnerPin(baseRoot, key, root, keys, `person:${DEFAULT_LOCAL_PERSON}`, new Date(), pin.state !== "missing");
+    return pin.state === "missing" || made.state !== "created" ? made : { ...made, reason: `Pinned a new owner: ${pin.reason ?? "the earlier pin could not be used"}` };
+  }
+  if (pin.state === "missing") return { state: "missing", reason: "This project was started before owners were pinned, so it has no owner on this device." };
+  return pin;
 }
 
 export function openCoreProject(baseRoot: string, key: string, override: string | undefined, keys: HostKeys): CoreProject {
-  const root = override ?? path.join(baseRoot, "projects", key);
+  const root = projectRootFor(baseRoot, key, override);
   fs.mkdirSync(root, { recursive: true });
   keys.ensureSystemKey();
-  const ownerKey = readOwnerKey(baseRoot, key);
-  const ledger = Ledger.openSync(new FileStore(root), { keys, ...(ownerKey ? { ownerKey } : {}) });
-  if (!ownerKey) pinOwnerOnFirstPersonEntry(baseRoot, key, root, ledger);
+  const owner = ownerPinFor(baseRoot, key, root, keys);
+  const ledger = Ledger.openSync(new FileStore(root), { keys, ...(owner.ownerKey ? { ownerKey: owner.ownerKey } : {}) });
   // The same rules every core module assumes: numbering (D-/Q-/T-/R- subjects), clauses, people, planning gates.
   installNumberingRules(ledger);
   installClauseRules(ledger);
@@ -83,5 +135,11 @@ export function openCoreProject(baseRoot: string, key: string, override: string 
   ledger.addRule(gateRule());
   const gate = new TestGate({ ledger });
   const service = new AgentService({ ledger, gate });
-  return { key, root, ledger, service, state: new Map(), entries: () => ledger.entries() };
+  // Shipping safety on for every project the app opens: the release rules hold before the first
+  // review, and the whole-branch secret scan runs before every push (a non-git folder is reported).
+  // The host excludes .perfect-planner/ before it opens a project for a request (host.ts openProject);
+  // this repeats it for direct callers, and every request waits for it.
+  const ready = excludePrivateFolder(root).then(() => undefined);
+  const protection = ready.then(() => protectRepository(ledger, root));
+  return { key, root, ledger, service, owner, ready, protection, state: new Map(), entries: () => ledger.entries() };
 }

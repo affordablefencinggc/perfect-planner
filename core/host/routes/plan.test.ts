@@ -33,7 +33,7 @@ describe("plan approval routes", () => {
 
   it("reports the Deep planning approval as the plan approval", async () => {
     await settleBlockers();
-    const ok = await hostCall(base, "POST", `/planning/approve${P}`, {});
+    const ok = await hostCall(base, "POST", `/planning/approve${P}`, { fingerprint: (await hostCall(base, "GET", `/planning${P}`)).body.result.fingerprint });
     expect(ok.status).toBe(200);
     const res = (await hostCall(base, "GET", `/plan${P}`)).body.result;
     expect(res.approved).toBe(true);

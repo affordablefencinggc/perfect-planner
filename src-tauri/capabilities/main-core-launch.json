@@ -1,0 +1,14 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main-core-launch",
+  "description": "The main window may take the core host's one-time launch secret, once, over IPC (so no local process can get it from an HTTP endpoint). Nothing else is granted.",
+  "windows": [
+    "main"
+  ],
+  "platforms": [
+    "windows"
+  ],
+  "permissions": [
+    "allow-take-core-launch"
+  ]
+}

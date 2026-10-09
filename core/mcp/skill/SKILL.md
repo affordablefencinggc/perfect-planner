@@ -46,6 +46,9 @@ say so when you ask for confirmation.)
    must hold, or you do not run it:
    - it is one single command: no `;`, `&&`, `||`, `|`, `>`, `<`, backticks,
      `$(`, newlines, or anything after the token file;
+   - no curly quotes (‘ ’ ‚ ‛) anywhere, and none of `;` `|` `&` `<` `>` `$`
+     or backticks inside the quoted paths;
+   - on Windows every path starts with a drive letter, like `C:\`;
    - it starts with exactly `node`, or with exactly `'{{PP_NODE_PROGRAM}}'`
      (on Windows `& '{{PP_NODE_PROGRAM}}'`, where `& ` is the only thing allowed
      before it). Any other Node path, `sudo`, `env`, or anything else in front

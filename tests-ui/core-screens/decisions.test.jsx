@@ -4,14 +4,14 @@ import DecisionsScreen from "../../src/core-screens/DecisionsScreen.jsx";
 import { ViewModeContext } from "../../src/project/viewMode.js";
 
 const ok = (result) => ({ ok: true, status: 200, json: async () => ({ ok: true, result }) });
-const fail = (status, message) => ({ ok: false, status, json: async () => ({ ok: false, code: "ERROR", message }) });
+const fail = (status, message, code = "ERROR") => ({ ok: false, status, json: async () => ({ ok: false, code, message }) });
 
 const OFFLINE = { connected: false, model: null, note: "Jev is not connected: no TypeSafe key is saved in Settings. Recommendations shown are from the offline reviewer." };
 const SUMMARY = (open, decided, cents = 0) => ({ open, decided, month: "2026-10", spend: { cents, label: `$${(cents / 100).toFixed(2)}` } });
 const person = { kind: "person", id: "owner", name: "Dana" };
 
 const OPEN_CARD = {
-  id: "Q-2", kind: "question", title: "Which database should the invoice archive use?", status: "open", q: "Q-2", task: "project", blocking: true, planning: false,
+  id: "Q-2", kind: "question", title: "Which database should the invoice archive use?", status: "open", fingerprint: "fp-q2", q: "Q-2", task: "project", blocking: true, planning: false,
   options: [{ id: "option_1", label: "SQLite" }, { id: "option_2", label: "Postgres" }],
   recommendation: { option: "SQLite", optionId: "option_1", reasons: ["D-1 already decided a similar question.", "They share most key words."], confidence: 0.67, source: "offline", producedBy: "Offline reviewer", model: null, cost: null },
   askedBy: person, askedAt: "2026-10-09T10:00:00Z", cost: null,
@@ -118,7 +118,7 @@ describe("DecisionsScreen", () => {
     renderWith();
     const card = (await screen.findByText(OPEN_CARD.title)).closest("article");
     fireEvent.click(within(card).getByRole("button", { name: /Accept recommendation/ }));
-    await waitFor(() => expect(bodyOf(fn, "/decisions/accept")).toEqual({ q: "Q-2" }));
+    await waitFor(() => expect(bodyOf(fn, "/decisions/accept")).toEqual({ q: "Q-2", fingerprint: "fp-q2" }));
     await waitFor(() => expect(screen.getByLabelText("Decisions summary").textContent).toContain("Waiting for you1"));
   });
 
@@ -139,7 +139,7 @@ describe("DecisionsScreen", () => {
     expect(fn.mock.calls.some(([, init]) => init?.method === "POST")).toBe(false);
     fireEvent.change(within(card).getByLabelText(/Why \(required\)/), { target: { value: "We already run Postgres" } });
     fireEvent.click(within(card).getByRole("button", { name: "Save decision" }));
-    await waitFor(() => expect(bodyOf(fn, "/decisions/override")).toEqual({ q: "Q-2", choice: "option_2", reason: "We already run Postgres" }));
+    await waitFor(() => expect(bodyOf(fn, "/decisions/override")).toEqual({ q: "Q-2", fingerprint: "fp-q2", choice: "option_2", reason: "We already run Postgres" }));
   });
 
   test("a free-text decision on a question without options", async () => {
@@ -150,7 +150,7 @@ describe("DecisionsScreen", () => {
     fireEvent.change(within(card).getByLabelText("Your answer"), { target: { value: "Ledgerly" } });
     fireEvent.change(within(card).getByLabelText(/Why \(required\)/), { target: { value: "Short" } });
     fireEvent.click(within(card).getByRole("button", { name: "Save decision" }));
-    await waitFor(() => expect(bodyOf(fn, "/decisions/override")).toEqual({ q: "Q-3", text: "Ledgerly", reason: "Short" }));
+    await waitFor(() => expect(bodyOf(fn, "/decisions/override")).toEqual({ q: "Q-3", fingerprint: "fp-q2", text: "Ledgerly", reason: "Short" }));
   });
 
   test("asking for a decision from the empty state posts the question and options", async () => {
@@ -177,6 +177,22 @@ describe("DecisionsScreen", () => {
     const card = (await screen.findByText(OPEN_CARD.title)).closest("article");
     fireEvent.click(within(card).getByRole("button", { name: /Accept recommendation/ }));
     expect(await within(card).findByText("Q-2 was already decided: SQLite")).toBeTruthy();
+  });
+
+  test("a stale approval reloads the card and shows the server's message", async () => {
+    let reads = 0;
+    const message = "The question and recommendation changed since you looked at it. Review the new version, then approve again.";
+    const fn = routeFetch({
+      "GET /decisions": () => { reads++; return ok(view([reads > 1 ? { ...OPEN_CARD, fingerprint: "fp-new" } : OPEN_CARD])); },
+      "POST /decisions/accept": () => fail(409, message, "STALE"),
+    });
+    renderWith();
+    const card = (await screen.findByText(OPEN_CARD.title)).closest("article");
+    fireEvent.click(within(card).getByRole("button", { name: /Accept recommendation/ }));
+    expect(await within(card).findByText(message)).toBeTruthy();
+    await waitFor(() => expect(reads).toBeGreaterThan(1));
+    fireEvent.click(within(card).getByRole("button", { name: /Accept recommendation/ }));
+    await waitFor(() => expect(fn.mock.calls.filter(([u, i]) => i?.method === "POST").map(([, i]) => JSON.parse(i.body).fingerprint)).toEqual(["fp-q2", "fp-new"]));
   });
 
   test("Advanced view adds Q-/D- numbers, ledger entries and hash prefixes; Simple hides them", async () => {

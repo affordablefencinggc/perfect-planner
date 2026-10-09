@@ -17,6 +17,12 @@ afterAll(async () => {
 });
 afterEach(() => setDecisionJev({ keys: new MemoryKeyProvider() }));
 
+/** The fingerprint of an open card, as the screen would have received it. */
+async function fp(project: string, q: string): Promise<string> {
+  const view = (await hostCall(t.base, "GET", `/decisions?project=${project}`)).body.result;
+  return view.open.find((c: { id: string }) => c.id === q).fingerprint;
+}
+
 describe("decisions routes", () => {
   it("is empty on a new project and says honestly that Jev is not connected", async () => {
     setDecisionJev({ keys: new MemoryKeyProvider() });
@@ -45,16 +51,16 @@ describe("decisions routes", () => {
     expect(card.entries[0].n).toBe("L-000001");
     expect(card.entries[0].hash).toHaveLength(12);
 
-    const noRec = await hostCall(t.base, "POST", `/decisions/accept?project=${p}`, { q: "Q-1" });
+    const noRec = await hostCall(t.base, "POST", `/decisions/accept?project=${p}`, { q: "Q-1", fingerprint: card.fingerprint });
     expect(noRec.status).toBe(409);
 
-    const missingReason = await hostCall(t.base, "POST", `/decisions/override?project=${p}`, { q: "Q-1", choice: "SQLite" });
+    const missingReason = await hostCall(t.base, "POST", `/decisions/override?project=${p}`, { q: "Q-1", choice: "SQLite", fingerprint: card.fingerprint });
     expect(missingReason.status).toBe(400);
     expect(missingReason.body.code).toBe("REASON_REQUIRED");
-    const badChoice = await hostCall(t.base, "POST", `/decisions/override?project=${p}`, { q: "Q-1", choice: "Mongo", reason: "x" });
+    const badChoice = await hostCall(t.base, "POST", `/decisions/override?project=${p}`, { q: "Q-1", choice: "Mongo", reason: "x", fingerprint: card.fingerprint });
     expect(badChoice.body.code).toBe("BAD_CHOICE");
 
-    const done = await hostCall(t.base, "POST", `/decisions/override?project=${p}`, { q: "Q-1", choice: "SQLite", reason: "One file is easier to back up" });
+    const done = await hostCall(t.base, "POST", `/decisions/override?project=${p}`, { q: "Q-1", choice: "SQLite", reason: "One file is easier to back up", fingerprint: card.fingerprint });
     expect(done.body.result).toMatchObject({ q: "Q-1", decision: "D-1", answer: "SQLite", status: "overridden" });
 
     const project = t.host.project(p);
@@ -68,7 +74,7 @@ describe("decisions routes", () => {
     expect(view.decided[0]).toMatchObject({ id: "Q-1", d: "D-1", status: "overridden", outcome: { answer: "SQLite", reason: "One file is easier to back up" } });
     expect(view.decided[0].outcome.by.kind).toBe("person");
 
-    const again = await hostCall(t.base, "POST", `/decisions/override?project=${p}`, { q: "Q-1", choice: "Postgres", reason: "x" });
+    const again = await hostCall(t.base, "POST", `/decisions/override?project=${p}`, { q: "Q-1", choice: "Postgres", reason: "x", fingerprint: card.fingerprint });
     expect(again.status).toBe(409);
   });
 
@@ -76,7 +82,7 @@ describe("decisions routes", () => {
     setDecisionJev({ keys: new MemoryKeyProvider() });
     const p = key();
     await hostCall(t.base, "POST", `/decisions/ask?project=${p}`, { question: "Which database should invoices use?", options: ["Postgres", "SQLite"] });
-    await hostCall(t.base, "POST", `/decisions/override?project=${p}`, { q: "Q-1", choice: "SQLite", reason: "Simple backups" });
+    await hostCall(t.base, "POST", `/decisions/override?project=${p}`, { q: "Q-1", choice: "SQLite", reason: "Simple backups", fingerprint: await fp(p, "Q-1") });
     await hostCall(t.base, "POST", `/decisions/ask?project=${p}`, { question: "Which database should the invoice archive use?", options: ["SQLite", "Postgres"] });
     const view = (await hostCall(t.base, "GET", `/decisions?project=${p}`)).body.result;
     const card = view.open[0];
@@ -85,18 +91,62 @@ describe("decisions routes", () => {
     expect(card.recommendation.reasons[0]).toMatch(/D-1/);
     expect(card.recommendation.confidence).toBeGreaterThan(0.4);
 
-    const accepted = await hostCall(t.base, "POST", `/decisions/accept?project=${p}`, { q: "Q-2" });
+    const accepted = await hostCall(t.base, "POST", `/decisions/accept?project=${p}`, { q: "Q-2", fingerprint: card.fingerprint });
     expect(accepted.body.result).toMatchObject({ decision: "D-2", answer: "SQLite", status: "accepted" });
     const after = (await hostCall(t.base, "GET", `/decisions?project=${p}`)).body.result;
     expect(after.decided.find((c: { id: string }) => c.id === "Q-2")).toMatchObject({ status: "accepted", recommendation: { option: "SQLite", source: "offline" } });
     expect(after.summary).toMatchObject({ open: 0, decided: 2 });
   });
 
+  it("accept and override are bound to the card the person saw", async () => {
+    setDecisionJev({ keys: new MemoryKeyProvider() });
+    const p = key();
+    await hostCall(t.base, "POST", `/decisions/ask?project=${p}`, { question: "Which database should invoices use?", options: ["Postgres", "SQLite"] });
+    await hostCall(t.base, "POST", `/decisions/override?project=${p}`, { q: "Q-1", choice: "SQLite", reason: "Simple backups", fingerprint: await fp(p, "Q-1") });
+    await hostCall(t.base, "POST", `/decisions/ask?project=${p}`, { question: "Which database should the invoice archive use?", options: ["SQLite", "Postgres"] });
+    const seen = await fp(p, "Q-2");
+    expect(seen).toMatch(/^[0-9a-f]{64}$/);
+
+    const missing = await hostCall(t.base, "POST", `/decisions/accept?project=${p}`, { q: "Q-2" });
+    expect(missing.status).toBe(400);
+    expect(missing.body.code).toBe("FINGERPRINT_REQUIRED");
+    const missingOverride = await hostCall(t.base, "POST", `/decisions/override?project=${p}`, { q: "Q-2", choice: "Postgres", reason: "x" });
+    expect(missingOverride.status).toBe(400);
+    expect(missingOverride.body.code).toBe("FINGERPRINT_REQUIRED");
+
+    // Something changes after the person looked: a new plan clause that names the other option changes what the offline reviewer says.
+    const stale = await hostCall(t.base, "POST", `/decisions/accept?project=${p}`, { q: "Q-2", fingerprint: "0".repeat(64) });
+    expect(stale.status).toBe(409);
+    expect(stale.body.code).toBe("STALE");
+    expect(stale.body.message).toMatch(/changed since you looked/);
+    const staleOverride = await hostCall(t.base, "POST", `/decisions/override?project=${p}`, { q: "Q-2", choice: "Postgres", reason: "x", fingerprint: "0".repeat(64) });
+    expect(staleOverride.status).toBe(409);
+    expect((await hostCall(t.base, "GET", `/decisions?project=${p}`)).body.result.open).toHaveLength(1);
+
+    const real = await hostCall(t.base, "POST", `/decisions/accept?project=${p}`, { q: "Q-2", fingerprint: seen });
+    expect(real.status).toBe(200);
+    expect(real.body.result).toMatchObject({ answer: "SQLite", status: "accepted" });
+  });
+
+  it("a changed recommendation makes the old fingerprint stale", async () => {
+    setDecisionJev({ keys: new MemoryKeyProvider() });
+    const p = key();
+    await hostCall(t.base, "POST", `/decisions/ask?project=${p}`, { question: "Where do invoices live?", options: ["Postgres", "SQLite"] });
+    const seen = await fp(p, "Q-1");
+    addClause(t.host.project(p).ledger, { kind: "person", id: "owner" }, { text: "Invoices are stored in SQLite." });
+    const now = await fp(p, "Q-1");
+    expect(now).not.toBe(seen);
+    const res = await hostCall(t.base, "POST", `/decisions/accept?project=${p}`, { q: "Q-1", fingerprint: seen });
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe("STALE");
+    expect((await hostCall(t.base, "POST", `/decisions/accept?project=${p}`, { q: "Q-1", fingerprint: now })).status).toBe(200);
+  });
+
   it("an identical question is answered at once by the relay from the earlier decision", async () => {
     setDecisionJev({ keys: new MemoryKeyProvider() });
     const p = key();
     await hostCall(t.base, "POST", `/decisions/ask?project=${p}`, { question: "Ship on Fridays?", options: ["Yes", "No"] });
-    await hostCall(t.base, "POST", `/decisions/override?project=${p}`, { q: "Q-1", choice: "No", reason: "Weekend support is thin" });
+    await hostCall(t.base, "POST", `/decisions/override?project=${p}`, { q: "Q-1", choice: "No", reason: "Weekend support is thin", fingerprint: await fp(p, "Q-1") });
     const again = await hostCall(t.base, "POST", `/decisions/ask?project=${p}`, { question: "ship on fridays", options: ["No", "Yes"] });
     expect(again.body.result).toMatchObject({ status: "answered", decision: "D-1", via: "decision" });
     const view = (await hostCall(t.base, "GET", `/decisions?project=${p}`)).body.result;
@@ -107,8 +157,8 @@ describe("decisions routes", () => {
     const p = key();
     expect((await hostCall(t.base, "POST", `/decisions/ask?project=${p}`, { question: "  " })).status).toBe(400);
     await hostCall(t.base, "POST", `/decisions/ask?project=${p}`, { question: "What should the app be called?" });
-    expect((await hostCall(t.base, "POST", `/decisions/override?project=${p}`, { q: "Q-1", reason: "x" })).status).toBe(400);
-    const named = await hostCall(t.base, "POST", `/decisions/override?project=${p}`, { q: "Q-1", text: "Ledgerly", reason: "Short and clear" });
+    expect((await hostCall(t.base, "POST", `/decisions/override?project=${p}`, { q: "Q-1", reason: "x", fingerprint: await fp(p, "Q-1") })).status).toBe(400);
+    const named = await hostCall(t.base, "POST", `/decisions/override?project=${p}`, { q: "Q-1", text: "Ledgerly", reason: "Short and clear", fingerprint: await fp(p, "Q-1") });
     expect(named.body.result).toMatchObject({ decision: "D-1", answer: "Ledgerly" });
     expect((await hostCall(t.base, "POST", `/decisions/override?project=${p}`, { q: "Q-9", text: "x", reason: "x" })).status).toBe(404);
   });

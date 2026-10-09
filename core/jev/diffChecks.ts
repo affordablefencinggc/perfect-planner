@@ -3,6 +3,10 @@
 // leaves the task's files, weakens a test or adds a secret is rejected with
 // line notes even when Jev is unavailable.
 
+import { detectSecrets } from "./redact";
+
+export { REDACTED, SECRET_RULES, looksSecret, redactSecrets } from "./redact";
+
 export interface DiffLine {
   line: number;
   text: string;
@@ -84,15 +88,6 @@ export function isTestFile(path: string): boolean {
   return TEST_FILE.test(path.replace(/\\/g, "/"));
 }
 
-export const SECRET_PATTERNS: { name: string; pattern: RegExp }[] = [
-  { name: "private key", pattern: /-----BEGIN [A-Z ]*PRIVATE KEY-----/ },
-  { name: "AWS access key", pattern: /\bAKIA[0-9A-Z]{16}\b/ },
-  { name: "GitHub token", pattern: /\bgh[pousr]_[A-Za-z0-9]{30,}\b/ },
-  { name: "OpenAI-style key", pattern: /\bsk-(?:live_|test_|proj-|ant-)?[A-Za-z0-9_-]{20,}/ },
-  { name: "Stripe key", pattern: /\b[rs]k_(live|test)_[A-Za-z0-9]{16,}/ },
-  { name: "Slack token", pattern: /\bxox[abprs]-[A-Za-z0-9-]{10,}/ },
-  { name: "assigned secret", pattern: /\b(api[_-]?key|secret|token|password|passwd)\b\s*[:=]\s*["'][^"'\s]{12,}["']/i },
-];
 
 export function checkDiff(files: readonly DiffFile[], allowed: readonly string[]): LineNote[] {
   const notes: LineNote[] = [];
@@ -111,16 +106,12 @@ export function checkDiff(files: readonly DiffFile[], allowed: readonly string[]
       for (const l of file.added) if (SKIPPED.test(l.text)) notes.push({ file: file.path, line: l.line, rule: "tests", note: "A test is skipped or focused (.skip, .only, .todo)." });
     }
     for (const l of file.added) {
-      const hit = SECRET_PATTERNS.find((s) => s.pattern.test(l.text));
-      if (hit) notes.push({ file: file.path, line: l.line, rule: "secret", note: `Looks like a ${hit.name} was added.` });
+      // The release scanner's rules plus every format redaction knows (core/secrets).
+      const hit = detectSecrets(file.path, l.text)[0];
+      if (hit) notes.push({ file: file.path, line: l.line, rule: "secret", note: `Looks like a ${hit.description.toLowerCase()} was added.` });
     }
   }
   return notes;
 }
 
 /** Replace anything that looks like a secret before text leaves the machine. */
-export function redactSecrets(text: string): string {
-  let out = text;
-  for (const { pattern } of SECRET_PATTERNS) out = out.replace(new RegExp(pattern.source, pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`), "[redacted-secret]");
-  return out;
-}

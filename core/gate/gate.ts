@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, u
 import os from "node:os";
 import path from "node:path";
 import { git, runGit } from "../worktrees/git";
+import { ensureRequiredIgnores, PRIVATE_DIR, privatePaths, stagedPrivatePaths } from "../worktrees/ignores";
 import { lines, realDir, samePath } from "../worktrees/platform";
 import { isAuthoritative } from "../ledger/index";
 import { GATE_ACTOR, evidenceValue, type Actor, type EntryDraft, type LedgerEntry, type LedgerPort } from "../worktrees/ports";
@@ -38,8 +39,13 @@ export interface GateState {
   merge?: TestOutcome;
   /** Commits (full sha) this attempt's current, unaltered test has passed on, outside the baseline. */
   passedCommits: string[];
-  /** Latest approving review of the diff (Jev or a person), at the commit it reviewed. */
-  diffApproval?: { n: string; commit: string; actor: Actor };
+  /**
+   * Latest approving review of the diff at the commit it reviewed. Counts only when the ledger verified
+   * its signature: a person's own entry, or the gate's entry recording Jev's verdict.
+   */
+  diffApproval?: { n: string; commit: string; reviewer: Actor; byPerson: boolean };
+  /** Latest merge approval: only a person's own signed entry, naming the commit they approved. */
+  mergeApproval?: { n: string; commit: string; actor: Actor };
   merged?: { n: string; commit: string };
   done?: { n: string };
   reopenedAs?: string;
@@ -64,7 +70,10 @@ export interface MergeOptions {
   repoRoot: string;
   branch: string;
   integrationBranch: string;
-  /** The person who approved the merge, acting on the diff review. Written on merge.done and task.done. */
+  /**
+   * The person merging. They must have approved the merge at the branch tip with their own signed entry
+   * (approveMerge); naming them here is not approval. Written on merge.done and task.done.
+   */
   actor: Actor;
   /**
    * Prepare the throwaway merge candidate before the test runs there, e.g. install dependencies.
@@ -234,6 +243,12 @@ async function changedTestFiles(cwd: string, pins: Pins): Promise<string[]> {
   return [...changed].sort();
 }
 
+/** The ledger, worker tokens and task worktrees in .perfect-planner/ must never be committed. */
+function privateRefusal(paths: readonly string[]): string {
+  const shown = paths.slice(0, 5).join(", ");
+  return `${PRIVATE_DIR}/ holds the ledger and worker tokens and must never be committed, but these are staged or committed: ${shown}${paths.length > 5 ? ` and ${paths.length - 5} more` : ""}. Remove them from the branch's commits (git rm --cached alone leaves them in history), then prove again.`;
+}
+
 /** Replay the ledger into one task's gate state. Pure. */
 export function deriveState(entries: readonly LedgerEntry[], taskId: string): GateState {
   const { baseId, attempt } = parseTaskId(taskId);
@@ -252,6 +267,8 @@ export function deriveState(entries: readonly LedgerEntry[], taskId: string): Ga
     if (!own && !aboutTheTest) continue;
     state.history.push({ n: entry.n, type: entry.type, summary: entry.summary });
     const forCurrent = state.definition !== undefined && definitionOf(entry) === state.definition.n;
+    // Results, merges, done and reopen only count when the ledger verified who wrote them.
+    if (["test.passed", "test.failed", "merge.done", "task.done", "task.reopened"].includes(entry.type) && !isAuthoritative(entry)) continue;
     switch (entry.type) {
       case "test.defined": {
         state.definition = { n: entry.n, command: dataString(entry, "test") ?? evidenceValue(entry, "test") ?? "", actor: entry.actor, files: dataFiles(entry) };
@@ -278,12 +295,27 @@ export function deriveState(entries: readonly LedgerEntry[], taskId: string): Ga
       }
       case "review.verdict": {
         if (own && evidenceValue(entry, "scope") === "diff") {
+          // An unsigned entry (an agent claiming to be Jev, say) is information, never approval.
+          if (!isAuthoritative(entry)) break;
           const commit = (dataString(entry, "commit") ?? evidenceValue(entry, "commit") ?? "").toLowerCase();
-          const approves = evidenceValue(entry, "verdict") === "approve" && (entry.actor.kind === "jev" || entry.actor.kind === "person");
-          state.diffApproval = approves && commit ? { n: entry.n, commit, actor: entry.actor } : undefined;
+          const byPerson = isAuthoritative(entry, { personOnly: true });
+          const recorded = entry.data?.reviewer as Actor | undefined;
+          const reviewer = byPerson ? entry.actor : recorded?.kind === "jev" ? recorded : undefined;
+          const approves = evidenceValue(entry, "verdict") === "approve" && reviewer !== undefined;
+          state.diffApproval = approves && commit ? { n: entry.n, commit, reviewer, byPerson } : undefined;
+          break;
+        }
+        if (own && evidenceValue(entry, "scope") === "merge") {
+          // Only the person's own signed entry approves a merge; nobody can approve it on their behalf.
+          if (!isAuthoritative(entry, { personOnly: true })) break;
+          const commit = (dataString(entry, "commit") ?? evidenceValue(entry, "commit") ?? "").toLowerCase();
+          const approves = evidenceValue(entry, "verdict") === "approve";
+          state.mergeApproval = approves && commit ? { n: entry.n, commit, actor: entry.actor } : undefined;
           break;
         }
         if (evidenceValue(entry, "scope") !== "test" || !forCurrent) break;
+        // Jev's verdict on the test is recorded by the gate (signed); an unsigned one is information only.
+        if (!isAuthoritative(entry)) break;
         const verdict = evidenceValue(entry, "verdict") === "approve" ? "approve" : "gaps";
         const gaps = entry.evidence.filter((item) => item.startsWith("gap:")).map((item) => item.slice(4));
         state.jev = { n: entry.n, verdict, gaps };
@@ -413,16 +445,61 @@ async function cleanDependencies(repoRoot: string, integrationBranch: string, ca
   return install.passed ? {} : { failure: `A clean dependency install in the merge candidate failed (${describeRun(install)}).` };
 }
 
+const IMPORT_SPECIFIER = /(?:\bimport\s*(?:[^"'`;]*?\bfrom\s*)?|\bexport\s*[^"'`;]*?\bfrom\s*|\bimport\s*\(\s*|\brequire\s*\(\s*)["']([^"']+)["']/g;
+const IMPORT_EXTENSIONS = ["", ".js", ".mjs", ".cjs", ".ts", ".mts", ".cts", ".tsx", ".jsx", ".json"];
+
+/**
+ * Files the approved test depends on, in either of the given commits: everything the pinned test
+ * files import (relative imports, followed transitively) and files named in package.json scripts
+ * or in the test command. A change to any of them can change what the test checks.
+ */
+export async function testSupportFiles(repoRoot: string, commits: readonly string[], pinned: readonly string[], command: string): Promise<Set<string>> {
+  const support = new Set<string>();
+  for (const commit of commits) {
+    const tracked = new Set(lines((await runGit(repoRoot, ["ls-tree", "-r", "--name-only", commit])).stdout));
+    const show = async (file: string) => {
+      const result = await runGit(repoRoot, ["cat-file", "blob", `${commit}:${file}`]);
+      return result.code === 0 ? result.stdout : "";
+    };
+    const named = (text: string) => [...text.matchAll(/[^\s"'`;&|<>()]+/g)].map((match) => normalizeTestFile(match[0])).filter((file): file is string => !!file && tracked.has(file));
+    for (const file of named(command)) support.add(file);
+    try {
+      const scripts = (JSON.parse(await show("package.json")) as { scripts?: Record<string, string> }).scripts ?? {};
+      for (const value of Object.values(scripts)) if (typeof value === "string") for (const file of named(value)) support.add(file);
+    } catch {
+      // No package.json, or not valid JSON: nothing to follow.
+    }
+    const queue = [...pinned];
+    const seen = new Set(queue);
+    while (queue.length && seen.size < 2000) {
+      const file = queue.shift()!;
+      for (const match of (await show(file)).matchAll(IMPORT_SPECIFIER)) {
+        const specifier = match[1]!;
+        if (!specifier.startsWith(".")) continue;
+        const base = path.posix.normalize(path.posix.join(path.posix.dirname(file), specifier));
+        const target = [...IMPORT_EXTENSIONS.map((ext) => base + ext), ...IMPORT_EXTENSIONS.slice(1).map((ext) => `${base}/index${ext}`)].find((candidate) => tracked.has(candidate));
+        if (!target || seen.has(target)) continue;
+        seen.add(target);
+        support.add(target);
+        queue.push(target);
+      }
+    }
+  }
+  return support;
+}
+
 /** Files whose change can alter what the approved test checks without touching the test itself. */
-export function sensitiveChanges(changed: readonly string[], pinned: readonly string[]): string[] {
+export function sensitiveChanges(changed: readonly string[], pinned: readonly string[], support: ReadonlySet<string> = new Set()): string[] {
   const pinnedDirs = new Set(pinned.map((file) => path.posix.dirname(file)));
   return changed.filter((file) => {
     const base = path.posix.basename(file);
-    if (DEPENDENCY_FILES.includes(base)) return true;
+    if (support.has(file) || DEPENDENCY_FILES.includes(base)) return true;
+    // Test setup and teardown files (vitest.setup.mjs, jest-setup.js, global-teardown.ts).
+    if (/(^|[._-])(setup|teardown|globalsetup)([._-]|$)/i.test(base)) return true;
     // Tool and build configuration: vitest.config.ts, tsconfig.json, babel, jest, .mocharc and the like.
     if (/(^|\.)config\.[cm]?[jt]s$|^tsconfig.*\.json$|^\.?(babel|jest|mocha|vitest|vite|eslint|prettier)rc/i.test(base)) return true;
     // Test support: helpers, fixtures, mocks and other tests can change what the approved test sees.
-    if (/(^|\/)(tests?|__tests__|specs?|fixtures|helpers|mocks|__mocks__)\//i.test(file) || /\.(test|spec)\.[cm]?[jt]sx?$/i.test(base)) return true;
+    if (/(^|\/)(tests?|__tests__|specs?|fixtures|helpers|support|mocks|__mocks__)\//i.test(file) || /\.(test|spec)\.[cm]?[jt]sx?$/i.test(base)) return true;
     // Anything beside a pinned test file (outside the project root) is treated as one of its helpers.
     const dir = path.posix.dirname(file);
     return dir !== "." && pinnedDirs.has(dir);
@@ -490,6 +567,8 @@ export class TestGate {
     const definition = state.definition;
     const approval = state.approval;
     const commit = await headOf(cwd);
+    // The ledger and worker tokens live in .perfect-planner/; keep `git add -A` from ever picking them up.
+    if (commit) await ensureRequiredIgnores(cwd);
     const base = {
       actor: GATE_ACTOR,
       subject: taskId,
@@ -563,23 +642,23 @@ export class TestGate {
         if (!gaps.length) throw new GateError('A Jev verdict is "approve" or a non-empty list of gaps.');
         verdict = this.ledger.append({
           type: "review.verdict",
-          actor: options.jev,
+          actor: GATE_ACTOR,
           subject: taskId,
           summary: `Jev found ${gaps.length} gap${gaps.length === 1 ? "" : "s"} in ${taskId}'s done-when test`,
           reason: oneLine(gaps.join("; "), 500),
-          evidence: ["scope:test", "verdict:gaps", `definition:${definition.n}`, ...gaps.map((gap) => `gap:${gap}`)],
-          data: { scope: "test", verdict: "gaps", test: definition.command, definition: definition.n, gaps },
+          evidence: ["scope:test", "verdict:gaps", `definition:${definition.n}`, `reviewer:jev:${options.jev.id}`, ...gaps.map((gap) => `gap:${gap}`)],
+          data: { scope: "test", verdict: "gaps", test: definition.command, definition: definition.n, gaps, reviewer: options.jev },
         });
         return { ok: false, reason: `Jev found gaps in the test: ${gaps.join("; ")}`, verdict };
       }
       if (jev !== "approve") throw new GateError('A Jev verdict is "approve" or a list of gaps.');
       verdict = this.ledger.append({
         type: "review.verdict",
-        actor: options.jev,
+        actor: GATE_ACTOR,
         subject: taskId,
         summary: `Jev found no gaps in ${taskId}'s done-when test`,
-        evidence: ["scope:test", "verdict:approve", `definition:${definition.n}`],
-        data: { scope: "test", verdict: "approve", test: definition.command, definition: definition.n },
+        evidence: ["scope:test", "verdict:approve", `definition:${definition.n}`, `reviewer:jev:${options.jev.id}`],
+        data: { scope: "test", verdict: "approve", test: definition.command, definition: definition.n, reviewer: options.jev },
       });
     } else if (state.jev?.verdict === "gaps") {
       return { ok: false, reason: `Jev's open gaps on this test must be resolved first: ${state.jev.gaps.join("; ")}` };
@@ -613,6 +692,9 @@ export class TestGate {
     if (status.code !== 0) return { ok: false, reason: `git status failed in ${worktreePath}: ${status.stderr.trim()}` };
     const dirty = lines(status.stdout);
     if (dirty.length) return { ok: false, reason: `Commit or remove these changes first; the test only counts against a commit: ${dirty.slice(0, 10).join(", ")}` };
+    await ensureRequiredIgnores(worktreePath);
+    const leaked = await stagedPrivatePaths(worktreePath);
+    if (leaked.length) return { ok: false, reason: privateRefusal(leaked) };
     const approval = state.approval!;
     const base = {
       actor: GATE_ACTOR,
@@ -645,6 +727,7 @@ export class TestGate {
   /**
    * Jev or a person approves the diff at a commit (default: the commit the test last passed on in the
    * worktree). mergeAndVerify only merges a branch whose tip has such a verdict (spec 5.5).
+   * Signs for any in-process caller: never expose it to agents (MCP or agent routes). See README.
    */
   approveDiff(taskId: string, reviewer: Actor, commit?: string): Ok<{ entry: LedgerEntry }> | Refusal {
     const state = this.state(taskId);
@@ -652,14 +735,41 @@ export class TestGate {
     if (reviewer.kind !== "jev" && reviewer.kind !== "person") return { ok: false, reason: `Only Jev or a person can approve a diff, not ${reviewer.kind} ${reviewer.id}.` };
     const reviewed = (commit ?? state.worktree?.commit ?? "").trim().toLowerCase();
     if (!/^[0-9a-f]{40,64}$/.test(reviewed)) return { ok: false, reason: "Name the full commit that was reviewed." };
+    // A person signs their own approval. Jev's verdict is recorded by the gate (signed by the app), so a
+    // process that merely calls itself Jev in the ledger can never approve a diff.
     const entry = this.ledger.append({
       type: "review.verdict",
-      actor: reviewer,
+      actor: reviewer.kind === "person" ? reviewer : GATE_ACTOR,
       subject: taskId,
-      summary: `Diff for ${taskId} approved at ${reviewed.slice(0, 12)}`,
-      evidence: ["scope:diff", "verdict:approve", `commit:${reviewed}`],
-      data: { scope: "diff", verdict: "approve", commit: reviewed },
+      summary: `Diff for ${taskId} approved by ${reviewer.kind === "jev" ? "Jev" : reviewer.id} at ${reviewed.slice(0, 12)}`,
+      evidence: ["scope:diff", "verdict:approve", `commit:${reviewed}`, `reviewer:${reviewer.kind}:${reviewer.id}`],
+      data: { scope: "diff", verdict: "approve", commit: reviewed, reviewer },
     });
+    return { ok: true, entry };
+  }
+
+  /**
+   * A person approves merging the task at a commit (default: the commit whose diff was approved). The
+   * entry is theirs and signed with their key; mergeAndVerify only merges a branch whose tip has one.
+   * Signs for any in-process caller: never expose it to agents (MCP or agent routes). See README.
+   */
+  approveMerge(taskId: string, person: Actor, commit?: string): Ok<{ entry: LedgerEntry }> | Refusal {
+    const state = this.state(taskId);
+    if (state.done || state.reopenedAs) return { ok: false, reason: `${taskId} is ${state.stage}.` };
+    if (person.kind !== "person") return { ok: false, reason: `Only a person can approve a merge, not ${person.kind} ${person.id}.` };
+    const approved = (commit ?? state.diffApproval?.commit ?? state.worktree?.commit ?? "").trim().toLowerCase();
+    if (!/^[0-9a-f]{40,64}$/.test(approved)) return { ok: false, reason: "Name the full commit whose merge is approved." };
+    const entry = this.ledger.append({
+      type: "review.verdict",
+      actor: person,
+      subject: taskId,
+      summary: `Merge of ${taskId} at ${approved.slice(0, 12)} approved by ${person.id}`,
+      evidence: ["scope:merge", "verdict:approve", `commit:${approved}`],
+      data: { scope: "merge", verdict: "approve", commit: approved },
+    });
+    if (!isAuthoritative(entry, { personOnly: true })) {
+      return { ok: false, reason: `The ledger could not verify ${person.id}'s signature, so this does not approve the merge.` };
+    }
     return { ok: true, entry };
   }
 
@@ -690,14 +800,29 @@ export class TestGate {
       return refuse(`The diff at ${branchTip.slice(0, 12)} has not been approved by Jev or a person.`);
     }
     const forkPoint = await runGit(repoRoot, ["merge-base", `refs/heads/${integrationBranch}`, branchTip]);
-    if (forkPoint.code === 0) {
-      const changed = lines((await runGit(repoRoot, ["diff", "--name-only", "--no-renames", forkPoint.stdout.trim(), branchTip])).stdout);
-      const sensitive = sensitiveChanges(changed, Object.keys(approval.pins));
-      if (sensitive.length && state.diffApproval.actor.kind !== "person") {
-        return refuse(`The diff changes ${sensitive.join(", ")}, which can change what the approved test checks; a person has to approve this diff.`);
-      }
+    if (forkPoint.code !== 0) return refuse(`Could not find where ${branch} left ${integrationBranch}, so its changes cannot be checked.`);
+    const changed = lines((await runGit(repoRoot, ["-c", "core.quotePath=false", "diff", "--name-only", "--no-renames", forkPoint.stdout.trim(), branchTip])).stdout);
+    await ensureRequiredIgnores(repoRoot);
+    // Any commit on the branch, not only its tip: a token committed and later removed is still in history.
+    const history = await runGit(repoRoot, ["-c", "core.quotePath=false", "log", "--name-only", "--format=", "--no-renames", `${forkPoint.stdout.trim()}..${branchTip}`, "--", `:(icase)${PRIVATE_DIR}`]);
+    if (history.code !== 0) return refuse(`Could not check ${branch}'s commits for ${PRIVATE_DIR}/ files: ${oneLine(history.stderr)}`);
+    const leaked = [...new Set(privatePaths([...changed, ...lines(history.stdout)]))];
+    if (leaked.length) return refuse(privateRefusal(leaked));
+    const support = await testSupportFiles(repoRoot, [forkPoint.stdout.trim(), branchTip], Object.keys(approval.pins), definition.command);
+    const sensitive = sensitiveChanges(changed, Object.keys(approval.pins), support);
+    if (sensitive.length && !state.diffApproval.byPerson) {
+      return refuse(`The diff changes ${sensitive.join(", ")}, which can change what the approved test checks; a person has to approve this diff.`);
     }
     if (actor.kind !== "person") return refuse(`A person approves the merge, not ${actor.kind} ${actor.id}.`);
+    // Naming a person is not their approval: the merge needs their own signed entry for this exact tip.
+    const mergeApproval = state.mergeApproval;
+    if (mergeApproval?.commit !== branchTip.toLowerCase()) {
+      return refuse(`The merge has not been approved by a person at ${branchTip.slice(0, 12)}; they approve it with their own signed entry.`);
+    }
+    if (mergeApproval.actor.id !== actor.id) {
+      return refuse(`The merge was approved by ${mergeApproval.actor.id}, not ${actor.id}.`);
+    }
+    const approver = mergeApproval.actor;
     const base = await runGit(repoRoot, ["rev-parse", "--verify", `refs/heads/${integrationBranch}^{commit}`]);
     if (base.code !== 0) return refuse(`Integration branch ${integrationBranch} does not exist.`);
     const oldIntegration = base.stdout.trim();
@@ -770,7 +895,7 @@ export class TestGate {
       entries.push(
         this.ledger.append({
           type: "merge.done",
-          actor,
+          actor: approver,
           subject: taskId,
           summary: `Merged ${branch} into ${integrationBranch} at ${mergeCommit.slice(0, 12)}`,
           evidence: [`commit:${mergeCommit}`, `from:${oldIntegration}`, `branch:${branch}`, `branch-tip:${branchTip}`, `integration:${integrationBranch}`],
@@ -785,8 +910,8 @@ export class TestGate {
           actor: GATE_ACTOR,
           subject: taskId,
           summary: `${taskId} is done: its approved test passes on ${integrationBranch} at ${mergeCommit.slice(0, 12)}`,
-          evidence: [`commit:${mergeCommit}`, `test:${definition.command}`, `definition:${definition.n}`, `proof:${passed.n}`, `pin:${approval.pin}`, `approved-by:${actor.kind}:${actor.id}`],
-          data: { commit: mergeCommit, test: definition.command, pin: approval.pin, approvedBy: actor },
+          evidence: [`commit:${mergeCommit}`, `test:${definition.command}`, `definition:${definition.n}`, `proof:${passed.n}`, `pin:${approval.pin}`, `approved-by:${approver.kind}:${approver.id}`, `merge-approval:${mergeApproval.n}`],
+          data: { commit: mergeCommit, test: definition.command, pin: approval.pin, approvedBy: approver, mergeApproval: mergeApproval.n },
         }),
       );
       return { ok: true, mergeCommit, entries, run };

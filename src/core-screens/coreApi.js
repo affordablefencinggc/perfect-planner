@@ -29,37 +29,100 @@ function coreUrl(path, project) {
   return `${url.pathname}${url.search}`;
 }
 
-// Writes need the person cookie that GET /session hands to this app window (see core/host/host.ts).
-// One request per page load; a 401 PERSON_REQUIRED (the local service restarted) asks again once.
-let personSession = null;
-function ensurePersonSession(fetchImpl, renew = false) {
-  if (renew || !personSession) {
-    personSession = Promise.resolve()
-      .then(() => fetchImpl(`${CORE_API}/session`, { method: "GET", credentials: "same-origin", headers: { accept: "application/json" } }))
-      .then(() => true, () => { personSession = null; return false; });
-  }
-  return personSession;
+// Writes are made in the person's name, so only the person's own window may make them
+// (core/host/session.ts). The launcher opens this window with a one-time secret in the
+// URL fragment (#pp-launch=...). On load the window strips it from the address bar and
+// claims it once for an HttpOnly cookie plus a CSRF token; the token lives in this tab's
+// sessionStorage and goes with every write. A window opened any other way can only read.
+export const CSRF_HEADER = "x-pp-csrf";
+const CSRF_KEY = "pp.core.csrf";
+const LAUNCH_PATTERN = /(?:^#|&)pp-launch=([\w-]{20,})/;
+
+function readCsrf() {
+  try { return globalThis.sessionStorage?.getItem(CSRF_KEY) || null; } catch { return null; }
 }
+
+function writeCsrf(value) {
+  try { if (value) globalThis.sessionStorage?.setItem(CSRF_KEY, value); else globalThis.sessionStorage?.removeItem(CSRF_KEY); } catch { /* the window then stays read-only */ }
+}
+
+/** Takes the launch secret out of the address bar (so it is not bookmarked, shared or kept in history). */
+export function takeLaunchSecret(location = globalThis.location, history = globalThis.history) {
+  const hash = String(location?.hash ?? "");
+  const match = hash.match(LAUNCH_PATTERN);
+  if (!match) return null;
+  const rest = hash.replace(/^#/, "").split("&").filter((part) => !part.startsWith("pp-launch=")).join("&");
+  try { history?.replaceState(history.state, "", `${location.pathname}${location.search}${rest ? `#${rest}` : ""}`); } catch { /* best effort */ }
+  return match[1];
+}
+
+/**
+ * In the desktop shell the secret comes over IPC instead: the shell read it once from the process
+ * that started it and hands it out once (src-tauri/src/core_launch.rs). Null outside the shell.
+ */
+export async function takeDesktopLaunch(runtime = globalThis, invoke) {
+  if (!runtime || typeof runtime !== "object" || !("__TAURI_INTERNALS__" in runtime)) return null;
+  try {
+    const call = invoke ?? (await import("@tauri-apps/api/core")).invoke;
+    const secret = await call("take_core_launch");
+    return typeof secret === "string" && secret ? secret : null;
+  } catch {
+    return null;
+  }
+}
+
+let personClaim = null;
+/** Claims this window's launch secret once per page load. Resolves true when the window can make changes. */
+export function claimPersonSession(fetchImpl = globalThis.fetch, desktopLaunch = takeDesktopLaunch) {
+  if (!personClaim) {
+    const fromLink = takeLaunchSecret();
+    personClaim = Promise.resolve(fromLink ?? desktopLaunch()).then((launch) => (!launch
+      ? Boolean(readCsrf())
+      : Promise.resolve()
+        .then(() => fetchImpl(`${CORE_API}/session/claim`, { method: "POST", credentials: "same-origin", headers: { accept: "application/json", "content-type": "application/json" }, body: JSON.stringify({ launch }) }))
+        .then((response) => response.json().then((payload) => (response.ok && payload?.result?.csrf ? payload.result.csrf : null)))
+        .then((csrf) => { if (csrf) writeCsrf(csrf); return Boolean(csrf || readCsrf()); }, () => Boolean(readCsrf()))));
+  }
+  return personClaim;
+}
+
+/** True when this window holds the person's CSRF token (it was opened from the launcher). */
+export function hasPersonSession() {
+  return Boolean(readCsrf());
+}
+
+/** For tests: forget this page load's claim. */
+export function resetPersonSession() {
+  personClaim = null;
+  writeCsrf(null);
+}
+
+const READ_ONLY_MESSAGE = "This window can only read. To make changes, open Perfect Planner from its launcher: press Enter in the terminal running it (l and Enter with npm run dev) for a new one-time link.";
 
 async function call(path, project, options = {}) {
   const { method = "GET", fetchImpl = globalThis.fetch } = options;
-  if (method !== "GET") await ensurePersonSession(fetchImpl);
+  if (method === "GET") return send(path, project, options);
+  await claimPersonSession(fetchImpl);
+  const csrf = readCsrf();
   try {
-    return await send(path, project, options);
+    return await send(path, project, { ...options, csrf });
   } catch (error) {
-    if (method === "GET" || error?.code !== "PERSON_REQUIRED" || options.renewed) throw error;
-    await ensurePersonSession(fetchImpl, true);
-    return send(path, project, { ...options, renewed: true });
+    if (error?.code === "PERSON_REQUIRED") {
+      // The local service restarted (sessions are per launch) or the window was never claimed.
+      writeCsrf(null);
+      throw new CoreApiError(READ_ONLY_MESSAGE, { status: error.status, code: "PERSON_REQUIRED" });
+    }
+    throw error;
   }
 }
 
-async function send(path, project, { method = "GET", body, fetchImpl = globalThis.fetch } = {}) {
+async function send(path, project, { method = "GET", body, csrf, fetchImpl = globalThis.fetch } = {}) {
   let response;
   try {
     response = await fetchImpl(coreUrl(path, project), {
       method,
       credentials: "same-origin",
-      headers: body === undefined ? { accept: "application/json" } : { accept: "application/json", "content-type": "application/json" },
+      headers: { accept: "application/json", ...(body === undefined ? {} : { "content-type": "application/json" }), ...(csrf ? { [CSRF_HEADER]: csrf } : {}) },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
   } catch {
@@ -153,10 +216,21 @@ export function useCoreResource(path, { isEmpty = (data) => data == null, pollMs
   }, [load, pollMs, enabled]);
 
   const post = useCallback(async (postPath, body) => {
-    const result = await corePost(postPath, project, body);
-    await load({ quiet: true });
-    return result;
+    try {
+      const result = await corePost(postPath, project, body);
+      await load({ quiet: true });
+      return result;
+    } catch (error) {
+      // The item changed since the person looked: show them the new version.
+      if (error?.code === "STALE") await load({ quiet: true });
+      throw error;
+    }
   }, [project, load]);
 
   return { ...state, project, reload: () => load(), post, setData: (data) => setState({ status: emptyRef.current(data) ? "empty" : "ready", data, error: null }) };
+}
+
+// Claim as soon as the app loads, so the secret leaves the address bar right away.
+if (typeof window !== "undefined" && typeof window.location !== "undefined" && LAUNCH_PATTERN.test(String(window.location.hash ?? ""))) {
+  claimPersonSession();
 }

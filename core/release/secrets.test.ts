@@ -3,10 +3,12 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { ALLOWLIST_PATH, fingerprintOf, parseAllowlist } from "./allowlist";
+import { Ledger, MemoryStore } from "../ledger/index";
+import { appendNumbered, installNumberingRules } from "../numbering/index";
+import { ALLOWLIST_PATH, approveSecretFinding, approvedFingerprints, fingerprintOf, parseAllowlist } from "./allowlist";
 import { checkPushProtection, enablePushProtection, type Fetcher } from "./pushProtection";
 import {
-  PLACEHOLDER, REQUIRED_IGNORES, SECRET_RULES, checkIgnoreList, isConfigLikeFile, isForbiddenFile, isPlaceholder, maskSecret, scanBranch, scanChange, scanText, withRequiredIgnores,
+  FIELD_WORD, PLACEHOLDER, REQUIRED_IGNORES, SECRET_RULES, checkIgnoreList, isConfigLikeFile, isForbiddenFile, isPlaceholder, maskSecret, scanBranch, scanChange, scanText, withRequiredIgnores,
 } from "./secrets";
 import type { CommandRunner } from "./types";
 
@@ -203,6 +205,23 @@ describe("forbidden files", () => {
   });
 });
 
+describe("Perfect Planner's own state", () => {
+  it("refuses any path under .perfect-planner/, whatever it holds", () => {
+    for (const p of [
+      ".perfect-planner/ledger/ledger.jsonl", ".perfect-planner/worker-token", ".perfect-planner/briefs/T-3.md",
+      ".perfect-planner/keys/system.json", "apps/web/.perfect-planner/HEAD", ".Perfect-Planner\\ledger\\HEAD",
+    ]) expect(isForbiddenFile(p), p).toBe("planner-state");
+    const findings = scanChange([{ path: ".perfect-planner/notes.txt", added: 1, removed: 0, addedText: "hello\n" }]);
+    expect(findings.map((f) => f.rule)).toEqual(["planner-state"]);
+  });
+
+  it("still lets the reviewed allowlist file and look-alike names through", () => {
+    for (const p of [ALLOWLIST_PATH, "perfect-planner/README.md", "docs/.perfect-planner.md", "src/.perfect-planner-ui/x.ts"]) {
+      expect(isForbiddenFile(p), p).toBeNull();
+    }
+  });
+});
+
 describe("scanChange", () => {
   it("combines names and added text, skipping deleted and binary files", () => {
     const findings = scanChange([
@@ -335,7 +354,7 @@ describe("scanBranch", () => {
   });
 });
 
-describe("scanBranch allowlist comes from the base commit only", () => {
+describe("scanBranch honours only ledger approvals, never a file on a branch", () => {
   const ghp = SAMPLES["github-token"];
   const allowDoc = (fp: string) => JSON.stringify({ version: 1, allow: [{ fingerprint: fp, reason: "fixture", approvedBy: "p1" }] });
   const fp = fingerprintOf("src/a.ts", "github-token", ghp);
@@ -348,33 +367,63 @@ describe("scanBranch allowlist comes from the base commit only", () => {
     return path in tree ? { code: 0, stdout: tree[path], stderr: "" } : { code: 128, stdout: "", stderr: "fatal: path does not exist\n" };
   };
   const src = `a = "${ghp}"\n`;
+  const opts = { cwd: "/r", base: "main", head: "feat" };
 
-  it("honours an allowlist that exists on base", async () => {
+  it("two-push bypass: an allowlist file already on base approves nothing", async () => {
     const calls: string[][] = [];
-    const res = await scanBranch(runner({ "src/a.ts": src }, { [ALLOWLIST_PATH]: allowDoc(fp) }, calls), { cwd: "/r", base: "main", head: "feat" });
-    expect(res).toMatchObject({ ok: true, findings: [], filesScanned: 1 });
-    expect(calls.some((c) => c[0] === "show" && c[1] === `main:${ALLOWLIST_PATH}`)).toBe(true);
+    const res = await scanBranch(runner({ "src/a.ts": src }, { [ALLOWLIST_PATH]: allowDoc(fp) }, calls), { ...opts, approved: new Set() });
+    expect(res.ok).toBe(false);
+    expect(res.findings.map((f) => f.rule)).toEqual(["github-token"]);
+    expect(calls.some((c) => c.join(" ").includes(ALLOWLIST_PATH))).toBe(false);
+    const none = await scanBranch(runner({ "src/a.ts": src }, { [ALLOWLIST_PATH]: allowDoc(fp) }), opts);
+    expect(none.ok).toBe(false);
   });
 
-  it("ignores an allowlist the pushed head adds or edits", async () => {
-    const head = { "src/a.ts": src, [ALLOWLIST_PATH]: allowDoc(fp) };
-    const none = await scanBranch(runner(head, {}), { cwd: "/r", base: "main", head: "feat" });
-    expect(none.ok).toBe(false);
-    expect(none.findings.map((f) => f.rule)).toEqual(["github-token"]);
-    const other = await scanBranch(runner(head, { [ALLOWLIST_PATH]: allowDoc("x:y:" + "0".repeat(64)) }), { cwd: "/r", base: "main", head: "feat" });
+  it("a head that adds its own allowlist file is flagged too", async () => {
+    const res = await scanBranch(runner({ "src/a.ts": src, [ALLOWLIST_PATH]: allowDoc(fp) }, {}), opts);
+    expect(res.ok).toBe(false);
+  });
+
+  it("approved fingerprints let exactly that finding through", async () => {
+    const res = await scanBranch(runner({ "src/a.ts": src }, {}), { ...opts, approved: new Set([fp]) });
+    expect(res).toMatchObject({ ok: true, findings: [], filesScanned: 1 });
+    const other = await scanBranch(runner({ "src/a.ts": src }, {}), { ...opts, approved: new Set(["x:y:" + "0".repeat(64)]) });
     expect(other.ok).toBe(false);
   });
 
-  it("missing base allowlist means empty; allowlistText overrides without a git call", async () => {
-    const calls: string[][] = [];
-    const res = await scanBranch(runner({ "src/a.ts": src }, {}, calls), { cwd: "/r", base: "main", head: "feat", allowlistText: allowDoc(fp) });
-    expect(res.ok).toBe(true);
-    expect(calls.some((c) => c[1] === `main:${ALLOWLIST_PATH}`)).toBe(false);
-  });
+  describe("with a real ledger", () => {
+    const person = { kind: "person", id: "owner" } as const;
+    const open = () => {
+      let t = 0;
+      const ledger = Ledger.openSync(new MemoryStore(), { now: () => new Date(Date.UTC(2026, 0, 1, 0, 0, t++)) });
+      installNumberingRules(ledger);
+      return ledger;
+    };
+    const scan = (ledger: Ledger) => scanBranch(runner({ "src/a.ts": src }, {}), { ...opts, approved: approvedFingerprints(ledger.entries()) });
 
-  it("malformed base allowlist is ignored, not thrown", async () => {
-    const res = await scanBranch(runner({ "src/a.ts": src }, { [ALLOWLIST_PATH]: "{nope" }), { cwd: "/r", base: "main", head: "feat" });
-    expect(res.ok).toBe(false);
+    it("a person's approval allows; a later revoke withdraws it", async () => {
+      const ledger = open();
+      expect((await scan(ledger)).ok).toBe(false);
+      approveSecretFinding(ledger, person, { fingerprint: fp, reason: "fixture value" });
+      expect((await scan(ledger)).ok).toBe(true);
+      approveSecretFinding(ledger, person, { fingerprint: fp, reason: "no longer needed", revoke: true });
+      expect((await scan(ledger)).ok).toBe(false);
+    });
+
+    it("a system actor's decision.made with the same data does not approve", async () => {
+      const ledger = open();
+      appendNumbered(ledger, {
+        actor: { kind: "system", id: "gate" },
+        type: "decision.made",
+        summary: "auto approve",
+        reason: "self approval attempt",
+        evidence: [],
+        refs: [],
+        data: { topic: "secret-allowlist", fingerprint: fp },
+      });
+      expect(approvedFingerprints(ledger.entries()).size).toBe(0);
+      expect((await scan(ledger)).ok).toBe(false);
+    });
   });
 });
 
@@ -477,6 +526,24 @@ describe("hooks/pre-push.mjs stays in sync", () => {
     }
   });
 
+  it("lets a value that only names a field through, in the gate and the hook alike", () => {
+    const dir = mkdtempSync(join(tmpdir(), "pp-hook-"));
+    try {
+      const file = join(dir, "en.json");
+      // the reviewer's sample: a UI label, not a credential
+      const text = ['  "passwordLabel": "Password",', '  "tokenHeading": "Token",', '  "secretTitle": "Secret",', kv("password", " = ", "hunter2isnotsafe")].join("\n");
+      writeFileSync(file, text);
+      expect(scanText("src/i18n/en.json", '  "passwordLabel": "Password",')).toEqual([]);
+      expect(JSON.parse(node("--field-word"))).toEqual({ source: FIELD_WORD.source, flags: FIELD_WORD.flags });
+      const expected = scanText(file, text);
+      expect(expected.map((f) => f.line)).toEqual([4]);
+      const fromHook = JSON.parse(node("--scan-text", file)) as Array<{ line: number; fingerprint: string }>;
+      expect(fromHook.map((f) => [f.line, f.fingerprint])).toEqual(expected.map((f) => [f.line, f.fingerprint]));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("scans config-only unquoted rules identically", () => {
     const dir = mkdtempSync(join(tmpdir(), "pp-hook-"));
     try {
@@ -496,7 +563,7 @@ describe("hooks/pre-push.mjs stays in sync", () => {
   });
 
   it("uses the same forbidden-name decisions", () => {
-    for (const p of [".env", ".env.example", "a/x.pem", "id_rsa", "id_rsa.pub", "src/a.ts", "service-account-1.json"]) {
+    for (const p of [".env", ".env.example", "a/x.pem", "id_rsa", "id_rsa.pub", "src/a.ts", "service-account-1.json", ".perfect-planner/worker-token", "x/.perfect-planner/ledger/HEAD", ".perfect-planner/secret-allowlist.json", "perfect-planner/a.md"]) {
       expect(JSON.parse(node("--check-name", p)), p).toBe(isForbiddenFile(p));
     }
   });
@@ -509,66 +576,126 @@ describe("secret-store references", () => {
   });
 });
 
-describe("pre-push hook reads the allowlist from the base commit only", () => {
+describe("pre-push hook honours the allowlist only from the remote default branch", () => {
   const hook = join(__dirname, "hooks", "pre-push.mjs");
   const secretText = 'a = "' + SAMPLES["github-token"] + '"\n';
   const fp = fingerprintOf("src/a.ts", "github-token", SAMPLES["github-token"]);
   const doc = JSON.stringify({ version: 1, allow: [{ fingerprint: fp, reason: "fixture", approvedBy: "p1" }] });
+  const ZERO = "0".repeat(40);
 
   const git = (cwd: string, ...args: string[]) =>
-    execFileSync("git", ["-c", "user.email=t@example.test", "-c", "user.name=t", "-c", "commit.gpgsign=false", ...args], { cwd, encoding: "utf8" }).trim();
+    execFileSync("git", ["-c", "user.email=t@example.test", "-c", "user.name=t", "-c", "commit.gpgsign=false", "-c", "protocol.file.allow=always", ...args], { cwd, encoding: "utf8" }).trim();
   const write = (cwd: string, rel: string, text: string) => {
     const full = join(cwd, rel);
     mkdirSync(dirname(full), { recursive: true });
     writeFileSync(full, text);
   };
-  const push = (cwd: string, base: string, head: string) =>
-    spawnSync(process.execPath, [hook], { cwd, input: `refs/heads/x ${head} refs/heads/x ${base}\n`, encoding: "utf8" });
-
-  const repo = (baseFiles: Record<string, string>, headFiles: Record<string, string>) => {
-    const dir = mkdtempSync(join(tmpdir(), "pp-hook-git-"));
-    git(dir, "init", "-q");
-    write(dir, "README.md", "hi\n");
-    for (const [k, v] of Object.entries(baseFiles)) write(dir, k, v);
-    git(dir, "add", "-A");
-    git(dir, "commit", "-q", "-m", "base");
-    const base = git(dir, "rev-parse", "HEAD");
-    for (const [k, v] of Object.entries(headFiles)) write(dir, k, v);
-    git(dir, "add", "-A");
-    git(dir, "commit", "-q", "-m", "head");
-    return { dir, base, head: git(dir, "rev-parse", "HEAD") };
+  const commit = (cwd: string, files: Record<string, string>, msg: string) => {
+    for (const [k, v] of Object.entries(files)) write(cwd, k, v);
+    git(cwd, "add", "-A");
+    git(cwd, "commit", "-q", "-m", msg);
+    return git(cwd, "rev-parse", "HEAD");
   };
+  const run = (cwd: string, ref: string, local: string, remote: string) =>
+    spawnSync(process.execPath, [hook], { cwd, input: `refs/heads/${ref} ${local} refs/heads/${ref} ${remote}\n`, encoding: "utf8" });
 
-  it("blocks a push that allowlists its own secret", () => {
-    const r = repo({}, { "src/a.ts": secretText, [ALLOWLIST_PATH]: doc });
+  /** Bare remote with `main` holding `mainFiles`; a clone with origin/HEAD set (unless noHead). */
+  const world = (mainFiles: Record<string, string>, opts: { noHead?: boolean; branch?: string } = {}) => {
+    const root = mkdtempSync(join(tmpdir(), "pp-hook-git-"));
+    const remote = join(root, "remote.git");
+    const work = join(root, "work");
+    execFileSync("git", ["init", "-q", "--bare", "-b", opts.branch ?? "main", remote]);
+    mkdirSync(work);
+    git(work, "init", "-q", "-b", opts.branch ?? "main");
+    git(work, "remote", "add", "origin", remote);
+    commit(work, { "README.md": "hi\n", ...mainFiles }, "main");
+    git(work, "push", "-q", "origin", opts.branch ?? "main");
+    git(work, "fetch", "-q", "origin");
+    if (opts.noHead) {
+      try { git(work, "remote", "set-head", "origin", "-d"); } catch { /* none set */ }
+    } else {
+      git(work, "remote", "set-head", "origin", opts.branch ?? "main");
+    }
+    return { root, work };
+  };
+  const done = (w: { root: string }) => rmSync(w.root, { recursive: true, force: true });
+
+  it("two-push bypass on a feature branch is blocked", () => {
+    const w = world({});
     try {
-      const res = push(r.dir, r.base, r.head);
+      git(w.work, "checkout", "-q", "-b", "feat");
+      // push 1: only the allowlist entry
+      const c1 = commit(w.work, { [ALLOWLIST_PATH]: doc }, "allowlist");
+      expect(run(w.work, "feat", c1, ZERO).status).toBe(0);
+      git(w.work, "push", "-q", "origin", "feat");
+      git(w.work, "fetch", "-q", "origin");
+      // push 2: the secret, measured against the remote tip of feat
+      const c2 = commit(w.work, { "src/a.ts": secretText }, "secret");
+      const res = run(w.work, "feat", c2, c1);
       expect(res.status).toBe(1);
       expect(res.stderr).toContain("github-token");
-      expect(res.stderr).toContain(fp);
       expect(res.stderr).not.toContain(SAMPLES["github-token"]);
+      // a brand-new branch (zero remote sha) holding both is blocked too
+      expect(run(w.work, "other", c2, ZERO).status).toBe(1);
     } finally {
-      rmSync(r.dir, { recursive: true, force: true });
+      done(w);
     }
   });
 
-  it("lets a push through when the BASE allowlist lists the fingerprint", () => {
-    const r = repo({ [ALLOWLIST_PATH]: doc }, { "src/a.ts": secretText });
+  it("a push that allowlists its own secret is blocked", () => {
+    const w = world({});
     try {
-      expect(push(r.dir, r.base, r.head).status).toBe(0);
+      git(w.work, "checkout", "-q", "-b", "feat");
+      const c = commit(w.work, { "src/a.ts": secretText, [ALLOWLIST_PATH]: doc }, "both");
+      expect(run(w.work, "feat", c, ZERO).status).toBe(1);
     } finally {
-      rmSync(r.dir, { recursive: true, force: true });
+      done(w);
+    }
+  });
+
+  it("lets a feature push through when the remote default branch already holds the fingerprint", () => {
+    const w = world({ [ALLOWLIST_PATH]: doc });
+    try {
+      git(w.work, "checkout", "-q", "-b", "feat");
+      const c = commit(w.work, { "src/a.ts": secretText }, "secret");
+      expect(run(w.work, "feat", c, ZERO).status).toBe(0);
+    } finally {
+      done(w);
+    }
+  });
+
+  it("falls back to origin/master when origin/HEAD is unset", () => {
+    const w = world({ [ALLOWLIST_PATH]: doc }, { noHead: true, branch: "master" });
+    try {
+      git(w.work, "checkout", "-q", "-b", "feat");
+      const c = commit(w.work, { "src/a.ts": secretText }, "secret");
+      expect(run(w.work, "feat", c, ZERO).status).toBe(0);
+    } finally {
+      done(w);
+    }
+  });
+
+  it("uses no allowlist when no default branch ref resolves", () => {
+    const w = world({ [ALLOWLIST_PATH]: doc }, { noHead: true, branch: "trunk" });
+    try {
+      git(w.work, "checkout", "-q", "-b", "feat");
+      const c = commit(w.work, { "src/a.ts": secretText }, "secret");
+      expect(run(w.work, "feat", c, ZERO).status).toBe(1);
+    } finally {
+      done(w);
     }
   });
 
   it("still blocks other secrets and the old inline marker", () => {
-    const r = repo({ [ALLOWLIST_PATH]: doc }, { "src/b.ts": secretText + "x = " + SAMPLES["aws-access-key"] + " // " + "pp-allow" + "-secret\n" });
+    const w = world({ [ALLOWLIST_PATH]: doc });
     try {
-      const res = push(r.dir, r.base, r.head);
+      git(w.work, "checkout", "-q", "-b", "feat");
+      const c = commit(w.work, { "src/b.ts": secretText + "x = " + SAMPLES["aws-access-key"] + " // " + "pp-allow" + "-secret\n" }, "more");
+      const res = run(w.work, "feat", c, ZERO);
       expect(res.status).toBe(1);
       expect(res.stderr).toContain("aws-access-key");
     } finally {
-      rmSync(r.dir, { recursive: true, force: true });
+      done(w);
     }
   });
 

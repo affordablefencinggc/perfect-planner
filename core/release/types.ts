@@ -34,7 +34,7 @@ export interface SecretFinding {
   rule: string;          // "github-token", "private-key", "env-file", ...
   /** The match with everything but the first 4 characters masked. */
   preview: string;
-  /** "<file>:<rule>:<sha256 of value>" - what a reviewer adds to the allowlist. */
+  /** "<file>:<rule>:<salted scrypt of value>" - what a person approves in the ledger. */
   fingerprint?: string;
 }
 

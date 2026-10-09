@@ -18,7 +18,13 @@ describe("network paths", () => {
     expect(isNetworkPath("\\\\?\\UNC\\host\\share\\x.token", "win32")).toBe(true);
     expect(isNetworkPath("\\\\.\\pipe\\x.token", "win32")).toBe(true);
     expect(isNetworkPath("//host/share/x.token", "linux")).toBe(true);
+    expect(isNetworkPath("\\/host/s/x.token", "win32")).toBe(true);
+    expect(isNetworkPath("/\\host\\s\\x.token", "win32")).toBe(true);
+    expect(isNetworkPath("\\??\\UNC\\host\\s\\x.token", "win32")).toBe(true);
+    expect(isNetworkPath("\\Users\\me\\x.token", "win32")).toBe(true);
+    expect(isNetworkPath("C:x.token", "win32")).toBe(true);
     expect(isNetworkPath("C:\\Users\\me\\x.token", "win32")).toBe(false);
+    expect(isNetworkPath("d:\\pp\\x.token", "win32")).toBe(false);
     expect(isNetworkPath("/home/me/x.token", "linux")).toBe(false);
   });
 });
@@ -76,8 +82,11 @@ describe("finding Claude Code", () => {
     touch(path.join(project, "claude.cmd"));
     touch(path.join(bin, "claude"));
     touch(path.join(bin, "claude.cmd"));
-    const posix = findExecutable("claude", { PATH: [".", "relative/bin", project, bin].join(":") }, project, "linux");
-    expect(posix).toBe(path.join(bin, "claude"));
+    // A Windows host's C:\ paths cannot be written as a ":"-separated PATH, so the POSIX case runs elsewhere.
+    if (process.platform !== "win32") {
+      const posix = findExecutable("claude", { PATH: [".", "relative/bin", project, bin].join(":") }, project, "linux");
+      expect(posix).toBe(path.join(bin, "claude"));
+    }
     const windows = findExecutable("claude", { Path: [".", project, bin].join(";"), PATHEXT: ".COM;.EXE;.BAT;.CMD" }, project, "win32");
     expect(windows).toBe(path.join(bin, "claude.cmd"));
   });

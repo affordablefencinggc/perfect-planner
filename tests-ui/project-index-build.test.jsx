@@ -5,7 +5,8 @@ import { ProjectBuildBoard } from "../src/components/ProjectBuildBoard.jsx";
 import { ProjectIndexPanel } from "../src/components/ProjectIndexPanel.jsx";
 import { ProjectContext } from "../src/project/ProjectProvider.jsx";
 import { emptyTaskDraftLedger, taskDraftBinding, updateTaskDraft } from "../src/project/taskDraftLedger.js";
-import { readSection } from "../src/project/projectWorkRecords.js";
+import { readSection, writeSection } from "../src/project/projectWorkRecords.js";
+import { addProofItem } from "../src/project/proofRecords.js";
 import { useProjectWorkRecords } from "../src/project/useProjectWorkRecords.js";
 import { deriveWorkRecordReceipt } from "../src/project/workRecordReceipts.js";
 import { readTaskDraftLink } from "../src/project/taskDraftMap.js";
@@ -93,4 +94,37 @@ test("index panel searches saved tasks and opens the matching Ledger task", asyn
   expect(within(screen.getByRole("list", { name: "Search results" })).getByText("tests/cart.test.js")).toBeTruthy();
   fireEvent.change(screen.getByPlaceholderText(/Search tasks, areas/), { target: { value: "nothing like this" } });
   expect(screen.getByText(/Nothing in this project matches/)).toBeTruthy();
+});
+
+// Regression (screen tour, 9 Oct 2026): proof saved on the Evidence page is stored
+// as { items: { T0001: [...] } }. Build said "None attached yet" and Index counted
+// 0 proof items because neither read that shape.
+function saveProofLikeEvidencePage() {
+  const add = (taskId, item) => {
+    const sections = { proof: readSection(project.projectId, "proof") };
+    writeSection(project.projectId, "proof", addProofItem(sections, taskId, { id: `P-${taskId}-${item.kind}`, addedAt: "2026-10-09T04:00:00.000Z", addedBy: "Ana", ...item }, null));
+  };
+  add("T0001", { kind: "screenshot", format: "link", label: "", value: "https://example.com/shot.png" });
+  add("T0001", { kind: "test", format: "text", label: "", value: "4 passed", outcome: "passed" });
+  add("T0002", { kind: "diff", format: "text", label: "Cart diff", value: "diff --git a b" });
+}
+
+test("build cards show proof that was attached on the Evidence page", async () => {
+  saveProofLikeEvidencePage();
+  render(<Live Panel={ProjectBuildBoard} />);
+  const first = await screen.findByRole("article", { name: "T0001 Add checkout page" });
+  expect(within(first).getByText("2 attached: Screenshot, Test result")).toBeTruthy();
+  expect(within(first).queryByRole("button", { name: /Add proof/ })).toBeNull();
+  const second = screen.getByRole("article", { name: "T0002 Write cart tests" });
+  expect(within(second).getByText("1 attached: Cart diff")).toBeTruthy();
+});
+
+test("index counts and finds proof that was attached on the Evidence page", async () => {
+  saveProofLikeEvidencePage();
+  const onWorkspace = vi.fn();
+  render(<Live Panel={ProjectIndexPanel} onWorkspace={onWorkspace} />);
+  await waitFor(() => expect(screen.getByLabelText("What is searchable").textContent).toContain("3 proof items"));
+  fireEvent.change(screen.getByPlaceholderText(/Search tasks, areas/), { target: { value: "cart diff" } });
+  fireEvent.click(within(screen.getByRole("list", { name: "Search results" })).getByRole("button", { name: /Cart diff/ }));
+  expect(onWorkspace).toHaveBeenCalledWith("evidence");
 });

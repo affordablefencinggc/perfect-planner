@@ -10,7 +10,7 @@ replayed from `ledger.entries()` (`deriveState`).
 ```
 define -> [Jev verdict] -> approve (a person; pins the test files) -> confirmFailsFirst (must FAIL) -> canStart
   -> worker commits -> prove (runs in the worktree at HEAD, must be clean, test files unchanged)
-  -> diff review: approveDiff (Jev or a person) -> mergeAndVerify (a person) -> test.passed (afterMerge), merge.done, task.done
+  -> diff review: approveDiff (Jev or a person) -> approveMerge (a person, signed) -> mergeAndVerify -> test.passed (afterMerge), merge.done, task.done
                   reject                         -> review.verdict, task.reopened (T-14 -> T-14.a2)
 ```
 
@@ -50,6 +50,7 @@ await gate.confirmFailsFirst(taskId, cwd)         // ok only when the approved t
 gate.canStart(taskId)                             // { ok, reason }
 await gate.prove(taskId, worktreePath)            // { ok, run, commit } | { ok: false, output }
 gate.approveDiff(taskId, reviewer, commit?)       // Jev or a person; default commit: last worktree run
+gate.approveMerge(taskId, person, commit?)        // the person's own signed entry; default commit: the approved diff
 await gate.mergeAndVerify(taskId, { repoRoot, branch, integrationBranch, actor, prepare? })
 gate.reject(taskId, reviewer, notes, { verdict? }) // { ok, newTaskId }; cites an existing verdict if given
 gate.assertCanFinish(taskId, headSha)             // throws GateError (mirror of the ledger's 2.4 check)
@@ -66,11 +67,46 @@ integration branch: `git merge --ff-only` in its checkout if it is checked out
 (refused when that checkout has uncommitted changes or has moved), else
 `git update-ref` with the expected old value. Conflicts and failures leave
 the integration branch untouched. The temporary worktree is always removed.
-It merges only when the branch tip has an approving diff verdict, and the merge
-actor must be a person. When the diff touches package files (package.json,
-lockfiles, .npmrc), tool configuration (`*.config.*`, tsconfig, rc files) or test
-support (tests/, helpers/, fixtures/, mocks/, `*.test.*`, files beside a pinned
-test), Jev's approval is not enough: a person has to approve that diff.
+It merges only when the branch tip has an approving diff verdict and a merge
+approval for that exact tip in the person's own signed entry (`approveMerge`,
+`review.verdict` with `scope:merge`). Passing a person as `actor` is not approval:
+the gate refuses unless that person signed the approval, and writes the signer on
+`merge.done` and `task.done`. A verdict counts only when the ledger verified its
+signature: a person's own entry, or the gate's entry recording Jev's verdict
+(`approveDiff(taskId, jev)` writes it as `system:gate` with `data.reviewer`). A
+`review.verdict` that merely names Jev as its actor is unsigned and ignored, as
+are unsigned test verdicts (Jev's `scope:test` verdicts are also recorded by the
+gate), test results, merges, done and reopen entries.
+
+When the diff touches anything that can change what the approved test checks,
+Jev's approval is not enough and a person has to approve that diff: package
+files (package.json, lockfiles, .npmrc), tool configuration (`*.config.*`,
+tsconfig, rc files), setup and teardown files, test support (tests/, helpers/,
+support/, fixtures/, mocks/, `*.test.*`, files beside a pinned test), files named
+in the test command or in package.json scripts, and every file the pinned test
+files import, followed transitively. That last rule includes the code under test
+when the test imports it directly, so such tasks always need a person's review.
+
+**Never expose `approveDiff` with a Jev reviewer or `approveMerge` on an MCP or
+agent route.** Both sign for any in-process caller: `approveDiff(taskId, jev)` is
+written by the gate's own key, and `approveMerge(taskId, person)` is signed with
+that person's key, so whoever can call them approves. Only the app's own person-facing
+flows (the person approving in the UI, or the gate after it has Jev's verdict from
+Jev itself) may call them. Any route an agent can reach must refuse them, and
+`core/` routes need a test proving it.
+
+This list is a heuristic and cannot be complete: a test can read files by
+computed paths, spawn programs, load plugins by name or depend on environment the
+gate does not trace. It decides only whether Jev alone may approve the diff. The
+backstop is the person's signed merge approval, which every merge needs: the
+person approving a merge should look at the whole diff, not only the files flagged
+here.
+
+`.perfect-planner/` holds the ledger and worker tokens and is never committed.
+The gate adds it to `.git/info/exclude` when it runs, `prove` refuses a commit whose
+index has anything under it (a `git add -f`, say), and `mergeAndVerify` refuses a
+branch where any commit since it left the integration branch touched it, even if a
+later commit removed it again.
 
 The task's own `node_modules` is never used for the merge check, because it is
 ignored by git and a worker could edit it unseen. When the candidate's package
@@ -100,7 +136,7 @@ shell's exit code or its localised error message; exit 126/127, 9009 and cmd's
 |---|---|---|
 | `test.defined` | `define` | `{ test }` |
 | `test.failed` / `test.passed` | baseline, worktree and merge runs | `{ test, definition, phase, afterMerge, commit }` |
-| `review.verdict` | Jev on the test (`scope:test`), or a diff rejection (`scope:diff`) | `{ scope, verdict, ... }` |
+| `review.verdict` | Jev on the test (`scope:test`, written by the gate), a diff approval or rejection (`scope:diff`), a person's merge approval (`scope:merge`) | `{ scope, verdict, ... }` |
 | `test.approved` | `approve` | `{ test, definition }` |
 | `merge.done`, `task.done` | `mergeAndVerify` pass | `{ commit, ... }` |
 | `task.reopened` | `reject`, written by the gate (system) | `{ attempt, notes, verdict }` |

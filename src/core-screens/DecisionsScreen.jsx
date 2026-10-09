@@ -60,7 +60,7 @@ export default function DecisionsScreen() {
           {asking && <AskForm onAsk={async (body) => { const r = await ask(body); setAsking(false); return r; }} onCancel={() => setAsking(false)} />}
           <Summary summary={data.summary} />
           <JevNote jev={data.jev} />
-          <OpenSection cards={data.open} post={resource.post} />
+          <OpenSection cards={data.open} post={resource.post} reload={resource.reload} />
           <DecidedSection cards={data.decided} />
         </>
       )}
@@ -92,13 +92,13 @@ function Summary({ summary }) {
   );
 }
 
-function OpenSection({ cards, post }) {
+function OpenSection({ cards, post, reload }) {
   if (!cards?.length) return <p className="core-muted decisions-none">Nothing is waiting for you right now.</p>;
   return (
     <section className="decisions-open" aria-labelledby="decisions-open-title">
       <h3 id="decisions-open-title">Waiting for you ({cards.length})</h3>
       <ul className="decisions-list">
-        {cards.map((card) => <li key={card.id}><OpenCard card={card} post={post} /></li>)}
+        {cards.map((card) => <li key={card.id}><OpenCard card={card} post={post} reload={reload} /></li>)}
       </ul>
     </section>
   );
@@ -146,7 +146,7 @@ function Numbers({ card }) {
   );
 }
 
-function OpenCard({ card, post }) {
+function OpenCard({ card, post, reload }) {
   const id = useId();
   const [choosing, setChoosing] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -156,7 +156,13 @@ function OpenCard({ card, post }) {
   const accept = async () => {
     setBusy(true);
     setError(null);
-    try { await post("/decisions/accept", { q: card.q }); } catch (e) { setError(errorText(e)); setBusy(false); }
+    try {
+      await post("/decisions/accept", { q: card.q, fingerprint: card.fingerprint });
+    } catch (e) {
+      setError(errorText(e));
+      setBusy(false);
+      if (e?.status === 409 && e?.code === "STALE") reload?.();
+    }
   };
 
   return (
@@ -183,14 +189,14 @@ function OpenCard({ card, post }) {
           {rec ? "Choose something else" : "Decide"}
         </button>
       </div>
-      {choosing && <ChooseForm id={`${id}-choose`} card={card} post={post} onBusy={setBusy} />}
+      {choosing && <ChooseForm id={`${id}-choose`} card={card} post={post} reload={reload} onBusy={setBusy} />}
     </article>
   );
 }
 
 const OTHER = "__other__";
 
-function ChooseForm({ id, card, post, onBusy }) {
+function ChooseForm({ id, card, post, reload, onBusy }) {
   const recId = card.recommendation?.optionId;
   const first = card.options.find((o) => o.id !== recId)?.id ?? (card.options.length ? card.options[0].id : OTHER);
   const [choice, setChoice] = useState(card.options.length ? first : OTHER);
@@ -207,11 +213,12 @@ function ChooseForm({ id, card, post, onBusy }) {
     onBusy(true);
     setError(null);
     try {
-      await post("/decisions/override", { q: card.q, ...(choice === OTHER ? { text } : { choice }), reason });
+      await post("/decisions/override", { q: card.q, fingerprint: card.fingerprint, ...(choice === OTHER ? { text } : { choice }), reason });
     } catch (e) {
       setError(errorText(e));
       setBusy(false);
       onBusy(false);
+      if (e?.status === 409 && e?.code === "STALE") reload?.();
     }
   };
 

@@ -147,9 +147,9 @@ function ApprovePanel({ data, resource }) {
     setRefusal(null);
     setDone(null);
     try {
-      const result = await resource.post("/planning/approve", {});
+      const result = await resource.post("/planning/approve", { fingerprint: data.fingerprint });
       const count = Object.keys(result.tasks ?? {}).length;
-      setDone(count ? `Plan approved. ${count} roadmap tasks were added.` : "Plan approved again. The roadmap tasks were already added.");
+      setDone(count ? `Plan approved. ${count} roadmap tasks were added.` : "The changed plan is approved. The roadmap tasks were already added.");
     } catch (e) {
       setRefusal(e.message);
     } finally {
@@ -169,8 +169,8 @@ function ApprovePanel({ data, resource }) {
         {refusal && <p className="planning-refusal" role="alert">{refusal}</p>}
         {done && <p className="planning-done" role="status">{done}</p>}
       </div>
-      <button type="button" className="core-button primary" onClick={approve} disabled={busy}>
-        <SealCheckIcon aria-hidden="true" /> {busy ? "Approving…" : "Approve plan"}
+      <button type="button" className="core-button primary" onClick={approve} disabled={busy || data.approval.current}>
+        <SealCheckIcon aria-hidden="true" /> {busy ? "Approving…" : data.approval.current ? "Plan approved" : latest ? "Approve changed plan" : "Approve plan"}
       </button>
     </div>
   );

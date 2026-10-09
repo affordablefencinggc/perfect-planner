@@ -194,6 +194,28 @@ describe("Deep planning screen", () => {
     expect((await screen.findByRole("alert")).textContent).toContain("1 blocking question is still open (Q-1)");
   });
 
+  it("does not offer to approve the same plan twice, and offers the changed plan", async () => {
+    const approved = [{ plan: "P-1", entry: "L-000020", at: "2026-10-09T10:00:00Z", by: "owner", summary: "Plan approved", fingerprint: "f1" }];
+    mockApi({ "GET /planning": () => ok(overview({ approval: { canApprove: false, current: true, message: "This plan is approved as it stands. Change an answer to approve a new version.", approved } })) });
+    renderScreen();
+    const button = await screen.findByRole("button", { name: /Plan approved/ });
+    expect(button.disabled).toBe(true);
+    cleanup();
+    mockApi({ "GET /planning": () => ok(overview({ approval: { canApprove: true, current: false, message: "The plan changed since it was approved. Approve the new version.", approved } })) });
+    renderScreen();
+    expect((await screen.findByRole("button", { name: /Approve changed plan/ })).disabled).toBe(false);
+  });
+
+  it("says plainly when this project's owner cannot sign on this computer", async () => {
+    mockApi({
+      "GET /planning": () => ok(overview()),
+      "GET /status": () => ok({ project: "default", owner: { state: "key-missing", reason: "The owner's key k-1 is not on this device." } }),
+    });
+    renderScreen();
+    const stop = await screen.findByText(/owner key is not on this computer/);
+    expect(stop.closest("[role=alert]").textContent).toMatch(/start a new project in a new folder/);
+  });
+
   it("switches to the mind map and the roadmap", async () => {
     mockApi({ "GET /planning": () => ok(overview()), "GET /planning/mindmap": () => ok(mindmap), "GET /planning/roadmap": () => ok(roadmap) });
     renderScreen();

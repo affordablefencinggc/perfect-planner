@@ -49,3 +49,30 @@ test('an earlier census form remains readable and exportable without rebinding i
  view.rerender(<TaskDraftLedger project={project} store={withMemoryTaskSaveIntents(store)}/>);await waitFor(()=>expect(screen.getByLabelText('Task title').value).toBe('Keep this earlier obligation'));
  fireEvent.click(screen.getByRole('button',{name:'Discard unsaved edits'}));
 });
+// Regression (screen tour, 9 Oct 2026): after approving on the Plan page the map still
+// said every task was "Draft" and "Planning approval could not be checked" under an
+// Approved banner, because it only read the native planning check.
+test('map shows tasks approved on the Plan page as approved, and says when they changed',async()=>{
+ const {recordPlanApproval}=await import('../src/project/planApproval.js');
+ const {readSection}=await import('../src/project/projectWorkRecords.js');
+ localStorage.clear();
+ const ledger=updateTaskDraft(emptyTaskDraftLedger(binding),task),store={read:async()=>ledger};
+ await recordPlanApproval(project.projectId,{tasks:ledger.tasks,censusDigest:project.census.digest});
+ const records={sections:{planAuthority:readSection(project.projectId,'planAuthority')}};
+ const context={planStatuses:{[project.projectId]:{state:'unavailable'}}};
+ const {ProjectContext}=await import('../src/project/ProjectProvider.jsx');
+ const view=render(<ProjectContext.Provider value={context}><TaskDraftMap project={project} records={records} store={withMemoryTaskSaveIntents(store)}/></ProjectContext.Provider>);
+ const node=await screen.findByRole('button',{name:'Open T0001: Keep local changes in Ledger'});
+ await waitFor(()=>expect(node.textContent).toContain('Approved'));
+ expect(node.textContent).not.toContain('Draft');
+ const approval=screen.getByLabelText('Map planning approval').textContent;
+ expect(approval).toContain('Plan approved: 1 task approved on this device');
+ expect(approval).not.toContain('could not be checked');
+ expect(screen.getByRole('status').textContent).toContain('plan approved on this device');
+ view.unmount();
+ const edited=updateTaskDraft(ledger,{...ledger.tasks[0],title:'Keep local changes and notes'});
+ render(<ProjectContext.Provider value={context}><TaskDraftMap project={project} records={records} store={withMemoryTaskSaveIntents({read:async()=>edited})}/></ProjectContext.Provider>);
+ await waitFor(()=>expect(screen.getByLabelText('Map planning approval').textContent).toContain('Tasks changed since the plan was approved'));
+ expect(screen.getByRole('button',{name:'Open T0001: Keep local changes and notes in Ledger'}).textContent).toContain('Draft');
+ localStorage.clear();
+});

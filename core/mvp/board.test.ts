@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { FileStore, Ledger, MemoryKeyProvider, MemoryStore, type Actor } from "../ledger/index";
 import { appendNumbered } from "../numbering/index";
 import {
+  MVP_STAGER,
   boardFromLedger,
   confirmMvp,
   installMvpRules,
@@ -162,6 +163,16 @@ describe("renameStage", () => {
   });
 });
 
+describe("who writes a proposal", () => {
+  it("records Jev's proposal as the stager, since the ledger refuses decision.made from Jev", () => {
+    const l = open();
+    expect(() => appendNumbered(l, { actor: jev, type: "decision.made", summary: "x", reason: "x", evidence: [], refs: [] })).toThrow();
+    const e = recordProposal(l, proposal);
+    expect(e.actor).toEqual(MVP_STAGER);
+    expect((e.data!.mvp as { proposedBy: unknown }).proposedBy).toEqual(jev);
+  });
+});
+
 describe("confirmMvp", () => {
   it("needs a person and a proposal", () => {
     const l = open();
@@ -283,6 +294,8 @@ describe("restart", () => {
   it("replays the same board from a re-opened FileStore", () => {
     const dir = mkdtempSync(join(tmpdir(), "mvp-board-"));
     try {
+      // A FileStore ledger signs person and system entries with a key provider;
+      // the same keys must verify them on reopen for the confirm to count.
       const keys = new MemoryKeyProvider();
       const first = Ledger.openSync(new FileStore(dir), { keys });
       recordProposal(first, proposal);
@@ -292,10 +305,15 @@ describe("restart", () => {
       confirmMvp(first, person);
       const before = boardFromLedger(first.entries());
       first.close();
-      const second = Ledger.openSync(new FileStore(dir), { readOnly: true, keys });
+      const second = Ledger.openSync(new FileStore(dir), { keys, readOnly: true });
+      expect(second.status.ok).toBe(true);
       expect(boardFromLedger(second.entries())).toEqual(before);
       expect(before.confirmed).toBe(true);
       second.close();
+      // A device that cannot check the signatures does not count the confirmation.
+      const unkeyed = Ledger.openSync(new FileStore(dir), { readOnly: true });
+      expect(boardFromLedger(unkeyed.entries()).confirmed).toBe(false);
+      unkeyed.close();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

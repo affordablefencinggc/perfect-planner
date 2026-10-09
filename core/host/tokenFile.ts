@@ -9,10 +9,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-/** UNC (\\host\share), device (\\?\, \\.\) and //host paths: anything that is not a plain local path. */
+/**
+ * True for anything that is not a plain local path. On Windows only a drive-letter path (C:\...) is
+ * local: UNC, device and NT prefixes in any slash mix (\\host, //host, \/host, /\host, \\?\UNC,
+ * \??\UNC) reach SMB, and rooted or relative paths depend on the current drive. Elsewhere //host is refused.
+ */
 export function isNetworkPath(value: string, platform: NodeJS.Platform = process.platform): boolean {
-  if (value.startsWith("//")) return true;
-  return platform === "win32" && value.startsWith("\\\\");
+  if (platform === "win32") return !/^[A-Za-z]:\\/.test(value);
+  return value.startsWith("//");
 }
 
 export function icaclsPath(): string {
@@ -58,7 +62,8 @@ export function findExecutable(name: string, env: NodeJS.ProcessEnv, cwd: string
   const exts = windows ? (env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean) : [""];
   for (const entry of pathValue.split(windows ? ";" : ":")) {
     const dir = entry.trim().replace(/^"(.*)"$/, "$1");
-    if (!dir || !p.isAbsolute(dir) || isNetworkPath(dir, platform)) continue;
+    // Network checks follow the real host (tests simulate Windows PATH syntax on any OS).
+    if (!dir || !p.isAbsolute(dir) || isNetworkPath(dir, process.platform)) continue;
     if (p.resolve(dir) === here) continue;
     for (const ext of exts) {
       const candidate = p.join(dir, `${name}${ext.toLowerCase()}`);

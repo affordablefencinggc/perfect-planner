@@ -3,6 +3,7 @@ import { budgetStatus, formatCents, installBudgetRule } from "./budget";
 import { affectedTests } from "./ciPlan";
 import { PRESETS, currentPreset, installSettingsRule, needsDeepReview } from "./presets";
 import { triageRisk, type RiskRater, type Triage } from "./risk";
+import { approvedFingerprints } from "./allowlist";
 import { scanChange } from "./secrets";
 import { checkSize, type SizeCapOptions } from "./sizeCap";
 import type { ChangeSet, CheckResult, PresetName } from "./types";
@@ -75,8 +76,8 @@ const wired = new WeakSet<Ledger>();
 /**
  * Installs the release rules on a ledger once: new runs stop when the month's
  * budget is spent, and only a person may change the review preset or budget.
- * The gate calls this itself; the app should also call it when it opens the
- * ledger so the rules hold before the first review runs.
+ * The gate calls this itself, and protectProject calls it when the host opens
+ * the project, so the rules hold before the first review runs.
  */
 export function installReleaseRules(ledger: Ledger, options: { now?: () => Date } = {}): void {
   if (wired.has(ledger)) return;
@@ -87,8 +88,9 @@ export function installReleaseRules(ledger: Ledger, options: { now?: () => Date 
 
 function sameBuilder(author: Actor, reviewer: Actor | undefined): string | null {
   if (!reviewer || !reviewer.kind || !reviewer.id) return "the reviewer did not say who it is";
-  if (reviewer.kind === author.kind && reviewer.id === author.id) return `${reviewer.id} built this change`;
-  if (author.model && reviewer.model && author.model === reviewer.model) return `the reviewer runs the same model as the builder (${author.model})`;
+  const same = (a: string | undefined, b: string | undefined) => !!a && !!b && a.trim().toLowerCase() === b.trim().toLowerCase();
+  if (same(reviewer.id, author.id)) return `${reviewer.id} built this change`;
+  if (same(reviewer.model, author.model)) return `the reviewer runs the same model as the builder (${author.model})`;
   return null;
 }
 
@@ -116,7 +118,8 @@ export async function runCheapFirst(change: ChangeSet, options: PipelineOptions)
   if (size.status !== "pass") return finish(preset, checks, "held", false);
 
   // 3. Secret scan on the added lines and file names.
-  const findings = scanChange(change.files);
+  // Only fingerprints a person approved in the signed ledger are let through.
+  const findings = scanChange(change.files, approvedFingerprints(entries));
   if (findings.length > 0) {
     checks.push({
       check: "secret-scan",

@@ -2,7 +2,7 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createCoreHost, type CoreHost } from "./index";
-import { hostCall, startTestHost } from "./testing";
+import { claimLaunch, hostCall, hostOf, startTestHost } from "./testing";
 
 let dir: string;
 let host: CoreHost;
@@ -23,7 +23,7 @@ describe("core host", () => {
     expect(body.ok).toBe(true);
     expect(body.result.project).toBe("demo");
     expect(body.result.ledger.ok).toBe(true);
-    expect(body.result.root.startsWith(dir)).toBe(true);
+    expect(body.result.root).toBeUndefined(); // the folder path is not served (Batch 3)
   });
 
   it("falls back to the default project for unsafe keys", async () => {
@@ -75,15 +75,14 @@ describe("person-only writes", () => {
     }
   });
 
-  it("hands the cookie only to a same-origin fetch from the app window", async () => {
-    const plain = await fetch(`${url}/session`);
-    expect(plain.status).toBe(403);
+  it("hands the cookie only to the window holding the one-time launch secret", async () => {
+    const plain = await fetch(`${url}/session/claim`, { method: "POST", headers: { origin: url.replace(/\/api\/core$/, ""), "content-type": "application/json" }, body: "{}" });
+    expect(plain.status).toBe(401);
     expect(plain.headers.get("set-cookie")).toBeNull();
-    const app = await fetch(`${url}/session`, { headers: { "sec-fetch-site": "same-origin", "sec-fetch-mode": "cors" } });
-    expect(app.status).toBe(200);
-    const cookie = app.headers.get("set-cookie") ?? "";
-    expect(cookie).toMatch(/^pp_core_person=[\w-]{20,}; HttpOnly; SameSite=Strict; Path=\/api\/core$/);
-    const write = await fetch(`${url}/planning/start?project=p`, { method: "POST", headers: { cookie: cookie.split(";")[0]!, "content-type": "application/json" }, body: JSON.stringify({ idea: "A notes app that syncs" }) });
-    expect(write.status).toBe(200);
+    const claimed = await claimLaunch(url, hostOf(url).issueLaunch());
+    expect(claimed.status).toBe(200);
+    expect(claimed.cookie).toMatch(/^pp_core_person=[\w-]{20,}$/);
+    expect(claimed.csrf).toMatch(/^[\w-]{20,}$/);
   });
+
 });
