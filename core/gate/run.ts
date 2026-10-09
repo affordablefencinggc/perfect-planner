@@ -70,8 +70,13 @@ export function scrubbedEnv(source: NodeJS.ProcessEnv = process.env, extra: Reco
 export function isConclusiveFailure(run: TestRunResult): boolean {
   if (run.passed || run.timedOut || run.exitCode === null) return false;
   // Shell "cannot execute" / "command not found" (POSIX) and "not recognized" (cmd.exe) mean the test never ran.
-  return isWindows ? run.exitCode !== 9009 : run.exitCode !== 126 && run.exitCode !== 127;
+  // cmd.exe /d /s /c (how Node runs shell: true) exits 1, not 9009, for an unknown command, so read its message too.
+  if (isWindows) return run.exitCode !== 9009 && !(run.exitCode === 1 && CMD_NOT_FOUND.test(run.outputTail));
+  return run.exitCode !== 126 && run.exitCode !== 127;
 }
+
+/** cmd.exe's message when the command is not a program, a built-in or a batch file (English Windows). */
+const CMD_NOT_FOUND = /is not recognized as an internal or external command,\s*operable program or batch file\.\s*$/;
 
 /** Kill the child and everything it started. */
 export function killTree(child: ChildProcess): void {
