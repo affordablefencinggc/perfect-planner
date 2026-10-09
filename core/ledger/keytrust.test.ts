@@ -316,3 +316,60 @@ describe("a retired key stops signing", () => {
     expect(asOwner.status.ok).toBe(true);
   });
 });
+
+// Review 2026-10-09, batch 5, #4: whether a stolen, retired key still counted
+// could depend on how many entries the ledger had (trust was recomputed until
+// it stopped changing, and could flip between two answers), and a retirement
+// written after the README's rotate-then-retire steps did not reach other
+// devices, which did not trust the new key that signed it.
+describe("retirement holds on every device, whatever the ledger's length", () => {
+  /** Owner rotates on their device; the helper's device only ever pinned the old key. */
+  function rotated() {
+    const { root, ownerKeys, helperKeys } = project();
+    const stolen = ownerKeys.copy();
+    const oldKey = keyOf(ownerKeys, "person:owner");
+    const ledger = Ledger.openSync(new FileStore(root), { keys: ownerKeys, now: clock("2026-10-09T04:00:00Z") });
+    const { retired } = ledger.rotateKey(owner, "Laptop stolen");
+    ledger.close();
+    return { root, ownerKeys, helperKeys, stolen, oldKey, retired };
+  }
+
+  it("rotates by having the old key vouch for the new one before retiring it", () => {
+    const { root, ownerKeys, oldKey, retired } = rotated();
+    const ledger = Ledger.openSync(new FileStore(root), { keys: ownerKeys, readOnly: true });
+    const enrol = ledger.get(`L-${String(Number(retired.n.slice(2)) - 1).padStart(6, "0")}`)!;
+    expect(enrol).toMatchObject({ type: "key.trusted" });
+    expect(enrol.sig!.key).toBe(oldKey.keyId);
+    expect(retired.sig!.key).not.toBe(oldKey.keyId);
+    expect(ledger.status.ok).toBe(true);
+  });
+
+  it("makes another device refuse what the stolen key signs after the retirement", () => {
+    const { root, helperKeys, stolen } = rotated();
+    appendSigned(root, stolen, owner, { type: "decision.made", subject: "D-1", summary: "Ship without tests", reason: "Owner says" });
+    const ledger = Ledger.openSync(new FileStore(root), { keys: helperKeys, readOnly: true });
+    expect(ledger.status).toMatchObject({ ok: false, problem: "signature" });
+    expect(isAuthoritative(ledger.last()!)).toBe(false);
+    expect(isAuthoritative(ledger.get("L-000001")!)).toBe(true);
+    // The rotated-in key counts on the helper's device too.
+    expect(ledger.entries().filter((e) => e.type.startsWith("key.")).every((e) => isAuthoritative(e))).toBe(true);
+  });
+
+  it.each([0, 1, 2, 3, 4, 5])("gives the same answer with %i extra entries, on both devices", (extra) => {
+    const { root, ownerKeys, helperKeys, stolen, oldKey } = rotated();
+    // The thief vouches for a key of their own with the stolen key, then retires the owner's new key with it.
+    const thief = new MemoryKeyProvider();
+    const thiefKey = thief.createKey("person:owner");
+    const newKey = keyOf(ownerKeys, "person:owner");
+    appendSigned(root, stolen, owner, { type: "key.trusted", subject: thiefKey.keyId, summary: "trust", reason: "mine", data: { ...thiefKey } });
+    appendSigned(root, stolen, owner, { type: "key.retired", subject: newKey.keyId, summary: "retire", reason: "mine", data: { keyId: newKey.keyId } });
+    for (let i = 0; i < extra; i += 1) appendSigned(root, undefined, { kind: "agent", id: "claude-code", model: "x" }, { summary: `pad ${i}` });
+    appendSigned(root, thief, owner, { type: "decision.made", subject: "D-1", summary: "Ship without tests", reason: "Owner says" });
+    for (const keys of [ownerKeys, helperKeys]) {
+      const ledger = Ledger.openSync(new FileStore(root), { keys, readOnly: true });
+      expect(isAuthoritative(ledger.last()!)).toBe(false);
+      expect(ledger.entries().filter((e) => e.sig?.key === oldKey.keyId && e.type.startsWith("key.") && e.at === "2026-10-09T05:00:00Z").some((e) => isAuthoritative(e))).toBe(false);
+      expect(ledger.status.ok).toBe(false);
+    }
+  });
+});

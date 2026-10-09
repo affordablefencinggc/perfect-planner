@@ -244,17 +244,31 @@ This is enforced in two places:
 So a helper cannot make a key in the owner's name and use it. Roles beyond
 owner (`core/people`) do not widen this.
 
-**Rotation and stolen keys.**
+**Rotation and stolen keys.** Call `ledger.rotateKey(person, reason)`. It
+works with any provider that can stage keys (`stageKey`, `activateKey`), and
+both built-in providers can:
 
-1. `rotateKey(principal)` on the provider makes a new key. The old one never
-   signs on this device again.
-2. Then call `ledger.retireKey(person, oldKeyId, reason)`. It writes
-   `key.retired`, which must come from the same person or the owner.
+1. The provider stages a new key, which does not sign yet.
+2. The old key vouches for it in a `key.trusted` entry.
+3. The new key becomes active.
+4. The new key retires the old one in a `key.retired` entry.
 
-From that entry on, anything the old key signs is a `signature` problem,
-and the ledger refuses to write with it. Entries it signed before still
-count. The owner can retire a helper's key the same way, for example when
-they leave.
+Every device that trusted the old key replays those two entries, so it
+trusts the new key from step 2. It also refuses anything the old key signs
+after step 4.
+
+Retiring a key by hand (`ledger.retireKey`) reaches only the devices that
+already trust the key that signs the retirement. The owner can retire a
+helper's key the same way, for example when they leave.
+
+Key trust is replayed in ledger order a fixed number of times:
+
+1. A plain replay.
+2. A replay in which keys a person re-trusted count from the start.
+3. A final check.
+
+So the answer never depends on the ledger's length. A retirement is final:
+no later entry can bring a key back.
 
 **Lost keychain** (reinstall, new PC). Make a new key. The ledger then shows
 the old entries as signed by a key this device does not trust. The app shows

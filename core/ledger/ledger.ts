@@ -299,6 +299,33 @@ export class Ledger {
     return this.append({ actor: person, type: "key.retired", subject: keyId, summary: `Retired key ${keyId}`, reason, data: { keyId } });
   }
 
+  /**
+   * Rotates a person's key so every device follows: a new key is staged,
+   * the old key vouches for it (key.trusted, signed by the old key), the new
+   * key becomes active, and it retires the old one (key.retired). Devices
+   * that trusted the old key trust the new one from that entry, and refuse
+   * anything the old key signs after the retirement.
+   */
+  rotateKey(person: Actor, reason: string): { trusted: LedgerEntry; retired: LedgerEntry } {
+    if (person?.kind !== "person") throw new LedgerError("BAD_ACTOR", "only a person can rotate their key");
+    const keys = this.keys;
+    if (!keys?.stageKey || !keys.activateKey) throw new LedgerError("NOT_SIGNED", "this device's key store cannot rotate keys");
+    const principal = principalOf(person);
+    const next = keys.stageKey(principal);
+    let trusted: LedgerEntry;
+    try {
+      trusted = this.trustKey(person, next, `Key rotation: ${reason}`);
+    } catch (error) {
+      keys.discardStagedKey?.(principal);
+      throw error;
+    }
+    keys.activateKey(principal, next.keyId);
+    const previous = trusted.sig!.key;
+    // Only the key that vouched is retired; this person's keys on other devices keep working.
+    const retired = this.retireKey(person, previous, `Key rotation: ${reason}`);
+    return { trusted, retired };
+  }
+
   /** Who owns this ledger as this device sees it, or undefined when it cannot tell. */
   get owner(): string | undefined {
     return this.trust.owner;
