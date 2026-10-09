@@ -1,0 +1,110 @@
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { describe, expect, it } from "vitest";
+import { Ledger, MemoryStore, type Actor } from "../ledger/index";
+import { installNumberingRules } from "../numbering/index";
+import { installPlanningRules } from "./rules";
+import { PlanningSession } from "./session";
+import { profileRepo, readRepoStack } from "./repo";
+import { planningAnswers } from "./state";
+
+const agent: Actor = { kind: "agent", id: "claude-code", model: "test-model" };
+
+function tmp(files: Record<string, string>): string {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "pp-repo-"));
+  for (const [rel, body] of Object.entries(files)) {
+    const file = path.join(root, ...rel.split("/"));
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, body);
+  }
+  return root;
+}
+
+// Shaped like Looplet, where planning recommended Tauri, Expo and SQLite for an
+// Electron, Capacitor and Supabase app.
+const looplet = () =>
+  tmp({
+    "package.json": JSON.stringify({
+      dependencies: { react: "18", "@supabase/supabase-js": "2", "@stripe/stripe-js": "4", "@capacitor/core": "6", "better-sqlite3": "11" },
+      devDependencies: { vite: "5", typescript: "5", electron: "31" },
+    }),
+    "tsconfig.json": "{}",
+    "vercel.json": "{}",
+    "wrangler.production.jsonc": "{}",
+    "supabase/migrations/0001_init.sql": "create table x (id int);",
+    "android/build.gradle": "",
+    "ios/App/Podfile": "",
+  });
+
+describe("readRepoStack", () => {
+  it("reads the stack an existing repo already chose, with the files that show it", () => {
+    const stack = readRepoStack(looplet());
+    const by = Object.fromEntries(stack.facts.map((f) => [f.id, f]));
+    expect(by["stack.language"]).toMatchObject({ choice: "typescript", evidence: ["tsconfig.json"] });
+    expect(by["stack.framework"]).toMatchObject({ choice: "vite-react" });
+    expect(by["stack.hosting"]).toMatchObject({ text: "Vercel and Cloudflare Workers", evidence: ["vercel.json", "wrangler.production.jsonc"] });
+    expect(by["stack.hosting"].choice).toBeUndefined();
+    // Supabase wins over a stray SQLite dependency.
+    expect(by["data.store"]).toMatchObject({ choice: "postgres", text: "Supabase (Postgres)", evidence: ["package.json", "supabase"] });
+    expect(by["data.schema"]).toMatchObject({ choice: "raw-sql" });
+    expect(by["auth.provider"]).toMatchObject({ choice: "supabase-auth" });
+    expect(by["money.payments"]).toMatchObject({ text: "Stripe" });
+    expect(by["platforms.desktop-shell"]).toMatchObject({ choice: "electron" });
+    expect(by["platforms.mobile-stack"]).toMatchObject({ text: "Capacitor (android, ios)", evidence: ["package.json", "android", "ios"] });
+    expect(by["ai.model"]).toBeUndefined();
+    expect(stack.signals.sort()).toEqual(["desktop", "mobile", "payments", "web"]);
+  });
+
+  it("finds nothing in an empty folder and never throws on a broken package.json", () => {
+    expect(readRepoStack(tmp({ "README.md": "x" }))).toEqual({ facts: [], signals: [] });
+    expect(readRepoStack(tmp({ "package.json": "{ not json" }))).toEqual({ facts: [], signals: [] });
+  });
+});
+
+describe("planning an existing repo", () => {
+  it("records the repo's stack as decisions and only asks what the repo leaves open", async () => {
+    const root = looplet();
+    const ledger = await Ledger.open(new MemoryStore());
+    installNumberingRules(ledger);
+    installPlanningRules(ledger);
+    const session = new PlanningSession(ledger, { person: "looplet-spare" });
+    const stack = readRepoStack(root);
+    const profile = profileRepo("A fencing contractor app for quotes and invoices", stack);
+    expect(profile.signals).toEqual(expect.arrayContaining(["desktop", "mobile", "payments", "web"]));
+
+    const decided = session.recordRepoFacts(agent, profile, stack.facts);
+    expect(decided).toHaveLength(stack.facts.length);
+    session.start(agent, profile);
+
+    const asked = session.questions().map((q) => q.id);
+    // Each repo fact is asked once (and already answered), never asked again by start().
+    for (const fact of stack.facts) expect(asked.filter((id) => id === fact.id)).toHaveLength(1);
+    const open = session.open().map((q) => q.id);
+    expect(open).not.toContain("platforms.desktop-shell");
+    expect(open).not.toContain("data.store");
+
+    const answers = Object.fromEntries(planningAnswers(ledger.entries()).map((a) => [a.questionId, a]));
+    expect(answers["platforms.desktop-shell"]).toMatchObject({ choice: "electron", text: "Electron" });
+    expect(answers["data.store"]).toMatchObject({ choice: "postgres", text: "Hosted Postgres: Supabase (Postgres)" });
+    expect(answers["platforms.mobile-stack"]).toMatchObject({ choice: "custom", text: "Capacitor (android, ios)" });
+
+    const shell = ledger.entries().find((e) => e.type === "decision.made" && (e.data?.planning as { id?: string } | undefined)?.id === "platforms.desktop-shell")!;
+    expect(shell.reason).toBe("Found in the repo: package.json");
+    expect(shell.evidence).toEqual(["package.json"]);
+    // The mind map builds on Electron, not a recommended Tauri.
+    const labels = Object.values(session.mindMap("x").nodes).map((n) => n.label).join("\n");
+    expect(labels).not.toMatch(/Tauri|Expo/);
+  });
+
+  it("leaves an already answered question alone", async () => {
+    const ledger = await Ledger.open(new MemoryStore());
+    installNumberingRules(ledger);
+    installPlanningRules(ledger);
+    const session = new PlanningSession(ledger, { person: "looplet-spare" });
+    const stack = readRepoStack(looplet());
+    const profile = profileRepo("x", stack);
+    session.recordRepoFacts(agent, profile, stack.facts);
+    expect(session.recordRepoFacts(agent, profile, stack.facts)).toEqual([]);
+  });
+});

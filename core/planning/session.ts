@@ -9,7 +9,8 @@ import { catchDeferral, findDeferrals, spikeProblem, type SpikePlan } from "./ca
 import { buildMindMap } from "./mindmap";
 import { buildRoadmap, writeRoadmap } from "./roadmap";
 import { depthCheck, type DepthFinding } from "./depth";
-import { questionsFor } from "./packs";
+import { findQuestion, questionsFor } from "./packs";
+import type { RepoFact } from "./repo";
 import { researchQuestion, type ResearchedQuestion, type ResearchProvider } from "./research";
 import { latestByQuestionId, openBlockers, planningAnswers, planningQuestions, type PlanningQuestionState } from "./state";
 import type { IdeaProfile, MindMap, PlanningQuestion, Roadmap } from "./types";
@@ -33,6 +34,8 @@ export interface AnswerInput {
   /** Free text, or extra detail on top of a choice. */
   text?: string;
   reason?: string;
+  /** Files or URLs that back the answer, recorded on the decision. */
+  evidence?: string[];
   /** Turn a deferral into a dated spike task instead of a decision. */
   spike?: SpikePlan;
 }
@@ -84,6 +87,31 @@ export class PlanningSession {
       researched: results.filter((r) => r.result).length,
       failed,
     };
+  }
+
+  /**
+   * Records what an existing repo already decided (see readRepoStack) as
+   * answered questions, each with the files that show it, so the mind map and
+   * roadmap build on the real stack. Call before start(); a question already
+   * answered is left alone. Returns the decision numbers.
+   */
+  recordRepoFacts(actor: Actor, profile: IdeaProfile, facts: readonly RepoFact[]): string[] {
+    const decided: string[] = [];
+    for (const fact of facts) {
+      const question = findQuestion(profile, fact.id);
+      if (!question || this.questions().some((x) => x.id === fact.id && x.status !== "open")) continue;
+      const q = this.ask(actor, question);
+      if (this.questions().find((x) => x.q === q)?.status !== "open") continue;
+      const label = fact.choice ? question.options.find((o) => o.id === fact.choice)?.label : undefined;
+      const result = this.answer(actor, q, {
+        ...(label ? { choice: fact.choice } : {}),
+        ...(!label || label !== fact.text ? { text: fact.text } : {}),
+        reason: `Found in the repo: ${fact.evidence.join(", ")}`,
+        evidence: fact.evidence,
+      });
+      if (result.status === "decided") decided.push(result.decision);
+    }
+    return decided;
   }
 
   /** Asks one question; an identical open question is not asked twice. */
@@ -172,7 +200,7 @@ export class PlanningSession {
       summary: oneLine(answer),
       reason,
       refs: [q, PLAN_TASK],
-      evidence: (question.recommendation.sources ?? []).map((s) => s.url),
+      evidence: [...(input.evidence ?? []), ...(question.recommendation.sources ?? []).map((s) => s.url)],
       data: { question: q, questionText: question.text, answer, choice, planning: { id: question.id, area: question.area } },
     });
     this.ledger.append({

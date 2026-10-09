@@ -64,6 +64,21 @@ only when a signal makes them matter (offline → conflict rule, payments →
 pricing and tax, ai → model, outage fallback, cost cap). Questions already
 answered by a repo scan (`profile.known`) are not asked.
 
+## Existing repos (`repo.ts`)
+
+`readRepoStack(root)` reads what a repo already chose from `package.json` and
+well-known files (`tsconfig.json`, `vercel.json`, `wrangler.*`, `fly.toml`,
+`supabase/`, `src-tauri/`, `android/`, `ios/`), as text only: nothing is
+imported or run. Each `RepoFact` names a question id, the matching option
+when there is one, the stack in words and the files that show it.
+`profileRepo(idea, stack)` adds the repo's signals and puts every fact in
+`profile.known`, so `start()` does not ask it. `session.recordRepoFacts(actor,
+profile, facts)` writes each fact as an answered question whose decision has
+reason "Found in the repo: <files>" and those files as evidence, so the mind
+map and roadmap build on the real stack. Found running Perfect Planner on
+Looplet, where planning recommended Tauri, Expo and SQLite for an Electron,
+Capacitor and Supabase app.
+
 ## Live research (`research.ts`)
 
 `ResearchProvider { name; available(); research(query, signal?) }` with
