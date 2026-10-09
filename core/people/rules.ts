@@ -1,5 +1,6 @@
-import type { EntryDraft, Ledger, LedgerEntry } from "../ledger/index";
-import { claimsPeople, memberForActor, peopleOpRefusal, replayRoster, type Roster } from "./model";
+import { isAuthoritative, Ledger, type EntryDraft, type LedgerEntry, type LedgerStore, type OpenOptions } from "../ledger/index";
+import { PeopleError } from "./errors";
+import { applyEntry, claimsPeople, emptyRoster, memberForActor, peopleOpRefusal, replayRoster, type Roster } from "./model";
 import { APPROVAL_TYPES, type Approval } from "./types";
 
 /**
@@ -25,6 +26,54 @@ export function installPeopleRules(ledger: Ledger): () => void {
   return uninstall;
 }
 
+export interface PeopleViolation {
+  /** The stored entry that breaks the rules. */
+  n: string;
+  reason: string;
+}
+
+/**
+ * Re-checks every stored entry against the people rules as they stood when
+ * it was written, for entries appended by a process that never installed
+ * them. A solo project's history (before the first member) is always clean.
+ */
+export function auditPeople(entries: readonly LedgerEntry[]): PeopleViolation[] {
+  const roster = emptyRoster();
+  const violations: PeopleViolation[] = [];
+  for (const entry of entries) {
+    const reason = claimsPeople(entry)
+      ? isAuthoritative(entry, { personOnly: true })
+        ? peopleOpRefusal(entry, roster)
+        : "only a person can change who is on the project"
+      : roleRefusal(entry, roster);
+    if (reason) violations.push({ n: entry.n, reason });
+    applyEntry(roster, entry);
+  }
+  return violations;
+}
+
+/**
+ * Opens a project's ledger with the people rules in force: the stored
+ * entries are audited first and a writable open is refused (PeopleError
+ * STORED_VIOLATION) when any breaks the rules, so a project is never written
+ * to on top of a roster it cannot trust. A read-only open (asked for, or
+ * because another process holds the writer lock) still succeeds, so the app
+ * can show `auditPeople(ledger.entries())`. The app opens project ledgers
+ * through this rather than `Ledger.open`.
+ */
+export async function openPeopleLedger(store: LedgerStore, options: OpenOptions = {}): Promise<Ledger> {
+  const ledger = await Ledger.open(store, options);
+  const violations = auditPeople(ledger.entries());
+  if (violations.length > 0 && ledger.status.writable) {
+    ledger.close();
+    const [first] = violations;
+    const more = violations.length > 1 ? ` (and ${violations.length - 1} more)` : "";
+    throw new PeopleError("STORED_VIOLATION", `${first!.n} breaks the people rules: ${first!.reason}${more}`);
+  }
+  installPeopleRules(ledger);
+  return ledger;
+}
+
 export function peopleRefusal(draft: EntryDraft, entries: readonly LedgerEntry[]): string | null {
   const roster = replayRoster(entries);
   if (claimsPeople(draft)) return peopleOpRefusal(draft, roster);
@@ -38,7 +87,7 @@ function approvalFor(type: EntryDraft["type"]): Approval | undefined {
   return undefined;
 }
 
-function roleRefusal(draft: EntryDraft, roster: Roster): string | null {
+function roleRefusal(draft: Pick<EntryDraft, "actor" | "type">, roster: Roster): string | null {
   if (roster.members.size === 0) return null;
   const { actor } = draft;
   const member = memberForActor(roster, actor);

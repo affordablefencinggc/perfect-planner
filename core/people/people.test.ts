@@ -3,6 +3,8 @@ import { Ledger, LedgerError, MemoryStore, type Actor, type EntryDraft, type Led
 import { appendNumbered, installNumberingRules } from "../numbering/index";
 import {
   addMember,
+  auditPeople,
+  openPeopleLedger,
   buildPeopleView,
   changeMember,
   claimOwnership,
@@ -513,5 +515,57 @@ describe("review fixes: authority comes from the ledger, not the payload", () =>
     const file = entry.evidence[0]!.slice("file:".length);
     clearPhoto(ledger, mia, "mia", store);
     expect(store.load(file)).toBeUndefined();
+  });
+});
+
+describe("opening a ledger with people rules", () => {
+  /** Writes a project to a store with the rules off, as a process that skipped them would. */
+  function unchecked(write: (ledger: Ledger) => void): MemoryStore {
+    const store = new MemoryStore();
+    const ledger = Ledger.openSync(store, { now: clock() });
+    write(ledger);
+    ledger.close();
+    return store;
+  }
+  const people = (event: Record<string, unknown>) => ({ people: event });
+  const raw = (ledger: Ledger, actor: Actor, event: Record<string, unknown>) =>
+    appendNumbered(ledger, { actor, type: "decision.made", summary: "x", reason: "x", evidence: [], refs: [], data: people(event) });
+
+  it("opens a clean project with the rules installed", async () => {
+    const store = unchecked((l) => {
+      raw(l, owner, { op: "member.added", person: "looplet-spare", name: "Looplet Spare", role: "owner" });
+      raw(l, owner, { op: "member.added", person: "sam", name: "Sam", role: "viewer" });
+    });
+    const ledger = await openPeopleLedger(store, { now: clock() });
+    expect(refusal(() => createTask(ledger, sam))).toMatch(/viewer/);
+    ledger.close();
+  });
+
+  it("refuses to open when a stored entry breaks the people rules", async () => {
+    const store = unchecked((l) => {
+      raw(l, owner, { op: "member.added", person: "looplet-spare", name: "Looplet Spare", role: "owner" });
+      raw(l, owner, { op: "member.added", person: "sam", name: "Sam", role: "viewer" });
+      appendNumbered(l, { actor: sam, type: "task.created", summary: "Sneaky task", evidence: [], refs: [] });
+    });
+    await expect(openPeopleLedger(store)).rejects.toMatchObject({ code: "STORED_VIOLATION", message: expect.stringMatching(/L-000003.*viewer/) });
+  });
+
+  it("can open read-only to show the violations instead", async () => {
+    const store = unchecked((l) => {
+      raw(l, owner, { op: "member.added", person: "looplet-spare", name: "Looplet Spare", role: "owner" });
+      raw(l, mia, { op: "member.added", person: "mia", name: "Mia", role: "owner" });
+      appendNumbered(l, { actor: stranger, type: "task.created", summary: "Who am I", evidence: [], refs: [] });
+    });
+    const ledger = await openPeopleLedger(store, { readOnly: true });
+    expect(auditPeople(ledger.entries()).map((v) => v.n)).toEqual(["L-000002", "L-000003"]);
+    expect(buildPeopleView(ledger.entries()).members.map((m) => m.person)).toEqual(["looplet-spare"]);
+  });
+
+  it("treats a solo project's history as clean", () => {
+    const ledger = open();
+    createTask(ledger, owner);
+    write(ledger, { actor: ownersAgent, type: "task.progress", subject: "T-1" });
+    claimOwnership(ledger, owner, "Looplet Spare");
+    expect(auditPeople(ledger.entries())).toEqual([]);
   });
 });
