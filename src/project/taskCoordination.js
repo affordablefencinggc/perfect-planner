@@ -183,7 +183,26 @@ export function normalizeAssignment(input) {
   return { owner, wave: Number.isInteger(wave) && wave >= 1 && wave <= WAVE_MAX ? wave : null };
 }
 
-export const ownerKind = (owner) => /^agent\s*:/i.test(owner ?? "") ? "agent" : owner ? "person" : null;
+/**
+ * The Ledger's "Proposed owner" for each active task that has no allocated
+ * owner yet. These are proposals, not decisions: an owner already allocated is
+ * kept, and a proposal is recorded only after the person confirms it.
+ */
+export function ledgerOwnerProposals(ledger, allocation = null) {
+  const proposals = {};
+  for (const task of activeTasks(ledger)) {
+    const proposed = normalizeAssignment({ owner: task.owner }).owner;
+    if (proposed && !normalizeAssignment(allocation?.assignments?.[task.id]).owner) proposals[task.id] = proposed;
+  }
+  return proposals;
+}
+
+/** Allocation form values with unconfirmed Ledger proposals removed, so only confirmed owners are saved. */
+export function confirmedAssignments(form) {
+  return Object.fromEntries(Object.entries(form ?? {}).map(([id, value]) => [id, { owner: value?.fromLedger ? "" : value?.owner ?? "", wave: value?.wave ?? "" }]));
+}
+
+export const ownerKind =(owner) => /^agent\s*:/i.test(owner ?? "") ? "agent" : owner ? "person" : null;
 
 export function buildAllocationRecord({ ledger, censusDigest, collisionData, assignments, now = new Date().toISOString() }) {
   const ids = activeTasks(ledger).map((task) => task.id);
