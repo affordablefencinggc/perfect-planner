@@ -229,6 +229,8 @@ for one person cannot be trusted as another's.
   the key must be trusted on this device. Otherwise it is a `signature`
   break on open, and `NOT_PERMITTED` when writing.
 - Then `ledger.owner` and `status.owner` name the owner.
+  `ledger.ownerKeyPinned` and `ledger.pinnedOwnerKey` say whether a key was
+  passed, whether or not it checked out.
 
 Without `ownerKey` there is no owner, whoever wrote first. Each person can
 still trust and retire their own keys, but nobody can trust or retire

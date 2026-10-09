@@ -339,6 +339,16 @@ export class Ledger {
     return { trusted, retired };
   }
 
+  /** The project owner key id this ledger was opened with (OpenOptions.ownerKey), if any. */
+  get pinnedOwnerKey(): string | undefined {
+    return this.ownerKey;
+  }
+
+  /** True when the ledger was opened with the project's owner key pinned. */
+  get ownerKeyPinned(): boolean {
+    return this.ownerKey !== undefined;
+  }
+
   /** Who owns this ledger as this device sees it, or undefined when it cannot tell. */
   get owner(): string | undefined {
     return this.trust.owner;

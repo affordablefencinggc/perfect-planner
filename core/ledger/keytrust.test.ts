@@ -402,6 +402,11 @@ describe("no owner without the project's owner key", () => {
     const pinned = Ledger.openSync(new FileStore(root), { ...pin(), keys: ownerKeys, ownerKey, readOnly: true });
     expect(pinned.owner).toBe("person:owner");
     expect(pinned.status.owner).toBe("person:owner");
+    expect(pinned.ownerKeyPinned).toBe(true);
+    expect(pinned.pinnedOwnerKey).toBe(ownerKey);
+    const unpinned = Ledger.openSync(new FileStore(root), { keys: ownerKeys, readOnly: true });
+    expect(unpinned.ownerKeyPinned).toBe(false);
+    expect(unpinned.pinnedOwnerKey).toBeUndefined();
   });
 });
 
