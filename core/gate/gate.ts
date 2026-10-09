@@ -715,6 +715,7 @@ export class TestGate {
   /**
    * Jev or a person approves the diff at a commit (default: the commit the test last passed on in the
    * worktree). mergeAndVerify only merges a branch whose tip has such a verdict (spec 5.5).
+   * Signs for any in-process caller: never expose it to agents (MCP or agent routes). See README.
    */
   approveDiff(taskId: string, reviewer: Actor, commit?: string): Ok<{ entry: LedgerEntry }> | Refusal {
     const state = this.state(taskId);
@@ -738,6 +739,7 @@ export class TestGate {
   /**
    * A person approves merging the task at a commit (default: the commit whose diff was approved). The
    * entry is theirs and signed with their key; mergeAndVerify only merges a branch whose tip has one.
+   * Signs for any in-process caller: never expose it to agents (MCP or agent routes). See README.
    */
   approveMerge(taskId: string, person: Actor, commit?: string): Ok<{ entry: LedgerEntry }> | Refusal {
     const state = this.state(taskId);

@@ -87,6 +87,14 @@ in the test command or in package.json scripts, and every file the pinned test
 files import, followed transitively. That last rule includes the code under test
 when the test imports it directly, so such tasks always need a person's review.
 
+**Never expose `approveDiff` with a Jev reviewer or `approveMerge` on an MCP or
+agent route.** Both sign for any in-process caller: `approveDiff(taskId, jev)` is
+written by the gate's own key, and `approveMerge(taskId, person)` is signed with
+that person's key, so whoever can call them approves. Only the app's own person-facing
+flows (the person approving in the UI, or the gate after it has Jev's verdict from
+Jev itself) may call them. Any route an agent can reach must refuse them, and
+`core/` routes need a test proving it.
+
 This list is a heuristic and cannot be complete: a test can read files by
 computed paths, spawn programs, load plugins by name or depend on environment the
 gate does not trace. It decides only whether Jev alone may approve the diff. The
