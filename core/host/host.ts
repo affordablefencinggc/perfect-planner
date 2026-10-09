@@ -1,7 +1,8 @@
 // The core host: serves the core loop modules to the app's screens as JSON under
 // /api/core/*. Mounted by the Vite dev server (src/node/coreHostVitePlugin.mjs)
 // and by the production server (scripts/serve-local.mjs, from the bundle that
-// scripts/build-core-host.mjs writes). Loopback, same-origin callers only.
+// scripts/build-core-host.mjs writes). Loopback, same-origin callers only, and every route
+// except /session/claim needs the session cookie of a window opened from a one-time link.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { LedgerError } from "../ledger/index";
 import { startBridge, ToolError, type Bridge } from "../mcp/index";
@@ -145,7 +146,7 @@ export class CoreHost {
       let body: unknown;
       try { body = await readJson(req); } catch { body = {}; }
       const claimed = sameOriginRequest(req) ? this.sessions.claim((body as { launch?: unknown })?.launch) : null;
-      if (!claimed) return send(401, { ok: false, code: "LAUNCH_REQUIRED", message: "Open Perfect Planner from its launcher to make changes. This window can only read." });
+      if (!claimed) return send(401, { ok: false, code: "LAUNCH_REQUIRED", message: "Open Perfect Planner from a one-time link. This window cannot show or change anything until then." });
       res.setHeader("set-cookie", this.sessions.setCookieHeader(claimed.cookie, CORE_PREFIX));
       return send(200, { ok: true, result: { csrf: claimed.csrf } });
     }
@@ -156,6 +157,11 @@ export class CoreHost {
     // Agents never have them; they act through the MCP tools, where the ledger records them as agents.
     if (method === "POST" && !this.sessions.isPerson(req)) {
       return send(401, { ok: false, code: "PERSON_REQUIRED", message: "Only the person using Perfect Planner, in a window opened from its launcher, can do this. Agents act through the MCP tools." });
+    }
+    // Every read needs the window's session cookie too. Origin and sec-fetch-site headers are not
+    // proof: any local process can send them. Agents read through the MCP bridge with their own tokens.
+    if (method !== "POST" && !this.sessions.hasSession(req)) {
+      return send(401, { ok: false, code: "PERSON_REQUIRED", message: "Open Perfect Planner from a one-time link to see this project. This window has no session, so it cannot show or change anything." });
     }
     try {
       const body = method === "POST" ? await readJson(req) : undefined;

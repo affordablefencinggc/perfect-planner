@@ -1,7 +1,7 @@
 import { ArrowClockwiseIcon, LockSimpleIcon, WarningCircleIcon } from "@phosphor-icons/react";
 import { useEffect, useState } from "react";
 import { useViewMode } from "../project/viewMode.js";
-import { claimPersonSession, hasPersonSession, useCoreResource } from "./coreApi.js";
+import { claimPersonSession, CORE_SESSION_EVENT, coreReadAccess, hasPersonSession, useCoreResource } from "./coreApi.js";
 import "./coreScreens.css";
 
 // Shared frame for the core loop screens: heading, purpose line, and the
@@ -22,6 +22,7 @@ export function CoreScreen({ id, title, purpose, actions = null, resource, empty
       {status === "loading" && <CoreLoading label={`Loading ${title.toLowerCase()}`} />}
       {status === "error" && <CoreError error={resource.error} onRetry={resource.reload} />}
       {status === "empty" && <div className="core-empty" role="status">{empty}</div>}
+      {/* "no-session": nothing to show; the notice above says how to open the window properly. */}
       {status === "ready" && children}
     </section>
   );
@@ -29,20 +30,38 @@ export function CoreScreen({ id, title, purpose, actions = null, resource, empty
 
 /** Whether this window may make changes (it was opened from the launcher's one-time link). */
 export function usePersonSession() {
-  const [person, setPerson] = useState(hasPersonSession);
-  useEffect(() => {
-    let live = true;
-    claimPersonSession().then((ok) => { if (live) setPerson(ok); }, () => undefined);
-    return () => { live = false; };
-  }, []);
-  return person;
+  return useCoreSession().person;
 }
 
-function ReadOnlyNotice() {
-  if (usePersonSession()) return null;
+/** { person, readAccess }: whether this window can make changes, and whether the host serves it reads. */
+export function useCoreSession() {
+  const [state, setState] = useState(() => ({ person: hasPersonSession(), readAccess: coreReadAccess() }));
+  useEffect(() => {
+    let live = true;
+    const refresh = () => { if (live) setState({ person: hasPersonSession(), readAccess: coreReadAccess() }); };
+    claimPersonSession().then(refresh, () => undefined);
+    globalThis.addEventListener?.(CORE_SESSION_EVENT, refresh);
+    return () => {
+      live = false;
+      globalThis.removeEventListener?.(CORE_SESSION_EVENT, refresh);
+    };
+  }, []);
+  return state;
+}
+
+const HOW_TO_OPEN = "press Enter in the terminal running Perfect Planner (l and Enter with npm run dev), or restart it, then open the link it prints.";
+
+export function ReadOnlyNotice() {
+  const { person, readAccess } = useCoreSession();
+  if (person) return null;
+  // A window that has the session cookie but not this tab's write token can still read.
+  const canRead = readAccess === "yes";
   return (
-    <p className="core-readonly" role="note">
-      <LockSimpleIcon aria-hidden="true" /> This window can only read. To make changes, open a new one-time link: press Enter in the terminal running Perfect Planner (l and Enter with npm run dev), or restart it, then open the link it prints.
+    <p className="core-readonly" role="note" data-session={canRead ? "read-only" : "none"}>
+      <LockSimpleIcon aria-hidden="true" />{" "}
+      {canRead
+        ? <>This window can only read. To make changes, open a new one-time link: {HOW_TO_OPEN}</>
+        : <>This window cannot show or change anything until it is opened from a one-time link. To get one, {HOW_TO_OPEN}</>}
     </p>
   );
 }
