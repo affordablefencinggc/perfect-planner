@@ -61,7 +61,10 @@ export async function startDesktopHost({ env = process.env, here, input = proces
   return { ...started, stop };
 }
 
-if (process.argv[1] && path.basename(fileURLToPath(import.meta.url)) === "desktop.mjs" && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+// Windows may start it as \\?\C:\...\desktop.mjs (verbatim form), which Node keeps in argv as is.
+const scriptPath = (arg) => path.resolve(String(arg).replace(/^\\\\\?\\(?=[A-Za-z]:)/, ""));
+
+if (process.argv[1] && path.basename(fileURLToPath(import.meta.url)) === "desktop.mjs" && scriptPath(process.argv[1]) === fileURLToPath(import.meta.url)) {
   for (const signal of ["SIGINT", "SIGTERM"]) process.once(signal, () => process.exit(0));
   startDesktopHost().catch((error) => {
     process.stdout.write(`${JSON.stringify({ event: "failed", message: String(error?.message ?? error) })}\n`);

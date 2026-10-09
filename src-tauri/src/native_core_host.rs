@@ -105,10 +105,35 @@ pub(crate) struct Runtime {
 
 const NODE_BINARY: &str = if cfg!(windows) { "node.exe" } else { "node" };
 
+/// Tauri's own WebView2 switches (wry's defaults, which any explicit list replaces).
+const WEBVIEW2_DEFAULT_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection";
+
+/// WebView2's documented WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS, honoured on top of Tauri's switches:
+/// wry always passes its own list, which otherwise silently drops the variable (the release smoke
+/// test opens DevTools with it). Only on Windows; whoever sets it for the app already runs as the user.
+fn webview2_browser_args(extra: Option<&str>) -> Option<String> {
+    let extra = extra.map(str::trim).filter(|e| !e.is_empty())?;
+    cfg!(windows).then(|| format!("{WEBVIEW2_DEFAULT_ARGS} {extra}"))
+}
+
+/// Windows hands out the resource folder in verbatim form (`\\?\C:\...`). Node then sees a script
+/// path that is not the file URL it loaded, so desktop.mjs never starts, and the same prefix would
+/// land in the connect line. Plain drive and UNC forms are used everywhere instead.
+pub(crate) fn plain_path(path: &Path) -> PathBuf {
+    let text = path.to_string_lossy();
+    if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+        return PathBuf::from(format!(r"\\{rest}"));
+    }
+    match text.strip_prefix(r"\\?\") {
+        Some(rest) if rest.as_bytes().get(1) == Some(&b':') => PathBuf::from(rest),
+        _ => path.to_path_buf(),
+    }
+}
+
 /// The service runs only on the Node the installer shipped, from the app's own read-only
 /// resources: never a copy in a user-writable folder and never whatever `node` is on PATH.
 fn locate_runtime(resources: &Path) -> Result<Runtime, String> {
-    let base = resources.join("desktop-host");
+    let base = plain_path(resources).join("desktop-host");
     let entry = base.join("core-host").join("desktop.mjs");
     let node = base.join(NODE_BINARY);
     if !entry.is_file() || !std::fs::metadata(&node).map(|m| m.is_file() && m.len() > 0).unwrap_or(false) {
@@ -191,12 +216,14 @@ pub(crate) fn setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
     let dev_origin = if cfg!(dev) { app.config().build.dev_url.as_ref().map(|u| u.origin().ascii_serialization()) } else { None };
     let config = app.config().app.windows.iter().find(|w| w.label == "main").cloned().ok_or("The main window is not configured.")?;
     let guard_origin = service_origin.clone();
-    let window = WebviewWindowBuilder::from_config(app.handle(), &config)?
-        .on_navigation(move |url| {
-            let current = guard_origin.lock().ok().and_then(|o| o.clone());
-            navigation_allowed(url, current.as_deref(), dev_origin.as_deref())
-        })
-        .build()?;
+    let mut builder = WebviewWindowBuilder::from_config(app.handle(), &config)?.on_navigation(move |url| {
+        let current = guard_origin.lock().ok().and_then(|o| o.clone());
+        navigation_allowed(url, current.as_deref(), dev_origin.as_deref())
+    });
+    if let Some(args) = webview2_browser_args(std::env::var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS").ok().as_deref()) {
+        builder = builder.additional_browser_args(&args);
+    }
+    let window = builder.build()?;
     app.manage(state);
     // `tauri dev` serves the core host from the Vite dev server (src/node/coreHostVitePlugin.mjs).
     if cfg!(dev) {
@@ -213,9 +240,15 @@ fn start(app: AppHandle, window: WebviewWindow, splash: Url) {
     let log_path = logged.as_ref().map(|(p, _)| p.clone());
     let fail = {
         let (window, log_path) = (window.clone(), log_path.clone());
-        move |message: &str, node_missing: bool| show_error(&window, &splash, message, node_missing, log_path.as_deref())
+        move |message: &str, node_missing: bool| {
+            // The log says why too, so a window nobody is looking at (or a bug report) still has the reason.
+            if let Some(mut file) = log_path.as_ref().and_then(|p| std::fs::OpenOptions::new().append(true).open(p).ok()) {
+                let _ = writeln!(file, "--- {message}");
+            }
+            show_error(&window, &splash, message, node_missing, log_path.as_deref())
+        }
     };
-    let (Ok(resources), Ok(data_dir)) = (app.path().resource_dir(), app.path().app_data_dir()) else {
+    let (Ok(resources), Ok(data_dir)) = (app.path().resource_dir(), app.path().app_data_dir().map(|d| plain_path(&d))) else {
         return fail("Perfect Planner could not find its own folders.", false);
     };
     let runtime = match locate_runtime(&resources) {
@@ -306,6 +339,27 @@ pub(crate) fn stop(app: &AppHandle) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn webview2_args_keep_tauris_switches_and_add_the_documented_variable() {
+        assert_eq!(super::webview2_browser_args(None), None);
+        assert_eq!(super::webview2_browser_args(Some("  ")), None);
+        let args = super::webview2_browser_args(Some("--remote-debugging-port=9333"));
+        if cfg!(windows) {
+            assert_eq!(args.as_deref(), Some("--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --remote-debugging-port=9333"));
+        } else {
+            assert_eq!(args, None);
+        }
+    }
+
+    #[test]
+    fn plain_paths_drop_the_windows_verbatim_prefix() {
+        use std::path::Path;
+        assert_eq!(super::plain_path(Path::new(r"\\?\C:\PP Smoke\Perfect Planner")), Path::new(r"C:\PP Smoke\Perfect Planner"));
+        assert_eq!(super::plain_path(Path::new(r"\\?\UNC\server\share\pp")), Path::new(r"\\server\share\pp"));
+        assert_eq!(super::plain_path(Path::new(r"\\?\Volume{x}\pp")), Path::new(r"\\?\Volume{x}\pp"));
+        assert_eq!(super::plain_path(Path::new("/opt/Perfect Planner")), Path::new("/opt/Perfect Planner"));
+    }
+
     use super::*;
 
     #[test]
