@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { git, runGit } from "../worktrees/git";
 import { lines, realDir, samePath } from "../worktrees/platform";
+import { isAuthoritative } from "../ledger/index";
 import { GATE_ACTOR, evidenceValue, type Actor, type EntryDraft, type LedgerEntry, type LedgerPort } from "../worktrees/ports";
 import { TASK_ID } from "../worktrees/types";
 import { DEFAULT_TIMEOUT_MS, isConclusiveFailure, runTestCommand, type TestRunResult, type TestRunner } from "./run";
@@ -289,7 +290,8 @@ export function deriveState(entries: readonly LedgerEntry[], taskId: string): Ga
         break;
       }
       case "test.approved": {
-        if (forCurrent && entry.actor.kind === "person") {
+        // Only a person's approval counts, whatever an entry's data says.
+        if (forCurrent && isAuthoritative(entry, { personOnly: true })) {
           const pins = dataPins(entry);
           state.approval = { n: entry.n, actor: entry.actor, pins, pin: dataString(entry, "pin") ?? pinDigest(pins) };
           state.baseline = undefined;
