@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import path from "node:path";
 import * as z from "zod/v4";
 import {preparePlannerDraft} from './plannerDraftBridge.mjs';
 
@@ -10,19 +11,24 @@ import {
   inspectRegisteredGitWorkspace,
   inspectRegisteredMergeRecovery,
   mapRegisteredWorkspace,
+  resolveRelayWriteConfig,
   searchRegisteredWorkspace,
 } from "./perfectPlannerMcpCore.mjs";
+import { registerRelayTools } from "./perfectPlannerRelayTools.mjs";
 
 const registryRoot = process.env.PERFECT_PLANNER_REGISTRY_ROOT;
 const recoveryCatalogRoot = process.env.PERFECT_PLANNER_RECOVERY_CATALOG_ROOT;
 if (!registryRoot) throw new Error("PERFECT_PLANNER_REGISTRY_ROOT is required.");
+const writeConfig = resolveRelayWriteConfig(process.env, process.argv.slice(2));
 
 const instructions = [
   "Perfect Planner is the grounded context and evidence boundary for user-registered local apps.",
   "Only inspect workspaces returned by planner_list_registered_apps; never substitute an unregistered path.",
   "Prefer these read-only MCP tools and direct app APIs. Never launch computer use as a fallback when a tool fails.",
   "planner_prepare_computer_use only prepares context; it neither controls the computer nor grants permission. Do not call it when the user has disabled computer use.",
-  "This server is read-only: it cannot approve plans, resolve collisions, mutate files, or grant operating-system authority.",
+  writeConfig.write
+    ? "Relay write tools are enabled: call hello first and pass its token to every relay tool. A worker token covers only the task it claimed; the main-chat token covers the relay. Relay tools only append to the Perfect Planner ledger; they cannot approve plans, merge, mark tasks done, mutate files, or grant operating-system authority."
+    : "This server is read-only: it cannot approve plans, resolve collisions, mutate files, or grant operating-system authority.",
 ].join(" ");
 
 const server = new McpServer({ name: "perfect-planner", version: "0.1.0" }, { instructions });
@@ -111,6 +117,26 @@ server.registerTool("planner_prepare_computer_use", {
   },
   annotations: readOnly,
 }, async ({ workspace_id, intent, target }) => response(await buildComputerUseBrief(registryRoot, workspace_id, { intent, target })));
+
+if (writeConfig.write) {
+  // The ledger is opened lazily on the first relay call so listing tools never takes the single-writer lock.
+  let relayPromise = null;
+  let openedLedger = null;
+  const getRelay = () => (relayPromise ??= (async () => {
+    const [{ openLedger }, { createRelay, createFileSessionStore }] = await Promise.all([
+      import("../src/core/ledger/index.mjs"),
+      import("../src/core/relay/index.mjs"),
+    ]);
+    openedLedger = await openLedger(writeConfig.ledgerRoot, {});
+    // Only sha256 hashes of session tokens are stored, next to the ledger, so agents can resume after a restart.
+    const sessionStore = createFileSessionStore(path.join(writeConfig.ledgerRoot, ".perfect-planner", "relay", "sessions.json"));
+    return createRelay({ ledger: openedLedger, sessionStore, mainAgent: process.env.PP_MAIN_AGENT?.trim() || null });
+  })().catch((error) => { relayPromise = null; throw error; }));
+  registerRelayTools(server, getRelay, z);
+  const closeLedger = () => { try { openedLedger?.close(); } catch { /* best effort on exit */ } };
+  process.once("exit", closeLedger);
+  process.stdin.once("end", closeLedger);
+}
 
 await server.connect(new StdioServerTransport());
 console.error("Perfect Planner MCP ready on stdio");
