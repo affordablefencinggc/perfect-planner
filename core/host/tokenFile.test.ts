@@ -76,8 +76,11 @@ describe("finding Claude Code", () => {
     touch(path.join(project, "claude.cmd"));
     touch(path.join(bin, "claude"));
     touch(path.join(bin, "claude.cmd"));
-    const posix = findExecutable("claude", { PATH: [".", "relative/bin", project, bin].join(":") }, project, "linux");
-    expect(posix).toBe(path.join(bin, "claude"));
+    // A ":"-separated PATH cannot hold Windows drive-letter folders, so the POSIX case runs off Windows only.
+    if (process.platform !== "win32") {
+      const posix = findExecutable("claude", { PATH: [".", "relative/bin", project, bin].join(":") }, project, "linux");
+      expect(posix).toBe(path.join(bin, "claude"));
+    }
     const windows = findExecutable("claude", { Path: [".", project, bin].join(";"), PATHEXT: ".COM;.EXE;.BAT;.CMD" }, project, "win32");
     expect(windows).toBe(path.join(bin, "claude.cmd"));
   });
