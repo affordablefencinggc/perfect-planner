@@ -14,6 +14,7 @@ import { installNumberingRules } from "../numbering/index";
 import { installPeopleRules } from "../people/index";
 import { installPlanningRules } from "../planning/index";
 import { installReleaseRules, protectProject, type CommandRunner, type ProtectionReport } from "../release/index";
+import { ensureRequiredIgnores, PRIVATE_DIR } from "../worktrees/index";
 
 export interface CoreProject {
   /** Safe key from the client ("default" when none was given). */
@@ -24,6 +25,8 @@ export interface CoreProject {
   service: AgentService;
   /** Whether the owner key this ledger was opened with is pinned and signed (core/host/owner.ts). */
   owner: OwnerPin;
+  /** Done once .perfect-planner/ is in the repo's info/exclude (when the project folder is inside a git repo). */
+  ready: Promise<void>;
   /** Shipping safety (core/release protectProject): release rules on the ledger, pre-push scan in the repo. */
   protection: Promise<ProtectionReport>;
   /** Per-screen scratch state that is not ledger truth (e.g. a planning session in progress). */
@@ -52,6 +55,7 @@ export const runCommand: CommandRunner = (command, args, options) =>
  * project folder that merely sits inside some other checkout must never get that checkout's hook.
  */
 export async function protectRepository(ledger: Ledger, dir: string): Promise<ProtectionReport> {
+  await excludePrivateFolder(dir);
   try {
     const top = await runCommand("git", ["rev-parse", "--show-toplevel"], { cwd: dir });
     const real = (p: string) => fs.realpathSync.native(p);
@@ -62,6 +66,28 @@ export async function protectRepository(ledger: Ledger, dir: string): Promise<Pr
   }
   installReleaseRules(ledger);
   return { rules: "on", prePush: { state: "not-a-repo", reason: `${dir} is not the top of a git repository, so there is nothing to scan before a push.` } };
+}
+
+/** Folder whose .perfect-planner/ holds a project's ledger. */
+export function projectRootFor(baseRoot: string, key: string, override?: string): string {
+  return override ?? path.join(baseRoot, "projects", key);
+}
+
+/**
+ * Keeps a folder's .perfect-planner/ (ledger, worker tokens, briefs, worktrees) out of git when the folder
+ * is inside a repository, so `git add -A` can never stage it (core/worktrees ensureRequiredIgnores).
+ * Never throws: a folder outside git has nothing to exclude.
+ */
+export async function excludePrivateFolder(dir: string): Promise<string[]> {
+  try {
+    const top = await runCommand("git", ["rev-parse", "--show-toplevel"], { cwd: dir });
+    if (top.code !== 0 || !top.stdout.trim()) return [];
+    const rel = path.relative(fs.realpathSync.native(top.stdout.trim()), fs.realpathSync.native(dir)).split(path.sep).join("/");
+    if (rel.startsWith("..")) return [];
+    return await ensureRequiredIgnores(dir, rel ? [`/${rel}/${PRIVATE_DIR}/`] : []);
+  } catch {
+    return [];
+  }
 }
 
 /**
@@ -79,7 +105,7 @@ function ownerPinFor(baseRoot: string, key: string, root: string, keys: HostKeys
 }
 
 export function openCoreProject(baseRoot: string, key: string, override: string | undefined, keys: HostKeys): CoreProject {
-  const root = override ?? path.join(baseRoot, "projects", key);
+  const root = projectRootFor(baseRoot, key, override);
   fs.mkdirSync(root, { recursive: true });
   keys.ensureSystemKey();
   const owner = ownerPinFor(baseRoot, key, root, keys);
@@ -96,6 +122,9 @@ export function openCoreProject(baseRoot: string, key: string, override: string 
   const service = new AgentService({ ledger, gate });
   // Shipping safety on for every project the app opens: the release rules hold before the first
   // review, and the whole-branch secret scan runs before every push (a non-git folder is reported).
-  const protection = protectRepository(ledger, root);
-  return { key, root, ledger, service, owner, protection, state: new Map(), entries: () => ledger.entries() };
+  // The host excludes .perfect-planner/ before it opens a project for a request (host.ts openProject);
+  // this repeats it for direct callers, and every request waits for it.
+  const ready = excludePrivateFolder(root).then(() => undefined);
+  const protection = ready.then(() => protectRepository(ledger, root));
+  return { key, root, ledger, service, owner, ready, protection, state: new Map(), entries: () => ledger.entries() };
 }

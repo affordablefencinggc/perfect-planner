@@ -130,6 +130,8 @@ describe("tasks routes", () => {
     expect((await post("/tasks/T-1/merge", { commit: "0".repeat(40) })).body.code).toBe("STALE");
     const merged = await post("/tasks/T-1/merge", { commit: head });
     expect(merged.status, JSON.stringify(merged.body)).toBe(200);
+    // The worker is finished: its token no longer works and its token file is gone.
+    expect(fs.existsSync(d.tokenFile)).toBe(false);
     expect(git(repo, "show", "main:src/save.js")).toContain("export const save");
     const done = (await tasks()).tasks[0];
     expect(done).toMatchObject({ status: "done", stage: "done", worktree: null });
@@ -156,6 +158,7 @@ describe("tasks routes", () => {
     expect((await post("/tasks/T-1/reject")).status).toBe(400);
     const rejected = await post("/tasks/T-1/reject", { notes: "Use a real file store" });
     expect(rejected.body.result).toMatchObject({ reopenedAs: "T-1.a2" });
+    expect(fs.existsSync(d.tokenFile)).toBe(false);
     expect((await tasks()).tasks[0]).toMatchObject({ id: "T-1", attempt: 2, label: "T-1.a2", status: "open" });
   }, 60_000);
 

@@ -18,7 +18,7 @@ import { WorktreeError, WorktreeManager, git, runGit, WORKTREES_ACTOR, type Work
 import type { CoreHost } from "../host";
 import type { CoreProject } from "../project";
 import { HttpError, type Router } from "../router";
-import { AGENT_SERVER_NAME, agentEntryPath, connectLine, quoteFor, writeTokenFile } from "./agents";
+import { AGENT_SERVER_NAME, agentEntryPath, connectLine, quoteFor, tokenFilePath, writeTokenFile } from "./agents";
 
 export { quoteFor };
 import { localPerson, localPersonId } from "./people";
@@ -243,6 +243,13 @@ export function workerBrief(task: { label: string; title: string; clauses: strin
     .join("\n");
 }
 
+/** Ends the task's current worker: its token stops working and its token file is deleted. */
+function revokeWorker(project: CoreProject, label: string): void {
+  const previous = dispatches(project).get(label);
+  if (previous) project.service.tokens.revoke(previous.token);
+  fs.rmSync(tokenFilePath(project, label), { force: true });
+}
+
 /**
  * The worker's token stays in a file only this user can read; the commands name the file, so the
  * token never lands on a command line, in shell history or in a process list.
@@ -285,8 +292,7 @@ async function dispatch(project: CoreProject, host: CoreHost, id: string, body: 
   }
   const bridge = await host.bridge(project);
   // One worker per task at a time: a new dispatch replaces the previous worker's token.
-  const previous = dispatches(project).get(label);
-  if (previous) project.service.tokens.revoke(previous.token);
+  revokeWorker(project, label);
   const person = localPersonId(project);
   const token = project.service.tokens.issue({ role: "worker", person, task: task.id, ...(model ? { model } : {}) });
   const record: Dispatch = { task: label, issuedAt: new Date().toISOString(), token, ...(model ? { model } : {}) };
@@ -436,8 +442,7 @@ export function registerTaskRoutes(router: Router): void {
     const label = attemptLabel(task);
     const result = project.service.gate.reject(label, localPerson(project), notes.trim());
     refuse(result);
-    const previous = dispatches(project).get(label);
-    if (previous) project.service.tokens.revoke(previous.token);
+    revokeWorker(project, label);
     return { reopenedAs: result.ok ? result.newTaskId : undefined, ...(await overview(project)) };
   });
 
@@ -458,8 +463,7 @@ export function registerTaskRoutes(router: Router): void {
     if (!state.mergeApproval || state.mergeApproval.commit !== approved) refuse(project.service.gate.approveMerge(label, localPerson(project), approved));
     const merged = await project.service.gate.mergeAndVerify(label, { repoRoot: root, branch: tree.branch, integrationBranch: tree.baseRef, actor: localPerson(project) });
     if (!merged.ok) throw new HttpError(409, "REFUSED", merged.reason);
-    const dispatched = dispatches(project).get(label);
-    if (dispatched) project.service.tokens.revoke(dispatched.token);
+    revokeWorker(project, label);
     dispatches(project).delete(label);
     const removed = await manager(project, root).remove(label, WORKTREES_ACTOR).catch((error: Error) => ({ error: error.message }));
     return { merged: true, commit: merged.mergeCommit, into: tree.baseRef, removed, ...(await overview(project)) };

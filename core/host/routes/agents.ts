@@ -131,8 +131,12 @@ export function setupFor(bridgeUrl: string, tokenFile: string, entry: string, pl
 }
 
 /** The token waits in a file only this OS user can read; the agent program reads it at start. */
+export function tokenFilePath(project: CoreProject, name: string): string {
+  return path.join(project.root, ".perfect-planner", "tokens", `${name}.token`);
+}
+
 export function writeTokenFile(project: CoreProject, name: string, token: string): string {
-  const file = path.join(project.root, ".perfect-planner", "tokens", `${name}.token`);
+  const file = tokenFilePath(project, name);
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   fs.rmSync(file, { force: true });
   fs.writeFileSync(file, token, { mode: 0o600 });
