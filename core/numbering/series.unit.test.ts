@@ -12,7 +12,7 @@ import {
 } from "./series";
 
 const owner = { kind: "person" as const, id: "owner" };
-const agent = { kind: "agent" as const, id: "claude-code", model: "m1" };
+const gate = { kind: "system" as const, id: "gate" };
 
 function fresh(): Ledger {
   return Ledger.openSync(new MemoryStore(), { now: () => new Date("2026-10-09T00:00:00Z") });
@@ -96,7 +96,7 @@ describe("highestNumber / nextNumber", () => {
     const ledger = fresh();
     ledger.append({ actor: owner, type: "plan.approved", subject: "P-1", summary: "plan one", evidence: [], refs: [] });
     ledger.append({ actor: owner, type: "plan.approved", subject: "P-2", summary: "plan two", evidence: [], refs: [] });
-    ledger.append({ actor: agent, type: "task.created", subject: "T-1", summary: "first task", evidence: [], refs: [] });
+    ledger.append({ actor: gate, type: "task.created", subject: "T-1", summary: "first task", evidence: [], refs: [] });
     expect(highestNumber(ledger.entries(), "L")).toBe(3);
     expect(nextNumber(ledger.entries(), "L")).toBe("L-000004");
     expect(highestNumber(ledger.entries(), "P")).toBe(2);
@@ -126,54 +126,54 @@ describe("highestNumber / nextNumber", () => {
   it("ignores entries whose subject is not an allocated number of that series", () => {
     const ledger = fresh();
     ledger.append({ actor: owner, type: "test.defined", subject: "T-50", summary: "defined", data: { test: "npm test" }, evidence: [], refs: [] });
-    ledger.append({ actor: owner, type: "question.asked", subject: "Q-3", summary: "a question", evidence: [], refs: [] });
+    ledger.append({ actor: owner, type: "question.asked", subject: "Q-1", summary: "a question", evidence: [], refs: [] });
     expect(highestNumber(ledger.entries(), "T")).toBe(0);
-    expect(nextNumber(ledger.entries(), "Q")).toBe("Q-4");
+    expect(nextNumber(ledger.entries(), "Q")).toBe("Q-2");
   });
 });
 
 describe("task attempts", () => {
   function withTask(): Ledger {
     const ledger = fresh();
-    ledger.append({ actor: agent, type: "task.created", subject: "T-14", summary: "login page", evidence: [], refs: [] });
+    ledger.append({ actor: gate, type: "task.created", subject: "T-1", summary: "login page", evidence: [], refs: [] });
     return ledger;
   }
 
   it("is attempt 1 until a task is reopened, then one more per reopen", () => {
     const ledger = withTask();
-    expect(currentAttempt(ledger.entries(), "T-14")).toBe(1);
-    expect(taskLabel(ledger.entries(), "T-14")).toBe("T-14");
-    ledger.append({ actor: owner, type: "task.reopened", subject: "T-14", summary: "tests failed", reason: "login regressed", evidence: [], refs: [] });
-    expect(currentAttempt(ledger.entries(), "T-14")).toBe(2);
-    expect(taskLabel(ledger.entries(), "T-14")).toBe("T-14.a2");
-    ledger.append({ actor: owner, type: "task.reopened", subject: "T-14", summary: "again", reason: "still broken", evidence: [], refs: [] });
-    expect(taskLabel(ledger.entries(), "T-14")).toBe("T-14.a3");
+    expect(currentAttempt(ledger.entries(), "T-1")).toBe(1);
+    expect(taskLabel(ledger.entries(), "T-1")).toBe("T-1");
+    ledger.append({ actor: owner, type: "task.reopened", subject: "T-1", summary: "tests failed", reason: "login regressed", evidence: [], refs: [] });
+    expect(currentAttempt(ledger.entries(), "T-1")).toBe(2);
+    expect(taskLabel(ledger.entries(), "T-1")).toBe("T-1.a2");
+    ledger.append({ actor: owner, type: "task.reopened", subject: "T-1", summary: "again", reason: "still broken", evidence: [], refs: [] });
+    expect(taskLabel(ledger.entries(), "T-1")).toBe("T-1.a3");
   });
 
   it("accepts an attempt-suffixed task as input", () => {
     const ledger = withTask();
-    ledger.append({ actor: owner, type: "task.reopened", subject: "T-14", summary: "retry", reason: "retry", evidence: [], refs: [] });
-    expect(currentAttempt(ledger.entries(), "T-14.a2")).toBe(2);
-    expect(taskLabel(ledger.entries(), "T-14.a2")).toBe("T-14.a2");
+    ledger.append({ actor: owner, type: "task.reopened", subject: "T-1", summary: "retry", reason: "retry", evidence: [], refs: [] });
+    expect(currentAttempt(ledger.entries(), "T-1.a2")).toBe(2);
+    expect(taskLabel(ledger.entries(), "T-1.a2")).toBe("T-1.a2");
   });
 
   it("does not count reopens of other tasks", () => {
     const ledger = withTask();
     ledger.append({ actor: owner, type: "task.reopened", subject: "T-15", summary: "other task", reason: "other", evidence: [], refs: [] });
-    expect(currentAttempt(ledger.entries(), "T-14")).toBe(1);
+    expect(currentAttempt(ledger.entries(), "T-1")).toBe(1);
   });
 
   it("requires a reason to reopen a task", () => {
     const ledger = withTask();
     let caught: unknown;
     try {
-      ledger.append({ actor: owner, type: "task.reopened", subject: "T-14", summary: "retry", evidence: [], refs: [] });
+      ledger.append({ actor: owner, type: "task.reopened", subject: "T-1", summary: "retry", evidence: [], refs: [] });
     } catch (error) {
       caught = error;
     }
     expect(caught).toBeInstanceOf(LedgerError);
     expect((caught as LedgerError).code).toBe("REASON_REQUIRED");
-    expect(currentAttempt(ledger.entries(), "T-14")).toBe(1);
+    expect(currentAttempt(ledger.entries(), "T-1")).toBe(1);
   });
 
   it("refuses taskLabel for a non-task number", () => {

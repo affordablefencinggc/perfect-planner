@@ -4,6 +4,7 @@ import { appendNumbered, installNumberingRules } from "./rules";
 
 const owner = { kind: "person" as const, id: "owner" };
 const agent = { kind: "agent" as const, id: "claude-code", model: "m1" };
+const gate = { kind: "system" as const, id: "gate" };
 
 function open(): Ledger {
   return Ledger.openSync(new MemoryStore(), { now: () => new Date("2026-10-09T00:00:00Z") });
@@ -20,7 +21,7 @@ function refusalCode(action: () => unknown): string | undefined {
 }
 
 function taskCreated(subject: string, extra: Partial<EntryDraft> = {}): EntryDraft {
-  return { actor: agent, type: "task.created", subject, summary: `task ${subject}`, evidence: [], refs: [], ...extra };
+  return { actor: gate, type: "task.created", subject, summary: `task ${subject}`, evidence: [], refs: [], ...extra };
 }
 
 describe("installNumberingRules: task numbers", () => {
@@ -50,8 +51,8 @@ describe("installNumberingRules: task numbers", () => {
   it("fills in subjects with appendNumbered: T-1, then T-2", () => {
     const ledger = open();
     installNumberingRules(ledger);
-    const first = appendNumbered(ledger, { actor: agent, type: "task.created", summary: "first", evidence: [], refs: [] });
-    const second = appendNumbered(ledger, { actor: agent, type: "task.created", summary: "second", evidence: [], refs: [] });
+    const first = appendNumbered(ledger, { actor: gate, type: "task.created", summary: "first", evidence: [], refs: [] });
+    const second = appendNumbered(ledger, { actor: gate, type: "task.created", summary: "second", evidence: [], refs: [] });
     expect(first.subject).toBe("T-1");
     expect(second.subject).toBe("T-2");
   });
@@ -208,8 +209,11 @@ describe("installNumberingRules: removal", () => {
   it("lifts the rules when the returned function is called", () => {
     const ledger = open();
     const remove = installNumberingRules(ledger);
-    expect(refusalCode(() => ledger.append(taskCreated("T-5")))).toBe("RULE");
+    const decision = { actor: owner, type: "decision.made" as const, subject: "D-1", summary: "answer", reason: "why", evidence: [], refs: [], data: { question: "Q-9" } };
+    expect(refusalCode(() => ledger.append(decision))).toBe("RULE");
     remove();
-    expect(ledger.append(taskCreated("T-5")).subject).toBe("T-5");
+    expect(ledger.append(decision).subject).toBe("D-1");
+    // The ledger itself still enforces the series, with or without these rules.
+    expect(refusalCode(() => ledger.append(taskCreated("T-5")))).toBe("RULE");
   });
 });
