@@ -110,3 +110,43 @@ describe("planning ledger rules", () => {
     expect(approve(ledger).subject).toBe("P-1");
   });
 });
+
+describe("planning answers come from a person", () => {
+  it("refuses an agent or Jev answering a planning question, whatever the payload claims", async () => {
+    const { ledger } = await setup();
+    const q = ask(ledger, { planning: true, blocking: true });
+    const jev: Actor = { kind: "jev", id: "jev", model: "jev-latest" };
+    for (const actor of [worker, jev]) {
+      expect(() =>
+        appendNumbered(ledger, {
+          actor,
+          type: "decision.made",
+          summary: "Postgres",
+          reason: "Answer",
+          data: { question: q, answer: "Postgres", answeredBy: { kind: "person", id: "looplet-spare" } },
+        }),
+      ).toThrow(/person|may not write/);
+    }
+    expect(refusal(() => ledger.append({ actor: worker, type: "question.answered", subject: q, summary: "Postgres", data: { answer: "Postgres", via: "main", person: "looplet-spare" } }))).toMatch(
+      /person/,
+    );
+    expect(refusal(() => approve(ledger))).toMatch(/open: Q-1/);
+  });
+
+  it("refuses non-blocking planning answers from an agent too, and accepts a person", async () => {
+    const { ledger } = await setup();
+    const q = ask(ledger, { planning: true, blocking: false });
+    expect(refusal(() => appendNumbered(ledger, { actor: worker, type: "decision.made", summary: "No", reason: "Answer", data: { question: q, answer: "No" } }))).toMatch(/person/);
+    const d = appendNumbered(ledger, { actor: person, type: "decision.made", summary: "No", reason: "Answer", data: { question: q, answer: "No" } });
+    ledger.append({ actor: person, type: "question.answered", subject: q, summary: "No", data: { answer: "No", decision: d.subject, via: "main" } });
+    expect(ledger.entries()).toHaveLength(3);
+  });
+
+  it("still lets an agent answer relay questions", async () => {
+    const { ledger } = await setup();
+    const q = ask(ledger, { planning: false, blocking: true });
+    appendNumbered(ledger, { actor: worker, type: "decision.made", summary: "Use the helper", reason: "Answer", data: { question: q, answer: "Use the helper" } });
+    ledger.append({ actor: worker, type: "question.answered", subject: q, summary: "Use the helper", data: { answer: "Use the helper", via: "main" } });
+    expect(ledger.entries()).toHaveLength(3);
+  });
+});

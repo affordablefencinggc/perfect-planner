@@ -187,11 +187,13 @@ describe("PlanningSession.startWithResearch", () => {
 });
 
 describe("PlanningSession and ledger permissions", () => {
-  it("an agent may ask and decide, but a spike task or roadmap needs a person", async () => {
+  it("an agent may ask, but only a person answers, decides or spikes", async () => {
     const { ledger, session } = await setup();
     session.ask(agent, storeQ);
-    expect(() => session.answer(agent, "Q-1", { text: "TBD", spike: { due: "2026-10-16", risk: "A wrong store choice forces a migration." } })).toThrow(/may not write/i);
+    expect(() => session.answer(agent, "Q-1", { choice: "postgres" })).toThrow(/for a person to answer/);
+    expect(() => session.answer(agent, "Q-1", { text: "TBD", spike: { due: "2026-10-16", risk: "A wrong store choice forces a migration." } })).toThrow(/for a person/);
+    expect(() => session.acceptRecommendations(agent)).toThrow(PlanningError);
     expect(ledger.entries()).toHaveLength(1);
-    expect(session.answer(agent, "Q-1", { choice: "postgres" }).status).toBe("decided");
+    expect(session.answer(owner, "Q-1", { choice: "postgres" }).status).toBe("decided");
   });
 });
