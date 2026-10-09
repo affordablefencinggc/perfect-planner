@@ -1,1 +1,636 @@
-/* define polish: owned by one screen pass; uses the tokens in ../frame.css. */
+/* define polish: Blueprint and Components pages. Uses the tokens in ../frame.css.
+   Type scale: page title 28 / section title 16 / body 14 / label 13 / caption 12.
+   Spacing rhythm: 16px between cards, 24px between sections, 24px card padding. */
+
+/* ---- shared page chrome --------------------------------------------------- */
+.app-shell :is(.blueprint-workspace, .component-plans-workspace) {
+  --define-gap: var(--space-4);
+  --define-section: var(--space-5);
+  padding-top: var(--space-5) !important;
+  padding-bottom: var(--space-7) !important;
+}
+.app-shell :is(.blueprint-workspace, .component-plans-workspace) > * {
+  margin-bottom: 0;
+}
+.app-shell :is(.blueprint-header, .component-plans-header, .imported-blueprint-header) {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4) var(--space-5) !important;
+  margin-bottom: var(--define-section) !important;
+}
+.app-shell :is(.blueprint-header, .component-plans-header, .imported-blueprint-header) > div:first-child {
+  flex: 1 1 420px;
+  min-width: 0;
+}
+.app-shell :is(.blueprint-workspace, .component-plans-workspace) :is(.blueprint-header, .component-plans-header, .imported-blueprint-header) .eyebrow {
+  display: block;
+  font-size: var(--text-xs) !important;
+  letter-spacing: 0.08em;
+  line-height: 1.4;
+  color: var(--muted);
+}
+.app-shell :is(.blueprint-workspace, .component-plans-workspace) h1 {
+  margin: var(--space-1) 0 var(--space-2);
+  font-size: var(--text-2xl) !important;
+  line-height: 1.2 !important;
+}
+.app-shell :is(.blueprint-header, .component-plans-header, .imported-blueprint-header) p {
+  max-width: 72ch;
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-md) !important;
+  line-height: 1.55 !important;
+}
+
+/* Verdict / status cards in the header */
+.app-shell :is(.blueprint-verdict, .imported-blueprint-verdict, .component-catalog-state, .component-intake-verdict) {
+  flex: 0 1 380px;
+  width: auto;
+  min-width: min(300px, 100%);
+  max-width: 440px;
+  padding: var(--space-4);
+  gap: var(--space-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+}
+.app-shell :is(.blueprint-verdict, .component-catalog-state, .component-intake-verdict) > svg,
+.app-shell .imported-blueprint-verdict > svg {
+  width: 28px;
+  height: 28px;
+}
+.app-shell :is(.blueprint-verdict, .component-catalog-state, .component-intake-verdict) strong {
+  font-size: var(--text-lg) !important;
+}
+.app-shell :is(.blueprint-verdict, .component-catalog-state, .component-intake-verdict, .imported-blueprint-verdict) :is(small, em) {
+  font-size: var(--text-xs) !important;
+  letter-spacing: 0.06em;
+}
+.app-shell :is(.blueprint-verdict, .component-catalog-state) em {
+  line-height: 1.4 !important;
+}
+.app-shell .blueprint-verdict { color: var(--red); }
+.app-shell .blueprint-verdict em { color: #7a3a35; }
+
+/* Cards: one radius / border / shadow */
+.app-shell :is(
+  .blueprint-panel,
+  .component-catalog,
+  .component-dossier,
+  .component-map-atlas,
+  .component-empty-catalog,
+  .component-discovery-catalog,
+  .imported-blueprint-facts > article
+) {
+  border: 1px solid var(--border) !important;
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-card) !important;
+}
+
+/* ---- Blueprint ------------------------------------------------------------ */
+.app-shell .blueprint-gates {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--define-gap) !important;
+  margin: 0 0 var(--define-section) !important;
+}
+@media (min-width: 1180px) {
+  .app-shell .blueprint-gates {
+    grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+  }
+}
+@media (max-width: 640px) {
+  .app-shell .blueprint-gates { grid-template-columns: minmax(0, 1fr) !important; }
+}
+.app-shell .blueprint-gate {
+  min-height: 0 !important;
+  height: 100%;
+  padding: var(--space-4) !important;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: var(--space-3);
+  border: 1px solid var(--border) !important;
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-card) !important;
+  transition: border-color 0.12s ease, box-shadow 0.12s ease;
+}
+.app-shell .blueprint-gate:hover { border-color: var(--border-strong) !important; }
+.app-shell .blueprint-gate.gate-blocked { border-top: 3px solid var(--red) !important; }
+.app-shell .blueprint-gate.gate-unknown { border-top: 3px solid var(--amber) !important; }
+.app-shell .blueprint-gate.gate-clear { border-top: 3px solid var(--green) !important; }
+.app-shell .blueprint-gate-icon svg { width: 24px; height: 24px; }
+.app-shell .blueprint-gate > span:nth-child(2) { display: grid; gap: var(--space-1); min-width: 0; }
+.app-shell .blueprint-gate code { font-size: var(--text-xs) !important; letter-spacing: 0.04em; }
+.app-shell .blueprint-gate strong { font-size: var(--text-md) !important; line-height: 1.3; }
+.app-shell .blueprint-gate small {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  white-space: normal;
+  font-size: var(--text-xs) !important;
+  line-height: 1.4 !important;
+}
+.app-shell .blueprint-gate b { font-size: var(--text-lg); white-space: nowrap; }
+.app-shell .blueprint-gate > span:last-child { gap: var(--space-2); }
+
+/* Layout: required contracts on the left, supporting panels stacked on the right */
+.app-shell .blueprint-layout {
+  margin-top: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--define-gap) !important;
+  align-items: start;
+}
+@media (min-width: 1100px) {
+  .app-shell .blueprint-workspace:not(.imported-blueprint-workspace) .blueprint-layout {
+    grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr) !important;
+  }
+  .app-shell .blueprint-layout > .decision-panel { grid-column: 1; grid-row: 1 / span 3; }
+  .app-shell .blueprint-layout > .evidence-requirements { grid-column: 2; grid-row: 1; }
+  .app-shell .blueprint-layout > .architecture-choice { grid-column: 2; grid-row: 2; }
+  .app-shell .blueprint-layout > .debt-coverage-panel { grid-column: 2; grid-row: 3; }
+  .app-shell .blueprint-layout > .rulebook-map-panel { grid-column: 1 / -1; grid-row: 4; }
+  .app-shell .blueprint-layout > .folder-contract-panel { grid-column: 1 / -1; grid-row: 5; }
+  .app-shell .imported-blueprint-layout { grid-template-columns: minmax(0, 1.5fr) minmax(320px, 0.7fr) !important; }
+}
+.app-shell .blueprint-panel {
+  margin-top: 0 !important;
+  padding: var(--space-5) !important;
+  overflow: hidden;
+}
+.app-shell .blueprint-panel + .blueprint-panel { margin-top: 0 !important; }
+.app-shell .blueprint-panel > header {
+  min-height: 52px;
+  margin: calc(var(--space-5) * -1) calc(var(--space-5) * -1) var(--space-4);
+  padding: var(--space-2) var(--space-5);
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  background: var(--surface-header);
+}
+.app-shell .blueprint-panel > header > span { gap: var(--space-2); min-width: 0; }
+.app-shell .blueprint-panel > header svg { width: 20px; height: 20px; flex: 0 0 auto; }
+.app-shell .blueprint-panel > header strong { font-size: var(--text-lg) !important; }
+.app-shell .blueprint-panel > header small { font-size: var(--text-xs) !important; color: var(--muted); text-align: right; }
+.app-shell .blueprint-panel > p { margin: 0 0 var(--space-4); font-size: var(--text-md) !important; color: var(--muted); }
+
+/* Rows inside panels */
+.app-shell .decision-list,
+.app-shell .coverage-list { gap: var(--space-2); }
+.app-shell .decision-list button,
+.app-shell .coverage-list button,
+.app-shell .folder-contract-tree button {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-muted);
+  transition: border-color 0.12s ease, background-color 0.12s ease;
+}
+.app-shell .decision-list button:hover,
+.app-shell .coverage-list button:hover,
+.app-shell .folder-contract-tree button:hover,
+.app-shell .debt-surface-grid button:hover {
+  border-color: var(--border-strong);
+  background: var(--surface);
+}
+.app-shell .decision-list button {
+  min-height: 56px;
+  padding: var(--space-2) var(--space-4);
+  grid-template-columns: 52px minmax(0, 1fr) auto 16px;
+  gap: var(--space-3);
+}
+.app-shell .decision-list code,
+.app-shell .coverage-list code,
+.app-shell .folder-contract-tree code { font-size: var(--text-xs) !important; }
+.app-shell .decision-list strong,
+.app-shell .coverage-list strong,
+.app-shell .template-card strong { font-size: var(--text-md) !important; }
+.app-shell .decision-list small,
+.app-shell .coverage-list small,
+.app-shell .template-card small { font-size: var(--text-xs) !important; line-height: 1.4 !important; }
+.app-shell .decision-list svg { width: 16px; height: 16px; color: var(--muted); }
+.app-shell .coverage-list button {
+  min-height: 0;
+  padding: var(--space-3) var(--space-4);
+  grid-template-columns: minmax(0, 1fr) 96px 44px;
+  gap: var(--space-3);
+}
+.app-shell .coverage-list b { font-size: var(--text-md); }
+.app-shell .coverage-meter { height: 8px; }
+.app-shell .economics-unknown,
+.app-shell .folder-contract-rule,
+.app-shell .imported-blueprint-caveat {
+  margin-top: var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  gap: var(--space-3);
+  border-radius: var(--radius-md);
+}
+.app-shell .economics-unknown small,
+.app-shell .folder-contract-rule small,
+.app-shell .imported-blueprint-caveat small { font-size: var(--text-xs) !important; }
+
+/* Architecture contract */
+.app-shell .template-card {
+  margin: 0 0 var(--space-3);
+  padding: var(--space-4);
+  grid-template-columns: 44px minmax(0, 1fr) auto;
+  gap: var(--space-3);
+  border-radius: var(--radius-md);
+}
+.app-shell .template-key { width: 44px; height: 44px; border-radius: var(--radius-md); }
+.app-shell .template-card b { font-size: var(--text-lg); white-space: nowrap; }
+.app-shell .architecture-rule { padding: var(--space-3) var(--space-4); border-radius: var(--radius-sm); }
+.app-shell .architecture-rule strong { font-size: var(--text-sm) !important; }
+.app-shell .architecture-rule p { font-size: var(--text-sm) !important; line-height: 1.5 !important; }
+.app-shell .rulebook-coverage,
+.app-shell .folder-contract-summary {
+  margin: var(--space-3) 0;
+  gap: var(--space-3);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.app-shell .rulebook-coverage span,
+.app-shell .folder-contract-summary span {
+  padding: var(--space-3) var(--space-4);
+  gap: var(--space-1);
+  border-radius: var(--radius-md);
+}
+.app-shell .rulebook-coverage b,
+.app-shell .folder-contract-summary b { font-size: var(--text-xl); line-height: 1.2; }
+.app-shell .rulebook-coverage small,
+.app-shell .folder-contract-summary small { font-size: var(--text-xs) !important; }
+.app-shell .architecture-choice .primary-button { margin-top: var(--space-3); min-height: 40px; }
+.app-shell .button-explanation { margin-top: var(--space-2); font-size: var(--text-xs) !important; }
+
+/* Debt coverage */
+.app-shell .debt-surface-grid { margin-top: 0; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-2); }
+.app-shell .debt-surface-grid button {
+  min-height: 0;
+  padding: var(--space-3);
+  grid-template-columns: 20px minmax(0, 1fr);
+  gap: 2px var(--space-2);
+  border-radius: var(--radius-md);
+}
+.app-shell .debt-surface-grid strong { font-size: var(--text-sm) !important; }
+.app-shell .debt-surface-grid small { font-size: var(--text-xs) !important; }
+.app-shell .debt-truth { margin: var(--space-3) 0 0; padding: var(--space-3); font-size: var(--text-sm) !important; }
+@media (max-width: 1280px) and (min-width: 1100px) {
+  .app-shell .debt-surface-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+/* Top-down build path: a tidy ordered list rather than a decorative spine */
+.app-shell .rulebook-map { padding: 0; gap: var(--space-2); justify-items: stretch; }
+.app-shell .rulebook-map::before { display: none; }
+@media (min-width: 900px) {
+  .app-shell .rulebook-map { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+.app-shell .rulebook-map button {
+  width: 100%;
+  min-height: 56px;
+  padding: var(--space-2) var(--space-4);
+  grid-template-columns: 56px minmax(0, 1fr) auto;
+  gap: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-muted);
+  box-shadow: none;
+}
+.app-shell .rulebook-map button:hover { border-color: var(--border-strong); background: var(--surface); }
+.app-shell .rulebook-map button:first-child { outline: 0; border-color: var(--green); box-shadow: inset 3px 0 0 var(--green); }
+.app-shell .rulebook-map code { font-size: var(--text-xs) !important; }
+.app-shell .rulebook-map strong { font-size: var(--text-md) !important; }
+
+/* Folder contract */
+.app-shell .folder-contract-tree { grid-template-columns: minmax(0, 1fr); gap: var(--space-2); }
+@media (min-width: 1100px) {
+  .app-shell .folder-contract-tree { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+.app-shell .folder-contract-tree button {
+  min-height: 56px;
+  padding: var(--space-2) var(--space-4) var(--space-2) calc(var(--space-4) + var(--folder-depth, 0) * 14px);
+  grid-template-columns: 48px minmax(0, 1fr) minmax(0, 120px) auto 16px;
+  gap: var(--space-3);
+}
+.app-shell .folder-contract-tree strong { font-size: var(--text-md) !important; }
+.app-shell .folder-contract-tree small,
+.app-shell .folder-contract-tree em { font-size: var(--text-xs) !important; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.app-shell .folder-contract-tree b { padding: 2px var(--space-2); }
+@media (max-width: 900px) {
+  .app-shell .folder-contract-tree button { grid-template-columns: 44px minmax(0, 1fr) auto 16px; }
+}
+
+/* Imported project variant */
+.app-shell .imported-blueprint-facts { margin: 0 0 var(--define-section); gap: var(--define-gap); grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.app-shell .imported-blueprint-facts > article { min-height: 0; padding: var(--space-4) var(--space-5); gap: var(--space-2); }
+.app-shell .imported-blueprint-facts article > header { font-size: var(--text-xs) !important; margin-bottom: var(--space-1); }
+.app-shell .imported-blueprint-facts article > strong { font-size: var(--text-lg); }
+.app-shell .imported-blueprint-facts article > p { font-size: var(--text-sm) !important; }
+.app-shell .imported-blueprint-facts article > small { font-size: var(--text-xs) !important; }
+.app-shell .imported-blueprint-caveat { margin: 0 0 var(--define-section); }
+.app-shell .imported-blueprint-layout { gap: var(--define-gap) !important; }
+.app-shell .imported-blueprint-side { gap: var(--define-gap); }
+.app-shell .imported-review-grid { gap: var(--space-3); }
+.app-shell .imported-review-grid > button {
+  min-height: 0;
+  padding: var(--space-4);
+  gap: var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--surface-muted);
+}
+.app-shell .imported-review-heading strong { font-size: var(--text-md) !important; }
+.app-shell .imported-review-receipt,
+.app-shell .imported-review-questions > span { font-size: var(--text-xs) !important; }
+.app-shell .imported-authority-list { gap: var(--space-2); }
+.app-shell .imported-authority-list > article { padding: var(--space-3) var(--space-4); border-radius: var(--radius-md); background: var(--surface-muted); }
+.app-shell .imported-authority-list strong { font-size: var(--text-sm) !important; }
+.app-shell .imported-authority-list small { font-size: var(--text-xs) !important; }
+.app-shell .imported-next-step > small { font-size: var(--text-xs) !important; }
+.app-shell .blueprint-evidence-label { font-size: var(--text-xs) !important; padding: 2px var(--space-2); }
+@media (max-width: 900px) {
+  .app-shell .imported-blueprint-facts,
+  .app-shell .imported-review-grid { grid-template-columns: minmax(0, 1fr); }
+  .app-shell .rulebook-coverage,
+  .app-shell .folder-contract-summary { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+
+/* ---- Components ----------------------------------------------------------- */
+.app-shell .component-summary-bar,
+.app-shell .component-intake-facts {
+  margin: 0 0 var(--define-section) !important;
+  padding: var(--space-3) var(--space-4);
+  gap: var(--space-3) var(--space-4) !important;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+}
+.app-shell .component-summary-bar {
+  grid-template-columns: repeat(4, minmax(80px, 1fr)) auto minmax(0, 1.4fr);
+}
+.app-shell .component-summary-bar > span { justify-items: start; gap: 2px; }
+.app-shell .component-summary-bar b { font-size: var(--text-xl); line-height: 1.2; }
+.app-shell .component-summary-bar small {
+  font-size: var(--text-xs) !important;
+  letter-spacing: 0.05em;
+  line-height: 1.3 !important;
+}
+.app-shell .component-summary-bar .demo-freeze-control { justify-items: end; text-align: right; gap: var(--space-1); }
+.app-shell .component-summary-bar .demo-freeze-control small { text-transform: uppercase; }
+@media (max-width: 1280px) {
+  .app-shell .component-summary-bar { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .app-shell .component-summary-bar > :nth-child(n+5) { grid-column: 1 / -1; justify-items: start; text-align: left; }
+}
+@media (max-width: 700px) {
+  .app-shell .component-summary-bar { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+.app-shell .component-intake-facts { padding: 0; border: 0; background: transparent; box-shadow: none; }
+.app-shell .component-intake-facts article {
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+}
+.app-shell .component-intake-facts small { font-size: var(--text-xs) !important; }
+.app-shell .component-intake-facts strong { font-size: var(--text-lg); }
+.app-shell .component-intake-facts span { font-size: var(--text-sm) !important; }
+
+/* Map atlas */
+.app-shell .component-map-atlas { margin-bottom: var(--define-section) !important; }
+.app-shell :is(.component-map-atlas, .component-catalog, .component-empty-catalog, .component-discovery-catalog) > header {
+  min-height: 56px !important;
+  padding: var(--space-2) var(--space-4) !important;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-header);
+}
+.app-shell .component-map-atlas > header strong,
+.app-shell .component-catalog > header strong,
+.app-shell .component-empty-catalog > header strong,
+.app-shell .component-discovery-catalog > header strong { font-size: var(--text-lg) !important; }
+.app-shell .component-map-atlas pre { padding: var(--space-4); }
+.app-shell .component-map-atlas nav button { min-width: 140px; border-radius: var(--radius-sm); }
+
+/* Inventory + dossier: sticky, internally scrolling list beside the dossier */
+.app-shell .component-plans-layout,
+.app-shell .component-intake-layout {
+  gap: var(--define-gap) !important;
+  align-items: start;
+}
+@media (min-width: 1100px) {
+  .app-shell .component-plans-layout { grid-template-columns: minmax(320px, 400px) minmax(0, 1fr) !important; }
+  .app-shell .component-intake-layout { grid-template-columns: minmax(300px, 0.8fr) minmax(0, 1.2fr) !important; }
+  .app-shell .component-catalog {
+    position: sticky !important;
+    top: var(--space-2);
+    max-height: calc(100vh - var(--app-header-height, 112px) - 140px);
+    min-height: 320px;
+    display: flex;
+    flex-direction: column;
+  }
+  .app-shell .component-catalog-list { overflow-y: auto; flex: 1 1 auto; min-height: 0; }
+}
+@media (max-width: 1099px) {
+  .app-shell .component-catalog-list { max-height: 420px; overflow-y: auto; }
+}
+.app-shell .component-search {
+  margin: var(--space-3) var(--space-3) var(--space-2);
+  min-height: 40px;
+  padding: 0 var(--space-3);
+  gap: var(--space-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+.app-shell .component-search:focus-within { box-shadow: var(--focus-ring); }
+.app-shell .component-search svg { width: 16px; height: 16px; flex: 0 0 auto; color: var(--muted); }
+.app-shell .component-search input { font-size: var(--text-md) !important; outline: 0; }
+.app-shell .component-catalog-list { gap: var(--space-2) !important; padding: 0 var(--space-3) var(--space-3) !important; }
+.app-shell .component-catalog-list button {
+  min-height: 56px !important;
+  padding: var(--space-2) var(--space-3) !important;
+  grid-template-columns: 44px minmax(0, 1fr) auto 14px;
+  gap: var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-muted);
+  transition: border-color 0.12s ease, background-color 0.12s ease;
+}
+.app-shell .component-catalog-list button:hover { border-color: var(--border-strong); background: var(--surface); }
+.app-shell .component-catalog-list button.active { border-color: var(--blue-focus); background: var(--surface); }
+.app-shell .component-catalog-list code { font-size: var(--text-xs) !important; }
+.app-shell .component-catalog-list strong { font-size: var(--text-sm) !important; }
+.app-shell .component-catalog-list small,
+.app-shell .component-catalog-list em { font-size: var(--text-xs) !important; }
+.app-shell .component-catalog-list em { max-width: 9ch; letter-spacing: 0.04em; }
+.app-shell .component-catalog footer { padding: var(--space-3) var(--space-4); }
+.app-shell .component-catalog footer :is(span, small) { font-size: var(--text-xs) !important; }
+
+.app-shell .component-dossier { padding: var(--space-5) !important; min-width: 0; }
+.app-shell .component-dossier-header { gap: var(--space-4); padding-bottom: var(--space-4); flex-wrap: wrap; }
+.app-shell .component-dossier-header h2 { margin: var(--space-3) 0 var(--space-1); font-size: var(--text-xl); line-height: 1.25; }
+.app-shell .component-dossier-header p { font-size: var(--text-sm) !important; }
+.app-shell .component-dossier-header code { font-size: var(--text-xs) !important; }
+.app-shell .component-dossier-header em { font-size: var(--text-xs) !important; padding: 2px var(--space-2); }
+.app-shell .component-dossier-header dl { gap: var(--space-2); }
+.app-shell .component-dossier-header dl div { padding: var(--space-1) var(--space-3); }
+.app-shell .component-dossier-header dt { font-size: var(--text-xs) !important; }
+.app-shell .component-dossier-header dd { font-size: var(--text-sm) !important; }
+.app-shell .component-definition { margin: var(--space-4) 0; gap: var(--space-3); }
+.app-shell .component-definition div { padding: var(--space-3) var(--space-4); border-radius: var(--radius-md); }
+.app-shell .component-definition small,
+.app-shell .component-section-body small { font-size: var(--text-xs) !important; }
+.app-shell .component-definition p { font-size: var(--text-md) !important; line-height: 1.5 !important; }
+
+/* Collapsible sections */
+.app-shell .component-section { margin-top: var(--space-2) !important; border: 1px solid var(--border); border-radius: var(--radius-md); }
+.app-shell .component-section-toggle {
+  min-height: 48px !important;
+  padding: var(--space-2) var(--space-4) !important;
+  gap: var(--space-3);
+  background: var(--surface-header);
+  cursor: pointer;
+}
+.app-shell .component-section-toggle:hover { background: #e8ebea; }
+.app-shell .component-section-toggle:focus-visible { outline-offset: -2px; }
+.app-shell .component-section-toggle > svg { width: 14px; height: 14px; }
+.app-shell .component-section-toggle strong { font-size: var(--text-md) !important; }
+.app-shell .component-section-toggle small { font-size: var(--text-xs) !important; }
+.app-shell .component-section-body { padding: var(--space-4) !important; }
+.app-shell .component-section-body :is(p, li) { font-size: var(--text-md) !important; line-height: 1.55 !important; }
+.app-shell .component-section-body li { margin: var(--space-1) 0; }
+.app-shell .contract-table { gap: var(--space-2); }
+.app-shell .contract-table > div,
+.app-shell .dependency-row,
+.app-shell .file-claims > div { padding: var(--space-2) var(--space-3); border-radius: var(--radius-sm); }
+.app-shell .contract-table strong,
+.app-shell .dependency-row strong { font-size: var(--text-sm) !important; }
+.app-shell .contract-table :is(small, b, code),
+.app-shell .dependency-row :is(small, code),
+.app-shell .file-claims :is(code, b, small) { font-size: var(--text-xs) !important; }
+.app-shell .data-rules div { padding: var(--space-2); }
+.app-shell .data-rules :is(dt, dd) { font-size: var(--text-xs) !important; }
+.app-shell .data-rules dd { font-size: var(--text-sm) !important; }
+.app-shell .state-flow section,
+.app-shell .naming-policy span,
+.app-shell .paired-copy section { border-radius: var(--radius-sm); }
+.app-shell .decision-card strong,
+.app-shell .state-flow strong { font-size: var(--text-sm) !important; }
+
+/* Intake (no catalogue yet) and discovery cards */
+.app-shell .component-empty-catalog > div { padding: var(--space-6) var(--space-5) var(--space-4); }
+.app-shell .component-empty-catalog h2 { font-size: var(--text-lg); }
+.app-shell .component-empty-catalog p { font-size: var(--text-md) !important; max-width: 56ch; margin-inline: auto; }
+.app-shell .component-empty-catalog li strong { font-size: var(--text-md) !important; }
+.app-shell .component-empty-catalog li small { font-size: var(--text-sm) !important; }
+.app-shell .component-discovery-grid { gap: var(--space-3); padding: var(--space-4); }
+.app-shell .component-discovery-card { padding: var(--space-4); border-radius: var(--radius-md); }
+.app-shell .component-discovery-card > header strong { font-size: var(--text-md) !important; }
+.app-shell .component-discovery-card :is(li, p) { font-size: var(--text-sm) !important; }
+.app-shell .component-evidence-state { font-size: var(--text-xs) !important; }
+.app-shell .component-discovery-reference {
+  margin-top: var(--define-section);
+  padding: var(--space-4) var(--space-5);
+  border-radius: var(--radius-lg);
+}
+.app-shell .component-discovery-reference > summary { font-size: var(--text-lg); }
+.app-shell .component-discovery-reference .component-discovery-grid { gap: var(--space-3); padding: var(--space-3) 0 0; }
+
+/* ---- Draft panels (imported projects) ------------------------------------- */
+.app-shell :is(.architecture-draft-panel, .component-draft-panel) {
+  max-width: none;
+  margin: var(--define-section) 0 0;
+  padding: var(--space-5);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+  font-family: var(--mono);
+  font-size: var(--text-md);
+  line-height: 1.55;
+}
+.app-shell :is(.architecture-draft-panel, .component-draft-panel) h2 { font-size: var(--text-xl); margin-bottom: var(--space-2); }
+.app-shell :is(.architecture-draft-panel, .component-draft-panel) h3 { font-size: var(--text-lg); }
+.app-shell :is(.architecture-draft-panel, .component-draft-panel) :is(fieldset, details) {
+  margin: var(--space-4) 0;
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+.app-shell :is(.architecture-draft-panel, .component-draft-panel) :is(summary, legend) { font-size: var(--text-md); font-weight: 700; }
+.app-shell :is(.architecture-draft-panel, .component-draft-panel) :is(textarea, select, input[type="text"]) {
+  min-height: 40px;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--surface-muted);
+  color: var(--ink);
+  font: var(--text-md) / 1.5 var(--mono) !important;
+}
+.app-shell :is(.architecture-draft-panel, .component-draft-panel) :is(textarea, select, input[type="text"]):focus-visible {
+  outline: 0;
+  box-shadow: var(--focus-ring);
+}
+.app-shell .architecture-draft-panel button,
+.app-shell .component-draft-panel button {
+  min-height: 36px;
+  margin: var(--space-2) var(--space-2) var(--space-2) 0;
+  padding: var(--space-2) var(--space-4);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--surface-header);
+  color: inherit;
+  font-family: var(--mono);
+  font-weight: 600;
+}
+.app-shell :is(.architecture-draft-panel, .component-draft-panel) button:hover:not(:disabled) { background: #e4e8e6; }
+.app-shell :is(.architecture-draft-panel, .component-draft-panel) button:disabled { opacity: 0.6; }
+.app-shell :is(.architecture-draft-panel, .component-draft-panel) [role="alert"] {
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-sm);
+}
+.app-shell .component-draft-layout { grid-template-columns: minmax(200px, 260px) minmax(0, 1fr); gap: var(--space-5); }
+.app-shell .component-draft-fields { gap: var(--space-4); }
+.app-shell .component-draft-caution { font-size: var(--text-sm); }
+@media (max-width: 800px) {
+  .app-shell .component-draft-layout { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* ---- Shared interaction states ------------------------------------------- */
+.app-shell :is(.blueprint-gate, .decision-list button, .coverage-list button, .rulebook-map button, .folder-contract-tree button, .debt-surface-grid button, .component-catalog-list button, .imported-review-grid > button):focus-visible {
+  outline: 0;
+  box-shadow: var(--focus-ring);
+}
+.app-shell :is(.blueprint-workspace, .component-plans-workspace) :is(p, li, span, strong) { overflow-wrap: break-word; }
+.app-shell :is(.blueprint-workspace, .component-plans-workspace) :is(button:disabled) { cursor: not-allowed; }
+
+/* ---- refinements ---------------------------------------------------------- */
+.app-shell .blueprint-gate { grid-template-columns: 28px minmax(0, 1fr); align-content: start; }
+.app-shell .blueprint-gate > span:last-child {
+  grid-column: 2;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-items: unset;
+  gap: var(--space-2) var(--space-3);
+  margin-top: auto;
+}
+.app-shell .component-summary-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3) var(--space-5) !important;
+}
+.app-shell .component-summary-bar > span:not(.demo-freeze-control) { flex: 0 1 auto; min-width: 110px; }
+.app-shell .component-summary-bar > button { flex: 0 0 auto; }
+.app-shell .component-summary-bar .demo-freeze-control { margin-left: auto; flex: 0 1 auto; grid-column: auto; }
+@media (max-width: 1280px) {
+  .app-shell .component-summary-bar > :nth-child(n+5) { grid-column: auto; }
+}
+@media (min-width: 1100px) {
+  .app-shell .blueprint-workspace:not(.imported-blueprint-workspace) .blueprint-layout { grid-template-rows: auto auto 1fr auto auto; }
+}
+.app-shell :is(.blueprint-header, .component-plans-header, .imported-blueprint-header) { flex-direction: row; }
+.app-shell .imported-blueprint-header { display: flex; }
+.app-shell .component-summary-bar .demo-freeze-control { flex: 1 1 260px; margin-left: 0; }
