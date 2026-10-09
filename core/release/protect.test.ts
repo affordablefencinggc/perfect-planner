@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { Ledger, MemoryStore } from "../ledger/index";
 import { appendNumbered, installNumberingRules } from "../numbering/index";
-import { DEFAULT_PRE_PUSH_SCRIPT, prePushScanWanted, protectProject, setPrePushScan } from "./protect";
+import { DEFAULT_PRE_PUSH_SCRIPT, PRE_PUSH_HOOK_FILES, prePushScanWanted, protectProject, setPrePushScan } from "./protect";
 import { prePushInstalled } from "./layers";
 import type { CommandRunner } from "./types";
 
@@ -43,6 +43,19 @@ function withRepo(fn: (dir: string) => Promise<void>): () => Promise<void> {
 describe("protectProject: shipping safety is on by default", () => {
   it("ships the pre-push scan script it points the hook at", () => {
     expect(existsSync(DEFAULT_PRE_PUSH_SCRIPT)).toBe(true);
+  });
+
+  it("lists every file the hook needs: itself plus everything it imports relatively, transitively", () => {
+    const dir = join(DEFAULT_PRE_PUSH_SCRIPT, "..");
+    const seen = new Set<string>();
+    const visit = (file: string) => {
+      if (seen.has(file)) return;
+      seen.add(file);
+      const text = readFileSync(join(dir, file), "utf8");
+      for (const m of text.matchAll(/(?:^|\n)\s*import[^"']*["']\.\/([^"']+)["']/g)) visit(m[1]!);
+    };
+    visit("pre-push.mjs");
+    expect([...seen].sort()).toEqual([...PRE_PUSH_HOOK_FILES].sort());
   });
 
   it("installs the release rules and the pre-push scan when a project opens", withRepo(async (dir) => {
