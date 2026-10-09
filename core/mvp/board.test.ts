@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { FileStore, Ledger, MemoryStore, type Actor } from "../ledger/index";
+import { FileStore, Ledger, MemoryKeyProvider, MemoryStore, type Actor } from "../ledger/index";
 import { appendNumbered } from "../numbering/index";
 import {
   boardFromLedger,
@@ -283,7 +283,8 @@ describe("restart", () => {
   it("replays the same board from a re-opened FileStore", () => {
     const dir = mkdtempSync(join(tmpdir(), "mvp-board-"));
     try {
-      const first = Ledger.openSync(new FileStore(dir));
+      const keys = new MemoryKeyProvider();
+      const first = Ledger.openSync(new FileStore(dir), { keys });
       recordProposal(first, proposal);
       renameStage(first, person, "mvp", "Pilot");
       moveFeature(first, person, "a", "beta", "Not needed yet");
@@ -291,7 +292,7 @@ describe("restart", () => {
       confirmMvp(first, person);
       const before = boardFromLedger(first.entries());
       first.close();
-      const second = Ledger.openSync(new FileStore(dir), { readOnly: true });
+      const second = Ledger.openSync(new FileStore(dir), { readOnly: true, keys });
       expect(boardFromLedger(second.entries())).toEqual(before);
       expect(before.confirmed).toBe(true);
       second.close();

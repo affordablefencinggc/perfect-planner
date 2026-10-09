@@ -5,6 +5,7 @@ import path from "node:path";
 import { FileStore, Ledger, type LedgerEntry } from "../ledger/index";
 import { installClauseRules } from "../lookup/index";
 import { AgentService } from "../mcp/index";
+import type { HostKeys } from "./keys";
 import { installNumberingRules } from "../numbering/index";
 import { installPeopleRules } from "../people/index";
 import { installPlanningRules } from "../planning/index";
@@ -28,10 +29,11 @@ export function projectKey(raw: string | null | undefined): string {
   return KEY.test(key) ? key : "default";
 }
 
-export function openCoreProject(baseRoot: string, key: string, override?: string): CoreProject {
+export function openCoreProject(baseRoot: string, key: string, override: string | undefined, keys: HostKeys): CoreProject {
   const root = override ?? path.join(baseRoot, "projects", key);
   fs.mkdirSync(root, { recursive: true });
-  const ledger = Ledger.openSync(new FileStore(root));
+  keys.ensureSystemKey();
+  const ledger = Ledger.openSync(new FileStore(root), { keys });
   // The same rules every core module assumes: numbering (D-/Q-/T-/R- subjects), clauses, people, planning gates.
   installNumberingRules(ledger);
   installClauseRules(ledger);

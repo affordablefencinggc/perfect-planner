@@ -4,7 +4,9 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import type { AddressInfo } from "node:net";
+import { MemoryKeyProvider } from "../ledger/index";
 import { createCoreHost, type CoreHost } from "./index";
+import { HostKeys } from "./keys";
 
 const personCookies = new Map<string, string>();
 
@@ -16,7 +18,7 @@ export function personHeaders(base: string): Record<string, string> {
 
 export async function startTestHost(): Promise<{ host: CoreHost; base: string; dir: string; stop: () => Promise<void> }> {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "pp-core-host-"));
-  const h = createCoreHost({ root, bridge: true });
+  const h = createCoreHost({ root, bridge: true, keys: new HostKeys(new MemoryKeyProvider({ autoCreate: false })) });
   const s = http.createServer((req, res) => h.middleware(req, res, () => { res.statusCode = 404; res.end(); }));
   await new Promise<void>((resolve) => s.listen(0, "127.0.0.1", resolve));
   const url = `http://127.0.0.1:${(s.address() as AddressInfo).port}/api/core`;

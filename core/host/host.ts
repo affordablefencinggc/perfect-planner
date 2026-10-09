@@ -7,6 +7,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { LedgerError } from "../ledger/index";
 import { startBridge, ToolError, type Bridge } from "../mcp/index";
 import { PeopleError } from "../people/index";
+import { asPersonRequest, hostKeys, type HostKeys } from "./keys";
 import { openCoreProject, projectKey, type CoreProject } from "./project";
 import { HttpError, Router } from "./router";
 import { registerRoutes } from "./routes/index";
@@ -25,6 +26,8 @@ export interface CoreHostOptions {
   guard?: (req: IncomingMessage) => boolean;
   /** Start the agent bridge (127.0.0.1) so external agents can check in. Default true. */
   bridge?: boolean;
+  /** Signing keys for person and system entries. Default: the OS keychain (PP_CORE_KEYS=memory for throwaway keys). */
+  keys?: HostKeys;
 }
 
 export class CoreHost {
@@ -33,12 +36,15 @@ export class CoreHost {
   private readonly bridges = new Map<string, Promise<Bridge>>();
   /** Per-process secret behind the person cookie; never written anywhere. */
   private readonly personSecret = randomBytes(32).toString("base64url");
+  readonly keys: HostKeys;
 
   constructor(private readonly options: CoreHostOptions) {
+    this.keys = options.keys ?? hostKeys();
     registerRoutes(this.router);
     this.router.get("/status", ({ project }) => ({
       project: project.key,
       ledger: project.ledger.status,
+      keys: this.keys.state(),
       root: project.root,
     }));
   }
@@ -46,7 +52,7 @@ export class CoreHost {
   project(key: string): CoreProject {
     let project = this.projects.get(key);
     if (!project) {
-      project = openCoreProject(this.options.root, key, this.options.projectRootOverride);
+      project = openCoreProject(this.options.root, key, this.options.projectRootOverride, this.keys);
       this.projects.set(key, project);
     }
     return project;
@@ -103,7 +109,9 @@ export class CoreHost {
     try {
       const body = method === "POST" ? await readJson(req) : undefined;
       const project = this.project(projectKey(url.searchParams.get("project")));
-      const result = await match.handler({ path, params: match.params, query: url.searchParams, body, project, host: this });
+      const call = () => match.handler({ path, params: match.params, query: url.searchParams, body, project, host: this });
+      // A person's POST may make their signing key on first use; nothing else can.
+      const result = await (method === "POST" ? asPersonRequest(call) : call());
       send(200, { ok: true, result: result ?? null });
     } catch (error) {
       if (error instanceof HttpError) return send(error.status, { ok: false, code: error.code, message: error.message });

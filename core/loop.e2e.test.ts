@@ -9,7 +9,7 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "nod
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { DEFAULT_PERMISSIONS, FileStore, Ledger, LedgerError, verifyChain, type Actor, type LedgerEntry } from "./ledger/index";
+import { DEFAULT_PERMISSIONS, FileStore, Ledger, LedgerError, MemoryKeyProvider as LedgerKeys, verifyChain, type Actor, type LedgerEntry } from "./ledger/index";
 import { appendNumbered, installNumberingRules } from "./numbering/index";
 import { addPlanText, installClauseRules, lookup } from "./lookup/index";
 import { WorktreeManager, WORKTREES_ACTOR, GATE_ACTOR, WATCHER_ACTOR, git, runGit, realDir, type WorktreeInfo } from "./worktrees/index";
@@ -217,7 +217,9 @@ describe("the whole core loop", () => {
     const step = (name: string) => steps.push(name);
 
     // The real ledger on its file store, with the numbering, clause and gate rules installed.
-    let ledger = Ledger.openSync(new FileStore(root));
+    // Person and system entries are signed; the app process holds the keys (in-memory here).
+    const ledgerKeys = new LedgerKeys();
+    let ledger = Ledger.openSync(new FileStore(root), { keys: ledgerKeys });
     installNumberingRules(ledger);
     installClauseRules(ledger);
     ledger.addRule(gateRule());
@@ -254,16 +256,13 @@ describe("the whole core loop", () => {
     expect(main.role).toBe("main");
     const mainActor: Actor = { kind: "agent", id: main.agent, model: "planner-model" };
 
-    // ---- 3. Tests defined (by the main chat), confirmed FAILING by the gate, reviewed by Jev.
+    // ---- 3. Tests defined (by the main chat) and reviewed by Jev. Nothing an agent wrote runs before a person approves it.
     const gate = new TestGate({ ledger, timeoutMs: 60_000 });
     const clausesOf = (id: TaskId) => [{ ref: SPECS[id].clause, text: lookup(entries(), SPECS[id].clause).text! }];
     const command = (id: TaskId) => `node ${SPECS[id].check}`;
     for (const id of TASKS) {
-      const defined = gate.define(id, command(id), mainActor, [SPECS[id].clause]);
+      const defined = gate.define(id, command(id), mainActor, [SPECS[id].clause], { files: [SPECS[id].check] });
       expect(defined.ok).toBe(true);
-      const first = await gate.confirmFailsFirst(id, root);
-      expect(first.ok, `${id} must fail on the current code`).toBe(true);
-      expect(first.entry).toMatchObject({ type: "test.failed", actor: GATE_ACTOR, data: { phase: "baseline" } });
       const review = await jev.reviewTest({
         task: id,
         title: SPECS[id].title,
@@ -277,29 +276,32 @@ describe("the whole core loop", () => {
       expect(ledger.get(review.entry!)).toMatchObject({ type: "review.verdict", actor: { kind: "jev" } });
       // The gate sees Jev's verdict on the current definition.
       expect(gate.state(id).jev).toMatchObject({ n: review.entry, verdict: "approve" });
-      expect(gate.state(id).stage).toBe("baseline-confirmed");
+      expect(gate.state(id).stage).toBe("defined");
     }
-    step("tests defined and confirmed failing first by the gate");
+    step("tests defined by the main chat");
     step("Jev reviewed each test (approve), visible to the gate");
 
     // Workers check in with per-task tokens; a claim before the owner approves the test is refused.
-    const workerA = await hello(tokens.issue({ role: "worker", person: "owner", task: "T-1" }), "Worker A", "builder-a");
-    const workerB = await hello(tokens.issue({ role: "worker", person: "owner", task: "T-2" }), "Worker B", "builder-b");
-    const workerC = await hello(tokens.issue({ role: "worker", person: "owner", task: "T-3" }), "Worker C", "builder-c");
+    const workerA = await hello(tokens.issue({ role: "worker", person: "owner", task: "T-1", model: "builder-a" }), "Worker A", "builder-a");
+    const workerB = await hello(tokens.issue({ role: "worker", person: "owner", task: "T-2", model: "builder-b" }), "Worker B", "builder-b");
+    const workerC = await hello(tokens.issue({ role: "worker", person: "owner", task: "T-3", model: "builder-c" }), "Worker C", "builder-c");
     expect([workerA.role, workerB.role, workerC.role]).toEqual(["worker", "worker", "worker"]);
+    // The owner names each worker's model when issuing its token, so Jev can check independence (§6.4).
     const builder = (worker: { agent: string }, model: string): Actor => ({ kind: "agent", id: worker.agent, model });
     await expectToolError(service.call(workerA, "claim_task", { task: "T-1" }), "REFUSED", /waiting for the owner's approval/);
 
-    // ---- 4. The owner (a person) approves each test.
+    // ---- 4. The owner (a person) approves each test, pinning its file; then the gate confirms it FAILS first.
     for (const id of TASKS) {
-      const approved = gate.approve(id, owner);
+      const approved = gate.approve(id, owner, { cwd: root });
       expect(approved.ok, `${id} approval`).toBe(true);
-      if (approved.ok) {
-        expect(approved.entry).toMatchObject({ type: "test.approved", actor: owner });
-        expect(approved.entry.evidence).toContain(`review:${gate.state(id).jev!.n}`);
-      }
+      if (approved.ok) expect(approved.entry).toMatchObject({ type: "test.approved", actor: owner, data: { pins: { [SPECS[id].check]: expect.any(String) } } });
+      const first = await gate.confirmFailsFirst(id, root);
+      expect(first.ok, `${id} must fail on the current code`).toBe(true);
+      expect(first.entry).toMatchObject({ type: "test.failed", actor: GATE_ACTOR, data: { phase: "baseline" } });
+      expect(gate.state(id).stage).toBe("baseline-confirmed");
     }
     step("owner approved the tests; claim before approval was refused");
+    step("gate confirmed each approved test fails first");
 
     // ---- 5. One worktree per task, launched by the system, with no file list typed by anyone.
     const worktrees = new WorktreeManager({ repoRoot: root, ledger, install: false });
@@ -333,11 +335,12 @@ describe("the whole core loop", () => {
     expect(digest.lines[0]).toMatch(/^Q-1 \(T-2, blocking\)/);
     await expectToolError(service.call(workerA, "answer", { question: "Q-1", text: "throw" }), "FORBIDDEN");
     const answered = (await service.call(main, "answer", { question: "Q-1", text: "return null" })) as { q: string; decision: string; worker: string };
-    expect(answered).toEqual({ q: "Q-1", decision: "D-1", worker: workerB.agent });
+    // Only a person decides: the main chat's answer is information, not a D- decision.
+    expect(answered).toEqual({ q: "Q-1", decision: null, worker: workerB.agent });
     expect(await service.call(workerA, "check_inbox", {})).toMatchObject({ answers: [], paused: false });
-    expect(await service.call(workerB, "check_inbox", {})).toMatchObject({ answers: [{ q: "Q-1", answer: "return null", decision: "D-1", via: "main" }], paused: false });
+    expect(await service.call(workerB, "check_inbox", {})).toMatchObject({ answers: [{ q: "Q-1", answer: "return null", via: "main" }], paused: false });
     expect(lookup(entries(), "Q-1")).toMatchObject({ status: "answered", tasks: ["T-2"] });
-    step("blocking Q-1 answered by the main chat as D-1 and routed back to worker B only");
+    step("blocking Q-1 answered by the main chat and routed back to worker B only");
 
     // ---- 8. Work in the worktrees. T-1 and T-2 both change src/registry.js.
     write(wt("T-1"), { "src/save.js": 'export function save(plan) { return "saved:" + plan; }\n', "src/registry.js": REGISTRY.replace("save: false", "save: true") });
@@ -412,6 +415,7 @@ describe("the whole core loop", () => {
         allowedFiles: [],
         author: builder(models[id][0], models[id][1]),
         attempt: 1,
+        commit: proven[id].commit,
       });
     }
     expect([verdicts["T-1"].verdict, verdicts["T-2"].verdict, verdicts["T-3"].verdict]).toEqual(["approve", "reject", "approve"]);
@@ -430,7 +434,8 @@ describe("the whole core loop", () => {
       expect(merged.ok, `${id} merge: ${merged.ok ? "" : merged.reason}`).toBe(true);
       expect(merged.entries.map((e) => e.type)).toEqual(["test.passed", "merge.done", "task.done"]);
       expect(merged.entries[0]).toMatchObject({ actor: GATE_ACTOR, data: { phase: "merge", afterMerge: true } });
-      expect(merged.entries[2]).toMatchObject({ actor: owner, subject: id });
+      expect(merged.entries[1]).toMatchObject({ type: "merge.done", actor: owner, subject: id });
+      expect(merged.entries[2]).toMatchObject({ actor: GATE_ACTOR, subject: id, data: { approvedBy: owner } });
       expect(await git(root, ["rev-parse", "main"])).toBe(merged.ok ? merged.mergeCommit : "");
       expect(gate.state(id).stage).toBe("done");
       expect(service.board().get(id)!.status).toBe("done");
@@ -497,7 +502,7 @@ describe("the whole core loop", () => {
     expect(verifyChain(entries())).toEqual({ ok: true });
     ledger.close();
 
-    ledger = Ledger.openSync(new FileStore(root), { readOnly: true });
+    ledger = Ledger.openSync(new FileStore(root), { readOnly: true, keys: ledgerKeys });
     expect(ledger.status).toMatchObject({ ok: true, entries: liveEntries.length });
     expect(JSON.parse(JSON.stringify(ledger.entries()))).toEqual(liveEntries);
     expect(foldBoard(ledger.entries())).toEqual(liveBoard);

@@ -1,11 +1,15 @@
 import { describe, expect, it } from "vitest";
 import type { LedgerEntry } from "../ledger/index";
+import { markVerified, needsSignature } from "../ledger/signing";
 import { openBlockers, planningAnswers, planningQuestions } from "./state";
 
 // Entries as they might sit in a stored ledger written before the rules were
 // installed: the views must still only take a person's answer as the user's.
 function entry(n: number, partial: Partial<LedgerEntry>): LedgerEntry {
-  return { n: `L-${String(n).padStart(6, "0")}`, at: "2026-10-09T06:00:00Z", evidence: [], refs: [], prev: "", hash: "", summary: "x", subject: "", type: "question.asked", actor: { kind: "system", id: "test" }, ...partial } as LedgerEntry;
+  const e = { n: `L-${String(n).padStart(6, "0")}`, at: "2026-10-09T06:00:00Z", evidence: [], refs: [], prev: "", hash: "", summary: "x", subject: "", type: "question.asked", actor: { kind: "system", id: "test" }, ...partial } as LedgerEntry;
+  // As if the ledger had checked a person's or the system's signature on open.
+  if (needsSignature(e.actor)) markVerified(e);
+  return e;
 }
 
 const asked = entry(1, {

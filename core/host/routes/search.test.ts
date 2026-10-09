@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Actor, Ledger } from "../../ledger/index";
 import { addPlanText, changeClause } from "../../lookup/index";
 import { appendNumbered, cutRelease } from "../../numbering/index";
+import { asPersonRequest } from "../keys";
 import { hostCall, startTestHost } from "../testing";
 import { normalizeRef } from "./search";
 
@@ -21,6 +22,10 @@ Finish invoice sending.
 `;
 
 function seed(ledger: Ledger) {
+  asPersonRequest(() => seedAsPerson(ledger));
+}
+
+function seedAsPerson(ledger: Ledger) {
   addPlanText(ledger, owner, PLAN);
   appendNumbered(ledger, { actor: owner, type: "plan.approved", summary: "Invoice plan approved" });
   appendNumbered(ledger, { actor: owner, type: "task.created", summary: "Invoice identity survives reload", refs: ["P-1 §2.1"], evidence: ["https://example.test/issue/1"] });

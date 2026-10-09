@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { markVerified, needsSignature } from "../ledger/signing";
 import { Ledger, LedgerError, MemoryStore, type Actor, type EntryDraft, type LedgerEntry } from "../ledger/index";
 import { appendNumbered, installNumberingRules } from "../numbering/index";
 import {
@@ -447,7 +448,10 @@ describe("review fixes: authority comes from the ledger, not the payload", () =>
   /** Entries as a reader sees them: replay is pure over the list, so forged entries can be fed straight in. */
   function entry(n: number, actor: Actor, event: Record<string, unknown>): LedgerEntry {
     const num = `L-${String(n).padStart(6, "0")}`;
-    return { n: num, at: "2026-10-09T02:00:00Z", actor, type: "decision.made", subject: `D-${n}`, summary: "x", reason: "x", evidence: [], refs: [], data: people(event), prev: "0".repeat(64), hash: "0".repeat(64) };
+    const e: LedgerEntry = { n: num, at: "2026-10-09T02:00:00Z", actor, type: "decision.made", subject: `D-${n}`, summary: "x", reason: "x", evidence: [], refs: [], data: people(event), prev: "0".repeat(64), hash: "0".repeat(64) };
+    // As if the ledger had checked a person's or the system's signature on open.
+    if (needsSignature(actor)) markVerified(e);
+    return e;
   }
 
   it("refuses an agent that tries to write itself in as owner", () => {

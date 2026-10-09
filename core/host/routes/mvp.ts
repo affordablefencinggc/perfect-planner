@@ -135,7 +135,7 @@ function buildBoard(project: CoreProject, refresh = false) {
   const { features, scannedAt, stale } = currentFeatures(project, staged, refresh);
   const byId = new Map(features.map((f) => [f.id, f]));
   const proposalEntry = entries.find((e) => e.n === board.proposalEntry);
-  const proposalData = (proposalEntry?.data?.mvp ?? {}) as { summary?: string };
+  const proposalData = (proposalEntry?.data?.mvp ?? {}) as { summary?: string; proposedBy?: Actor };
   const placementOf = new Map(board.placements.map((p) => [p.feature, p]));
   const deps = missingDependencies(board, features);
   const depsOf = new Map(deps.map((d) => [d.feature, d.missing]));
@@ -208,7 +208,7 @@ function buildBoard(project: CoreProject, refresh = false) {
     warnings,
     proposal: {
       by: proposalEntry?.actor,
-      offline: isOffline(proposalEntry?.actor),
+      offline: isOffline(proposalData.proposedBy ?? proposalEntry?.actor),
       summary: proposalData.summary ?? proposalEntry?.summary ?? "",
       at: proposalEntry?.at,
       entry: board.proposalEntry,

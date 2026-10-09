@@ -62,6 +62,8 @@ export interface DiffReviewInput {
   /** Who built the change, with their model. Jev only approves work built by a different model (§6.4). */
   author: Actor;
   attempt?: number;
+  /** The full commit reviewed. When Jev approves, the test gate takes this verdict as the diff approval for that commit. */
+  commit?: string;
 }
 
 type Transport = (request: JevRequest) => Promise<JevCallResult>;
@@ -163,7 +165,7 @@ export class JevReviewer implements SettledAnswerer {
 
   // ---------- shared plumbing ----------
 
-  private record(task: string, review: "test" | "diff" | "question", result: ReviewResult, extra: { called: JevCallResult | null; refs: string[]; summary: string; data?: Record<string, unknown>; definition?: string }): LedgerEntry {
+  private record(task: string, review: "test" | "diff" | "question", result: ReviewResult, extra: { called: JevCallResult | null; refs: string[]; summary: string; data?: Record<string, unknown>; definition?: string; commit?: string }): LedgerEntry {
     const called = extra.called;
     const cost = called?.ok ? (called.cost ?? this.settings.estimatedCostPerCall) : 0;
     // The test gate reads Jev's test verdicts from evidence (core/gate deriveState). Only a real
@@ -171,7 +173,9 @@ export class JevReviewer implements SettledAnswerer {
     const gateEvidence =
       review === "test" && extra.definition && (result.verdict === "approve" || result.verdict === "reject")
         ? ["scope:test", `verdict:${result.verdict === "approve" ? "approve" : "gaps"}`, `definition:${extra.definition}`, ...(result.notes as string[]).map((gap) => `gap:${String(gap).replace(/\s+/g, " ").trim()}`)]
-        : undefined;
+        : review === "diff" && called?.ok && result.verdict === "approve" && extra.commit && /^[0-9a-f]{40,64}$/i.test(extra.commit)
+          ? ["scope:diff", "verdict:approve", `commit:${extra.commit.toLowerCase()}`]
+          : undefined;
     return this.ledger.append({
       actor: called?.ok ? { kind: "jev", id: "jev", model: called.model } : SYSTEM,
       type: "review.verdict",
@@ -337,7 +341,7 @@ export class JevReviewer implements SettledAnswerer {
     const confidence = this.minConfidence(a);
     const result = this.independent(this.decide(gaps, confidence, `the diff for ${input.task}`), input.author, called.model);
     const summary = result.verdict === "approve" ? `Jev approves the diff for ${input.task}` : result.verdict === "reject" ? `Jev rejects the diff for ${input.task}` : `Diff for ${input.task} goes to the main chat: ${result.reason.startsWith("Not independent") ? "Jev cannot review it independently" : "Jev is unsure"}`;
-    const entry = this.record(input.task, "diff", result, { called, refs, summary, data });
+    const entry = this.record(input.task, "diff", result, { called, refs, summary, data, commit: input.commit });
     this.warnIfNeeded();
     return { ...result, entry: entry.n };
   }

@@ -56,7 +56,7 @@ describe("agents routes", () => {
 
     const list = (await hostCall(base, "GET", "/agents?project=demo")).body.result;
     expect(list.agents).toHaveLength(1);
-    expect(list.agents[0]).toMatchObject({ name: "Claude Code", model: "claude-opus", role: "main", person: "owner", connection });
+    expect(list.agents[0]).toMatchObject({ name: "Claude Code", model: "unverified:claude-opus", role: "main", person: "owner", connection });
     expect(typeof list.agents[0].connectedAt).toBe("string");
     expect(list.agents[0]).not.toHaveProperty("token");
     expect(list.connections[0].agent).toBe(list.agents[0].id);
