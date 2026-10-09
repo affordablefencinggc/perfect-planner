@@ -31,8 +31,8 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/heads/trial/') }}
 
 env:
-  # Push-triggered trials use these Release runs (37921501956: PR #31, core host bundled in the installer).
-  DEFAULT_SOURCE_RUNS: '["37921501956"]'
+  # Push-triggered trials use these Release runs: PR #31 (core host bundled) and PR #12 head (main + pipeline).
+  DEFAULT_SOURCE_RUNS: '["37921501956","37918632579"]'
 
 jobs:
   plan:
