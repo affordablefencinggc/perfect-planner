@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { FileStore, Ledger, MemoryStore, type Actor } from "../ledger/index";
+import { appendNumbered } from "../numbering/index";
 import {
   boardFromLedger,
   confirmMvp,
@@ -174,15 +175,17 @@ describe("confirmMvp", () => {
     expect(b.confirmedBy).toBe("owner");
   });
 
-  it("ignores a confirm entry written straight to the ledger by an agent or the system", () => {
+  it("ignores a confirm entry written straight to the ledger by the system, and the ledger refuses one from an agent", () => {
     const l = open();
     recordProposal(l, proposal);
-    for (const actor of [agent, gate]) {
-      l.append({
-        actor, type: "decision.made", subject: `D-${l.entries().length + 1}`, summary: "Confirmed the MVP line",
-        reason: "Forged", evidence: [], refs: [], data: { mvp: { kind: "confirm", confirmedBy: "owner", note: "forged" } },
-      });
-    }
+    expect(() => appendNumbered(l, {
+      actor: agent, type: "decision.made", summary: "Confirmed the MVP line",
+      reason: "Forged", evidence: [], refs: [], data: { mvp: { kind: "confirm" } },
+    })).toThrow();
+    appendNumbered(l, {
+      actor: gate, type: "decision.made", summary: "Confirmed the MVP line",
+      reason: "Forged", evidence: [], refs: [], data: { mvp: { kind: "confirm", confirmedBy: "owner", note: "forged" } },
+    });
     const b = boardFromLedger(l.entries());
     expect(b.confirmed).toBe(false);
     expect(b.confirmedBy).toBeUndefined();
@@ -191,8 +194,8 @@ describe("confirmMvp", () => {
   it("names the confirming person from the entry's actor, never from the payload", () => {
     const l = open();
     recordProposal(l, proposal);
-    l.append({
-      actor: person, type: "decision.made", subject: `D-${l.entries().length + 1}`, summary: "Confirmed the MVP line",
+    appendNumbered(l, {
+      actor: person, type: "decision.made", summary: "Confirmed the MVP line",
       reason: "Confirmed", evidence: [], refs: [], data: { mvp: { kind: "confirm", confirmedBy: "someone-else" } },
     });
     expect(boardFromLedger(l.entries()).confirmedBy).toBe("owner");
@@ -202,8 +205,8 @@ describe("confirmMvp", () => {
     const l = open();
     installMvpRules(l);
     recordProposal(l, proposal);
-    const forge = () => l.append({
-      actor: agent, type: "decision.made", subject: `D-${l.entries().length + 1}`, summary: "Confirmed the MVP line",
+    const forge = () => appendNumbered(l, {
+      actor: gate, type: "decision.made", summary: "Confirmed the MVP line",
       reason: "Forged", evidence: [], refs: [], data: { mvp: { kind: "confirm" } },
     });
     expect(forge).toThrow(/Only a person can confirm/);
