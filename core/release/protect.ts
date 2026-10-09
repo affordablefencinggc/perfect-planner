@@ -4,7 +4,7 @@ import { nextNumber } from "../numbering/index";
 import { installPrePushHook, removePrePushHook } from "./layers";
 import { installReleaseRules } from "./pipeline";
 import { RELEASE_SAFETY_TOPIC } from "./presets";
-import { safeRunner } from "./run";
+import { createSafeRunner } from "./run";
 import type { CommandRunner } from "./types";
 
 // Shipping safety on by default. The host calls protectProject when it opens a
@@ -67,12 +67,12 @@ export interface ProtectionReport {
  */
 export async function protectProject(
   ledger: Ledger,
-  options: { run?: CommandRunner; cwd: string; hookScript?: string; now?: () => Date },
+  options: { run?: CommandRunner; cwd: string; hookScript?: string; now?: () => Date; protect?: readonly string[] },
 ): Promise<ProtectionReport> {
   installReleaseRules(ledger, options.now ? { now: options.now } : {});
   const wanted = prePushScanWanted(ledger.entries());
-  // Default: git by absolute path, never one planted in the repo (core/exec).
-  const run = options.run ?? safeRunner;
+  // Default: git by absolute path, never one planted in the repo or a protected root (core/exec).
+  const run = options.run ?? createSafeRunner({ protect: options.protect ?? [] });
   try {
     if (!wanted) {
       const removed = await removePrePushHook(run, { cwd: options.cwd });
