@@ -9,6 +9,7 @@ export {
   attemptId,
   nextAttemptId,
   sensitiveChanges,
+  verifyMergeCommit,
   testSupportFiles,
   type GatePolicy,
   type GateState,

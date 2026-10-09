@@ -257,6 +257,24 @@ async function changedTestFiles(cwd: string, pins: Pins): Promise<string[]> {
   return [...changed].sort();
 }
 
+/** Why the merge commit about to land is not exactly the merge of `base` and `approved`, or null when it is. */
+export async function verifyMergeCommit(candidate: string, mergeCommit: string, base: string, approved: string): Promise<string | null> {
+  const head = (await runGit(candidate, ["rev-parse", "--verify", "HEAD^{commit}"])).stdout.trim();
+  if (head !== mergeCommit) return `The merge candidate moved from ${mergeCommit.slice(0, 12)} to ${head.slice(0, 12) || "nothing"} after the merge.`;
+  const parents = (await runGit(candidate, ["rev-list", "--parents", "-n", "1", mergeCommit])).stdout.trim().split(/\s+/).slice(1);
+  if (parents.length !== 2 || parents[0] !== base || parents[1] !== approved) return `The merge commit's parents are not ${base.slice(0, 12)} and the approved ${approved.slice(0, 12)}.`;
+  const pure = await runGit(candidate, ["merge-tree", "--write-tree", "--no-messages", base, approved]);
+  if (pure.code !== 0) {
+    return /usage|unknown option|write-tree/i.test(pure.stderr)
+      ? "Checking the merge needs Git 2.38 or later (git merge-tree --write-tree); update Git and merge again."
+      : `A clean re-merge of the approved commit does not succeed (${oneLine(pure.stderr || pure.stdout) || `exit ${pure.code}`}).`;
+  }
+  const expected = pure.stdout.trim().split(/\r?\n/)[0]!;
+  const actual = (await runGit(candidate, ["rev-parse", `${mergeCommit}^{tree}`])).stdout.trim();
+  if (actual !== expected) return `The merge commit's content (tree ${actual.slice(0, 12)}) is not the clean merge of the approved commit (tree ${expected.slice(0, 12)}); something changed it while git ran.`;
+  return null;
+}
+
 /** The ledger, worker tokens and task worktrees in .perfect-planner/ must never be committed. */
 function privateRefusal(paths: readonly string[]): string {
   const shown = paths.slice(0, 5).join(", ");
@@ -962,6 +980,12 @@ export class TestGate {
         entries.push(this.ledger.append({ ...proof(mergeCommit, run), type: "test.failed", summary: `Done-when test for ${taskId} fails after merging into ${integrationBranch}`, reason: failureReason(run) }));
         return refuse(`The test fails after the merge (${describeRun(run)}); ${integrationBranch} was left untouched.`, { output: run.outputTail, run, mergeCommit });
       }
+
+      // Land only the merge that was approved: the candidate's commit must still be HEAD, have exactly the
+      // integration tip and the approved commit as parents, and hold the tree a pure in-memory merge of the
+      // two produces (git merge-tree runs no hooks or filters). Anything changed in between is refused.
+      const landing = await verifyMergeCommit(candidate, mergeCommit, oldIntegration, branchTip);
+      if (landing) return refuse(`${landing} ${integrationBranch} was left untouched.`, { run, mergeCommit });
 
       const advanced = await this.advance(repoRoot, integrationBranch, oldIntegration, mergeCommit, candidate);
       if (!advanced.ok) return refuse(advanced.reason, { run, mergeCommit });
