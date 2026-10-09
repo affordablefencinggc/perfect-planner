@@ -461,41 +461,6 @@ describe("Perfect Planner shell interaction and accessibility", () => {
   });
 });
 
-describe("Demo project index", () => {
-  test("has a named search, pressed-state filters, neutral sample chips, and pins an exact ID match", async () => {
-    window.history.replaceState({}, "", "/?workspace=index");
-    renderDemoShell();
-    const index = await screen.findByRole("region", { name: "Project index" });
-    const search = within(index).getByRole("searchbox", { name: "Search the project index" });
-    const filters = within(index).getByRole("group", { name: "Index categories" });
-    expect(within(filters).getByRole("button", { name: /^All/ }).getAttribute("aria-pressed")).toBe("true");
-    fireEvent.click(within(filters).getByRole("button", { name: /^Outcome/ }));
-    expect(within(filters).getByRole("button", { name: /^Outcome/ }).getAttribute("aria-pressed")).toBe("true");
-    expect(within(filters).getByRole("button", { name: /^All/ }).getAttribute("aria-pressed")).toBe("false");
-    expect(index.querySelector(".index-entry .status-verified")).toBeNull();
-    fireEvent.click(within(filters).getByRole("button", { name: /^All/ }));
-    fireEvent.change(search, { target: { value: "b07" } });
-    const entries = [...index.querySelectorAll(".index-entry")];
-    expect(entries.length).toBeGreaterThan(1);
-    expect(entries[0].querySelector("code").textContent).toBe("B07");
-    expect(within(index).getByRole("region", { name: "Exact ID match" })).toBeTruthy();
-    expect(entries.filter((entry) => entry.querySelector("code").textContent === "B07")).toHaveLength(1);
-  });
-
-  test("Escape clears the search first, then closes the index", async () => {
-    window.history.replaceState({}, "", "/?workspace=index");
-    renderDemoShell();
-    const index = await screen.findByRole("region", { name: "Project index" });
-    const search = within(index).getByRole("searchbox", { name: "Search the project index" });
-    fireEvent.change(search, { target: { value: "P3" } });
-    fireEvent.keyDown(search, { key: "Escape" });
-    expect(search.value).toBe("");
-    expect(screen.getByRole("region", { name: "Project index" })).toBeTruthy();
-    fireEvent.keyDown(search, { key: "Escape" });
-    expect(await screen.findByRole("region", { name: "Project Home workspace" })).toBeTruthy();
-  });
-});
-
 function renderEmptyShell(route = "home", extra = "") {
   window.history.replaceState({}, "", `/?workspace=${route}${extra}`);
   const registry = createProjectRegistry({ storage: createMemoryStorage() });
@@ -586,5 +551,40 @@ describe("shell trial fixes", () => {
     const toast = await screen.findByText(/Invitation not sent/);
     expect(toast.textContent).toContain("nothing was saved or sent");
     expect(document.body.textContent).not.toMatch(/Invitation drafted/);
+  });
+});
+
+describe("Demo project index", () => {
+  test("has a named search, pressed-state filters, neutral sample chips, and pins an exact ID match", async () => {
+    window.history.replaceState({}, "", "/?workspace=index");
+    renderDemoShell();
+    const index = await screen.findByRole("region", { name: "Project index" });
+    const search = within(index).getByRole("searchbox", { name: "Search the project index" });
+    const filters = within(index).getByRole("group", { name: "Index categories" });
+    expect(within(filters).getByRole("button", { name: /^All/ }).getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(within(filters).getByRole("button", { name: /^Outcome/ }));
+    expect(within(filters).getByRole("button", { name: /^Outcome/ }).getAttribute("aria-pressed")).toBe("true");
+    expect(within(filters).getByRole("button", { name: /^All/ }).getAttribute("aria-pressed")).toBe("false");
+    expect(index.querySelector(".index-entry .status-verified")).toBeNull();
+    fireEvent.click(within(filters).getByRole("button", { name: /^All/ }));
+    fireEvent.change(search, { target: { value: "b07" } });
+    const entries = [...index.querySelectorAll(".index-entry")];
+    expect(entries.length).toBeGreaterThan(1);
+    expect(entries[0].querySelector("code").textContent).toBe("B07");
+    expect(within(index).getByRole("region", { name: "Exact ID match" })).toBeTruthy();
+    expect(entries.filter((entry) => entry.querySelector("code").textContent === "B07")).toHaveLength(1);
+  });
+
+  test("Escape clears the search first, then closes the index", async () => {
+    window.history.replaceState({}, "", "/?workspace=index");
+    renderDemoShell();
+    const index = await screen.findByRole("region", { name: "Project index" });
+    const search = within(index).getByRole("searchbox", { name: "Search the project index" });
+    fireEvent.change(search, { target: { value: "P3" } });
+    fireEvent.keyDown(search, { key: "Escape" });
+    expect(search.value).toBe("");
+    expect(screen.getByRole("region", { name: "Project index" })).toBeTruthy();
+    fireEvent.keyDown(search, { key: "Escape" });
+    expect(await screen.findByRole("region", { name: "Project Home workspace" })).toBeTruthy();
   });
 });
