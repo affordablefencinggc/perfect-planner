@@ -247,7 +247,8 @@ function isLiteralSecret(name: string, value: string, quoted: boolean, context: 
   // line is plainly configuration (DB_PASSWORD=<word>, or password: <word> in YAML).
   // On NAME=value lines a dotted value is a literal (API_KEY=blue.whale.sings.loud), not member access.
   if (context.envLine) return true;
-  if (context.configFile) return !value.includes(".") || /\d/.test(value);
+  // In config files and on lone `name: value` lines, a dotted value is a literal too (passphrase: a.b.c).
+  if (context.configFile || context.yamlLine) return true;
   // Redaction also hides identifiers with digits ("hunter2"); plain words stay
   // unless the line is a lone `name: value` (YAML in a log or a paste).
   if (context.mode !== "redact" || value.includes(".") || /^[_$]/.test(value) || /[a-z][A-Z]/.test(value) || SECRET_WORDS.has(value.toLowerCase())) return false;
