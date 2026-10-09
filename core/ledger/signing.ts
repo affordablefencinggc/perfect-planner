@@ -1,5 +1,6 @@
 import { createPrivateKey, createPublicKey, generateKeyPairSync, sign as cryptoSign, verify as cryptoVerify, type KeyObject } from "node:crypto";
 import { canonicalJson, sha256 } from "./chain";
+import { ownerChain } from "./recovery";
 import type { Actor, LedgerEntry } from "./types";
 
 /**
@@ -139,6 +140,8 @@ export interface KeyTrust {
   /** Why there is no owner although the ledger has person entries. */
   ownerProblem?: { n: string; detail: string };
   retired: Retirements;
+  /** The pinned owner key was replaced by an owner.recovered entry (another computer recovered the project). */
+  ownerKeyReplaced?: { n: string; keyId: string };
 }
 
 /**
@@ -160,6 +163,9 @@ export interface KeyTrust {
  *   when the app pins `ownerKey` and that entry was signed by exactly that
  *   key, trusted without the owner's help. Without `ownerKey` there is no
  *   owner: nobody can trust or retire another person's key.
+ * - Or the pin is a key this device holds that ownership reached through
+ *   owner.recovered entries (recovery.ts, ownerChain). Every owner key on
+ *   that chain is then trusted until the entry that replaced it.
  */
 export function keyTrust(anchors: readonly TrustedKey[], entries: readonly LedgerEntry[], options: { ownerKey?: string } = {}): KeyTrust {
   const bound = new Map<string, string>();
@@ -171,17 +177,32 @@ export function keyTrust(anchors: readonly TrustedKey[], entries: readonly Ledge
   const firstIndex = entries.findIndex((entry) => entry.actor?.kind === "person" && typeof entry.actor.id === "string");
   let owner: string | undefined;
   let ownerProblem: KeyTrust["ownerProblem"];
-  // Only the app can name the owner, by pinning the owner key it kept outside the ledger.
+  let ownerKeyReplaced: KeyTrust["ownerKeyReplaced"];
+  let ownerAnchors: TrustedKey[] = [];
+  const ownerRetired = new Map<string, { index: number; n: string }>();
+  // Only the app can name the owner, by pinning the owner key it kept outside the ledger. The pin
+  // may be the first person entry's key or one an owner.recovered entry handed ownership to.
   if (firstIndex >= 0 && options.ownerKey) {
     const first = entries[firstIndex];
-    const problem = signatureProblem(first, withoutOwner.trusted, withoutOwner.retired, firstIndex);
-    if (problem) ownerProblem = { n: first.n, detail: `no owner: ${problem}` };
-    else if (first.sig?.key !== options.ownerKey) {
-      ownerProblem = { n: first.n, detail: `${first.n} was not signed by this project's owner key ${options.ownerKey}` };
-    } else owner = principalOf(first.actor);
+    const chain = ownerChain(entries);
+    const step = chain?.keys.findIndex((k) => k.keyId === options.ownerKey) ?? -1;
+    // The pinned key must also be one this device holds or pinned, as before recovery existed.
+    if (chain && step >= 0 && anchors.some((k) => k.keyId === options.ownerKey)) {
+      owner = chain.principal;
+      ownerAnchors = chain.keys.map((k) => ({ keyId: k.keyId, principal: chain.principal, publicKey: k.publicKey }));
+      for (const k of chain.keys) if (k.replacedAt) ownerRetired.set(k.keyId, k.replacedAt);
+      const pinned = chain.keys[step];
+      if (pinned.replacedAt) ownerKeyReplaced = { n: pinned.replacedAt.n, keyId: chain.keys[chain.keys.length - 1].keyId };
+    } else {
+      const problem = signatureProblem(first, withoutOwner.trusted, withoutOwner.retired, firstIndex);
+      if (problem) ownerProblem = { n: first.n, detail: `no owner: ${problem}` };
+      else if (first.sig?.key !== options.ownerKey) {
+        ownerProblem = { n: first.n, detail: `${first.n} was not signed by this project's owner key ${options.ownerKey}` };
+      } else owner = principalOf(first.actor);
+    }
   }
-  const result = owner ? settle(anchors, entries, bound, owner) : withoutOwner;
-  return { trusted: result.trusted, owner, ownerProblem, retired: result.retired };
+  const result = owner ? settle([...anchors, ...ownerAnchors], entries, bound, owner, ownerRetired) : withoutOwner;
+  return { trusted: result.trusted, owner, ownerProblem, retired: result.retired, ...(ownerKeyReplaced ? { ownerKeyReplaced } : {}) };
 }
 
 interface Replay {
@@ -192,12 +213,18 @@ interface Replay {
 }
 
 /** Three ledger-order replays: plain, then with re-trusted keys counting from the start, then re-checked. */
-function settle(anchors: readonly TrustedKey[], entries: readonly LedgerEntry[], bound: ReadonlyMap<string, string>, owner: string | undefined): Replay {
-  const first = replay(anchors, [], entries, bound, owner);
-  const second = replay(anchors, [...first.selfTrusted.values()], entries, bound, owner);
+function settle(
+  anchors: readonly TrustedKey[],
+  entries: readonly LedgerEntry[],
+  bound: ReadonlyMap<string, string>,
+  owner: string | undefined,
+  seedRetired: Retirements = new Map(),
+): Replay {
+  const first = replay(anchors, [], entries, bound, owner, seedRetired);
+  const second = replay(anchors, [...first.selfTrusted.values()], entries, bound, owner, seedRetired);
   // Keep only recoveries the second replay still accepts; never feed back again.
   const kept = [...first.selfTrusted.values()].filter((key) => second.selfTrusted.has(key.keyId));
-  return replay(anchors, kept, entries, bound, owner);
+  return replay(anchors, kept, entries, bound, owner, seedRetired);
 }
 
 function replay(
@@ -206,10 +233,12 @@ function replay(
   entries: readonly LedgerEntry[],
   bound: ReadonlyMap<string, string>,
   owner: string | undefined,
+  seedRetired: Retirements,
 ): Replay {
   const trusted = new Map<string, TrustedKey>();
   for (const key of [...anchors, ...recovered]) if (validKey(key) && !trusted.has(key.keyId)) trusted.set(key.keyId, { ...key });
-  const retired = new Map<string, { index: number; n: string }>();
+  // Owner keys handed on by owner.recovered stop signing at that entry.
+  const retired = new Map<string, { index: number; n: string }>(seedRetired);
   const selfTrusted = new Map<string, TrustedKey>();
   entries.forEach((entry, index) => {
     if (entry.actor?.kind !== "person") return;

@@ -24,3 +24,13 @@ export {
   type TrustedKey,
 } from "./signing";
 export { KeychainKeyProvider, osSecretStore, type SecretStore } from "./keychain";
+export {
+  checkRecoveryCode,
+  deriveRecoveryKey,
+  formatRecoveryCode,
+  ownerChain,
+  parseRecoveryCode,
+  recoveryStatement,
+  type OwnerChain,
+  type RecoveryCheck,
+} from "./recovery";

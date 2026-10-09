@@ -1,4 +1,5 @@
 import { acknowledgesExactly, hashEntry, ledgerNumber, parseLedgerNumber, verifyWithAcknowledgements } from "./chain";
+import { checkRecoveryCode, deriveRecoveryKey, formatRecoveryCode, newRecoverySecret, ownerChain, parseRecoveryCode, recoveryStatement, type RecoveryCheck } from "./recovery";
 import type { LedgerStore } from "./store";
 import {
   recordedKeys,
@@ -71,7 +72,9 @@ export class Ledger {
   private anchors: TrustedKey[];
   private trusted: Map<string, TrustedKey>;
   private trust: KeyTrust;
-  private readonly ownerKey?: string;
+  private ownerKey?: string;
+  /** Set only inside setRecoveryCode and recoverOwner: owner.* entries are never written through append. */
+  private writingOwnerEntry = false;
 
   private constructor(
     store: LedgerStore,
@@ -162,6 +165,7 @@ export class Ledger {
       head,
       acknowledged: [...this.acknowledged],
       ...(this.trust.owner ? { owner: this.trust.owner } : {}),
+      ...(this.trust.ownerKeyReplaced ? { ownerKeyReplaced: { ...this.trust.ownerKeyReplaced } } : {}),
       ...(this.repaired ? { repaired: this.repaired } : {}),
     };
     if (this.chain.ok) return { ok: true, ...base };
@@ -354,6 +358,139 @@ export class Ledger {
     return this.trust.owner;
   }
 
+  /**
+   * The owner makes a new recovery code (specs/owner-key-recovery.md). Only
+   * the code's public key is recorded, in owner.recovery.set signed by the
+   * current owner key; any earlier code stops working. The code is returned
+   * once, to show the person: never copy it to the clipboard, log it, or
+   * capture it in evidence screenshots. App use only, from the person's own
+   * session; never expose this on an agent or MCP route.
+   */
+  setRecoveryCode(person: Actor, reason: string): { code: string; entry: LedgerEntry } {
+    if (!this.writable) throw new LedgerError("READ_ONLY", `this ledger is read-only (${this.store.description})`);
+    if (person?.kind !== "person") throw new LedgerError("BAD_ACTOR", "only a person can set a recovery code");
+    if (!this.chain.ok) {
+      throw new LedgerError("CHAIN_BROKEN", `writes are stopped: ${this.chain.firstBad} failed the fingerprint check (${this.chain.problem}); acknowledge it first`);
+    }
+    const principal = principalOf(person);
+    if (!this.trust.owner || this.trust.owner !== principal) {
+      throw new LedgerError("NOT_PERMITTED", "only the project's owner, on a computer that holds the owner key, can set a recovery code");
+    }
+    const chain = ownerChain(this.list)!;
+    const current = chain.keys[chain.keys.length - 1].keyId;
+    const mine = this.keys?.trustedKeys().find((k) => k.principal === principal && !k.retired)?.keyId;
+    if (mine !== current) {
+      throw new LedgerError("NOT_PERMITTED", `this computer does not hold the current owner key ${current}, so it cannot set a recovery code`);
+    }
+    const secret = newRecoverySecret();
+    const code = formatRecoveryCode(secret);
+    const key = deriveRecoveryKey(secret, chain.genesis);
+    secret.fill(0);
+    key.wipe();
+    const entry = this.writeOwnerEntry({
+      actor: person,
+      type: "owner.recovery.set",
+      subject: key.keyId,
+      summary: "Set a new owner recovery code (earlier codes no longer work)",
+      reason,
+      data: { genesis: chain.genesis, recoveryKeyId: key.keyId, recoveryPublicKey: key.publicKey },
+    });
+    return { code, entry };
+  }
+
+  /**
+   * Checks a typed recovery code against this ledger without writing: who
+   * the owner is, and the ledger's head for the person to confirm (a code
+   * proves where the history starts, not that its end is all there).
+   */
+  checkRecoveryCode(typed: string): RecoveryCheck {
+    return checkRecoveryCode(this.list, typed);
+  }
+
+  /**
+   * On a computer without the owner key: the person types the recovery code
+   * and confirms the head checkRecoveryCode showed them. The code's key
+   * signs an owner.recovered entry for exactly that head, countersigned by
+   * this computer's key, which becomes the owner key (the old one stops
+   * signing). The code is spent, and a new one is made and returned once.
+   * The app must then pin `ownerKey` for this project. App use only, from
+   * the person's own session; never on an agent or MCP route.
+   */
+  recoverOwner(
+    person: Actor,
+    typed: string,
+    confirmedHead: { n: string; hash: string },
+    reason: string,
+  ): { ownerKey: string; recovered: LedgerEntry; code: string; codeEntry: LedgerEntry } {
+    if (!this.writable) throw new LedgerError("READ_ONLY", `this ledger is read-only (${this.store.description})`);
+    if (person?.kind !== "person") throw new LedgerError("BAD_ACTOR", "only a person can recover a project");
+    // Without the owner key, entries it signed show as unchecked signatures; anything worse must be fixed first.
+    if (!this.chain.ok && this.chain.problem !== "signature") {
+      throw new LedgerError("CHAIN_BROKEN", `the ledger is damaged at ${this.chain.firstBad} (${this.chain.problem}); restore it before recovering`);
+    }
+    const last = this.last();
+    if (!last || last.n !== confirmedHead?.n || last.hash !== confirmedHead?.hash) {
+      throw new LedgerError("RULE", `the ledger's last entry is ${last?.n ?? "nothing"}, not the one that was confirmed; check it again before recovering`);
+    }
+    const check = checkRecoveryCode(this.list, typed);
+    const principal = principalOf(person);
+    if (check.owner !== principal) throw new LedgerError("NOT_PERMITTED", `this project belongs to ${check.owner.replace(/^person:/, "")}; only they can recover it`);
+    const keys = this.keys;
+    if (!keys) throw new LedgerError("NOT_SIGNED", `recovery needs this computer's key store (${this.store.description})`);
+    let mine = keys.trustedKeys().find((k) => k.principal === principal && !k.retired);
+    if (!mine && keys.stageKey && keys.activateKey) {
+      mine = keys.stageKey(principal);
+      keys.activateKey(principal, mine.keyId);
+    }
+    if (!mine) throw new LedgerError("NOT_SIGNED", `this computer has no key for ${principal} to take over as owner`);
+    if (mine.keyId === check.ownerKey) throw new LedgerError("RULE", "this computer already holds the owner key; there is nothing to recover");
+    const chain = ownerChain(this.list)!;
+    const secret = parseRecoveryCode(typed);
+    const recoveryKey = deriveRecoveryKey(secret, chain.genesis);
+    secret.fill(0);
+    const head = { n: last.n, hash: last.hash };
+    let recoverySignature: string;
+    try {
+      recoverySignature = recoveryKey.sign(recoveryStatement({ genesis: chain.genesis, head, newKeyId: mine.keyId, recoveryKeyId: recoveryKey.keyId }));
+    } finally {
+      recoveryKey.wipe();
+    }
+    const previousPin = this.ownerKey;
+    if (!this.chain.ok) this.store.resetHead(head);
+    // Pin the new key first so the entry is checked as the owner's once written.
+    this.ownerKey = mine.keyId;
+    let recovered: LedgerEntry;
+    try {
+      recovered = this.writeOwnerEntry({
+        actor: person,
+        type: "owner.recovered",
+        subject: mine.keyId,
+        summary: `Recovered ownership on a new computer with the recovery code; owner key is now ${mine.keyId}`,
+        reason,
+        data: { genesis: chain.genesis, head, newKeyId: mine.keyId, newPublicKey: mine.publicKey, recoveryKeyId: recoveryKey.keyId, recoverySignature },
+      });
+    } catch (error) {
+      this.ownerKey = previousPin;
+      this.reassess();
+      throw error;
+    }
+    this.reassess();
+    if (this.trust.owner !== principal) {
+      throw new LedgerError("RULE", `the recovery entry ${recovered.n} was written but did not establish ownership: ${this.chain.ok ? "unknown reason" : this.chain.detail}`);
+    }
+    const next = this.setRecoveryCode(person, "New code after recovery: the old one is spent");
+    return { ownerKey: mine.keyId, recovered, code: next.code, codeEntry: next.entry };
+  }
+
+  private writeOwnerEntry(draft: EntryDraft): LedgerEntry {
+    this.writingOwnerEntry = true;
+    try {
+      return this.write(draft);
+    } finally {
+      this.writingOwnerEntry = false;
+    }
+  }
+
   private write(input: EntryDraft, acknowledging = false): LedgerEntry {
     if (!input || typeof input !== "object") throw new LedgerError("EMPTY_FIELD", "an entry is required");
     // Work on a frozen JSON copy: what is checked is what is hashed and stored,
@@ -363,6 +500,9 @@ export class Ledger {
       throw new LedgerError("RULE", "chain.acknowledged is written only by acknowledgeBreak, by a person");
     }
     this.validate(draft);
+    if (draft.type.startsWith("owner.") && !this.writingOwnerEntry) {
+      throw new LedgerError("RULE", `${draft.type} is written only by setRecoveryCode or recoverOwner, from the person's own app session`);
+    }
     const previous = this.last();
     let at = this.now();
     if (previous && at.getTime() < Date.parse(previous.at)) at = new Date(previous.at);
@@ -392,7 +532,7 @@ export class Ledger {
     this.index.set(entry.n, this.list.length);
     this.list.push(entry);
     if (entry.sig) markVerified(entry);
-    if (entry.type.startsWith("key.") || entry.type === "chain.acknowledged" || !this.chain.ok || this.trust.owner === undefined) {
+    if (entry.type.startsWith("key.") || entry.type.startsWith("owner.") || entry.type === "chain.acknowledged" || !this.chain.ok || this.trust.owner === undefined) {
       // A key change (or the first person entry) can change what checks out; re-check everything.
       this.reassess();
     }
@@ -425,6 +565,10 @@ export class Ledger {
       this.anchors = readAnchors(this.keys);
       this.trust = keyTrust(this.anchors, this.list, { ownerKey: this.ownerKey });
       this.trusted = this.trust.trusted;
+    }
+    const replaced = this.trust.ownerKeyReplaced;
+    if (replaced && signed.keyId === this.ownerKey) {
+      throw new LedgerError("NOT_SIGNED", `this project was recovered on another computer at ${replaced.n}; this computer's owner key no longer signs. If that was not you, keep this copy read-only and start a new project from it`);
     }
     const pub = this.trusted.get(signed.keyId)?.publicKey;
     if (!pub) throw new LedgerError("NOT_SIGNED", `${principal} signed with key ${signed.keyId}, which this device does not trust`);
