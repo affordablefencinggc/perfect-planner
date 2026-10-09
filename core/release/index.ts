@@ -9,3 +9,4 @@ export * from "./budget";
 export * from "./ciPlan";
 export * from "./pipeline";
 export * from "./rollback";
+export * from "./protect";

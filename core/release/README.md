@@ -30,6 +30,39 @@ outright (the ledger itself already refuses agents and Jev). The gate reads the 
 from the ledger (`runCheapFirst(change, { ledger, author })`); callers cannot
 pass one in.
 
+## On by default (`protect.ts`)
+
+The host calls this once when it opens a project (`openCoreProject`):
+
+```ts
+await protectProject(ledger, { run, cwd: repoRoot }) // { rules: "on", prePush: { state, path, reason } }
+```
+
+It installs the release rules on the ledger and the whole-branch secret scan
+as the repository's pre-push hook (`DEFAULT_PRE_PUSH_SCRIPT`). The rules have
+no off switch. The pre-push scan can be switched off only by a person's
+signed decision (`setPrePushScan(ledger, person, false, reason)`, topic
+`release-safety`); a system or agent entry is refused, and one written before
+the rule existed is ignored. Switching it off removes only our own hook.
+`prePush.state` is `installed`, `opted-out`, `foreign-hook` (the repo has its
+own hook, left alone; chain the scan into it by hand) or `not-a-repo`.
+
+## Protect `main` on GitHub (your setting)
+
+A direct push to an unprotected `main` skips review and CI, and no code in
+the app can stop it. On GitHub, open the repository's **Settings > Branches
+> Add branch protection rule** (or **Settings > Rules > Rulesets > New branch
+ruleset**), branch name pattern `main`, then tick:
+
+1. **Require a pull request before merging**.
+2. **Require status checks to pass before merging**, and add: `Core loop on
+   ubuntu-latest`, `Core loop on macos-latest`, `Core loop on windows-latest`
+   (core), `Web, contracts, MCP, and Sites` (web) and `Windows native compile
+   and tests` (guardrail).
+3. Leave **Allow force pushes** and **Allow deletions** off.
+4. Optional: **Do not allow bypassing the above settings**, so admins follow
+   them too.
+
 ## Cheap checks first (`pipeline.ts`, `risk.ts`)
 
 `runCheapFirst(change, { ledger, author, ... })` runs, cheapest first, and
@@ -38,8 +71,8 @@ money on the later ones. It fails closed: without the ledger (preset and
 budget) or the builder (`author`, for reviewer independence) it throws
 instead of running with defaults. It also installs the release rules on the
 ledger (`installReleaseRules`: budget stop plus person-only settings, once per
-ledger); the app should call `installReleaseRules(ledger)` when it opens the
-ledger too, so the rules hold before the first review.
+ledger). The host also installs them when it opens a project, through
+`protectProject` (below), so they hold before the first review.
 
 1. **budget**: a stopped month holds everything (free)
 2. **size-cap**: oversize changes are held with a split plan (free)

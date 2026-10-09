@@ -76,8 +76,8 @@ const wired = new WeakSet<Ledger>();
 /**
  * Installs the release rules on a ledger once: new runs stop when the month's
  * budget is spent, and only a person may change the review preset or budget.
- * The gate calls this itself; the app should also call it when it opens the
- * ledger so the rules hold before the first review runs.
+ * The gate calls this itself, and protectProject calls it when the host opens
+ * the project, so the rules hold before the first review runs.
  */
 export function installReleaseRules(ledger: Ledger, options: { now?: () => Date } = {}): void {
   if (wired.has(ledger)) return;

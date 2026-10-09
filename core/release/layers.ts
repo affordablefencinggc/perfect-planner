@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { PushProtectionResult } from "./pushProtection";
 import { checkIgnoreList, scanText } from "./secrets";
@@ -140,4 +140,12 @@ export async function installPrePushHook(
   writeFileSync(file, prePushShim(options.hookScript), { mode: 0o755 });
   chmodSync(file, 0o755);
   return { installed: true, path: file };
+}
+
+/** Removes the pre-push scan, but only when the hook is ours; someone else's hook is left alone. */
+export async function removePrePushHook(run: CommandRunner, options: { cwd: string }): Promise<{ removed: boolean; path: string }> {
+  const file = join(await hooksDir(run, options.cwd), "pre-push");
+  if (!existsSync(file) || !readFileSync(file, "utf8").includes(SHIM_MARK)) return { removed: false, path: file };
+  rmSync(file);
+  return { removed: true, path: file };
 }
