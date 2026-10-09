@@ -1,0 +1,642 @@
+/* Prove polish (Integrity + Evidence). Uses the tokens in ../frame.css. */
+
+/* ---------- Shared type floor: nothing under 12px ---------- */
+.app-shell :is(.integrity-workspace, .evidence-workspace) .eyebrow {
+  font-size: var(--text-xs);
+  letter-spacing: 0.08em;
+  line-height: 1.4;
+}
+
+/* ================= INTEGRITY ================= */
+.app-shell .integrity-workspace {
+  padding-block: var(--space-5) var(--space-7);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+.app-shell .integrity-workspace > * {
+  flex-shrink: 0;
+}
+.app-shell .integrity-workspace .integrity-header {
+  align-items: flex-start;
+  gap: var(--space-5);
+  padding: 0;
+}
+.app-shell .integrity-workspace .integrity-header h1 {
+  margin: var(--space-1) 0 var(--space-2);
+  font-size: var(--text-2xl);
+  line-height: 1.2;
+}
+.app-shell .integrity-workspace .integrity-header p {
+  max-width: 78ch;
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-md);
+  line-height: 1.5;
+}
+.app-shell .integrity-workspace .release-verdict {
+  flex: 0 0 auto;
+  min-width: 180px;
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-md);
+}
+.app-shell .integrity-workspace .release-verdict small {
+  font-size: var(--text-xs);
+}
+.app-shell .integrity-workspace .release-verdict strong {
+  font-size: var(--text-lg);
+}
+
+/* Summary strip: equal cells, aligned baselines */
+.app-shell .integrity-workspace .integrity-summary {
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+}
+.app-shell .integrity-workspace .integrity-summary div {
+  padding: var(--space-4) var(--space-5);
+  display: grid;
+  align-content: start;
+  gap: var(--space-1);
+  min-width: 0;
+  border-left: 1px solid var(--border);
+}
+.app-shell .integrity-workspace .integrity-summary div:first-child {
+  border-left: 0;
+}
+.app-shell .integrity-workspace .integrity-summary strong {
+  font-size: var(--text-xl);
+  line-height: 1.2;
+}
+.app-shell .integrity-workspace .integrity-summary span {
+  font-size: var(--text-xs) !important;
+  line-height: 1.4;
+  color: var(--muted);
+}
+
+/* Grid: truth core full width, then a real 2x2 of equal panels */
+.app-shell .integrity-workspace .integrity-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-5);
+}
+.app-shell .integrity-workspace .truth-panel {
+  grid-column: auto;
+  width: 100%;
+}
+.app-shell .integrity-workspace .operational-integrity-grid {
+  width: 100%;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: none;
+  grid-auto-rows: auto;
+  gap: var(--space-5);
+  align-items: stretch;
+}
+.app-shell .integrity-workspace .guarantee-panel,
+.app-shell .integrity-workspace .guarantee-panel.truth-panel {
+  min-height: 0 !important;
+  height: auto;
+  padding: 0 !important;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+}
+.app-shell .integrity-workspace .operational-integrity-grid > .guarantee-panel {
+  height: auto;
+}
+.app-shell .integrity-workspace .guarantee-panel.truth-invalid {
+  border-color: #d9a9a5;
+}
+.app-shell .integrity-workspace .guarantee-panel.truth-valid {
+  border-color: #9cc4a8;
+}
+.app-shell .integrity-workspace .guarantee-panel > :not(.guarantee-title) {
+  margin-inline: var(--space-5);
+}
+.app-shell .integrity-workspace .guarantee-panel > :last-child {
+  margin-bottom: var(--space-5);
+}
+.app-shell .integrity-workspace .guarantee-title {
+  min-height: 52px !important;
+  margin: 0 !important;
+  padding: var(--space-3) var(--space-5);
+  gap: var(--space-2);
+  background: var(--surface-header);
+  border-bottom: 1px solid var(--border);
+}
+.app-shell .integrity-workspace .guarantee-title svg {
+  flex: none;
+  width: 20px;
+  height: 20px;
+}
+.app-shell .integrity-workspace .guarantee-title strong {
+  font-size: var(--text-md);
+}
+.app-shell .integrity-workspace .guarantee-title span {
+  margin-left: auto;
+  text-align: right;
+  font-size: var(--text-xs) !important;
+  line-height: 1.3;
+}
+.app-shell .integrity-workspace .panel-note {
+  max-width: 78ch;
+  margin-block: 0;
+  font-size: var(--text-sm);
+  line-height: 1.55;
+}
+.app-shell .integrity-workspace .truth-panel .soft-button {
+  align-self: flex-start;
+  min-height: 36px;
+  padding-inline: var(--space-4);
+  border-radius: var(--radius-sm);
+}
+
+/* Truth metrics: auto-fit tiles, no orphan gaps */
+.app-shell .integrity-workspace .truth-metrics {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+.app-shell .integrity-workspace .truth-metrics span:last-child {
+  grid-column: span 2;
+}
+@media (max-width: 1100px) {
+  .app-shell .integrity-workspace .truth-metrics {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .app-shell .integrity-workspace .truth-metrics span:last-child {
+    grid-column: auto;
+  }
+}
+@media (max-width: 560px) {
+  .app-shell .integrity-workspace .truth-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+.app-shell .integrity-workspace .truth-metrics span {
+  padding: var(--space-3) var(--space-4);
+  gap: var(--space-1);
+  border-radius: var(--radius-sm);
+  border-color: var(--border);
+  background: var(--surface-muted);
+  font-size: var(--text-xs) !important;
+}
+.app-shell .integrity-workspace .truth-metrics strong,
+.app-shell .integrity-workspace .truth-metrics code {
+  font-size: var(--text-md) !important;
+}
+
+/* Session rows / proof audits / stop list share one row rhythm */
+.app-shell .integrity-workspace .session-list,
+.app-shell .integrity-workspace .proof-audit-list,
+.app-shell .integrity-workspace .stop-list {
+  gap: var(--space-2);
+}
+.app-shell .integrity-workspace .session-row,
+.app-shell .integrity-workspace .proof-audit,
+.app-shell .integrity-workspace .stop-list > div {
+  min-height: 64px !important;
+  padding: var(--space-3) var(--space-4) !important;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+}
+.app-shell .integrity-workspace .session-row {
+  grid-template-columns: 12px minmax(120px, 0.9fr) minmax(0, 1.2fr) auto;
+  gap: var(--space-3);
+}
+.app-shell .integrity-workspace .session-row > span:nth-child(3) {
+  overflow-wrap: anywhere;
+  font-size: var(--text-xs) !important;
+}
+.app-shell .integrity-workspace .session-row strong,
+.app-shell .integrity-workspace .proof-audit strong {
+  font-size: var(--text-sm) !important;
+  line-height: 1.35;
+}
+.app-shell .integrity-workspace .session-row code,
+.app-shell .integrity-workspace .proof-audit code {
+  font-size: var(--text-xs) !important;
+}
+.app-shell .integrity-workspace .proof-audit small {
+  font-size: var(--text-xs) !important;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  white-space: normal;
+  text-overflow: clip;
+  display: block;
+}
+.app-shell .integrity-workspace .stop-list > div {
+  min-height: 48px !important;
+  font-size: var(--text-sm) !important;
+  align-items: center;
+}
+.app-shell .integrity-workspace :is(.session-row, .proof-audit):hover {
+  border-color: var(--border-strong);
+  background: var(--surface-muted);
+}
+.app-shell .integrity-workspace :is(.session-row, .proof-audit, .soft-button):focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+/* Parallel map: columns scroll inside the panel, never past it */
+.app-shell .integrity-workspace .wave-map {
+  min-height: 0;
+  max-width: 100%;
+  gap: var(--space-3) !important;
+  padding: 0 0 var(--space-2);
+  overflow-x: auto;
+}
+.app-shell .integrity-workspace .wave-column {
+  flex: 1 0 180px;
+  min-width: 180px !important;
+}
+.app-shell .integrity-workspace .wave-column > strong {
+  font-size: var(--text-sm) !important;
+}
+.app-shell .integrity-workspace .lane span,
+.app-shell .integrity-workspace .lane code {
+  font-size: var(--text-xs) !important;
+  overflow-wrap: anywhere;
+}
+.app-shell .integrity-workspace .execution-foot {
+  margin-top: auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: var(--space-3);
+}
+.app-shell .integrity-workspace .execution-foot span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: var(--text-xs) !important;
+}
+.app-shell .integrity-workspace .execution-foot strong {
+  font-size: var(--text-xs) !important;
+}
+
+/* Completion contract */
+.app-shell .integrity-workspace .completion-counts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-2);
+}
+.app-shell .integrity-workspace .completion-counts span {
+  font-size: var(--text-xs) !important;
+  text-align: center;
+}
+.app-shell .integrity-workspace .completion-counts strong {
+  font-size: var(--text-md) !important;
+}
+.app-shell .integrity-workspace .unproven-box {
+  border-radius: var(--radius-sm);
+  padding: var(--space-3) var(--space-4);
+}
+.app-shell .integrity-workspace .unproven-box strong {
+  font-size: var(--text-xs) !important;
+  letter-spacing: 0.06em;
+}
+.app-shell .integrity-workspace .unproven-box p {
+  margin: var(--space-1) 0 0;
+  font-size: var(--text-sm) !important;
+  line-height: 1.5;
+}
+
+@media (max-width: 1100px) {
+  .app-shell .integrity-workspace .integrity-summary {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .app-shell .integrity-workspace .integrity-summary div:nth-child(n + 4) {
+    border-top: 1px solid var(--border);
+  }
+  .app-shell .integrity-workspace .integrity-summary div:nth-child(4) {
+    border-left: 0;
+  }
+}
+@media (max-width: 1100px) {
+  .app-shell .integrity-workspace .operational-integrity-grid {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+}
+@media (max-width: 720px) {
+  .app-shell .integrity-workspace .integrity-header {
+    flex-direction: column;
+  }
+  .app-shell .integrity-workspace .integrity-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* ================= EVIDENCE ================= */
+.app-shell .evidence-workspace {
+  padding-block: 0 var(--space-4);
+}
+.app-shell .evidence-workspace .evidence-toolbar {
+  height: auto;
+  min-height: 72px;
+  padding-block: var(--space-4) var(--space-3);
+  flex-wrap: wrap;
+  gap: var(--space-3) var(--space-5);
+  align-items: flex-end;
+}
+.app-shell .evidence-workspace .evidence-toolbar h1 {
+  margin: var(--space-1) 0 0;
+  font-size: var(--text-xl);
+  line-height: 1.25;
+}
+.app-shell .evidence-workspace .canvas-legend {
+  flex-wrap: wrap;
+  gap: var(--space-3) var(--space-4);
+  font-size: var(--text-xs);
+  align-items: center;
+}
+.app-shell .evidence-workspace .evidence-view-toggle button,
+.app-shell .evidence-workspace .ledger-button {
+  min-height: 36px;
+  padding-inline: var(--space-3);
+  font-size: var(--text-xs) !important;
+  border-radius: var(--radius-sm);
+}
+.app-shell .evidence-workspace .evidence-view-toggle {
+  border-radius: var(--radius-md);
+}
+.app-shell .evidence-workspace .evidence-view-toggle button.active {
+  font-weight: 700;
+}
+.app-shell .evidence-workspace .evidence-view-toggle button:not(.active):hover,
+.app-shell .evidence-workspace .ledger-button:hover {
+  background: var(--surface-muted);
+  color: var(--ink);
+}
+.app-shell .evidence-workspace :is(.evidence-view-toggle button, .ledger-button, .journey-card, .journey-calendar-rail button, .journey-spine-controls button, .evidence-node):focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.app-shell .evidence-workspace .journey-viewport {
+  height: calc(100% - 72px);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+  background-color: var(--surface-muted);
+  display: flex;
+  flex-direction: column;
+}
+
+/* Summary: one row of equal tiles, then the note */
+.app-shell .evidence-workspace .journey-summary {
+  position: sticky;
+  top: 0;
+  flex: none;
+  min-width: 0;
+  min-height: 0;
+  padding: var(--space-3) var(--space-4);
+  grid-template-columns: repeat(5, minmax(120px, 160px)) minmax(240px, 1fr);
+  gap: var(--space-3);
+  align-items: stretch;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+.app-shell .evidence-workspace .journey-summary > div {
+  padding: var(--space-2) var(--space-3);
+  align-content: start;
+  gap: var(--space-1);
+  border-color: var(--border);
+  border-radius: var(--radius-sm);
+}
+.app-shell .evidence-workspace .journey-summary strong {
+  font-size: var(--text-md);
+  line-height: 1.25;
+}
+.app-shell .evidence-workspace .journey-summary span,
+.app-shell .evidence-workspace .journey-summary p {
+  font-size: var(--text-xs) !important;
+  line-height: 1.4 !important;
+}
+.app-shell .evidence-workspace .journey-summary p {
+  align-self: center;
+}
+
+/* Calendar scrubber: a compact horizontal bar instead of a floating overlay */
+.app-shell .evidence-workspace .journey-calendar-rail {
+  position: static;
+  flex: none;
+  width: auto;
+  min-height: 0;
+  margin: var(--space-3) var(--space-4) 0;
+  padding: var(--space-2) var(--space-3);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: none;
+  background: var(--surface);
+}
+.app-shell .evidence-workspace .journey-calendar-rail > strong {
+  font-size: var(--text-xs);
+}
+.app-shell .evidence-workspace .journey-calendar-rail > div {
+  display: flex;
+  gap: var(--space-1);
+}
+.app-shell .evidence-workspace .journey-calendar-rail button {
+  min-height: 32px;
+  padding: 0 var(--space-3);
+  font-size: var(--text-xs);
+  border-radius: var(--radius-sm);
+}
+.app-shell .evidence-workspace .journey-calendar-rail label {
+  flex: 1 1 280px;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+  font-size: var(--text-xs);
+}
+.app-shell .evidence-workspace .journey-calendar-rail label input {
+  flex: 1 1 120px;
+  min-width: 80px;
+  margin: 0;
+}
+.app-shell .evidence-workspace .journey-calendar-rail small {
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+
+/* Journey map: compact, fluid zigzag around a slim spine */
+.app-shell .evidence-workspace .journey-map {
+  width: 100%;
+  min-width: 0;
+  max-width: 1480px;
+  margin: 0 auto;
+  padding: var(--space-5) var(--space-4) var(--space-7);
+  gap: var(--space-5);
+}
+.app-shell .evidence-workspace .journey-row {
+  grid-template-columns: minmax(0, 1fr) 56px minmax(0, 1fr);
+  align-items: center;
+}
+.app-shell .evidence-workspace .journey-sequence {
+  align-self: center;
+  margin: 0;
+  width: 32px;
+  height: 32px;
+  font-size: var(--text-xs);
+}
+.app-shell .evidence-workspace .journey-card {
+  min-height: 0;
+  padding: var(--space-5);
+  gap: var(--space-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+}
+.app-shell .evidence-workspace .journey-card.expanded {
+  min-height: 0;
+}
+.app-shell .evidence-workspace .journey-card:hover {
+  border-color: var(--ink);
+}
+.app-shell .evidence-workspace .journey-card-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-3);
+}
+.app-shell .evidence-workspace .journey-card-head strong {
+  flex: 1 1 140px;
+  min-width: 0;
+  font-size: var(--text-md) !important;
+}
+.app-shell .evidence-workspace .journey-card-head code {
+  font-size: var(--text-xs);
+}
+.app-shell .evidence-workspace .journey-route {
+  font-size: var(--text-xs) !important;
+}
+.app-shell .evidence-workspace .journey-responsibility {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.app-shell .evidence-workspace .journey-responsibility > span {
+  padding: var(--space-1) var(--space-3);
+  font-size: var(--text-xs) !important;
+  border-radius: var(--radius-sm);
+}
+.app-shell .evidence-workspace .journey-card-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+  gap: var(--space-3);
+  align-items: stretch;
+}
+.app-shell .evidence-workspace .journey-placeholder,
+.app-shell .evidence-workspace .journey-proof {
+  min-height: 140px;
+  padding: var(--space-4);
+  border-radius: var(--radius-md);
+  align-self: stretch;
+}
+.app-shell .evidence-workspace .journey-proof img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.app-shell .evidence-workspace .journey-proof.missing small,
+.app-shell .evidence-workspace .journey-placeholder small {
+  font-size: var(--text-xs) !important;
+}
+.app-shell .evidence-workspace .journey-progress strong {
+  font-size: var(--text-xs) !important;
+  min-width: 8ch;
+  text-align: right;
+}
+.app-shell .evidence-workspace .journey-expanded-detail small,
+.app-shell .evidence-workspace .journey-expanded-detail code {
+  font-size: var(--text-xs) !important;
+  overflow-wrap: anywhere;
+}
+.app-shell .evidence-workspace .journey-now-line {
+  left: 0;
+  width: 100%;
+  transform: none;
+  background: transparent;
+  border-top: 1px dashed var(--ink);
+  box-shadow: none;
+}
+.app-shell .evidence-workspace .journey-now-line span {
+  left: auto;
+  right: var(--space-2);
+  bottom: var(--space-1);
+  font-size: var(--text-xs);
+  font-weight: 700;
+}
+
+/* Screenshot proof canvas */
+.app-shell .evidence-workspace .evidence-viewport {
+  height: calc(100% - 72px);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+}
+.app-shell .evidence-workspace .evidence-caption,
+.app-shell .evidence-workspace .evidence-phase span,
+.app-shell .evidence-workspace .evidence-node code {
+  font-size: var(--text-xs) !important;
+}
+
+@media (max-width: 1180px) {
+  .app-shell .evidence-workspace .journey-summary {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+  .app-shell .evidence-workspace .journey-summary p {
+    grid-column: 1 / -1;
+  }
+  /* Single column beside a left spine */
+  .app-shell .evidence-workspace .journey-spine {
+    left: 16px;
+    transform: none;
+  }
+  .app-shell .evidence-workspace .journey-spine-controls {
+    display: none;
+  }
+  .app-shell .evidence-workspace .journey-row {
+    grid-template-columns: 32px minmax(0, 1fr);
+    column-gap: var(--space-4);
+  }
+  .app-shell .evidence-workspace .journey-sequence {
+    grid-column: 1;
+    grid-row: 1;
+  }
+  .app-shell .evidence-workspace .journey-row .journey-card {
+    grid-column: 2 !important;
+    grid-row: 1;
+  }
+  .app-shell .evidence-workspace .journey-card::after {
+    display: none;
+  }
+  .app-shell .evidence-workspace .journey-now-line {
+    left: 0;
+    width: 100%;
+    transform: none;
+  }
+}
+@media (max-width: 720px) {
+  .app-shell .evidence-workspace .journey-card-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .app-shell .evidence-workspace .journey-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}

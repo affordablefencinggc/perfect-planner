@@ -62,7 +62,8 @@ describe("Perfect Planner shell interaction and accessibility", () => {
     expect(await screen.findByRole("region", { name: "Plan workspace" })).toBeTruthy();
     expect(screen.getByRole("navigation", { name: "Coordinate pages" })).toBeTruthy();
     const pages = screen.getByRole("navigation", { name: "Coordinate pages" });
-    expect(pages.closest(".workspace-stage")).toBeTruthy();
+    // Coordinate pages use the same tab row in the context strip as every other stage.
+    expect(pages.closest(".workspace-context")).toBeTruthy();
     expect(within(pages).getByRole("button", { name: "Plan", exact: true }).getAttribute("aria-current")).toBe("page");
     await user.click(screen.getByRole("button", { name: "Allocation" }));
     expect(await screen.findByRole("region", { name: "Allocation workspace" })).toBeTruthy();
