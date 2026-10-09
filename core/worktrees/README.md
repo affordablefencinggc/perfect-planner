@@ -12,8 +12,9 @@ small platform layer (`platform.ts`, `git.ts`) that `core/watcher` and `core/gat
    no other running task has claimed the same files.
 2. Refuses if branch `pp/T-14` already exists. Retries get a new attempt id instead of reusing a branch.
 3. `git worktree add -b pp/T-14 .perfect-planner/worktrees/T-14 <base sha>`. Git itself refuses to
-   check one branch out in two worktrees. The folder is added to `.git/info/exclude`, so the main
-   checkout stays clean without editing the tracked `.gitignore`.
+   check one branch out in two worktrees. The whole `.perfect-planner/` folder (worktrees, the ledger,
+   worker tokens) is added to `.git/info/exclude` (`REQUIRED_IGNORES`, `ensureRequiredIgnores`), so
+   `git add -A` never stages it and the main checkout stays clean without editing the tracked `.gitignore`.
 4. Picks a free dev-server port (default 5200 to 5999) that no other worktree holds and nothing is listening on.
 5. Copies untracked `.env*` files from the main checkout with every value replaced by `PLACEHOLDER`, except plainly
    safe settings (ports, hosts, modes, flags) whose values don't themselves look secret. Connection strings with

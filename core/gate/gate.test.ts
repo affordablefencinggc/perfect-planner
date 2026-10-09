@@ -466,6 +466,29 @@ describe("TestGate", () => {
     expect(ledger.entries().at(-1)).toMatchObject({ type: "task.done", data: { approvedBy: OWNER } });
   }, SLOW);
 
+  it("keeps .perfect-planner/ (ledger, worker tokens) out of commits and refuses a branch that committed it", async () => {
+    const { root, gate, worktree, branch, addWorktree } = await approved();
+    // After the gate has run, `git add -A` in the main checkout skips the planner folder.
+    writeFiles(root, { ".perfect-planner/ledger/2026-10.jsonl": "{}\n", ".perfect-planner/tokens/worker-1": "secret-token\n" });
+    await git(root, ["add", "-A"]);
+    expect(await git(root, ["diff", "--cached", "--name-only"])).toBe("");
+    await addWorktree();
+    // A forced add still lands in the index; prove refuses to count that commit.
+    writeFiles(worktree, { "feature.txt": "enabled\n", ".perfect-planner/tokens/worker-1": "secret-token\n" });
+    await git(worktree, ["add", "-f", ".perfect-planner/tokens/worker-1"]);
+    await commitAll(worktree, "enable feature with a token");
+    expect(await gate.prove("T-1", worktree)).toMatchObject({ ok: false, reason: expect.stringContaining(".perfect-planner/tokens/worker-1") });
+    // Untracking it at the tip is not enough: it is still in the branch's history.
+    await git(worktree, ["rm", "-q", "--cached", ".perfect-planner/tokens/worker-1"]);
+    const tip = await commitAll(worktree, "untrack the token");
+    expect((await gate.prove("T-1", worktree)).ok).toBe(true);
+    expect(gate.approveDiff("T-1", OWNER, tip).ok).toBe(true);
+    expect(gate.approveMerge("T-1", OWNER, tip).ok).toBe(true);
+    const merged = await gate.mergeAndVerify("T-1", { repoRoot: root, branch, integrationBranch: "main", actor: OWNER });
+    expect(merged).toMatchObject({ ok: false, reason: expect.stringContaining(".perfect-planner/tokens/worker-1") });
+    expect(await head(root, "main")).not.toBe(tip);
+  }, SLOW);
+
   it("an unsigned Jev verdict on the test cannot clear the gaps Jev found", async () => {
     const { root, gate, ledger } = await setup();
     gate.define("T-1", COMMAND, WORKER);
