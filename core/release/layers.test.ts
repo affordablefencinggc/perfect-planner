@@ -47,10 +47,16 @@ describe("secret posture", () => {
     expect(secretPosture({ pushProtection: { status: "unknown", detail: "no access" } }).layers[3].state).toBe("unchecked");
   });
 
-  it("writes a hook shim with forward slashes", () => {
-    const shim = prePushShim("C:\\repos\\pp\\core\\release\\hooks\\pre-push.mjs");
+  it("writes a hook shim with forward slashes, single-quoted so sh expands nothing", () => {
+    const shim = prePushShim("C:\\repos\\pp\\core\\release\\hooks\\pre-push.mjs", {});
     expect(shim.startsWith("#!/bin/sh\n")).toBe(true);
-    expect(shim).toContain('exec node "C:/repos/pp/core/release/hooks/pre-push.mjs" "$@"');
+    expect(shim).toContain(`exec node 'C:/repos/pp/core/release/hooks/pre-push.mjs' "$@"`);
+    expect(prePushShim("/opt/it's $(x)/pre-push.mjs", {})).toContain(`exec node '/opt/it'\\''s $(x)/pre-push.mjs' "$@"`);
+  });
+
+  it("runs the desktop app's own Node when it names one", () => {
+    const shim = prePushShim("C:\\PP\\desktop-host\\core-host\\hooks\\pre-push.mjs", { PP_NODE_BINARY: "C:\\Program Files\\PP\\desktop-host\\node.exe" });
+    expect(shim).toContain(`exec 'C:/Program Files/PP/desktop-host/node.exe' 'C:/PP/desktop-host/core-host/hooks/pre-push.mjs' "$@"`);
   });
 });
 
