@@ -3,7 +3,7 @@
 // leaves the task's files, weakens a test or adds a secret is rejected with
 // line notes even when Jev is unavailable.
 
-import { findSecrets } from "./redact";
+import { detectSecrets } from "./redact";
 
 export { REDACTED, SECRET_RULES, looksSecret, redactSecrets } from "./redact";
 
@@ -106,8 +106,8 @@ export function checkDiff(files: readonly DiffFile[], allowed: readonly string[]
       for (const l of file.added) if (SKIPPED.test(l.text)) notes.push({ file: file.path, line: l.line, rule: "tests", note: "A test is skipped or focused (.skip, .only, .todo)." });
     }
     for (const l of file.added) {
-      // The release scanner's rules, so a diff Jev passes is one the push check passes too.
-      const hit = findSecrets(file.path, l.text)[0];
+      // The release scanner's rules plus every format redaction knows (core/secrets).
+      const hit = detectSecrets(file.path, l.text)[0];
       if (hit) notes.push({ file: file.path, line: l.line, rule: "secret", note: `Looks like a ${hit.description.toLowerCase()} was added.` });
     }
   }
