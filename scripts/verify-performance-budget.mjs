@@ -8,7 +8,8 @@ import { gzipSync } from "node:zlib";
 export const PERFORMANCE_BUDGETS = Object.freeze({
   maxIndividualJavaScriptGzipBytes: 300 * 1024,
   // v1 (Oct 2026): totals raised for the seven on-demand imported-project panels; first-load limits unchanged.
-  maxTotalJavaScriptGzipBytes: 480 * 1024,
+  // Oct 2026: +16 KiB for the self-plan gap fixes (Blueprint pre-fill, task paste, scripted intake guard, discovery details); per-file limit unchanged.
+  maxTotalJavaScriptGzipBytes: 496 * 1024,
   maxIndividualStylesheetGzipBytes: 44 * 1024,
   maxTotalStylesheetGzipBytes: 56 * 1024,
   maxClientBytes: 14 * 1024 * 1024,
