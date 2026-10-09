@@ -1,0 +1,282 @@
+name: Installer Trial
+
+# Installs the desktop installers a Release run built, on clean GitHub-hosted Windows, macOS and
+# Linux runners, and smoke-tests them the way a person would: install, launch, first-run screen,
+# Settings, open a project folder, Connect agent, close, uninstall, look for leftovers.
+# - Called by release.yml after its builds (workflow_call) so every dry run and R-<n> tag is trialed.
+# - Push to a trial/** branch, or Run workflow, to trial earlier Release runs by id.
+# No pull_request trigger on purpose: the truth report treats every pull_request job as a locally
+# reproducible merge gate (src/node/ciDerivation.mjs), and these jobs install software.
+on:
+  push:
+    branches: ["trial/**"]
+  workflow_dispatch:
+    inputs:
+      source_runs:
+        description: 'Release workflow run ids to trial, as a JSON list (e.g. ["37918632579"])'
+        required: true
+  workflow_call:
+    inputs:
+      source_runs:
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  # Push-triggered trials use these Release runs: PR #12 head (main + pipeline) and the preview build.
+  DEFAULT_SOURCE_RUNS: '["37918632579","37915996951"]'
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      sources: ${{ steps.pick.outputs.sources }}
+    steps:
+      - id: pick
+        env:
+          INPUT: ${{ inputs.source_runs }}
+        run: echo "sources=${INPUT:-$DEFAULT_SOURCE_RUNS}" >> "$GITHUB_OUTPUT"
+
+  windows:
+    name: Windows (run ${{ matrix.source }})
+    needs: plan
+    runs-on: windows-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        source: ${{ fromJSON(needs.plan.outputs.sources) }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          sparse-checkout: scripts
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          run-id: ${{ matrix.source }}
+          github-token: ${{ github.token }}
+          pattern: PerfectPlanner-*-windows-x64
+          path: installers
+          merge-multiple: true
+      - name: Install tauri-driver and the WebView2-matched msedgedriver
+        shell: pwsh
+        run: |
+          cargo install tauri-driver --locked
+          $v = (Get-ItemProperty 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}' -ErrorAction SilentlyContinue).pv
+          Write-Output "WebView2 runtime $v"
+          $dest = Join-Path $env:RUNNER_TEMP edgedriver
+          New-Item -ItemType Directory -Force $dest | Out-Null
+          $ok = $false
+          foreach ($url in "https://msedgedriver.microsoft.com/$v/edgedriver_win64.zip", "https://msedgedriver.azureedge.net/$v/edgedriver_win64.zip") {
+            try { Invoke-WebRequest $url -OutFile "$dest\d.zip"; Expand-Archive "$dest\d.zip" $dest -Force; $ok = $true; break } catch { Write-Output "could not fetch $url" }
+          }
+          $driver = if ($ok) { "$dest\msedgedriver.exe" } else { Join-Path $env:EdgeWebDriver msedgedriver.exe }
+          & $driver --version
+          "NATIVE_DRIVER=$driver" | Out-File -Append $env:GITHUB_ENV
+      - name: Make a sample project folder
+        shell: pwsh
+        run: |
+          $f = Join-Path $env:RUNNER_TEMP "trial-sample-app"
+          New-Item -ItemType Directory -Force "$f\src" | Out-Null
+          '{ "name": "trial-sample-app", "version": "1.0.0" }' | Out-File "$f\package.json" -Encoding utf8
+          'export const hello = () => "hi";' | Out-File "$f\src\index.js" -Encoding utf8
+          "TRIAL_FOLDER=$f" | Out-File -Append $env:GITHUB_ENV
+      - name: List the installers
+        shell: pwsh
+        run: Get-ChildItem installers | Format-Table Name, Length
+      - name: Trial the NSIS setup.exe
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem installers -Filter *setup*.exe | Select-Object -First 1
+          if (-not $exe) { node scripts/release/trial/record-check.mjs evidence windows-nsis install fail "no setup.exe in run ${{ matrix.source }}"; exit 0 }
+          ./scripts/release/trial/trial-windows.ps1 -Installer $exe.FullName -Kind nsis -Out evidence -Folder $env:TRIAL_FOLDER -NativeDriver $env:NATIVE_DRIVER
+      - name: Trial the MSI
+        shell: pwsh
+        run: |
+          $msi = Get-ChildItem installers -Filter *.msi | Select-Object -First 1
+          if (-not $msi) { node scripts/release/trial/record-check.mjs evidence windows-msi install fail "no .msi in run ${{ matrix.source }}"; exit 0 }
+          ./scripts/release/trial/trial-windows.ps1 -Installer $msi.FullName -Kind msi -Out evidence -Folder $env:TRIAL_FOLDER -NativeDriver $env:NATIVE_DRIVER
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: trial-windows-${{ matrix.source }}
+          path: evidence
+          retention-days: 14
+
+  linux:
+    name: Linux ${{ matrix.os }} (run ${{ matrix.source }})
+    needs: plan
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        source: ${{ fromJSON(needs.plan.outputs.sources) }}
+        os: [ubuntu-22.04, ubuntu-24.04]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          sparse-checkout: scripts
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          run-id: ${{ matrix.source }}
+          github-token: ${{ github.token }}
+          pattern: PerfectPlanner-*-linux-x64
+          path: installers
+          merge-multiple: true
+      - name: Install a desktop session for the trial
+        run: |
+          sudo apt-get update
+          fuse=libfuse2; [ "${{ matrix.os }}" = ubuntu-24.04 ] && fuse=libfuse2t64
+          sudo apt-get install -y xvfb xdotool openbox dbus-x11 webkit2gtk-driver xdg-desktop-portal xdg-desktop-portal-gtk desktop-file-utils imagemagick $fuse
+          cargo install tauri-driver --locked
+          ls -la installers
+      - name: Trial the .deb and the AppImage
+        run: |
+          mkdir -p "$RUNNER_TEMP/trial-sample-app/src"
+          echo '{ "name": "trial-sample-app", "version": "1.0.0" }' > "$RUNNER_TEMP/trial-sample-app/package.json"
+          echo 'export const hello = () => "hi";' > "$RUNNER_TEMP/trial-sample-app/src/index.js"
+          Xvfb :99 -screen 0 1600x1000x24 & sleep 2
+          export DISPLAY=:99 XDG_CURRENT_DESKTOP=GNOME
+          dbus-run-session -- bash -c 'openbox & sleep 1; dbus-update-activation-environment DISPLAY XDG_CURRENT_DESKTOP; bash scripts/release/trial/trial-linux.sh installers evidence "$RUNNER_TEMP/trial-sample-app" "${{ matrix.os }}"'
+          import -window root "evidence/${{ matrix.os }}-desktop-end.png" || true
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: trial-linux-${{ matrix.os }}-${{ matrix.source }}
+          path: evidence
+          retention-days: 14
+
+  linux-rpm:
+    name: Linux Fedora rpm (run ${{ matrix.source }})
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        source: ${{ fromJSON(needs.plan.outputs.sources) }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          sparse-checkout: scripts
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          run-id: ${{ matrix.source }}
+          github-token: ${{ github.token }}
+          pattern: PerfectPlanner-*-linux-x64
+          path: installers
+          merge-multiple: true
+      - name: Install, check libraries, remove, in a Fedora container
+        run: |
+          rec() { node scripts/release/trial/record-check.mjs evidence fedora-rpm "$@"; }
+          rpm="$(ls installers/*.rpm | head -n1)"
+          [ -z "$rpm" ] && { rec install fail "no .rpm in run ${{ matrix.source }}"; exit 0; }
+          docker run --rm -v "$PWD/installers:/in:ro" fedora:41 bash -c '
+            set -u; r=$(ls /in/*.rpm | head -n1); name=$(rpm -qp --qf "%{NAME}" "$r")
+            dnf install -y "$r" > /tmp/dnf.log 2>&1 && echo "INSTALL=ok" || { echo "INSTALL=fail $(tail -n 4 /tmp/dnf.log | tr "\n" " ")"; exit 0; }
+            bin=$(rpm -ql "$name" | grep "^/usr/bin/" | grep -v helper | head -n1)
+            echo "FILES=$(rpm -ql "$name" | grep -E "^/usr/(bin|share/applications)" | tr "\n" " ")"
+            echo "LDD=$(ldd "$bin" | grep "not found" | tr "\n" " ")"
+            dnf remove -y "$name" > /tmp/rm.log 2>&1 && echo "REMOVE=ok" || echo "REMOVE=fail"
+            echo "LEFT=$(ls /usr/bin | grep -i perfect; ls /usr/share/applications | grep -i perfect)"
+          ' | tee rpm.out
+          mkdir -p evidence
+          get() { grep "^$1=" rpm.out | head -n1 | cut -d= -f2-; }
+          [ "$(get INSTALL)" = ok ] && rec install pass "dnf installed $(basename "$rpm"); $(get FILES)" || rec install fail "$(get INSTALL)"
+          [ "$(get INSTALL)" = ok ] || exit 0
+          [ -z "$(get LDD)" ] && rec "shared libraries" pass "ldd: all resolved on Fedora 41" || rec "shared libraries" fail "$(get LDD)"
+          [ "$(get REMOVE)" = ok ] && [ -z "$(get LEFT)" ] && rec "uninstall program files" pass "dnf remove ok; nothing left" || rec "uninstall program files" fail "$(get REMOVE) left: $(get LEFT)"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: trial-linux-rpm-${{ matrix.source }}
+          path: evidence
+          retention-days: 14
+
+  macos:
+    name: macOS ${{ matrix.target.platform }} (run ${{ matrix.source }})
+    needs: plan
+    runs-on: ${{ matrix.target.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        source: ${{ fromJSON(needs.plan.outputs.sources) }}
+        target:
+          - { platform: macos-arm64, os: macos-latest }
+          - { platform: macos-x64, os: macos-15-intel }
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          sparse-checkout: scripts
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          run-id: ${{ matrix.source }}
+          github-token: ${{ github.token }}
+          pattern: PerfectPlanner-*-${{ matrix.target.platform }}
+          path: installers
+          merge-multiple: true
+      - name: Trial the DMG
+        run: |
+          ls -la installers
+          sw_vers; uname -m
+          mkdir -p "$RUNNER_TEMP/trial-sample-app"
+          bash scripts/release/trial/trial-macos.sh installers evidence "$RUNNER_TEMP/trial-sample-app" "${{ matrix.target.platform }}"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: trial-${{ matrix.target.platform }}-${{ matrix.source }}
+          path: evidence
+          retention-days: 14
+
+  summary:
+    name: Trial summary
+    needs: [windows, linux, linux-rpm, macos]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          sparse-checkout: scripts
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: trial-*
+          path: evidence
+      - name: Summarize
+        run: |
+          node scripts/release/trial/summarize.mjs evidence "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" > evidence/SUMMARY.md; status=$?
+          cat evidence/SUMMARY.md >> "$GITHUB_STEP_SUMMARY"
+          cat evidence/SUMMARY.md
+          echo "TRIAL_STATUS=$status" >> "$GITHUB_ENV"
+      # Keep screenshots readable without downloading artifacts: commit them to an evidence-only branch.
+      - name: Publish evidence to the installer-trial-evidence branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir pub && cd pub && git init -q
+          git config user.name "github-actions[bot]"
+          git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
+          git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
+          if git fetch -q --depth 1 origin installer-trial-evidence; then git checkout -q -b installer-trial-evidence FETCH_HEAD; else git checkout -q --orphan installer-trial-evidence; fi
+          mkdir -p "runs/${{ github.run_id }}"
+          cp -R ../evidence/. "runs/${{ github.run_id }}/"
+          git add runs
+          git commit -qm "Installer trial evidence for run ${{ github.run_id }}"
+          git push -q origin HEAD:installer-trial-evidence
+      - name: Fail if any check failed
+        run: exit "$TRIAL_STATUS"

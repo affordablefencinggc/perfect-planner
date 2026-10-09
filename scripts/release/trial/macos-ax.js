@@ -1,0 +1,47 @@
+// JXA helper for the macOS installer trial: reads and presses the app's accessibility tree.
+//   osascript -l JavaScript macos-ax.js windows <bundle id>
+//   osascript -l JavaScript macos-ax.js text <bundle id>
+//   osascript -l JavaScript macos-ax.js press <bundle id> <case-insensitive regex>
+//   osascript -l JavaScript macos-ax.js key <bundle id> escape
+function run(argv) {
+  const [command, bundleId, pattern] = argv;
+  const se = Application("System Events");
+  const procs = se.processes.whose({ bundleIdentifier: bundleId })();
+  if (!procs.length) return `no process for ${bundleId}`;
+  const proc = procs[0];
+  if (command === "windows") {
+    const wins = proc.windows();
+    return `windows: count=${wins.length} ${wins.map((w) => JSON.stringify(w.name())).join(" ")}`;
+  }
+  if (command === "key") {
+    proc.frontmost = true;
+    se.keyCode(53);
+    return "key sent";
+  }
+  const seen = [];
+  const matches = [];
+  const re = pattern ? new RegExp(pattern, "i") : null;
+  const visit = (el, depth) => {
+    if (depth > 40 || seen.length > 4000) return;
+    let role = "", name = "", value = "", desc = "";
+    try { role = el.role(); } catch (e) {}
+    try { name = el.title() || ""; } catch (e) {}
+    try { desc = el.description() || ""; } catch (e) {}
+    try { const v = el.value(); value = typeof v === "string" ? v : ""; } catch (e) {}
+    const label = [name, desc, value].filter(Boolean).join(" | ");
+    if (label) seen.push(label);
+    if (re && /button|link|menuitem/i.test(role) && (re.test(name.trim()) || re.test(desc.trim()))) matches.push(el);
+    let kids = [];
+    try { kids = el.uiElements(); } catch (e) {}
+    for (const kid of kids) visit(kid, depth + 1);
+  };
+  for (const w of proc.windows()) visit(w, 0);
+  if (command === "text") return seen.join("\n");
+  if (command === "press") {
+    if (!matches.length) return `no element matching /${pattern}/i among ${seen.length} labelled elements`;
+    proc.frontmost = true;
+    try { matches[0].actions.byName("AXPress").perform(); } catch (e) { matches[0].click(); }
+    return `pressed /${pattern}/i`;
+  }
+  return `unknown command ${command}`;
+}
