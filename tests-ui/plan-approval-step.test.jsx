@@ -69,6 +69,10 @@ describe("PlanApprovalStep", () => {
     view.rerender(<PlanApprovalStep project={project} records={live(project)} store={store} onWorkspace={vi.fn()} />);
     expect(screen.getByText(/2 tasks approved/)).toBeTruthy();
     expect(screen.getByRole("button", { name: "Approve the current tasks" }).disabled).toBe(true);
+    // Gap 17: the person's approval is named distinctly from the ledger-bound saved-plan check.
+    expect(screen.getByText("Approved by you")).toBeTruthy();
+    expect(screen.getByText(/^Plan approved by you:/)).toBeTruthy();
+    expect(screen.getByText(/separate saved-plan check/)).toBeTruthy();
 
     // The workspace-level watcher records that the tasks changed after approval.
     const watcherStore = fakeStore(first);
