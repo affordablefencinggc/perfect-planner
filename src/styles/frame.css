@@ -388,3 +388,13 @@
     scrollbar-width: none;
   }
 }
+
+/* Short viewports (200% zoom on a laptop, landscape phones): the header and context strip can fill the
+   whole window, leaving the fixed workspace no height at all. Let the page scroll instead and give the
+   workspace a usable minimum height (WCAG 1.4.10). */
+@media (max-height: 640px) {
+  body { overflow-y: auto; }
+  #root { height: auto; min-height: 100%; }
+  .app-shell { height: auto; min-height: 100%; overflow: visible; }
+  .app-main { position: relative; inset: auto; height: max(360px, calc(100dvh - var(--app-header-height) - 42px)); margin-bottom: 42px; }
+}
