@@ -1,7 +1,8 @@
+import "./helpers/hermetic-env.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { emptyTaskDraftLedger, updateTaskDraft } from "../src/project/taskDraftLedger.js";
-import { buildAllocationRecord, buildCollisionRecord, collisionStatus, createResolution, evaluateTaskCollisions, suggestedWaves, taskSnapshot } from "../src/project/taskCoordination.js";
+import { buildAllocationRecord, buildCollisionRecord, collisionStatus, confirmedAssignments, createResolution, evaluateTaskCollisions, ledgerOwnerProposals, suggestedWaves, taskSnapshot } from "../src/project/taskCoordination.js";
 import { deriveWorkRecordReceipt } from "../src/project/workRecordReceipts.js";
 
 const binding = { projectId: "pp_coord_test", rootIdentity: "a".repeat(64), censusDigest: "b".repeat(64) };
@@ -91,4 +92,40 @@ test("owner receipts need an owner and wave for every task in the checked task l
   const other = buildCollisionRecord({ ledger: ledgerOf(task("Other", [["write", "a.js"]])), censusDigest: binding.censusDigest });
   assert.equal(deriveWorkRecordReceipt("ALLOC-OWNERS", sections(other, full), { project }).state, "stale");
   assert.equal(deriveWorkRecordReceipt("ALLOC-OWNERS", sections(), { project }), null);
+});
+
+test("Ledger owners are offered as proposals only for tasks without an allocated owner", () => {
+  const owned = ledgerOf({ ...task("Login form"), owner: "  Dana  " }, { ...task("Session store"), owner: "Eli" }, task("Docs"), { ...task("Old"), owner: "Fay", archived: true });
+  assert.deepEqual(ledgerOwnerProposals(owned), { T0001: "Dana", T0002: "Eli" });
+  const allocation = { assignments: { T0002: { owner: "agent: builder", wave: 1 }, T0001: { owner: "", wave: 1 } } };
+  // An owner already allocated is kept: no proposal replaces it.
+  assert.deepEqual(ledgerOwnerProposals(owned, allocation), { T0001: "Dana" });
+});
+
+test("unconfirmed Ledger proposals are never recorded as assignments", () => {
+  const form = { T0001: { owner: "Dana", wave: "1", fromLedger: true }, T0002: { owner: "Eli", wave: "2", fromLedger: false }, T0003: { owner: "", wave: "" } };
+  assert.deepEqual(confirmedAssignments(form), { T0001: { owner: "", wave: "1" }, T0002: { owner: "Eli", wave: "2" }, T0003: { owner: "", wave: "" } });
+});
+
+test("glob claims are compared, not reported as uncomparable, and paths keep their case", () => {
+  const globs = ledgerOf(
+    task("Core", [["write", "src/Core/**"]]),
+    task("Core file", [["write", "src/Core/Engine.js"]]),
+    task("Core tests", [["write", "tests/core-*.test.mjs"]]),
+    task("UI tests", [["write", "tests/ui-*.test.mjs"]]),
+    task("MCP", [["write", "mcp/**"]]),
+  );
+  const result = evaluateTaskCollisions(globs);
+  assert.deepEqual(result.invalid, []);
+  assert.deepEqual(result.checkedTaskIds, ["T0001", "T0002", "T0003", "T0004", "T0005"]);
+  assert.deepEqual(result.collisions.map((item) => item.key), ["T0001|T0002"]);
+  assert.deepEqual(result.collisions[0].files.map((file) => file.path), ["src/Core/**"]);
+  assert.deepEqual(result.collisions[0].files[0].paths, ["src/Core/**", "src/Core/Engine.js"]);
+  assert.deepEqual(suggestedWaves(globs, buildCollisionRecord({ ledger: globs, censusDigest: binding.censusDigest })).waves, { T0001: 1, T0002: 2, T0003: 1, T0004: 1, T0005: 1 });
+});
+
+test("decision signatures ignore letter case so earlier decisions still match", () => {
+  const lower = buildCollisionRecord({ ledger: ledgerOf(task("A", [["write", "src/x.js"]]), task("B", [["write", "src/x.js"]])), censusDigest: binding.censusDigest });
+  const upper = buildCollisionRecord({ ledger: ledgerOf(task("A", [["write", "src/X.js"]]), task("B", [["write", "SRC/x.js"]])), censusDigest: binding.censusDigest });
+  assert.equal(upper.collisions[0].signature, lower.collisions[0].signature);
 });

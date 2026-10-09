@@ -7752,91 +7752,6 @@ code {
   height: 10px;
 }
 
-.workspace-stage-coordinate {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 115px;
-  column-gap: 24px;
-  padding-right: 10%;
-  overflow: auto;
-}
-.workspace-stage-coordinate > .workspace {
-  grid-column: 1;
-  grid-row: 1;
-  min-width: 0;
-  height: auto;
-  min-height: 100%;
-  overflow: visible;
-}
-.stage-subnav-coordinate {
-  grid-column: 2;
-  grid-row: 1;
-  position: sticky;
-  align-self: start;
-  z-index: 2;
-  top: 15vh;
-  margin-top: 15vh;
-  width: 115px;
-  padding: 0;
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 10px;
-  border: 0;
-  background: transparent;
-}
-.stage-subnav-coordinate button {
-  width: 100%;
-  min-height: 46px;
-  padding: 0 12px;
-  border: 1px solid #939da2;
-  border-radius: 999px;
-  background: #eef1f2;
-  color: #4b5550;
-  text-align: left;
-  font-size: 14px !important;
-  font-weight: 700;
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.95),
-    0 5px 13px rgba(38, 45, 48, 0.14);
-}
-.stage-subnav-coordinate button:hover {
-  background: #fff;
-  box-shadow:
-    inset 0 1px 0 #fff,
-    0 7px 17px rgba(38, 45, 48, 0.18);
-}
-.stage-subnav-coordinate button.active {
-  border-color: #69756f;
-  background: #fff;
-  box-shadow:
-    inset 4px 0 0 var(--green),
-    0 7px 17px rgba(38, 45, 48, 0.18);
-}
-
-@media (max-width: 980px) {
-  .workspace-stage-coordinate { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); padding-right: 0; }
-  .workspace-stage-coordinate > .workspace { grid-row: 2; }
-  .stage-subnav-coordinate {
-    grid-column: 1;
-    grid-row: 1;
-    justify-self: stretch;
-    max-width: none;
-    overflow: visible;
-    flex-wrap: wrap;
-    margin: 12px 14px 0;
-    position: static;
-    width: auto;
-    display: flex;
-    gap: 6px;
-    transform: none;
-  }
-  .stage-subnav-coordinate button {
-    width: auto;
-    min-height: 34px;
-    padding-inline: 13px;
-    font-size: 12px !important;
-  }
-}
-
 /* The plan-state chip stays crisp against the charcoal glass header. */
 .topbar .plan-identity .status-chip.status-active {
   min-height: 24px;
@@ -9103,4 +9018,10 @@ code {
   background: var(--amber-soft);
   color: var(--ink);
   font-size: 13px;
+}
+
+.journey-calendar-rail button:disabled,
+.worker-cell:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
 }

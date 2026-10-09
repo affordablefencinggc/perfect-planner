@@ -1,3 +1,4 @@
+import "./helpers/hermetic-env.mjs";
 import test from 'node:test';import assert from 'node:assert/strict';import {createHash} from 'node:crypto';import {hostname} from 'node:os';
 import {createTaskDraftDelivery} from '../src/project/taskDraftDelivery.js';
 import {planSharedTaskReconciliation} from '../src/project/sharedTaskReconciliation.js';
