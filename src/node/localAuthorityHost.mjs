@@ -23,7 +23,7 @@ export function platformDataDirectory(env = process.env, platform = process.plat
   const homeDir = env.HOME || home();
   if (platform === "win32") {
     if (!homeDir) throw new Error("Perfect Planner cannot find a folder to save in: LOCALAPPDATA is not set.");
-    return path.join(homeDir, "AppData", "Local");
+    return path.win32.join(homeDir, "AppData", "Local");
   }
   if (platform === "darwin") {
     if (!homeDir) throw new Error("Perfect Planner cannot find a folder to save in: HOME is not set.");
@@ -34,7 +34,7 @@ export function platformDataDirectory(env = process.env, platform = process.plat
   return path.join(canonical(homeDir), ".local", "share");
 }
 
-export const localAuthorityRoot = (env = process.env, platform = process.platform) => path.join(platformDataDirectory(env, platform), "PerfectPlannerCleanroom", "authority");
+export const localAuthorityRoot = (env = process.env, platform = process.platform) => (platform === "win32" ? path.win32 : path.posix).join(platformDataDirectory(env, platform), "PerfectPlannerCleanroom", "authority");
 
 const planningLedgerUnavailable = (req, res, next) => {
   if (!String(req.url).startsWith("/api/planning-ledger/")) return next();
