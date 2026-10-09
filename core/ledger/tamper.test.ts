@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { Ledger, LedgerError, MemoryStore, hashEntry, type EntryDraft, type LedgerEntry } from "./index";
+import { Ledger, LedgerError, MemoryStore, hashEntry, type EntryDraft, type LedgerEntry, MemoryKeyProvider } from "./index";
+
+/** One device's keys, shared by every open in this file. */
+const keys = new MemoryKeyProvider();
 
 const person = { kind: "person" as const, id: "owner" };
 const agent = { kind: "agent" as const, id: "claude-code", model: "claude-x" };
@@ -29,7 +32,7 @@ function thrown(fn: () => unknown): LedgerError {
 
 /** Writes five entries to the store and releases the writer lock. */
 function writeFive(store: MemoryStore): void {
-  const ledger = Ledger.openSync(store, { now: clock() });
+  const ledger = Ledger.openSync(store, { keys, now: clock() });
   for (let i = 1; i <= 5; i += 1) ledger.append(draft({ summary: `Step ${i}` }));
   ledger.close();
 }
@@ -50,7 +53,7 @@ describe("tamper flow", () => {
       e.summary = "Step three, rewritten";
     });
 
-    const ledger = Ledger.openSync(store, { now: clock("2026-10-09T03:00:00Z") });
+    const ledger = Ledger.openSync(store, { keys, now: clock("2026-10-09T03:00:00Z") });
     expect(ledger.status).toMatchObject({ ok: false, writable: true, brokenAt: "L-000003", problem: "hash", acknowledged: [] });
     expect(thrown(() => ledger.append(draft())).code).toBe("CHAIN_BROKEN");
 
@@ -68,14 +71,14 @@ describe("tamper flow", () => {
     expect(after.n).toBe("L-000007");
     ledger.close();
 
-    const reopened = Ledger.openSync(store);
+    const reopened = Ledger.openSync(store, { keys });
     expect(reopened.status).toMatchObject({ ok: true, writable: true, acknowledged: ["L-000003"], entries: 7 });
     reopened.close();
 
     tamper(store, 4, (e) => {
       e.summary = "Step five, rewritten too";
     });
-    const again = Ledger.openSync(store);
+    const again = Ledger.openSync(store, { keys });
     expect(again.status).toMatchObject({ ok: false, brokenAt: "L-000005", problem: "hash", acknowledged: ["L-000003"] });
     expect(thrown(() => again.append(draft())).code).toBe("CHAIN_BROKEN");
   });
@@ -91,7 +94,7 @@ describe("tamper flow", () => {
       },
       true,
     );
-    const ledger = Ledger.openSync(store);
+    const ledger = Ledger.openSync(store, { keys });
     expect(ledger.status).toMatchObject({ ok: false, brokenAt: "L-000004", problem: "prev" });
   });
 
@@ -106,7 +109,7 @@ describe("tamper flow", () => {
       },
       true,
     );
-    const ledger = Ledger.openSync(store);
+    const ledger = Ledger.openSync(store, { keys });
     expect(ledger.status).toMatchObject({ ok: false, brokenAt: "L-000005", problem: "hash" });
     expect(ledger.status.detail).toContain("rewritten after it was recorded");
   });
@@ -116,7 +119,7 @@ describe("tamper flow", () => {
     writeFive(store);
     const lastLine = store.lines.pop() as string;
 
-    const ledger = Ledger.openSync(store);
+    const ledger = Ledger.openSync(store, { keys });
     expect(ledger.status).toMatchObject({ ok: false, writable: true, brokenAt: "L-000005", problem: "truncated", entries: 4 });
     expect(thrown(() => ledger.append(draft())).code).toBe("CHAIN_BROKEN");
     const refusal = thrown(() => ledger.acknowledgeBreak(person, "the tail is gone, accept it"));
@@ -125,7 +128,7 @@ describe("tamper flow", () => {
     ledger.close();
 
     store.lines.push(lastLine);
-    expect(Ledger.openSync(store).status).toMatchObject({ ok: true, entries: 5 });
+    expect(Ledger.openSync(store, { keys }).status).toMatchObject({ ok: true, entries: 5 });
   });
 
   it.each([
@@ -138,7 +141,7 @@ describe("tamper flow", () => {
     writeFive(store);
     store.lines[3] = garbage;
 
-    const ledger = Ledger.openSync(store);
+    const ledger = Ledger.openSync(store, { keys });
     expect(ledger.status).toMatchObject({ ok: false, brokenAt: "L-000004", problem: "parse" });
     expect(ledger.entries()).toHaveLength(3);
     expect(thrown(() => ledger.acknowledgeBreak(person, "unreadable line")).code).toBe("RULE");
@@ -149,7 +152,7 @@ describe("tamper flow", () => {
     const store = new MemoryStore();
     writeFive(store);
     store.lines.splice(1, 1);
-    const ledger = Ledger.openSync(store);
+    const ledger = Ledger.openSync(store, { keys });
     expect(ledger.status).toMatchObject({ ok: false, brokenAt: "L-000003", problem: "number" });
   });
 });
@@ -161,7 +164,7 @@ describe("acknowledgement rules", () => {
     tamper(store, 2, (entry) => {
       entry.summary = "Edited";
     });
-    const ledger = Ledger.openSync(store, { now: clock("2026-10-09T03:00:00Z") });
+    const ledger = Ledger.openSync(store, { keys, now: clock("2026-10-09T03:00:00Z") });
     expect(thrown(() => ledger.acknowledgeBreak(person, "  ")).code).toBe("EMPTY_FIELD");
     expect(ledger.status.ok).toBe(false);
   });
@@ -170,7 +173,7 @@ describe("acknowledgement rules", () => {
     const store = new MemoryStore();
     writeFive(store);
     // Forge an agent acknowledgement on disk for a break that does not exist yet.
-    const ledger = Ledger.openSync(store, { now: clock("2026-10-09T03:00:00Z") });
+    const ledger = Ledger.openSync(store, { keys, now: clock("2026-10-09T03:00:00Z") });
     ledger.close();
     const last = JSON.parse(store.lines[4]) as LedgerEntry;
     const forged = { n: "L-000006", at: "2026-10-09T03:00:00Z", actor: agent, type: "chain.acknowledged", subject: "L-000003", summary: "Pre-acknowledged", reason: "pre", evidence: [], refs: [], data: { firstBad: "L-000003" }, prev: last.hash } as Omit<LedgerEntry, "hash">;
@@ -180,7 +183,7 @@ describe("acknowledgement rules", () => {
     tamper(store, 2, (entry) => {
       entry.summary = "Edited";
     });
-    const reopened = Ledger.openSync(store);
+    const reopened = Ledger.openSync(store, { keys });
     expect(reopened.status).toMatchObject({ ok: false, brokenAt: "L-000003", acknowledged: [] });
   });
 });

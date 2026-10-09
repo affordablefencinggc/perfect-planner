@@ -67,7 +67,7 @@ export function verifyWithAcknowledgements(entries: readonly LedgerEntry[]): {
         e.actor?.kind === "person" &&
         e.data?.firstBad === result.firstBad &&
         index >= 0 &&
-        acknowledgesExactly(e, entries[index]),
+        acknowledgesExactly(e, entries[index], entries),
     );
     if (index < 0 || ackIndex <= index) return { result, acknowledged };
     acknowledged.push(result.firstBad);
@@ -82,8 +82,15 @@ export function verifyWithAcknowledgements(entries: readonly LedgerEntry[]): {
  * fingerprint of its content as the person saw it, so any further edit to
  * that entry, of any field, is a new break.
  */
-export function acknowledgesExactly(ack: LedgerEntry, bad: LedgerEntry): boolean {
-  return ack.data?.hash === bad.hash && ack.data?.content === hashEntry(bad);
+export function acknowledgesExactly(ack: LedgerEntry, bad: LedgerEntry, entries?: readonly LedgerEntry[]): boolean {
+  if (ack.data?.hash !== bad.hash || ack.data?.content !== hashEntry(bad)) return false;
+  // A "prev" break also pins the entry before it, which is the one that was rewritten.
+  const pins = Array.isArray(ack.data?.pins) ? (ack.data.pins as { n?: unknown; hash?: unknown; content?: unknown }[]) : [];
+  for (const pin of pins) {
+    const pinned = entries?.find((e) => e.n === pin.n);
+    if (!pinned || pinned.hash !== pin.hash || hashEntry(pinned) !== pin.content) return false;
+  }
+  return true;
 }
 
 export function parseLedgerNumber(n: string): number | undefined {
