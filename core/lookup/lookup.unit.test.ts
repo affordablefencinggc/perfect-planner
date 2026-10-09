@@ -7,6 +7,7 @@ import { renderLedger, renderPlan, renderReleaseNotes, renderTask } from "./view
 
 const owner = { kind: "person" as const, id: "owner" };
 const agent = { kind: "agent" as const, id: "claude-code", model: "m1" };
+const gate = { kind: "system" as const, id: "gate" };
 
 const PLAN = "# Plan\n\n## 1. Scope\n\nBuild the thing.\n\n- Must be fast\n";
 
@@ -27,7 +28,7 @@ function shipped(): Ledger {
   addPlanText(ledger, owner, PLAN);
   appendNumbered(ledger, { actor: owner, type: "plan.approved", summary: "Plan approved", evidence: [], refs: [] });
   appendNumbered(ledger, {
-    actor: agent,
+    actor: gate,
     type: "task.created",
     summary: "Build the thing",
     evidence: [],
@@ -36,9 +37,9 @@ function shipped(): Ledger {
   });
   ledger.append({ actor: owner, type: "test.defined", subject: "T-1", summary: "test defined", evidence: [], refs: [], data: { test: "npm test" } });
   ledger.append({ actor: owner, type: "test.approved", subject: "T-1", summary: "test approved", evidence: [], refs: [], data: { test: "npm test" } });
-  ledger.append({ actor: agent, type: "commit.observed", subject: "T-1", summary: "commit observed", evidence: ["commit:abc1234"], refs: [], data: { sha: "abc1234" } });
-  ledger.append({ actor: agent, type: "test.passed", subject: "T-1", summary: "test passed", evidence: [], refs: [], data: { test: "npm test" } });
-  ledger.append({ actor: agent, type: "task.done", subject: "T-1", summary: "task finished", evidence: [], refs: [] });
+  ledger.append({ actor: gate, type: "commit.observed", subject: "T-1", summary: "commit observed", evidence: ["commit:abc1234"], refs: [], data: { sha: "abc1234" } });
+  ledger.append({ actor: gate, type: "test.passed", subject: "T-1", summary: "test passed", evidence: [], refs: [], data: { test: "npm test" } });
+  ledger.append({ actor: gate, type: "task.done", subject: "T-1", summary: "task finished", evidence: [], refs: [] });
   appendNumbered(ledger, {
     actor: agent,
     type: "question.asked",
@@ -327,7 +328,7 @@ describe("render: task", () => {
     expect(text).toContain("Status: done, attempt 1.");
     expect(text).toContain("Implements: P-1 §1.1");
     expect(text).toContain("## History");
-    expect(text).toContain("task.created by claude-code (m1): Build the thing");
+    expect(text).toContain("task.created by gate: Build the thing");
     expect(text).toContain("## Commits");
     expect(text).toContain("- abc1234");
   });
@@ -353,5 +354,20 @@ describe("render: ledger table", () => {
       // Unescaped pipes only: a leading and trailing pipe plus eight columns.
       expect(row.split(/(?<!\\)\|/)).toHaveLength(10);
     }
+  });
+});
+
+describe("review fixes: plan-qualified lookup", () => {
+  it("counts only citations of that plan version (or unversioned ones)", () => {
+    const ledger = Ledger.openSync(new MemoryStore(), { now: () => new Date("2026-10-09T00:00:00Z") });
+    const owner = { kind: "person" as const, id: "owner" };
+    addPlanText(ledger, owner, "## 1. Scope\n\nDo the thing.\n");
+    appendNumbered(ledger, { actor: owner, type: "plan.approved", summary: "P-1" });
+    appendNumbered(ledger, { actor: owner, type: "plan.approved", summary: "P-2" });
+    appendNumbered(ledger, { actor: owner, type: "task.created", summary: "old", refs: ["P-1 §1.1"] });
+    appendNumbered(ledger, { actor: owner, type: "task.created", summary: "new", refs: ["P-2 §1.1"] });
+    expect(lookup(ledger.entries(), "P-1 §1.1").tasks).toEqual(["T-1"]);
+    expect(lookup(ledger.entries(), "P-2 §1.1").tasks).toEqual(["T-2"]);
+    expect(lookup(ledger.entries(), "§1.1").tasks).toEqual(["T-1", "T-2"]);
   });
 });

@@ -30,3 +30,20 @@ jobs:
       - run: npm ci --ignore-scripts
       - run: npm run typecheck:core
       - run: npm run test:core
+      # Signing keys in the real OS keychain: Credential Locker, the macOS
+      # keychain, and the Secret Service (gnome-keyring in a private session).
+      - name: Real OS keychain (Windows, macOS)
+        if: runner.os != 'Linux'
+        env:
+          PP_KEYCHAIN_TEST: "1"
+          PP_KEYCHAIN_REQUIRED: "1"
+        run: npx vitest run -c vitest.core.config.mjs core/ledger/keychain.test.ts --reporter=verbose
+      - name: Real OS keychain (Linux)
+        if: runner.os == 'Linux'
+        env:
+          PP_KEYCHAIN_TEST: "1"
+          PP_KEYCHAIN_REQUIRED: "1"
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libsecret-tools gnome-keyring dbus
+          dbus-run-session -- sh -c 'printf "ci-only-password" | gnome-keyring-daemon --unlock --components=secrets >/dev/null && npx vitest run -c vitest.core.config.mjs core/ledger/keychain.test.ts --reporter=verbose'

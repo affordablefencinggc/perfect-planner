@@ -50,6 +50,7 @@ interface LedgerEntry {
   refs: string[];       // clauses implemented or changed: ["P-2 §3.1"]
   corrects?: string;    // "L-000229" when this entry corrects an earlier one
   data?: Record<string, unknown>;  // type-specific payload, see "Payloads"
+  sig?: { key: string; value: string };  // person and system entries: Ed25519 signature
   prev: string;         // hash of the previous entry ("0"*64 for L-000001)
   hash: string;         // sha256 of canonical JSON of every field except hash
 }
@@ -69,16 +70,18 @@ Entry types (spec §2.3), exported as `ENTRY_TYPES`:
 | Git | `worktree.created`, `commit.observed`, `collision.detected`, `collision.resolved`, `merge.done`, `worktree.removed` |
 | Proof | `test.defined`, `test.approved`, `test.passed`, `test.failed`, `review.verdict` |
 | Release | `release.cut`, `release.rollback` |
-| Housekeeping | `correction`, `budget.warning`, `chain.acknowledged` |
+| Housekeeping | `correction`, `budget.warning`, `chain.acknowledged`, `key.trusted` |
 
 `chain.acknowledged` is how a person clears a fingerprint break (§2.5).
+`key.trusted` is how a person trusts a signing key (see "Signatures").
 
 ## Writing
 
 ```ts
 import { Ledger, FileStore, MemoryStore } from "../ledger/index";
 
-const ledger = await Ledger.open(new FileStore(projectRoot));   // takes the writer lock
+const keys = new KeychainKeyProvider();   // OS keychain; the app process only, never an agent
+const ledger = await Ledger.open(new FileStore(projectRoot), { keys });   // takes the writer lock
 const entry = ledger.append({
   actor: { kind: "agent", id: "claude-code", model: "claude-x" },
   type: "task.claimed",
@@ -104,8 +107,50 @@ with a `code` when a rule refuses the entry:
 | `BAD_CORRECTS` | `corrects` does not name an existing earlier entry, or a `correction` has no `corrects` |
 | `DONE_WITHOUT_PASS` | `task.done` unless the latest run of the task's approved test after its last `commit.observed` (or approval, or reopen) is a `test.passed` (§2.4) |
 | `CHAIN_BROKEN` | the chain failed verification on open and has not been acknowledged; all writes stop |
+| `NOT_PERMITTED` | the actor's kind may not write this entry type (see "Who may write what") |
+| `NOT_SIGNED` | a person or system entry, and this device cannot sign it: no key provider, the keychain is unavailable (the message says why), or no key for that person here. Nothing is stored unsigned |
 | `READ_ONLY` | the ledger was opened read-only, or another process holds the writer lock |
 | `RULE` | a rule registered with `ledger.addRule` refused it; also `test.approved` for a command never defined for that task, and `chain.acknowledged` written through `append` (use `acknowledgeBreak`) |
+
+### Who may write what
+
+Checked before every other rule, from `DEFAULT_PERMISSIONS` (or
+`Ledger.open(store, { permissions })`):
+
+| Actor kind | May write |
+|---|---|
+| `person` | any type (`core/people` narrows this per role: owner, helper, viewer) |
+| `system` (the gate, the git watcher) | any type except `chain.acknowledged` and `key.trusted` |
+| `agent` | `task.claimed`, `task.progress`, `task.blocked`, `task.proof`, `test.defined` (a proposal), and the relay: `question.asked`, `question.answered` |
+| `jev` | `review.verdict`, `question.asked` |
+
+So decisions (`decision.made`), approvals (`plan.approved`, `test.approved`, `release.*`), test results,
+`commit.observed`, `merge.done`, `task.created`, `task.done` and
+`task.reopened` never come from an agent or Jev: the gate writes results and
+done, a person approves. A helper's agent is limited by both this table and
+its person's role in `core/people`.
+
+Every open re-checks the stored entries against the same table; an entry
+its actor could not have written stops writes as a `permission` break.
+
+**Trust the author, not the payload.** Code that treats an entry as a
+person's decision, confirmation, answer, preset or budget must check
+`isAuthoritative(entry)` (person or system) or
+`isAuthoritative(entry, { personOnly: true })`, never a field inside
+`data`. An agent's `question.answered` is information, not your answer.
+`isAuthoritative` is true only for entry objects handed out by a `Ledger`
+whose signature checked out against a trusted key; a copy, a re-parsed
+line or a hand-built entry is never authoritative.
+
+The actor is declared by the caller, but person and system entries are
+signed (next section), so a caller can only produce them through the app
+process that holds the keys. Whatever hands out ledger access to agents
+(the MCP server) must never pass them a key provider.
+
+Every series number is checked by the ledger itself: `task.created`,
+`plan.approved`, `question.asked`, `decision.made`, `release.cut` and
+`release.rollback` must take exactly the next number in their series
+(`RULE` otherwise), with or without `installNumberingRules`.
 
 Extra rules: `ledger.addRule((draft, ledger) => string | null)`; return a
 message to refuse. Sibling threads use this for gate rules (for example
@@ -125,6 +170,70 @@ message to refuse. Sibling threads use this for gate rules (for example
 Numbering payloads (`task.created`, `plan.approved`, `release.cut`, …) are
 documented in `core/numbering/README.md`; clause payloads in
 `core/lookup/README.md`.
+
+## Signatures
+
+Every `person` and `system` entry carries `sig`, an Ed25519 signature over
+every field except `hash` and `sig` (so `n`, `at` and `prev` are signed),
+and `hash` covers `sig`. Agent and Jev entries are not signed and are never
+authoritative. Each person has their own key, principal `person:<actor id>`;
+the gate and the watcher share the app's key, principal `system`.
+
+- `Ledger.open(store, { keys })` takes a `KeyProvider`: `state()`,
+  `trustedKeys()`, `sign(principal, bytes)`. The private key never leaves
+  the provider.
+- `KeychainKeyProvider` keeps keys in the OS keychain: Windows Credential
+  Locker, the macOS keychain, the Linux Secret Service (`secret-tool`).
+  Secrets go to those tools on stdin, never on a command line, in a file or
+  in a log. `ensureKey(principal)` makes a key; call it on the person's own
+  action (setup in Settings), never from an agent. Signing never creates one.
+- When the keychain is unavailable, `state()` says why in plain words and
+  person and system writes fail with `NOT_SIGNED`. Nothing is written
+  unsigned.
+- `MemoryKeyProvider` is the test fake. `MemoryStore` brings one, so
+  in-memory ledgers need no setup. A `FileStore` ledger without `keys`
+  refuses person and system writes, and reports every signed entry as
+  unchecked (`signature`).
+
+Checking on open (and after every write that changes trust): an entry
+with no signature, an unknown key, another principal's key or a bad
+signature is a `signature` break. Writes stop, as with any break. A person
+may acknowledge the break to resume work. The entry stays non-authoritative
+either way.
+
+Trusted keys are the provider's own keys plus keys added by `key.trusted`
+entries, written by a person, signed by an already-trusted person key,
+`data: { keyId, principal, publicKey }`, reason required. `ledger.trustKey(person, key, reason)`
+writes one. It is allowed while the only problem is signatures this device
+cannot check. A key trusted late in the ledger also covers what it signed
+earlier.
+
+**Rotation.** `rotateKey(principal)` retires the active key and makes a new
+one. The retired public key stays trusted, so old entries still verify, but
+it never signs again.
+
+**Lost keychain** (reinstall, new PC). Make a new key. The ledger then shows
+the old entries as signed by a key this device does not trust. The app shows
+the old key's fingerprint (`sig.key`, and the public key from any earlier
+`key.trusted` entry or another device). Once the person confirms it was
+theirs, `trustKey` restores it. Without that confirmation, the old entries
+stay unchecked: shown, but not authoritative.
+
+**Another device or a helper.** Its key is trusted the same way, by a
+person who checked the fingerprint.
+
+**What this does not stop:**
+
+- A process running as the same OS user that calls the keychain tools
+  itself. On Windows and Linux, any such process can read the Credential
+  Locker or an unlocked Secret Service. On macOS, items made with
+  `security` are readable by `security`.
+- So agents must run without access to the user's keychain: a separate
+  OS user, a sandbox, or a container. That is the gate's job.
+- Requiring Windows Hello, Touch ID or a polkit prompt per signature is the
+  next step.
+- Revoking a stolen key is not built yet; rotate it, and acknowledge
+  anything it signed that the person did not.
 
 ## Reading
 
@@ -160,19 +269,43 @@ throws `CHAIN_BROKEN`, except `ledger.acknowledgeBreak(person, reason)`, which
 writes one `chain.acknowledged` entry naming the first bad entry and reopens
 writes. Only acknowledgements written by a person count when the chain is
 re-checked, and `append` refuses the type, so an agent cannot pre-acknowledge
-a break. A later open still reports the break, as acknowledged
+a break. The acknowledgement pins the bad entry's stored hash and the fingerprint of
+its content (and, for a `prev` break, the entry before it, which is the one
+that was rewritten), so editing either again is a new break. Acknowledging
+also rewrites a missing or stale `HEAD` from the current tip. After the
+acknowledgement the whole chain is re-checked, so a second break further on
+still stops writes. A later open still reports the break, as acknowledged
 (`status.acknowledged = ["L-000005"]`), so the red banner can say "a known
 break, acknowledged by …" rather than disappear. A new, unacknowledged break
 stops writes again.
 
 ## Storage (§2.6)
 
+Problems reported in `status.problem`: `hash`, `prev`, `number`, `parse`,
+`truncated`, `permission` (an entry its actor may not write), `signature`
+(a person or system entry whose signature does not check out) and `write`
+(a write failed; close and reopen to re-read what reached disk).
+
+What the chain cannot catch: someone who deletes the last entries and the
+`HEAD` file together. A rewrite of the whole chain with fresh hashes can no
+longer produce person or system entries, but it can still drop them from
+the end, or change agent entries. Git history of `.perfect-planner/ledger/`
+is the backstop for both.
+
 `FileStore(root)` keeps one JSON line per entry in
 `<root>/.perfect-planner/ledger/YYYY-MM.jsonl` (month of `at`, UTC). Files are
-appended and fsynced, never rewritten. A writer lock
+appended (in full, fsynced) and never rewritten; `HEAD` is replaced
+atomically. The writer takes its lock before it reads, and checks `HEAD`
+before every append, so files changed underneath a live writer stop it
+instead of forking the chain. A final line torn by a crash mid-write is
+repaired on the next writable open: `status.repaired` says what was done,
+dropped bytes are kept in `torn-<time>.txt`, and a system `correction`
+entry records the repair in the ledger itself. Known gap: three processes
+racing for a stale lock in one narrow window can both believe they hold it. A writer lock
 (`.perfect-planner/ledger/.writer.lock`, holding pid and host) makes this the
 only writing process for the project; a second writer opens read-only with
-`READ_ONLY`. A lock left by a dead process on the same host is taken over, and one
+`READ_ONLY`. A lock left by a dead process on the same host is taken over by an atomic
+rename, so two processes cannot both take it, and one
 `FileStore` instance hands its lock to one `Ledger` only.
 Paths go through `node:path`, so the store behaves the same on Windows, macOS
 and Linux. `MemoryStore` is the in-memory equivalent for tests.

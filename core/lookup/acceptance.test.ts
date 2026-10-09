@@ -2,9 +2,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { FileStore, Ledger, verifyChain, type Actor } from "../ledger/index";
+import { FileStore, Ledger, verifyChain, type Actor, MemoryKeyProvider } from "../ledger/index";
 import { appendNumbered, cutRelease, installNumberingRules, releaseRange, rollbackRelease, taskLabel } from "../numbering/index";
 import { addClause, addPlanText, changeClause, installClauseRules, lookup, renderPlan, renderReleaseNotes, search, withdrawClause } from "./index";
+
+/** One device's keys, shared by every open in this file. */
+const keys = new MemoryKeyProvider();
 
 const owner: Actor = { kind: "person", id: "looplet-spare" };
 const worker: Actor = { kind: "agent", id: "claude-code", model: "worker-model" };
@@ -35,7 +38,7 @@ function tempRoot(): string {
 }
 
 function open(root: string, now: () => Date): Ledger {
-  const ledger = Ledger.openSync(new FileStore(root), { now });
+  const ledger = Ledger.openSync(new FileStore(root), { keys, now });
   installNumberingRules(ledger);
   installClauseRules(ledger);
   return ledger;

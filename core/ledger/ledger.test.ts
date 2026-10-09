@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  ALLOCATING_TYPES,
+  DEFAULT_PERMISSIONS,
   ENTRY_TYPES,
   Ledger,
   LedgerError,
@@ -7,7 +9,9 @@ import {
   REASON_REQUIRED_TYPES,
   type Actor,
   type EntryDraft,
+  type EntryType,
   type LedgerEntry,
+  MemoryKeyProvider,
 } from "./index";
 
 const person = { kind: "person" as const, id: "owner" };
@@ -25,6 +29,14 @@ function clock(start = "2026-10-09T02:00:00Z", stepMs = 1000): () => Date {
 
 function open(store: MemoryStore = new MemoryStore(), now: () => Date = clock()): Ledger {
   return Ledger.openSync(store, { now });
+}
+
+/** Allocating types must take the next number in their series. */
+function nextSubject(ledger: Ledger, type: EntryDraft["type"]): string {
+  const seriesOf = (t: string) => Object.entries(ALLOCATING_TYPES).find(([, types]) => (types as readonly string[]).includes(t))?.[0];
+  const series = seriesOf(type);
+  if (!series) return "T-1";
+  return `${series}-${ledger.entries().filter((e) => seriesOf(e.type) === series).length + 1}`;
 }
 
 function draft(overrides: Partial<EntryDraft> = {}): EntryDraft {
@@ -101,7 +113,7 @@ describe("EMPTY_FIELD", () => {
 
   it("stores the summary and reason trimmed", () => {
     const ledger = open();
-    const entry = ledger.append(draft({ summary: "  Did it  ", type: "decision.made", reason: "  because  " }));
+    const entry = ledger.append(draft({ summary: "  Did it  ", type: "decision.made", subject: "D-1", reason: "  because  " }));
     expect(entry.summary).toBe("Did it");
     expect(entry.reason).toBe("because");
   });
@@ -118,6 +130,7 @@ describe("REASON_REQUIRED", () => {
         "decision.made",
         "release.rollback",
         "task.reopened",
+        "key.trusted",
       ].sort(),
     );
   });
@@ -136,10 +149,17 @@ describe("REASON_REQUIRED", () => {
     ledger.append(draft({ summary: "seed" }));
     for (const type of REASON_REQUIRED_TYPES) {
       if (type === "chain.acknowledged") continue;
-      expect(() => ledger.append(draft({ type, reason: "Because the owner said so", corrects: "L-000001" }))).not.toThrow();
+      expect(() => ledger.append(draft({ type, subject: nextSubject(ledger, type), reason: "Because the owner said so", corrects: "L-000001", ...keyPayload(type) }))).not.toThrow();
     }
   });
 });
+
+/** key.trusted names a real key; other types need nothing extra. */
+function keyPayload(type: string): Partial<EntryDraft> {
+  if (type !== "key.trusted") return {};
+  const key = new MemoryKeyProvider().createKey("person:helper");
+  return { subject: key.keyId, data: { ...key } };
+}
 
 describe("UNKNOWN_TYPE", () => {
   it.each(["task.nope", "constructor", ""])("refuses type %j", (type) => {
@@ -152,7 +172,7 @@ describe("UNKNOWN_TYPE", () => {
     ledger.append(draft({ summary: "seed" }));
     for (const type of ENTRY_TYPES) {
       if (type === "task.done" || type === "chain.acknowledged") continue;
-      expect(() => ledger.append(draft({ type, reason: "reason", corrects: "L-000001", data: { test: "npm test" } }))).not.toThrow();
+      expect(() => ledger.append(draft({ type, subject: nextSubject(ledger, type), reason: "reason", corrects: "L-000001", data: { test: "npm test" }, ...keyPayload(type) }))).not.toThrow();
     }
   });
 });
@@ -586,5 +606,60 @@ describe("latest run decides", () => {
     expect(Object.isFrozen(entry.actor)).toBe(true);
     expect(Object.isFrozen(entry.refs)).toBe(true);
     expect(Object.isFrozen((entry.data as { nested: object }).nested)).toBe(true);
+  });
+});
+
+describe("NOT_PERMITTED: who may write which entry types", () => {
+  const jev = { kind: "jev" as const, id: "jev", model: "jev-latest" };
+  const gate = { kind: "system" as const, id: "gate" };
+  const agentOnly = new Set(DEFAULT_PERMISSIONS.agent === "any" ? [] : DEFAULT_PERMISSIONS.agent);
+  const refusedToAgents = ENTRY_TYPES.filter((type) => !agentOnly.has(type) && type !== "chain.acknowledged");
+
+  it.each(refusedToAgents)("refuses %s from an agent", (type) => {
+    const error = thrown(() => open().append(draft({ actor: agent, type, reason: "because", data: { test: "npm test" } })));
+    expect(error.code).toBe("NOT_PERMITTED");
+    expect(error.message).toContain(`may not write ${type}`);
+  });
+
+  it("refuses approvals, test results and done from an agent even when they would otherwise pass", () => {
+    const ledger = open();
+    ledger.append(draft({ actor: agent, type: "test.defined", subject: "T-1", summary: "Proposed test", data: { test: "npm test" } }));
+    expect(thrown(() => ledger.append(draft({ actor: agent, type: "test.approved", subject: "T-1", summary: "Approved", data: { test: "npm test" } }))).code).toBe("NOT_PERMITTED");
+    ledger.append(draft({ type: "test.approved", subject: "T-1", summary: "Approved", data: { test: "npm test" } }));
+    expect(thrown(() => ledger.append(draft({ actor: agent, type: "test.passed", subject: "T-1", summary: "Passed", data: { test: "npm test" } }))).code).toBe("NOT_PERMITTED");
+    ledger.append(draft({ actor: gate, type: "test.passed", subject: "T-1", summary: "Passed", data: { test: "npm test" } }));
+    expect(thrown(() => ledger.append(draft({ actor: agent, type: "task.done", subject: "T-1", summary: "Done" }))).code).toBe("NOT_PERMITTED");
+    expect(ledger.append(draft({ actor: gate, type: "task.done", subject: "T-1", summary: "Done" })).type).toBe("task.done");
+  });
+
+  it("lets an agent claim, report, attach proof and ask or answer through the relay, but not decide", () => {
+    const ledger = open();
+    for (const type of ["task.claimed", "task.progress", "task.blocked", "task.proof", "question.asked", "question.answered"] as const) {
+      expect(ledger.append(draft({ actor: agent, type, subject: type.startsWith("question.") ? "Q-1" : "T-1" })).type).toBe(type);
+    }
+    expect(thrown(() => ledger.append(draft({ actor: agent, type: "decision.made", subject: "D-1", reason: "Earlier decision D-1 answers it" }))).code).toBe("NOT_PERMITTED");
+  });
+
+  it("lets Jev record verdicts only", () => {
+    const ledger = open();
+    expect(ledger.append(draft({ actor: jev, type: "review.verdict", summary: "Approve" })).type).toBe("review.verdict");
+    for (const type of ["test.approved", "test.passed", "task.done", "release.cut"] as const) {
+      expect(thrown(() => ledger.append(draft({ actor: jev, type, data: { test: "npm test" } }))).code).toBe("NOT_PERMITTED");
+    }
+  });
+
+  it("lets a person and the gate write anything the other rules allow", () => {
+    const ledger = open();
+    ledger.append(draft({ actor: gate, type: "test.defined", subject: "T-1", summary: "Defined", data: { test: "npm test" } }));
+    expect(ledger.append(draft({ type: "test.approved", subject: "T-1", summary: "Approved", data: { test: "npm test" } })).actor.kind).toBe("person");
+  });
+
+  it("takes a custom permission table, e.g. to let an agent create tasks", () => {
+    const ledger = Ledger.openSync(new MemoryStore(), {
+      now: clock(),
+      permissions: { ...DEFAULT_PERMISSIONS, agent: [...(DEFAULT_PERMISSIONS.agent as readonly EntryType[]), "task.created"] },
+    });
+    expect(ledger.append(draft({ actor: agent, type: "task.created" })).type).toBe("task.created");
+    expect(thrown(() => ledger.append(draft({ actor: agent, type: "task.done" }))).code).toBe("NOT_PERMITTED");
   });
 });
