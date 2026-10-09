@@ -21,6 +21,8 @@ A worker's question gets the next `Q-n` and lands in its person's main chat.
    `isAuthoritative`.
 
 A blocking question pauses only its asker (`blockingFor`). `pauseAll` writes one
-`task.blocked` per active task with `data.pauseAll`; `resumeAll` writes
-`task.progress` with `data.resumeAll`. All state is rebuilt from the ledger on
+`task.blocked` per active task (or every open task when none is active) with
+`data.pauseAll`; `resumeAll` writes `task.progress` with `data.resumeAll` for
+exactly the tasks it paused. Question and answer text is passed through
+`redactSecrets` (core/jev/redact) before it is written. All state is rebuilt from the ledger on
 construction and kept current through `ledger.subscribe`.

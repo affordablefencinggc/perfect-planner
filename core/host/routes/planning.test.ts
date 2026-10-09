@@ -133,7 +133,12 @@ describe("planning routes", () => {
     expect(draft.written).toBe(false);
     expect(draft.phases.map((p: any) => p.id)).toEqual(["foundation", "core", "integrations", "hardening", "release"]);
 
-    const ok = await hostCall(base, "POST", `/planning/approve${P}`, {});
+    // Approval is bound to the plan as shown: none, or a stale fingerprint, is refused.
+    expect((await hostCall(base, "POST", `/planning/approve${P}`, {})).body.code).toBe("FINGERPRINT_REQUIRED");
+    const stale = await hostCall(base, "POST", `/planning/approve${P}`, { fingerprint: view.fingerprint });
+    expect(stale.status).toBe(409);
+    expect(stale.body.code).toBe("STALE");
+    const ok = await hostCall(base, "POST", `/planning/approve${P}`, { fingerprint: current.fingerprint });
     expect(ok.status).toBe(200);
     expect(ok.body.result.plan).toBe("P-1");
     expect(Object.values(ok.body.result.tasks).every((t) => /^T-\d+$/.test(String(t)))).toBe(true);
@@ -145,8 +150,20 @@ describe("planning routes", () => {
     expect(release.task).toMatch(/^T-\d+$/);
     expect(release.dependsOnTasks.every((d: string) => /^T-\d+$/.test(d))).toBe(true);
 
-    // A second approval adds P-2 without writing the roadmap twice.
-    const again = await hostCall(base, "POST", `/planning/approve${P}`, {});
+    // The plan as shown is approved: no second approval of the same plan, and the screen says so.
+    const approvedView = (await hostCall(base, "GET", `/planning${P}`)).body.result;
+    expect(approvedView.approval).toMatchObject({ current: true, canApprove: false });
+    const same = await hostCall(base, "POST", `/planning/approve${P}`, { fingerprint: approvedView.fingerprint });
+    expect(same.status).toBe(409);
+    expect(same.body.code).toBe("ALREADY_APPROVED");
+
+    // A changed plan can be approved again: P-2, without writing the roadmap twice.
+    const open = approvedView.areas.flatMap((a: any) => a.questions).find((q: any) => q.status === "open");
+    expect(open, "an open question to answer").toBeTruthy();
+    expect((await hostCall(base, "POST", `/planning/answer${P}`, { q: open.q, text: "Decided: export to PDF only" })).status).toBe(200);
+    const changed = (await hostCall(base, "GET", `/planning${P}`)).body.result;
+    expect(changed.approval).toMatchObject({ current: false, canApprove: true, message: expect.stringMatching(/changed since it was approved/) });
+    const again = await hostCall(base, "POST", `/planning/approve${P}`, { fingerprint: changed.fingerprint });
     expect(again.body.result.plan).toBe("P-2");
     expect(again.body.result.tasks).toEqual({});
   });
@@ -279,7 +296,7 @@ describe("planning routes", () => {
       expect(roadmap.dropped).toEqual([]);
       await hostCall(base, "POST", `/planning/roadmap/drop${P}`, { key: victim.key });
 
-      const ok = await hostCall(base, "POST", `/planning/approve${P}`, {});
+      const ok = await hostCall(base, "POST", `/planning/approve${P}`, { fingerprint: (await hostCall(base, "GET", `/planning${P}`)).body.result.fingerprint });
       expect(ok.status).toBe(200);
       expect(ok.body.result.tasks[victim.key]).toBeUndefined();
       const late = await hostCall(base, "POST", `/planning/roadmap/drop${P}`, { key: draft.phases.flatMap((p: any) => p.tasks).find((t: any) => t.key !== victim.key && t.key !== "K-first-release").key });

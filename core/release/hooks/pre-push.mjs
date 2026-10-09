@@ -8,15 +8,20 @@
 // Git feeds stdin lines: <local ref> <local sha> <remote ref> <remote sha>.
 // Findings are printed masked to stderr; any finding exits 1.
 // Testing modes: --scan-text <file> [allowlist.json]  (JSON findings), --rules,
-// --placeholder, --check-name <path>, --check-config <path>.
+// --placeholder, --field-word, --check-name <path>, --check-config <path>.
 //
-// There is no inline "allow this line" marker. A reviewed exception is an exact
-// fingerprint in .perfect-planner/secret-allowlist.json, read from the BASE
-// commit (the remote's current tip, or the merge-base for a new branch) and never
-// from the pushed commit, so a push cannot allowlist its own secret.
+// This hook is a local, best-effort layer. The binding check is the review
+// gate's scanBranch with person-approved ledger fingerprints, plus GitHub push
+// protection. There is no inline "allow this line" marker. A file entry in
+// .perfect-planner/secret-allowlist.json is honoured here ONLY as it exists on
+// the repository's default branch on the remote (origin/HEAD, else origin/main,
+// else origin/master); never from the pushed ref, its remote tip or a merge-base
+// of the pushed branch, so pushes to a feature branch cannot approve their own
+// secret (an entry only reaches the default branch through review). With no
+// resolvable default branch, no allowlist applies.
 
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { scryptSync } from "node:crypto";
 import { readFileSync } from "node:fs";
 
 const ALLOWLIST_PATH = ".perfect-planner/secret-allowlist.json";
@@ -62,6 +67,8 @@ const FORBIDDEN = [
   { id: "service-account-file", pattern: /^service-account.*\.json$/ },
 ];
 const ENV_TEMPLATE = /^\.env\.(?:example|sample|template)$/;
+const PLANNER_STATE = /(^|\/)\.perfect-planner\//i;
+const FIELD_WORD = /^(?:password|passwd|passphrase|secret|token|api[ _-]?key|client[ _-]?secret|credentials?)$/i;
 const PLACEHOLDER = /^(?:placeholder|changeme|x{3,}|<[^>]*>|\$\{[^}]*\}|\{\{[^}]*\}\}|process\.env\.[\w.]+|your[_-][\w-]*|example|dummy|test|redacted|\*{3,}|none|null|undefined|todo)$|^(?:secret:\/\/|keychain:|keyring:|vault:|dpapi:|op:\/\/|credentials:)/i;
 const CONFIG_NAME = /\.(?:ya?ml|ini|cfg|conf|properties|toml)$|^\.env(?:\..+)?$|^\.npmrc$|^dockerfile(?:\..+)?$|^docker-compose/;
 const NPMRC_TOKEN = /_authToken\s*=\s*(\S+)/;
@@ -71,7 +78,10 @@ const baseName = (p) => { const q = p.replace(/\\/g, "/"); return q.slice(q.last
 
 const minLength = (name) => (/password|passwd|secret/i.test(name) ? 8 : 12);
 const isConfigLike = (path) => CONFIG_NAME.test(baseName(path).toLowerCase());
-const fingerprintOf = (file, rule, value) => `${file.replace(/\\/g, "/")}:${rule}:${createHash("sha256").update(value).digest("hex")}`;
+const fingerprintOf = (file, rule, value) => {
+  const f = file.replace(/\\/g, "/");
+  return `${f}:${rule}:${scryptSync(value, `perfect-planner:${f}:${rule}`, 32).toString("hex")}`;
+};
 
 function parseAllowlist(text) {
   const out = new Set();
@@ -87,6 +97,8 @@ function parseAllowlist(text) {
 
 function forbiddenRule(path) {
   if (path.replace(/\\/g, "/") === ALLOWLIST_PATH) return null;
+  // Perfect Planner's own state (ledger, worker tokens, briefs, keys) never leaves the machine.
+  if (PLANNER_STATE.test(path.replace(/\\/g, "/"))) return "planner-state";
   const name = baseName(path).toLowerCase();
   if (ENV_TEMPLATE.test(name)) return null;
   for (const r of FORBIDDEN) if (r.pattern.test(name)) return r.id;
@@ -121,6 +133,7 @@ function scanText(file, text, allow) {
         taken.push([valueStart, valueStart + value.length]);
         if (rule.nameGroup !== undefined && value.length < minLength(m[rule.nameGroup])) continue;
         if (PLACEHOLDER.test(value) || !/[A-Za-z]/.test(value)) continue;
+        if (rule.nameGroup !== undefined && FIELD_WORD.test(value)) continue;
         add(rule.id, value);
       }
     }
@@ -139,11 +152,12 @@ function git(args) {
 }
 const lines = (s) => s.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
 
-// The commit the push is measured against: the remote tip, else the merge-base
-// with origin/HEAD, else null (brand-new history: no trusted allowlist exists).
-function baseForPush(localSha, remoteSha) {
+// What the push is measured against: the remote tip, else the merge-base with
+// the default branch, else null (brand-new history: scan everything).
+function baseForPush(localSha, remoteSha, defaultRef) {
   if (!ZERO.test(remoteSha)) return remoteSha;
-  try { return git(["merge-base", localSha, "origin/HEAD"]).trim(); } catch { return null; }
+  if (!defaultRef) return null;
+  try { return git(["merge-base", localSha, defaultRef]).trim(); } catch { return null; }
 }
 
 function filesForPush(localSha, base) {
@@ -151,14 +165,30 @@ function filesForPush(localSha, base) {
   return lines(git(["ls-tree", "-r", "--name-only", localSha]));
 }
 
-function allowlistAt(base) {
-  if (!base) return new Set();
-  try { return parseAllowlist(git(["show", `${base}:${ALLOWLIST_PATH}`])); } catch { return new Set(); }
+// The remote's default branch as last fetched: origin/HEAD, else origin/main,
+// else origin/master. Null when none resolves.
+function defaultBranchRef() {
+  const candidates = [];
+  try {
+    const head = git(["symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"]).trim();
+    if (head) candidates.push(head);
+  } catch { /* origin/HEAD not set */ }
+  candidates.push("refs/remotes/origin/main", "refs/remotes/origin/master");
+  for (const ref of candidates) {
+    try { git(["rev-parse", "--verify", "--quiet", `${ref}^{commit}`]); return ref; } catch { /* try next */ }
+  }
+  return null;
+}
+
+function allowlistFromDefaultBranch(defaultRef) {
+  if (!defaultRef) return new Set();
+  try { return parseAllowlist(git(["show", `${defaultRef}:${ALLOWLIST_PATH}`])); } catch { return new Set(); }
 }
 
 function scanPush(localSha, remoteSha) {
-  const base = baseForPush(localSha, remoteSha);
-  const allow = allowlistAt(base);
+  const defaultRef = defaultBranchRef();
+  const base = baseForPush(localSha, remoteSha, defaultRef);
+  const allow = allowlistFromDefaultBranch(defaultRef);
   const findings = [];
   for (const path of filesForPush(localSha, base)) {
     const rule = forbiddenRule(path);
@@ -181,6 +211,10 @@ function main() {
       id: r.id, source: r.pattern.source, flags: r.pattern.flags,
       valueGroup: r.valueGroup ?? null, nameGroup: r.nameGroup ?? null, configOnly: r.configOnly === true,
     }))));
+    return 0;
+  }
+  if (args[0] === "--field-word") {
+    console.log(JSON.stringify({ source: FIELD_WORD.source, flags: FIELD_WORD.flags }));
     return 0;
   }
   if (args[0] === "--placeholder") {
@@ -215,7 +249,7 @@ function main() {
   if (findings.length === 0) return 0;
   process.stderr.write("Push blocked: possible secrets found (values masked).\n");
   for (const f of findings) process.stderr.write(`  ${f.file}${f.line ? `:${f.line}` : ""}  ${f.rule}  ${f.preview}  ${f.fingerprint}\n`);
-  process.stderr.write(`Remove them, or have a reviewer add the fingerprint to ${ALLOWLIST_PATH} on the remote base branch first.\n`);
+  process.stderr.write(`Remove them, or have a reviewer add the fingerprint to ${ALLOWLIST_PATH} on the remote default branch first.\n`);
   return 1;
 }
 

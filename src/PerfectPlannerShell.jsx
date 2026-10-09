@@ -69,6 +69,7 @@ import { ProjectTruthGate } from "./components/ProjectTruthGate.jsx";
 import { ViewModeToggle } from "./components/ViewModeToggle.jsx";
 import { CORE_WORKSPACES, CoreWorkspace, coreWorkspaceContext, coreWorkspaceLabels, isCoreWorkspace } from "./core-screens/coreWorkspaces.jsx";
 import { LedgerSearchBox } from "./core-screens/LedgerSearchBox.jsx";
+import { useCorePlanApproval } from "./core-screens/coreApi.js";
 import { ViewModeContext, useViewModeState } from "./project/viewMode.js";
 import { DEMO_ONLY_REASON, DemoOnlyReason, DemoSampleBadge } from "./demo/DemoSampleNotice.jsx";
 const loadRuntimeTools = (name) => import("./components/RuntimeConnectionsPanel.jsx")
@@ -2691,6 +2692,8 @@ function ProjectHomeWorkspace({
   const workRecords = useProjectWorkRecords(demoMode ? null : activeProject?.projectId);
   usePlanTaskDriftWatch(activeProject, workRecords);
   const [homeActionError, setHomeActionError] = useState("");
+  // With no imported app, the core loop still runs on the local ledger ("default"): Home says so.
+  const corePlan = useCorePlanApproval(activeProject ? null : "default");
   const homeModel = useMemo(
     () => deriveProjectHomeModel(activeProject, workRecords),
     [activeProject, workRecords],
@@ -2740,12 +2743,19 @@ function ProjectHomeWorkspace({
             <span className="eyebrow">
               {hasProject
                 ? <><span className="advanced-only">{`${project.projectId} · scan ${project.generation} · `}</span>{mode}</>
-                : "No project selected · honest empty state"}
+                : corePlan?.approved ? "Core loop · app folder not imported" : "No project selected · honest empty state"}
             </span>
             <h1>
-              {hasProject ? project.name : "Bring in a real app to begin"}
+              {hasProject ? project.name : corePlan?.approved ? "Your plan is approved and work is under way" : "Bring in a real app to begin"}
             </h1>
             <p>{summary.message}</p>
+            {!hasProject && corePlan?.approved && (
+              <p className="project-home-core-loop" data-home-core-plan={corePlan.latest?.plan ?? ""}>
+                Plan {corePlan.latest?.plan} approved by {corePlan.latest?.by}
+                {corePlan.tasks.length ? `, ${corePlan.tasks.length} task${corePlan.tasks.length === 1 ? "" : "s"} on the board` : ""}.{" "}
+                <button type="button" className="soft-button" onClick={() => onWorkspace("tasks")}>Open Tasks</button>
+              </p>
+            )}
           </div>
           <div
             className={`home-verdict ${verdictClass}`}

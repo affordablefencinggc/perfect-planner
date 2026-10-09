@@ -13,8 +13,15 @@ export const CONNECT_POLL_MS = 1500;
 
 const ROLE_LABEL = { main: "Main chat", worker: "Worker", observer: "Read-only" };
 
+// The relay marks a model the agent named itself as "unverified:<name>": show it as self-reported.
+export function modelLabel(model) {
+  if (!model) return "";
+  const text = String(model);
+  return text.startsWith("unverified:") ? `${text.slice("unverified:".length)}, self-reported` : text;
+}
+
 function describeAgent(agent) {
-  return agent.model ? `${agent.name} (${agent.model})` : agent.name;
+  return agent.model ? `${agent.name} (${modelLabel(agent.model)})` : agent.name;
 }
 
 export function CoreAgentConnect() {
@@ -156,7 +163,7 @@ export function CoreAgentConnect() {
                 <li key={agent.id}>
                   <div>
                     <strong>{agent.name}</strong>
-                    {agent.model && <span className="core-muted"> · {agent.model}</span>}
+                    {agent.model && <span className="core-muted"> · {modelLabel(agent.model)}</span>}
                     {agent.task && <span className="core-muted"> · {agent.task}</span>}
                     {advanced && <code className="core-advanced"> {agent.id}</code>}
                   </div>

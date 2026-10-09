@@ -273,7 +273,7 @@ describe("the whole core loop", () => {
         definition: defined.ok ? defined.entry.n : undefined,
       });
       expect(review.verdict, `${id} test review`).toBe("approve");
-      expect(ledger.get(review.entry!)).toMatchObject({ type: "review.verdict", actor: { kind: "jev" } });
+      expect(ledger.get(review.entry!)).toMatchObject({ type: "review.verdict", actor: { kind: "system" }, data: { reviewer: { kind: "jev" } } });
       // The gate sees Jev's verdict on the current definition.
       expect(gate.state(id).jev).toMatchObject({ n: review.entry, verdict: "approve" });
       expect(gate.state(id).stage).toBe("defined");
@@ -429,7 +429,11 @@ describe("the whole core loop", () => {
     step("Jev rejected the T-2 diff; T-2 reopened as T-2.a2 (T-1, T-3 approved)");
 
     // ---- 14. Approved work merges; the gate reruns the test after the merge before task.done.
+    // The person approves each merge with their own signed entry; without it the gate refuses.
+    expect(await gate.mergeAndVerify("T-1", { repoRoot: root, branch: "pp/T-1", integrationBranch: "main", actor: owner })).toMatchObject({ ok: false, reason: expect.stringMatching(/not been approved by a person/) });
     for (const id of ["T-1", "T-3"] as const) {
+      const approval = gate.approveMerge(id, owner);
+      expect(approval.ok, `${id} merge approval: ${approval.ok ? "" : approval.reason}`).toBe(true);
       const merged = await gate.mergeAndVerify(id, { repoRoot: root, branch: `pp/${id}`, integrationBranch: "main", actor: owner });
       expect(merged.ok, `${id} merge: ${merged.ok ? "" : merged.reason}`).toBe(true);
       expect(merged.entries.map((e) => e.type)).toEqual(["test.passed", "merge.done", "task.done"]);
@@ -478,7 +482,12 @@ describe("the whole core loop", () => {
     expect([...kindOf.get("task.claimed")!]).toEqual(["agent"]);
     expect([...kindOf.get("question.asked")!]).toEqual(["agent"]);
     expect([...kindOf.get("test.approved")!]).toEqual(["person"]);
-    expect([...kindOf.get("review.verdict")!]).toEqual(["jev"]);
+    // Jev's counted verdicts are signed by Perfect Planner and name Jev; merges are the person's own signed approval.
+    expect([...kindOf.get("review.verdict")!].sort()).toEqual(["person", "system"]);
+    for (const e of entries().filter((v) => v.type === "review.verdict")) {
+      if (e.actor.kind === "system" && e.evidence.includes("verdict:approve")) expect(e.data?.reviewer, e.n).toMatchObject({ kind: "jev" });
+      if (e.actor.kind === "person") expect(e.evidence, e.n).toContain("scope:merge");
+    }
     for (const type of ["test.passed", "test.failed", "commit.observed", "collision.detected", "collision.resolved", "worktree.created", "task.reopened"]) {
       expect([...kindOf.get(type)!], type).toEqual(["system"]);
     }

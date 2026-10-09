@@ -1,5 +1,7 @@
-import { ArrowClockwiseIcon, WarningCircleIcon } from "@phosphor-icons/react";
+import { ArrowClockwiseIcon, LockSimpleIcon, WarningCircleIcon } from "@phosphor-icons/react";
+import { useEffect, useState } from "react";
 import { useViewMode } from "../project/viewMode.js";
+import { claimPersonSession, hasPersonSession, useCoreResource } from "./coreApi.js";
 import "./coreScreens.css";
 
 // Shared frame for the core loop screens: heading, purpose line, and the
@@ -15,11 +17,63 @@ export function CoreScreen({ id, title, purpose, actions = null, resource, empty
         </div>
         {actions && <div className="core-screen-actions">{actions}</div>}
       </header>
+      <ReadOnlyNotice />
+      <OwnerNotice />
       {status === "loading" && <CoreLoading label={`Loading ${title.toLowerCase()}`} />}
       {status === "error" && <CoreError error={resource.error} onRetry={resource.reload} />}
       {status === "empty" && <div className="core-empty" role="status">{empty}</div>}
       {status === "ready" && children}
     </section>
+  );
+}
+
+/** Whether this window may make changes (it was opened from the launcher's one-time link). */
+export function usePersonSession() {
+  const [person, setPerson] = useState(hasPersonSession);
+  useEffect(() => {
+    let live = true;
+    claimPersonSession().then((ok) => { if (live) setPerson(ok); }, () => undefined);
+    return () => { live = false; };
+  }, []);
+  return person;
+}
+
+function ReadOnlyNotice() {
+  if (usePersonSession()) return null;
+  return (
+    <p className="core-readonly" role="note">
+      <LockSimpleIcon aria-hidden="true" /> This window can only read. To make changes, open a new one-time link: press Enter in the terminal running Perfect Planner (l and Enter with npm run dev), then open the link it prints.
+    </p>
+  );
+}
+
+const OWNER_PROBLEMS = {
+  "key-missing": "This project's owner key is not on this computer, so nothing here can be approved or changed in it.",
+  tampered: "This project's owner record does not check out on this computer, so nothing here can be approved or changed in it.",
+  missing: "This project was started before Perfect Planner recorded owners, so it has no owner on this computer and nothing here can be approved or changed in it.",
+  unavailable: "This computer's key store is not available, so nothing you approve can be signed.",
+};
+
+const OWNER_NEXT = {
+  unavailable: "Unlock or set up the system keychain, then restart Perfect Planner.",
+  default: "Its history stays readable. To keep working, open Perfect Planner on the computer that started this project, or start a new project in a new folder, which gets its own owner.",
+};
+
+/** A project whose owner cannot sign here is a hard stop: say so and what to do, instead of failing on every click. */
+export function OwnerNotice() {
+  const status = useCoreResource("/status");
+  const owner = status.data?.owner;
+  const problem = owner && OWNER_PROBLEMS[owner.state];
+  if (!problem) return null;
+  return (
+    <div className="core-owner-stop" role="alert" data-owner-state={owner.state}>
+      <WarningCircleIcon weight="fill" aria-hidden="true" />
+      <div>
+        <strong>{problem}</strong>
+        <p>{OWNER_NEXT[owner.state] ?? OWNER_NEXT.default}</p>
+        {owner.reason && <AdvancedOnly as="p">{owner.reason}</AdvancedOnly>}
+      </div>
+    </div>
   );
 }
 

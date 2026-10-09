@@ -257,6 +257,35 @@ export class KeychainKeyProvider implements KeyProvider {
     return this.createKey(principal);
   }
 
+  /** A new key that does not sign yet; see KeyProvider.stageKey. */
+  stageKey(principal: string): TrustedKey {
+    this.requireAvailable();
+    if (!/^(person:.+|system)$/.test(principal)) throw new RangeError(`not a principal: ${principal}`);
+    const pair = newKeyPair();
+    this.store.set(`staged.${principal}`, pair.privateKey);
+    return { keyId: keyIdOf(pair.publicKey), principal, publicKey: pair.publicKey };
+  }
+
+  activateKey(principal: string, keyId: string): void {
+    this.requireAvailable();
+    const privateKey = this.store.get(`staged.${principal}`);
+    if (!privateKey) throw new Error(`no staged key for ${principal}`);
+    const publicKey = createPublicKey(createPrivateKey({ key: Buffer.from(privateKey, "base64"), format: "der", type: "pkcs8" }))
+      .export({ format: "der", type: "spki" })
+      .toString("base64");
+    if (keyIdOf(publicKey) !== keyId) throw new Error(`the staged key for ${principal} is not ${keyId}`);
+    const key: TrustedKey = { keyId, principal, publicKey };
+    this.store.set(`private.${principal}`, privateKey);
+    this.writePublic(principal, [...this.publicKeys(principal).map((k) => ({ ...k, retired: true })), key]);
+    const principals = this.principals();
+    if (!principals.includes(principal)) this.store.set("principals", JSON.stringify([...principals, principal]));
+    this.store.remove(`staged.${principal}`);
+  }
+
+  discardStagedKey(principal: string): void {
+    this.store.remove(`staged.${principal}`);
+  }
+
   sign(principal: string, message: Buffer): { keyId: string; signature: string } {
     this.requireAvailable();
     const active = this.publicKeys(principal).find((k) => !k.retired);
@@ -268,6 +297,7 @@ export class KeychainKeyProvider implements KeyProvider {
   /** Removes every key this provider stored; for tests and for an explicit reset by the person. */
   removeAll(): void {
     for (const principal of this.principals()) {
+      this.store.remove(`staged.${principal}`);
       this.store.remove(`private.${principal}`);
       this.store.remove(`public.${principal}`);
     }

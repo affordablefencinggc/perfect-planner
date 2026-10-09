@@ -2,19 +2,18 @@
 // /api/core/*. Mounted by the Vite dev server (src/node/coreHostVitePlugin.mjs)
 // and by the production server (scripts/serve-local.mjs, from the bundle that
 // scripts/build-core-host.mjs writes). Loopback, same-origin callers only.
-import { randomBytes, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { LedgerError } from "../ledger/index";
 import { startBridge, ToolError, type Bridge } from "../mcp/index";
 import { PeopleError } from "../people/index";
 import { asPersonRequest, hostKeys, type HostKeys } from "./keys";
-import { openCoreProject, projectKey, type CoreProject } from "./project";
+import { excludePrivateFolder, openCoreProject, projectKey, projectRootFor, type CoreProject } from "./project";
 import { HttpError, Router } from "./router";
+import { PersonSessions } from "./session";
 import { registerRoutes } from "./routes/index";
 
 export const CORE_PREFIX = "/api/core";
-/** HttpOnly cookie that marks a request as coming from the person's own app window. */
-export const PERSON_COOKIE = "pp_core_person";
+export { PERSON_COOKIE, CSRF_HEADER } from "./session";
 const MAX_BODY = 768 * 1024; // fits a 512 KB photo as base64
 
 export interface CoreHostOptions {
@@ -30,12 +29,16 @@ export interface CoreHostOptions {
   keys?: HostKeys;
 }
 
+/** The host's key provider type (kept for callers of the older name). */
+export type SigningKeys = HostKeys;
+/** PP_CORE_KEYS=memory: throwaway keys for automated runs (CI, the browser journey). Never for real projects. */
+export const defaultKeys = hostKeys;
+
 export class CoreHost {
   readonly router = new Router();
   private readonly projects = new Map<string, CoreProject>();
   private readonly bridges = new Map<string, Promise<Bridge>>();
-  /** Per-process secret behind the person cookie; never written anywhere. */
-  private readonly personSecret = randomBytes(32).toString("base64url");
+  readonly sessions = new PersonSessions();
   readonly keys: HostKeys;
 
   constructor(private readonly options: CoreHostOptions) {
@@ -44,9 +47,38 @@ export class CoreHost {
     this.router.get("/status", ({ project }) => ({
       project: project.key,
       ledger: project.ledger.status,
-      keys: this.keys.state(),
-      root: project.root,
+      keys: { description: this.keys.description, ...this.keys.state() },
+      owner: { state: project.owner.state, ...(project.owner.reason ? { reason: project.owner.reason } : {}) },
     }));
+  }
+
+  /** A one-time launch secret for the app window about to be opened (see session.ts). */
+  issueLaunch(): string {
+    return this.sessions.issueLaunch();
+  }
+
+  /**
+   * The desktop shell's launch secret: the starter process puts the same value in
+   * PP_CORE_DESKTOP_LAUNCH for this host and for the shell, which hands it to its window
+   * over IPC (src-tauri/src/core_launch.rs). Read once and removed from the environment.
+   */
+  acceptDesktopLaunch(env: NodeJS.ProcessEnv = process.env): boolean {
+    const secret = env.PP_CORE_DESKTOP_LAUNCH;
+    delete env.PP_CORE_DESKTOP_LAUNCH;
+    return typeof secret === "string" && this.sessions.acceptLaunch(secret);
+  }
+
+  /**
+   * Makes a signing key if it is missing ("person:<id>" or "system"). Called only
+   * while handling a request from the person's own window, never for an agent.
+   * When the key store is unavailable nothing is made and the ledger refuses the write (NOT_SIGNED).
+   */
+  ensureKey(principal: string): void {
+    this.keys.ensure(principal);
+  }
+
+  ensurePersonKey(person: string): void {
+    this.ensureKey(`person:${person}`);
   }
 
   project(key: string): CoreProject {
@@ -55,6 +87,17 @@ export class CoreHost {
       project = openCoreProject(this.options.root, key, this.options.projectRootOverride, this.keys);
       this.projects.set(key, project);
     }
+    return project;
+  }
+
+  /**
+   * Opens a project for a request: .perfect-planner/ goes into the repo's info/exclude before the
+   * ledger's first file (its writer lock) is created, and every request waits until that is done.
+   */
+  async openProject(key: string): Promise<CoreProject> {
+    if (!this.projects.has(key)) await excludePrivateFolder(projectRootFor(this.options.root, key, this.options.projectRootOverride));
+    const project = this.project(key);
+    await project.ready;
     return project;
   }
 
@@ -89,28 +132,29 @@ export class CoreHost {
     if (this.options.guard && !this.options.guard(req)) return send(403, { ok: false, code: "FORBIDDEN", message: "Only this app, on this computer, can use these APIs." });
     const path = url.pathname.slice(CORE_PREFIX.length) || "/";
     const method = (req.method ?? "GET").toUpperCase();
-    // Every write is made in the person's name, so it needs the person cookie the app window
-    // received from GET /session. Agents never get it: they act through the MCP tools, where the
-    // ledger records them as agents. (A process running as the same OS user can still read what
-    // the browser can; this keeps agent HTTP calls and other sites out, it is not a sandbox.)
-    if (method === "GET" && path === "/session") {
-      if (req.headers["sec-fetch-site"] !== "same-origin" || req.headers["sec-fetch-mode"] === "navigate") {
-        return send(403, { ok: false, code: "FORBIDDEN", message: "Open Perfect Planner in its own window to sign in as yourself." });
-      }
-      res.setHeader("set-cookie", `${PERSON_COOKIE}=${this.personSecret}; HttpOnly; SameSite=Strict; Path=${CORE_PREFIX}`);
-      return send(200, { ok: true, result: { person: true } });
+    // The app window claims its one-time launch secret here (session.ts). Nothing else hands out the cookie.
+    if (path === "/session/claim") {
+      if (method !== "POST") return send(405, { ok: false, code: "METHOD", message: "POST only." });
+      let body: unknown;
+      try { body = await readJson(req); } catch { body = {}; }
+      const claimed = sameOriginRequest(req) ? this.sessions.claim((body as { launch?: unknown })?.launch) : null;
+      if (!claimed) return send(401, { ok: false, code: "LAUNCH_REQUIRED", message: "Open Perfect Planner from its launcher to make changes. This window can only read." });
+      res.setHeader("set-cookie", this.sessions.setCookieHeader(claimed.cookie, CORE_PREFIX));
+      return send(200, { ok: true, result: { csrf: claimed.csrf } });
     }
     const match = this.router.match(method, path);
     if (match === null) return send(404, { ok: false, code: "NOT_FOUND", message: `Nothing at ${path}.` });
     if (match === "method") return send(405, { ok: false, code: "METHOD", message: `${method} is not allowed on ${path}.` });
-    if (method === "POST" && !this.isPerson(req)) {
-      return send(401, { ok: false, code: "PERSON_REQUIRED", message: "Only the person using Perfect Planner can do this. Agents act through the MCP tools." });
+    // Every write is made in the person's name: it needs the window's cookie, CSRF token and Origin.
+    // Agents never have them; they act through the MCP tools, where the ledger records them as agents.
+    if (method === "POST" && !this.sessions.isPerson(req)) {
+      return send(401, { ok: false, code: "PERSON_REQUIRED", message: "Only the person using Perfect Planner, in a window opened from its launcher, can do this. Agents act through the MCP tools." });
     }
     try {
       const body = method === "POST" ? await readJson(req) : undefined;
-      const project = this.project(projectKey(url.searchParams.get("project")));
+      const project = await this.openProject(projectKey(url.searchParams.get("project")));
       const call = () => match.handler({ path, params: match.params, query: url.searchParams, body, project, host: this });
-      // A person's POST may make their signing key on first use; nothing else can.
+      // A person's POST may make their signing key on first use (keys.ts); nothing else can.
       const result = await (method === "POST" ? asPersonRequest(call) : call());
       send(200, { ok: true, result: result ?? null });
     } catch (error) {
@@ -123,27 +167,17 @@ export class CoreHost {
     }
   }
 
-  /** True when the request carries this process's person cookie. */
-  isPerson(req: IncomingMessage): boolean {
-    const cookie = String(req.headers.cookie ?? "");
-    const value = cookie.split(";").map((part) => part.trim()).find((part) => part.startsWith(`${PERSON_COOKIE}=`))?.slice(PERSON_COOKIE.length + 1);
-    if (!value) return false;
-    const a = Buffer.from(value);
-    const b = Buffer.from(this.personSecret);
-    return a.length === b.length && timingSafeEqual(a, b);
-  }
-
-  /** For tests and in-process callers (the desktop shell): the cookie header a person request carries. */
-  personCookie(): string {
-    return `${PERSON_COOKIE}=${this.personSecret}`;
-  }
-
   async close(): Promise<void> {
     for (const bridge of this.bridges.values()) await (await bridge).close().catch(() => undefined);
     for (const project of this.projects.values()) project.ledger.close();
     this.bridges.clear();
     this.projects.clear();
   }
+}
+
+function sameOriginRequest(req: IncomingMessage): boolean {
+  const { origin, host } = req.headers;
+  return typeof origin === "string" && typeof host === "string" && (origin === `http://${host}` || origin === `https://${host}`);
 }
 
 function readJson(req: IncomingMessage): Promise<unknown> {

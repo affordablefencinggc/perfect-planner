@@ -26,6 +26,7 @@ import {
   type PlanningQuestionState,
 } from "../../planning/index";
 import type { CoreProject } from "../project";
+import { fingerprintOf, requireFingerprint } from "../fingerprint";
 import { HttpError, type Router } from "../router";
 import { localPerson, localPersonId } from "./people";
 
@@ -118,7 +119,7 @@ function entryNumbers(entries: readonly LedgerEntry[]): Map<string, { asked?: st
 function approvals(entries: readonly LedgerEntry[]) {
   return entries
     .filter((e) => e.type === "plan.approved" && isAuthoritative(e, { personOnly: true }))
-    .map((e) => ({ plan: e.subject, entry: e.n, at: e.at, by: e.actor.id, summary: e.summary }));
+    .map((e) => ({ plan: e.subject, entry: e.n, at: e.at, by: e.actor.id, summary: e.summary, fingerprint: typeof e.data?.fingerprint === "string" ? e.data.fingerprint : null }));
 }
 
 function blockerMessage(open: string[]): string {
@@ -183,7 +184,12 @@ function overview(project: CoreProject) {
     questions: questions.filter((q) => q.area === area).map((q) => ({ ...questionView(q, numbers), why: why.get(q.q) ?? "" })),
   })).filter((a) => a.questions.length > 0);
   const answered = questions.filter((q) => q.status !== "open").length;
+  const fingerprint = planFingerprint(state.idea, areas);
+  const approved = approvals(entries);
+  // The plan exactly as shown is already approved: approving it again would only add a duplicate P-n.
+  const current = approved.length > 0 && approved[approved.length - 1]!.fingerprint === fingerprint;
   return {
+    fingerprint,
     started: questions.length > 0,
     idea: state.idea,
     signals: state.profile?.signals ?? [],
@@ -195,11 +201,17 @@ function overview(project: CoreProject) {
     description: descriptionView(state, questions),
     tasks: tasksView(entries),
     approval: {
-      canApprove: questions.length > 0 && open.length === 0,
-      message: questions.length === 0 ? "Start with your idea first; there is nothing to approve yet." : open.length ? blockerMessage(open) : "Every blocking question is settled. The plan can be approved.",
-      approved: approvals(entries),
+      canApprove: questions.length > 0 && open.length === 0 && !current,
+      current,
+      message: questions.length === 0 ? "Start with your idea first; there is nothing to approve yet." : open.length ? blockerMessage(open) : current ? "This plan is approved as it stands. Change an answer to approve a new version." : approved.length ? "The plan changed since it was approved. Approve the new version." : "Every blocking question is settled. The plan can be approved.",
+      approved,
     },
   };
+}
+
+/** What the person reviews before approving: the idea and every question as shown (see fingerprint.ts). */
+function planFingerprint(idea: unknown, areas: unknown): string {
+  return fingerprintOf({ idea: idea ?? null, areas });
 }
 
 function mindMapView(project: CoreProject) {
@@ -425,12 +437,16 @@ export function registerPlanningRoutes(router: Router): void {
    * POST /planning/approve: plan.approved P-n, then the roadmap's tasks (T-n)
    * the first time. Refused with the gate's reason while a blocker is open.
    */
-  router.post("/planning/approve", ({ project }) => {
+  router.post("/planning/approve", ({ project, body }) => {
     const state = planning(project);
     const entries = project.entries();
     if (!state.session.questions().length) throw new HttpError(409, "NOT_STARTED", "Start with your idea first; there is nothing to approve yet.");
     const open = openBlockers(entries);
     if (open.length) throw new HttpError(409, "BLOCKERS_OPEN", blockerMessage(open));
+    // Bound to the plan the person is looking at: a changed plan needs a fresh look.
+    const view = overview(project);
+    requireFingerprint(body, view.fingerprint, "plan");
+    if (view.approval.current) throw new HttpError(409, "ALREADY_APPROVED", "This plan is already approved as it stands.");
     const actor = actorFor(project);
     const already = writtenTasks(entries).size > 0;
     // The ledger's planning rule refuses this too if a blocker is open (LedgerError -> 422).
@@ -439,7 +455,7 @@ export function registerPlanningRoutes(router: Router): void {
       type: "plan.approved",
       summary: `Plan approved: ${(state.idea ?? "deep planning").replace(/\s+/g, " ").slice(0, 100)}`,
       refs: ["plan"],
-      data: { source: "planning", idea: state.idea, answered: state.session.questions().filter((q) => q.status !== "open").length },
+      data: { source: "planning", idea: state.idea, fingerprint: view.fingerprint, answered: state.session.questions().filter((q) => q.status !== "open").length },
     });
     let tasks: Record<string, string> = {};
     if (!already) {

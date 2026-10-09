@@ -8,7 +8,9 @@ export const steps = [
       await page.expectText("See who is on this project");
       await page.expectText("Add the first person");
       await page.type({ label: "Name" }, "Riley Owner");
-      await waitFor(() => page.run((h) => h.find({ label: "Person id" })?.value === "riley-owner"), { label: "person id riley-owner" });
+      // Earlier steps already wrote to this project as "owner" from this computer, so that stays the id.
+      await waitFor(() => page.run((h) => h.find({ label: "Person id" })?.value === "owner"), { label: "person id owner (the project starter)" });
+      await page.expectText("so that stays your person id");
       await page.click({ role: "button", name: "Add person" });
       await page.expectText("Riley Owner is now the owner of this project.");
       await page.expectText("Add helper");

@@ -68,7 +68,7 @@ const listenOnce = (server, port, host) => new Promise((resolve, reject) => {
 // Starts the host. port 0 asks the OS for any free port; otherwise busy ports are skipped upward.
 async function loadCoreHost(bundle, root, logger) {
   if (!bundle || !(await fileAt(bundle))) { logger.warn?.(`[perfect-planner] Core host bundle not found (${bundle}); run npm run build:core-host.`); return null; }
-  try { const { createCoreHost } = await import(pathToFileURL(bundle).href); return createCoreHost(coreHostOptions(process.env, root)); }
+  try { const { createCoreHost } = await import(pathToFileURL(bundle).href); const host = createCoreHost(coreHostOptions(process.env, root)); host.acceptDesktopLaunch?.(); return host; }
   catch (error) { logger.warn?.(`[perfect-planner] Core host disabled: ${error.message}`); return null; }
 }
 
@@ -88,7 +88,10 @@ export async function startLocalServer({ clientDirectory = DEFAULT_CLIENT_DIRECT
   const address = server.address();
   const url = `http://${host}:${address.port}/`;
   const close = () => new Promise((resolve) => { closeAuthority(); coreHost?.close(); server.close(() => resolve()); server.closeAllConnections?.(); });
-  return { server, url, port: address.port, root, close };
+  // The person's window proves itself with a one-time launch secret in the URL fragment
+  // (core/host/session.ts). Fragments never reach a server, a proxy or a log.
+  const launchUrl = () => (coreHost ? `${url}#pp-launch=${coreHost.issueLaunch()}` : url);
+  return { server, url, port: address.port, root, close, launchUrl };
 }
 
 // Newest modification time under the client's sources (generated truth output excluded).
@@ -140,10 +143,17 @@ async function main(argv) {
       catch (error) { console.warn(`[perfect-planner] The build status report was not generated (${error.message}); the app will show it as unavailable.`); }
     }
   }
-  const { url, root, close } = await startLocalServer();
+  const { url, root, close, launchUrl } = await startLocalServer();
   console.log(`[perfect-planner] Perfect Planner is running at ${url}`);
   console.log(`[perfect-planner] Saving to ${root}`);
-  if (process.env.PP_OPEN === "1") openBrowser(url);
+  // A window opened from this link can make changes as you; the link works once, for 10 minutes.
+  const open = launchUrl();
+  console.log(`[perfect-planner] Open Perfect Planner (one-time link): ${open}`);
+  if (process.stdin.isTTY) {
+    console.log("[perfect-planner] Press Enter for a new one-time link.");
+    process.stdin.on("data", () => console.log(`[perfect-planner] Open Perfect Planner (one-time link): ${launchUrl()}`));
+  }
+  if (process.env.PP_OPEN === "1") openBrowser(open);
   const stop = () => { close().finally(() => process.exit(0)); };
   process.once("SIGINT", stop); process.once("SIGTERM", stop);
 }

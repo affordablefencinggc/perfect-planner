@@ -25,7 +25,7 @@ export const steps = [
       });
       const body = await res.json();
       if (!body.ok || body.result.role !== "main") throw new Error(`hello did not make the main chat: ${JSON.stringify(body)}`);
-      await page.expectText("Connected: E2E Agent (e2e-model) is your main chat.");
+      await page.expectText("Connected: E2E Agent (e2e-model, self-reported) is your main chat.");
       const leaked = await page.eval(`document.body.innerText.includes(${JSON.stringify(token)}) || Object.keys(localStorage).some((k) => (localStorage.getItem(k) ?? "").includes(${JSON.stringify(token)}))`);
       if (leaked) throw new Error("The token is still on the page or in localStorage after the agent checked in.");
       await page.click({ within: DRAWER, role: "button", name: "Close" }, "close drawer");
