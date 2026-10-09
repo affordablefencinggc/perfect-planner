@@ -66,6 +66,7 @@ describe("KeychainKeyProvider", () => {
     const second = keys.rotateKey("person:owner");
     expect(keys.trustedKeys()).toEqual([{ ...first, retired: true }, second]);
     expect(keys.sign("person:owner", Buffer.from("x")).keyId).toBe(second.keyId);
+    expect(keys.signingKeys()).toEqual([second]);
   });
 
   it("pins another person's public key on this device without being able to sign for them", () => {
@@ -73,6 +74,7 @@ describe("KeychainKeyProvider", () => {
     const other = new KeychainKeyProvider(new FakeSecrets()).ensureKey("person:owner");
     keys.pinKey(other);
     expect(keys.trustedKeys()).toEqual([other]);
+    expect(keys.signingKeys()).toEqual([]);
     expect(() => keys.sign("person:owner", Buffer.from("x"))).toThrow("no signing key");
   });
 
