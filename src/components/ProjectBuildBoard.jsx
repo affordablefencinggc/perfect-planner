@@ -101,8 +101,10 @@ export function ProjectBuildBoard({ project, records, onWorkspace, store = null 
     {drafts.stale && <p role="alert" className="build-board-error">The saved tasks belong to an earlier folder scan. Review them in the Ledger before building.</p>}
     {error && <p role="alert" className="build-board-error">{error}</p>}
     {approval.state !== "approved" && !drafts.busy && <div className="build-board-empty">
-      <p>{approval.state === "refreshing" ? "Checking the plan approval…" : approval.state === "pending" || approval.state === "unfinished" ? "A plan approval is still in progress in the Ledger." : approval.state === "stale" ? "The plan approval is out of date. Review it again in the Ledger." : approval.state === "unavailable" ? "The plan approval could not be checked right now." : "No approved plan yet. Approve the plan in the Ledger, then each approved task appears here."}</p>
-      <button type="button" onClick={() => onWorkspace?.("ledger")}>Open Ledger<ArrowRightIcon aria-hidden="true" /></button>
+      <p>{approval.state === "refreshing" ? "Checking the plan approval…" : approval.state === "pending" || approval.state === "unfinished" ? "A plan approval is still in progress in the Ledger." : approval.state === "stale" ? "The plan approval is out of date because the folder scan changed. Review the tasks and approve the plan again on the Plan page." : approval.state === "unavailable" ? "The plan approval could not be checked right now." : "No plan approved yet. Approve the plan on the Plan page first."}</p>
+      {approval.state === "pending" || approval.state === "unfinished"
+        ? <button type="button" onClick={() => onWorkspace?.("ledger")}>Open Ledger<ArrowRightIcon aria-hidden="true" /></button>
+        : <button type="button" onClick={() => onWorkspace?.("plan")}>Open Plan<ArrowRightIcon aria-hidden="true" /></button>}
     </div>}
     {approval.changed && <p className="build-board-note"><WarningIcon aria-hidden="true" />The Ledger changed after the plan was approved. Approve it again to bring new or edited tasks onto this board.</p>}
     {board.waitingDrafts > 0 && approval.state === "approved" && <p className="build-board-note">{board.waitingDrafts} task draft{board.waitingDrafts === 1 ? " is" : "s are"} not part of the approved plan yet.</p>}

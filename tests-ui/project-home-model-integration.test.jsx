@@ -21,6 +21,7 @@ import {
   createMemoryStorage,
   createProjectRegistry,
 } from "../src/project/projectRegistry.js";
+import { recordPlanApproval } from "../src/project/planApproval.js";
 
 const FIXED_TIME = "2026-09-04T08:00:00.000Z";
 
@@ -448,6 +449,30 @@ describe("project Home consumes the project-home model", () => {
       expectOnlyModelAction(container, actionId, state === "stale" ? "Refresh project evidence" : "Restore project access");
     },
   );
+
+  test("an approved plan is not shown as 'not checked', and Home names the next page instead of a generic promotion message (gaps 17, 28)", async () => {
+    localStorage.clear();
+    const project = importedProject({ name: "Approved Plan Home", rootCharacter: "f", digestCharacter: "6", discovery: discovery() });
+    const before = renderShell(registryWith(project), project);
+    await screen.findByRole("heading", { name: project.name });
+    expect(screen.getByLabelText("Saved planning approval status").textContent).toContain("No plan approved yet. Approve the plan on the Plan page first.");
+    before.unmount();
+
+    const tasks = [{ id: "T0001", title: "Add login", description: "", owner: "", acceptance: "", recovery: "", claims: [], dependsOn: [], archived: false }];
+    await recordPlanApproval(project.projectId, { tasks, censusDigest: project.census.digest });
+    renderShell(registryWith(project), project);
+    await screen.findByRole("heading", { name: project.name });
+    const check = screen.getByLabelText("Saved planning approval status");
+    // The check runs on open and the planning service is offline here; the approval still shows.
+    expect(check.textContent).toContain("Plan approved. The saved-plan check could not run.");
+    expect(check.textContent).not.toMatch(/not checked/i);
+    expect(within(check).getByRole("button", { name: "Run saved-plan check" })).toBeTruthy();
+    expect(screen.getByLabelText("Current project stage").textContent).toContain("Overlap check required");
+    expect(screen.getByLabelText("Current project stage").textContent).not.toContain("Architecture record required");
+    expect(screen.queryByText(/unresolved review or authority work blocks promotion/)).toBeNull();
+    expect(screen.getByText(/Next step: Check overlaps on the Collision page/)).toBeTruthy();
+    localStorage.clear();
+  });
 
   test("the explicit Demo keeps its original fixture dashboard branch", async () => {
     const demo = createDemoProjectSession({ now: FIXED_TIME });

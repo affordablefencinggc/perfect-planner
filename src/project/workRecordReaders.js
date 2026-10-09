@@ -59,7 +59,7 @@ export function recordedCollisions(sections) {
     const saved = text(item?.key) && data.resolutions && typeof data.resolutions === "object" ? data.resolutions[item.key] : null;
     const state = Boolean(saved) && Array.isArray(item?.tasks) ? resolutionState(item, saved) : "open";
     const decided = state === "decided";
-    return { taskIds: pair, paths: distinctPaths, resolved: item?.resolved === true || RESOLVED.has(decision) || decided, note: text(item?.note) ?? text(item?.resolutionNote) ?? (decided && saved.choice === "order" ? `${saved.first} goes first` : state === "split-pending" ? "split chosen; file scopes still overlap" : null) };
+    return { taskIds: pair, paths: distinctPaths, first: decided && saved.choice === "order" ? text(saved.first) : null, resolved: item?.resolved === true || RESOLVED.has(decision) || decided, note: text(item?.note) ?? text(item?.resolutionNote) ?? (decided && saved.choice === "order" ? `${saved.first} goes first` : state === "split-pending" ? "split chosen; file scopes still overlap" : null) };
   }).filter((item) => item.taskIds.length);
 }
 

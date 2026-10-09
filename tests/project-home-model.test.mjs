@@ -245,3 +245,57 @@ test("Home reads saved collision decisions: open overlaps block, decided ones do
 
   assert.equal(deriveProjectHomeModel(ready).summary.overlaps.state, "unavailable");
 });
+
+test("an approved plan with decided overlaps and owners reaches a usable 'ready to build' Home (gap 28)", async () => {
+  const { emptyTaskDraftLedger, updateTaskDraft } = await import("../src/project/taskDraftLedger.js");
+  const { buildCollisionRecord, buildAllocationRecord, createResolution } = await import("../src/project/taskCoordination.js");
+  const { digestPlanTasks } = await import("../src/project/planApproval.js");
+  // Imported, discovery reviewed, but no architecture/folder/component records (Blueprint cannot publish).
+  const session = imported("d", { name: "Planned Home", discovery: discovery() });
+  const binding = { projectId: session.projectId, rootIdentity: session.registration.rootIdentity, censusDigest: session.census.digest };
+  const task = (title, path) => ({ id: null, title, description: "", owner: "", acceptance: "", recovery: "", claims: [{ access: "write", path }], dependsOn: [], archived: false });
+  const ledger = [task("A", "src/x.js"), task("B", "src/x.js"), task("C", "src/y.js")].reduce((value, item) => updateTaskDraft(value, item, at), emptyTaskDraftLedger(binding));
+  const planAuthority = { revision: 1, recordedAt: at, data: {
+    planDigest: await digestPlanTasks(ledger.tasks), taskIds: ["T0001", "T0002", "T0003"], tasks: ledger.tasks.map((item) => ({ id: item.id, title: item.title })), taskCount: 3,
+    approvedAt: at, source: "local-approval", censusDigest: binding.censusDigest, confirmedAt: null, confirmedDigest: null, tasksChangedAt: null,
+  } };
+  const collisions = buildCollisionRecord({ ledger, censusDigest: binding.censusDigest, now: at });
+  const decided = { ...collisions, resolutions: { [collisions.collisions[0].key]: createResolution(collisions.collisions[0], "order", "T0001", at) } };
+  const owners = (assignments) => buildAllocationRecord({ ledger, censusDigest: binding.censusDigest, collisionData: decided, assignments, now: at });
+  const records = (sections) => ({ sections: Object.fromEntries(Object.entries(sections).map(([key, data]) => [key, key === "planAuthority" ? data : { revision: 1, recordedAt: at, data }])) });
+
+  // Plan approved, overlaps not checked yet: the one remaining step is named with its page.
+  const unchecked = deriveProjectHomeModel(session, records({ planAuthority }));
+  assert.equal(unchecked.stage.id, "collision");
+  assert.equal(unchecked.nextAction.workspace, "collision");
+  assert.doesNotMatch(unchecked.summary.message, /unresolved review or authority work blocks promotion/);
+  assert.match(unchecked.summary.message, /Collision page/);
+
+  // Overlap still open: names the pair and the Collision page.
+  const open = deriveProjectHomeModel(session, records({ planAuthority, collisions }));
+  assert.equal(open.stage.id, "collision");
+  assert.match(open.nextAction.reason, /T0001 and T0002/);
+
+  // Overlaps decided, an owner missing: names the task and the Allocation page.
+  const missingOwner = deriveProjectHomeModel(session, records({ planAuthority, collisions: decided, allocation: owners({ T0001: { owner: "Sam" }, T0002: { owner: "Ann" } }) }));
+  assert.equal(missingOwner.stage.id, "allocation");
+  assert.equal(missingOwner.nextAction.workspace, "allocation");
+  assert.match(missingOwner.nextAction.reason, /T0003/);
+  assert.doesNotMatch(missingOwner.nextAction.reason, /T0001|T0002/);
+  assert.match(missingOwner.summary.message, /Allocation page/);
+  assert.ok(missingOwner.blockers.some((item) => item.scope === "allocation" && /T0003/.test(item.reason)));
+
+  // Everything done: Home shows the plan approved and ready to build.
+  const planned = deriveProjectHomeModel(session, records({ planAuthority, collisions: decided, allocation: owners({ T0001: { owner: "Sam" }, T0002: { owner: "Ann" }, T0003: { owner: "agent: Claude" } }) }));
+  assert.equal(planned.stage.id, "build-ready");
+  assert.equal(planned.stage.label, "Plan approved · ready to build");
+  assert.equal(planned.nextAction.workspace, "build");
+  assert.equal(planned.blockers.length, 0, "missing optional records do not block building");
+  assert.match(planned.summary.message, /Plan approved by you/);
+  assert.match(planned.summary.message, /Blueprint/, "the optional architecture record is still named, with where to add it");
+  assertOneAction(planned);
+
+  // Without any plan approval the original order is unchanged, but named precisely.
+  assert.equal(deriveProjectHomeModel(session).stage.id, "architecture");
+  assert.match(deriveProjectHomeModel(session).summary.message, /Blueprint page/);
+});

@@ -31,10 +31,16 @@ afterEach(() => { cleanup(); window.history.replaceState(null, "", "/"); });
 test("build board waits for an approved plan instead of inventing cards", async () => {
   const onWorkspace = vi.fn();
   render(<Live Panel={ProjectBuildBoard} context={{ planStatuses: {} }} onWorkspace={onWorkspace} />);
-  expect(await screen.findByText(/No approved plan yet/)).toBeTruthy();
+  expect(await screen.findByText("No plan approved yet. Approve the plan on the Plan page first.")).toBeTruthy();
   expect(screen.queryByRole("article")).toBeNull();
-  fireEvent.click(screen.getByRole("button", { name: /Open Ledger/ }));
-  expect(onWorkspace).toHaveBeenCalledWith("ledger");
+  fireEvent.click(screen.getByRole("button", { name: /Open Plan/ }));
+  expect(onWorkspace).toHaveBeenCalledWith("plan");
+});
+
+test("an unchecked planning status before any approval is not called out of date (gap 26)", async () => {
+  render(<Live Panel={ProjectBuildBoard} context={{ planStatuses: { [project.projectId]: { state: "stale", projectId: project.projectId, reason: "ledger-context-changed" } } }} />);
+  expect(await screen.findByText("No plan approved yet. Approve the plan on the Plan page first.")).toBeTruthy();
+  expect(screen.queryByText(/out of date/)).toBeNull();
 });
 
 test("each approved task gets a card whose status is saved to the project and drives BUILD-RUN", async () => {
