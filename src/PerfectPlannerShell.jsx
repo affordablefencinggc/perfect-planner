@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {useAgentSessionObservations} from './runtime/useAgentSessionObservations.js';
 import {DeveloperNotes} from './components/DeveloperNotes.jsx';
 import {BrowserInputMarkers,useBrowserInputMarkerControl} from './components/BrowserInputMarkers.jsx';
@@ -382,6 +382,21 @@ function stageForWorkspace(workspace) {
   );
 }
 
+// The header wraps on narrow windows, so the workspace below follows its real height.
+function useHeaderHeightVariable(headerRef) {
+  useLayoutEffect(() => {
+    const header = headerRef.current;
+    const root = document.documentElement;
+    if (!header) return undefined;
+    const apply = () => root.style.setProperty("--app-header-height", `${Math.ceil(header.getBoundingClientRect().height)}px`);
+    apply();
+    if (typeof ResizeObserver !== "function") return undefined;
+    const observer = new ResizeObserver(apply);
+    observer.observe(header);
+    return () => { observer.disconnect(); root.style.removeProperty("--app-header-height"); };
+  }, [headerRef]);
+}
+
 function TopBar({
   workspace,
   onWorkspace,
@@ -412,6 +427,8 @@ function TopBar({
   const [agentDrawerOpen, setAgentDrawerOpen] = useState(false);
   const openAgentDrawer = () => { setOpenMenu(null); setAgentDrawerOpen(true); };
   const menuTriggerRef = useRef(null);
+  const headerRef = useRef(null);
+  useHeaderHeightVariable(headerRef);
   const menuPopoverRef = useRef(null);
   let runtimeCapabilityMatrix = null;
   if (activeProject) {
@@ -528,7 +545,7 @@ function TopBar({
     setOpenMenu(null);
   };
   return (
-    <header className="topbar">
+    <header className="topbar" ref={headerRef}>
       <BrowserInputMarkers key={browserInput.scope} enabled={browserInput.enabled} scope={browserInput.scope} onDisable={()=>browserInput.setEnabled(false)}/>
       <div className="topbar-primary">
         <button

@@ -5,6 +5,7 @@ import { ProjectProvider } from "./project/ProjectProvider.jsx";
 import { createMemoryStorage, DEFAULT_PROJECT_REGISTRY_KEY } from "./project/projectRegistry.js";
 import { AppErrorBoundary, isSafeStart, SafeStartNotice } from "./components/AppErrorBoundary.jsx";
 import "./styles.css";
+import "./styles/frame.css";
 
 function LocalAgentation() {
   const [Toolbar, setToolbar] = React.useState(null);
