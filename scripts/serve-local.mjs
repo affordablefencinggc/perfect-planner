@@ -5,6 +5,8 @@
 //   npm run start  -> build the client first when dist/client is missing or older than its sources
 // PORT picks the first port to try (default 4173; busy ports fall through to the next one).
 // PP_OPEN=1 opens the default browser once listening.
+// npm start -- C:\path\to\app offers that folder for a one-click read-only scan (default: the folder
+// npm was run from; PP_FOLDER also works).
 import http from "node:http";
 import path from "node:path";
 import { spawn } from "node:child_process";
@@ -12,6 +14,7 @@ import { createReadStream } from "node:fs";
 import { readdir, stat } from "node:fs/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createLocalAuthorityMiddlewares, localAuthorityRoot, runMiddlewares } from "../src/node/localAuthorityHost.mjs";
+import { createLaunchFolderMiddleware, resolveLaunchFolder } from "../src/node/launchFolderHost.mjs";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 export const DEFAULT_CLIENT_DIRECTORY = path.join(projectRoot, "dist", "client");
@@ -64,12 +67,13 @@ const listenOnce = (server, port, host) => new Promise((resolve, reject) => {
 });
 
 // Starts the host. port 0 asks the OS for any free port; otherwise busy ports are skipped upward.
-export async function startLocalServer({ clientDirectory = DEFAULT_CLIENT_DIRECTORY, root = localAuthorityRoot(), port = Number(process.env.PORT ?? 4173), host = LOOPBACK_HOST, logger = console } = {}) {
+export async function startLocalServer({ clientDirectory = DEFAULT_CLIENT_DIRECTORY, root = localAuthorityRoot(), launchFolder = null, port = Number(process.env.PORT ?? 4173), host = LOOPBACK_HOST, logger = console } = {}) {
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error(`Invalid PORT: ${port}`);
   const server = http.createServer();
   const { middlewares, close: closeAuthority } = await createLocalAuthorityMiddlewares({ root, logger, getAddress: () => server.address(), isHttps: () => false });
   const serveStatic = createStaticHandler(clientDirectory);
-  server.on("request", (req, res) => runMiddlewares(middlewares, req, res, (request, response) => serveStatic(request, response).catch(() => { if (!response.headersSent) plain(response, 500, "Server error"); else response.destroy(); })));
+  const handlers = launchFolder ? [createLaunchFolderMiddleware({ folder: launchFolder }), ...middlewares] : middlewares;
+  server.on("request", (req, res) => runMiddlewares(handlers, req, res, (request, response) => serveStatic(request, response).catch(() => { if (!response.headersSent) plain(response, 500, "Server error"); else response.destroy(); })));
   for (let attempt = 0, candidate = port; ; attempt++, candidate++) {
     try { await listenOnce(server, candidate, host); break; }
     catch (error) { if (error.code !== "EADDRINUSE" || port === 0 || attempt + 1 >= PORT_ATTEMPTS || candidate >= 65535) { closeAuthority(); throw error; } }
@@ -127,8 +131,10 @@ async function main(argv) {
       catch (error) { console.warn(`[perfect-planner] The build status report was not generated (${error.message}); the app will show it as unavailable.`); }
     }
   }
-  const { url, root, close } = await startLocalServer();
+  const launchFolder = resolveLaunchFolder({ argv: argv.filter((value) => value !== "--build") });
+  const { url, root, close } = await startLocalServer({ launchFolder });
   console.log(`[perfect-planner] Perfect Planner is running at ${url}`);
+  if (launchFolder) console.log(`[perfect-planner] One-click scan offered for ${launchFolder} (read only)`);
   console.log(`[perfect-planner] Saving to ${root}`);
   if (process.env.PP_OPEN === "1") openBrowser(url);
   const stop = () => { close().finally(() => process.exit(0)); };
