@@ -59,7 +59,7 @@ export function verifyWithAcknowledgements(entries: readonly LedgerEntry[]): {
     if (result.ok) return { result, acknowledged };
     const index = entries.findIndex((e, i) => i >= start && e.n === result.firstBad);
     const ackIndex = entries.findIndex(
-      (e) => e.type === "chain.acknowledged" && String(e.data?.firstBad ?? e.subject) === result.firstBad,
+      (e) => e.type === "chain.acknowledged" && e.actor?.kind === "person" && String(e.data?.firstBad ?? e.subject) === result.firstBad,
     );
     if (index < 0 || ackIndex <= index) return { result, acknowledged };
     acknowledged.push(result.firstBad);
