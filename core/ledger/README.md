@@ -102,10 +102,10 @@ with a `code` when a rule refuses the entry:
 | `UNKNOWN_TYPE` | `type` is not in `ENTRY_TYPES` |
 | `BAD_ACTOR` | missing actor, unknown kind, or an AI actor with no model |
 | `BAD_CORRECTS` | `corrects` does not name an existing earlier entry, or a `correction` has no `corrects` |
-| `DONE_WITHOUT_PASS` | `task.done` with no `test.passed` for the task's approved test after its last `commit.observed` (§2.4) |
+| `DONE_WITHOUT_PASS` | `task.done` unless the latest run of the task's approved test after its last `commit.observed` (or approval, or reopen) is a `test.passed` (§2.4) |
 | `CHAIN_BROKEN` | the chain failed verification on open and has not been acknowledged; all writes stop |
 | `READ_ONLY` | the ledger was opened read-only, or another process holds the writer lock |
-| `RULE` | a rule registered with `ledger.addRule` refused it |
+| `RULE` | a rule registered with `ledger.addRule` refused it; also `test.approved` for a command never defined for that task, and `chain.acknowledged` written through `append` (use `acknowledgeBreak`) |
 
 Extra rules: `ledger.addRule((draft, ledger) => string | null)`; return a
 message to refuse. Sibling threads use this for gate rules (for example
@@ -158,7 +158,9 @@ and each `hash` recomputes. It returns
 On a break the ledger opens with `status.ok === false` and every `append`
 throws `CHAIN_BROKEN`, except `ledger.acknowledgeBreak(person, reason)`, which
 writes one `chain.acknowledged` entry naming the first bad entry and reopens
-writes. A later open still reports the break, as acknowledged
+writes. Only acknowledgements written by a person count when the chain is
+re-checked, and `append` refuses the type, so an agent cannot pre-acknowledge
+a break. A later open still reports the break, as acknowledged
 (`status.acknowledged = ["L-000005"]`), so the red banner can say "a known
 break, acknowledged by …" rather than disappear. A new, unacknowledged break
 stops writes again.
@@ -170,6 +172,7 @@ stops writes again.
 appended and fsynced, never rewritten. A writer lock
 (`.perfect-planner/ledger/.writer.lock`, holding pid and host) makes this the
 only writing process for the project; a second writer opens read-only with
-`READ_ONLY`. A lock left by a dead process on the same host is taken over.
+`READ_ONLY`. A lock left by a dead process on the same host is taken over, and one
+`FileStore` instance hands its lock to one `Ledger` only.
 Paths go through `node:path`, so the store behaves the same on Windows, macOS
 and Linux. `MemoryStore` is the in-memory equivalent for tests.

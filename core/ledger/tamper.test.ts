@@ -153,3 +153,34 @@ describe("tamper flow", () => {
     expect(ledger.status).toMatchObject({ ok: false, brokenAt: "L-000003", problem: "number" });
   });
 });
+
+describe("acknowledgement rules", () => {
+  it("needs a reason to acknowledge a break", () => {
+    const store = new MemoryStore();
+    writeFive(store);
+    tamper(store, 2, (entry) => {
+      entry.summary = "Edited";
+    });
+    const ledger = Ledger.openSync(store, { now: clock("2026-10-09T03:00:00Z") });
+    expect(thrown(() => ledger.acknowledgeBreak(person, "  ")).code).toBe("EMPTY_FIELD");
+    expect(ledger.status.ok).toBe(false);
+  });
+
+  it("ignores a chain.acknowledged written by anyone but a person", () => {
+    const store = new MemoryStore();
+    writeFive(store);
+    // Forge an agent acknowledgement on disk for a break that does not exist yet.
+    const ledger = Ledger.openSync(store, { now: clock("2026-10-09T03:00:00Z") });
+    ledger.close();
+    const last = JSON.parse(store.lines[4]) as LedgerEntry;
+    const forged = { n: "L-000006", at: "2026-10-09T03:00:00Z", actor: agent, type: "chain.acknowledged", subject: "L-000003", summary: "Pre-acknowledged", reason: "pre", evidence: [], refs: [], data: { firstBad: "L-000003" }, prev: last.hash } as Omit<LedgerEntry, "hash">;
+    const signed = { ...forged, hash: hashEntry(forged) } as LedgerEntry;
+    store.lines.push(JSON.stringify(signed));
+    store.head = { n: signed.n, hash: signed.hash };
+    tamper(store, 2, (entry) => {
+      entry.summary = "Edited";
+    });
+    const reopened = Ledger.openSync(store);
+    expect(reopened.status).toMatchObject({ ok: false, brokenAt: "L-000003", acknowledged: [] });
+  });
+});

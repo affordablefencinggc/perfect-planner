@@ -221,8 +221,8 @@ describe("FileStore tamper detection", () => {
   });
 });
 
-describe("suspected source bug (it.fails)", () => {
-  it.fails("BUG: a second Ledger on the same FileStore instance is writable while the first holds the lock", () => {
+describe("fixed source bug", () => {
+  it("a second Ledger on the same FileStore instance is not writable while the first holds the lock", () => {
     const root = tempRoot();
     const store = new FileStore(root);
     const first = Ledger.openSync(store, { now: clockFrom(times) });

@@ -120,8 +120,9 @@ export interface NumberedBlock {
 
 /**
  * Gives every heading, paragraph and list item of a markdown plan a clause
- * number (spec §3.3). A "## 3. Title" heading keeps its own number when it
- * has one; blocks under a heading are numbered as its children.
+ * number (spec §3.3). A top-level "## 3. Title" heading keeps its typed
+ * number when it is higher than the one before; everything else is numbered
+ * in order, and blocks under a heading are numbered as its children.
  */
 export function numberMarkdown(markdown: string): NumberedBlock[] {
   const blocks: NumberedBlock[] = [];
@@ -154,14 +155,17 @@ export function numberMarkdown(markdown: string): NumberedBlock[] {
       const level = heading[1].length;
       if (level === 1 && stack.length === 0 && blocks.length === 0) continue; // document title
       while (stack.length && stack[stack.length - 1].level >= level) stack.pop();
-      const text = heading[2].replace(/^\d+(?:\.\d+)*\.?\s+/, "").trim();
+      const typed = /^(\d+(?:\.\d+)*)\.?\s+/.exec(heading[2]);
+      const text = heading[2].slice(typed ? typed[0].length : 0).trim();
       const parent = stack[stack.length - 1];
       let number: string;
       if (parent) {
         parent.children += 1;
         number = `${parent.number}.${parent.children}`;
       } else {
-        topLevel += 1;
+        // A typed top-level number is kept when it moves forward; otherwise number in order.
+        const wanted = typed && !typed[1].includes(".") ? Number(typed[1]) : 0;
+        topLevel = wanted > topLevel ? wanted : topLevel + 1;
         number = String(topLevel);
       }
       blocks.push({ clause: number, kind: "heading", text });

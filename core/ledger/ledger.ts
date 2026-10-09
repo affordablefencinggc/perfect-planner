@@ -148,20 +148,26 @@ export class Ledger {
       throw new LedgerError("RULE", `entries up to ${this.chain.firstBad} are missing; restore them from git before writing`);
     }
     const broken = this.chain;
-    const entry = this.write({
+    const entry = this.write(
+      {
       actor: person,
       type: "chain.acknowledged",
       subject: broken.firstBad,
       summary: `Fingerprint break at ${broken.firstBad} acknowledged`,
       reason,
       data: { firstBad: broken.firstBad, problem: broken.problem, detail: broken.detail },
-    });
+      },
+      true,
+    );
     this.acknowledged.push(broken.firstBad);
     this.chain = { ok: true };
     return entry;
   }
 
-  private write(draft: EntryDraft): LedgerEntry {
+  private write(draft: EntryDraft, acknowledging = false): LedgerEntry {
+    if (draft?.type === "chain.acknowledged" && !acknowledging) {
+      throw new LedgerError("RULE", "chain.acknowledged is written only by acknowledgeBreak, by a person");
+    }
     this.validate(draft);
     const previous = this.last();
     let at = this.now();
@@ -185,7 +191,7 @@ export class Ledger {
       if (unsigned[key] === undefined) delete unsigned[key];
     }
     if (unsigned.actor.model === undefined) delete unsigned.actor.model;
-    const entry = Object.freeze({ ...unsigned, hash: hashEntry(unsigned) }) as LedgerEntry;
+    const entry = deepFreeze({ ...unsigned, hash: hashEntry(unsigned) }) as LedgerEntry;
     this.store.append(entry);
     this.index.set(entry.n, this.list.length);
     this.list.push(entry);
@@ -223,6 +229,7 @@ export class Ledger {
       throw new LedgerError("BAD_CORRECTS", `${draft.corrects} is not an existing entry`);
     }
     if (draft.type === "task.done") this.checkDone(draft.subject.trim());
+    if (draft.type === "test.approved") this.checkApproved(draft);
     for (const rule of this.rules) {
       const refusal = rule(draft, this);
       if (refusal) throw new LedgerError("RULE", refusal);
@@ -252,7 +259,11 @@ export class Ledger {
           passedAfterAnchor = false;
           break;
         case "test.passed":
-          if (approvedTest !== undefined && i > anchor && String(entry.data?.test ?? "") === approvedTest) passedAfterAnchor = true;
+        case "test.failed":
+          // The latest run of the approved test after the anchor decides.
+          if (approvedTest !== undefined && i > anchor && String(entry.data?.test ?? "") === approvedTest) {
+            passedAfterAnchor = entry.type === "test.passed";
+          }
           break;
         default:
           break;
@@ -265,6 +276,25 @@ export class Ledger {
       throw new LedgerError("DONE_WITHOUT_PASS", `${task} has no passing run of its approved test after its last commit`);
     }
   }
+
+  /** test.approved must approve a command that was defined for the same task. */
+  private checkApproved(draft: EntryDraft): void {
+    const test = draft.data?.test;
+    if (typeof test !== "string" || test.trim() === "") {
+      throw new LedgerError("EMPTY_FIELD", "test.approved needs data.test, the command being approved");
+    }
+    const base = taskBase(draft.subject);
+    const defined = this.list.some((entry) => entry.type === "test.defined" && taskBase(entry.subject) === base && entry.data?.test === test);
+    if (!defined) throw new LedgerError("RULE", `${base} has no defined test "${test}" to approve`);
+  }
+}
+
+function deepFreeze<T>(value: T): T {
+  if (value && typeof value === "object" && !Object.isFrozen(value)) {
+    Object.freeze(value);
+    for (const child of Object.values(value as Record<string, unknown>)) deepFreeze(child);
+  }
+  return value;
 }
 
 /** "T-14.a2" and "T-14" are the same task. */

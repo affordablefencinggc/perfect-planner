@@ -122,7 +122,8 @@ describe("REASON_REQUIRED", () => {
     );
   });
 
-  it.each([...REASON_REQUIRED_TYPES])("refuses %s without a reason", (type) => {
+  // chain.acknowledged is written only by acknowledgeBreak; its reason check is covered in tamper.test.ts.
+  it.each([...REASON_REQUIRED_TYPES].filter((type) => type !== "chain.acknowledged"))("refuses %s without a reason", (type) => {
     const ledger = open();
     ledger.append(draft({ summary: "seed" }));
     // corrects is supplied so that a correction is refused for its reason, not its target.
@@ -134,6 +135,7 @@ describe("REASON_REQUIRED", () => {
     const ledger = open();
     ledger.append(draft({ summary: "seed" }));
     for (const type of REASON_REQUIRED_TYPES) {
+      if (type === "chain.acknowledged") continue;
       expect(() => ledger.append(draft({ type, reason: "Because the owner said so", corrects: "L-000001" }))).not.toThrow();
     }
   });
@@ -149,8 +151,8 @@ describe("UNKNOWN_TYPE", () => {
     const ledger = open();
     ledger.append(draft({ summary: "seed" }));
     for (const type of ENTRY_TYPES) {
-      if (type === "task.done") continue;
-      expect(() => ledger.append(draft({ type, reason: "reason", corrects: "L-000001" }))).not.toThrow();
+      if (type === "task.done" || type === "chain.acknowledged") continue;
+      expect(() => ledger.append(draft({ type, reason: "reason", corrects: "L-000001", data: { test: "npm test" } }))).not.toThrow();
     }
   });
 });
@@ -353,6 +355,7 @@ describe("RULE", () => {
     expect(thrown(() => ledger.append(draft({ type: "task.claimed", subject: "T-3", summary: "Claimed" }))).message).toBe(
       "task.claimed needs test.approved",
     );
+    ledger.append(draft({ type: "test.defined", subject: "T-3", summary: "Defined", data: { test: "npm test" } }));
     ledger.append(draft({ type: "test.approved", subject: "T-3", summary: "Approved", data: { test: "npm test" } }));
     expect(() => ledger.append(draft({ type: "task.claimed", subject: "T-3", summary: "Claimed" }))).not.toThrow();
   });
@@ -539,11 +542,8 @@ describe("queries", () => {
   });
 });
 
-// Suspected source bugs. Each is an it.fails: the body must throw for the test to pass.
-// When the source is fixed the body stops throwing and the test reports as failed, so
-// delete the .fails and keep the test as a regression check.
-describe("suspected source bugs (it.fails)", () => {
-  it.fails("BUG: append accepts chain.acknowledged from an agent, though only a person may acknowledge a break", () => {
+describe("fixed source bugs", () => {
+  it("refuses chain.acknowledged written through append, even by an agent", () => {
     const ledger = open();
     ledger.append(draft({ summary: "seed" }));
     expect(() =>
@@ -560,10 +560,31 @@ describe("suspected source bugs (it.fails)", () => {
     ).toThrow();
   });
 
-  it.fails("BUG: append accepts test.approved for a test that was never defined (README: must match a defined test)", () => {
+  it("refuses test.approved for a test that was never defined", () => {
     const ledger = open();
     expect(() =>
       ledger.append(draft({ type: "test.approved", subject: "T-1", summary: "Approved", data: { test: "npm test -- ghost.spec" } })),
     ).toThrow();
+  });
+});
+
+describe("latest run decides", () => {
+  it("refuses task.done when the approved test failed after it passed", () => {
+    const ledger = open();
+    defineAndApprove(ledger);
+    commit(ledger);
+    passed(ledger);
+    ledger.append(draft({ type: "test.failed", subject: "T-1", summary: "Login test failed", data: { test: "npm test -- login.spec" } }));
+    expect(thrown(() => done(ledger)).code).toBe("DONE_WITHOUT_PASS");
+    passed(ledger);
+    expect(done(ledger).type).toBe("task.done");
+  });
+
+  it("deep-freezes stored entries", () => {
+    const ledger = open();
+    const entry = ledger.append(draft({ refs: ["P-1 §1"], data: { nested: { a: 1 } } }));
+    expect(Object.isFrozen(entry.actor)).toBe(true);
+    expect(Object.isFrozen(entry.refs)).toBe(true);
+    expect(Object.isFrozen((entry.data as { nested: object }).nested)).toBe(true);
   });
 });
