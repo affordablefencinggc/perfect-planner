@@ -7,7 +7,7 @@ import { surfacesOverlap } from "../../src/engine/collisionEngine.js";
 import { git, GitError, runGit } from "./git";
 import { isWithin, lines, realDir, samePath, toRepoPath } from "./platform";
 import { type Actor, type LedgerPort, WORKTREES_ACTOR } from "./ports";
-import { copyLocalSettings } from "./settings";
+import { copyLocalSettings, placeholderSecrets } from "./settings";
 import { branchFor, TASK_ID, type WorktreeInfo } from "./types";
 
 export type Installer = (worktreePath: string) => Promise<void>;
@@ -199,6 +199,9 @@ export class WorktreeManager {
       if (existsSync(info.path)) {
         const dirty = await git(info.path, ["status", "--porcelain=v1", "--untracked-files=all"]);
         if (dirty) throw new WorktreeError(`${taskId} has uncommitted changes; commit or move them before removing the worktree.`);
+        // git worktree remove also deletes ignored files, which can be real work (notes, data, edited settings).
+        const kept = await this.ignoredWork(info.path);
+        if (kept.length) throw new WorktreeError(`${taskId} has ignored files that would be deleted with the worktree; move them first: ${kept.slice(0, 10).join(", ")}`);
         await git(this.repoRoot, ["worktree", "remove", info.path]);
       } else {
         await git(this.repoRoot, ["worktree", "prune"]);
@@ -224,6 +227,23 @@ export class WorktreeManager {
         data: { removedBy: actor, branch: info.branch, branchDeleted },
       });
       return { taskId, branchDeleted, branchKeptReason };
+    });
+  }
+
+  /**
+   * Ignored files in a worktree that removal would destroy. Dependencies (node_modules) can be
+   * reinstalled, and settings copied in at launch that still match what the copy produced are
+   * placeholders; anything else counts as work.
+   */
+  private async ignoredWork(worktreePath: string): Promise<string[]> {
+    const ignored = lines(await git(worktreePath, ["status", "--porcelain=v1", "--ignored=matching", "--untracked-files=all"]))
+      .filter((line) => line.startsWith("!! "))
+      .map((line) => line.slice(3).replace(/^"(.*)"$/, "$1"));
+    return ignored.filter((file) => {
+      if (/(^|\/)node_modules(\/|$)/.test(file)) return false;
+      if (!/^\.env(?:\..+)?$/.test(file)) return true;
+      const source = path.join(this.repoRoot, file);
+      return !existsSync(source) || readFileSync(path.join(worktreePath, file), "utf8") !== placeholderSecrets(readFileSync(source, "utf8"));
     });
   }
 
