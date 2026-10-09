@@ -116,8 +116,8 @@ describe("Connect agent drawer", () => {
     const dialog = await screen.findByRole("dialog", { name: "Connect agent" });
     expect(within(dialog).getByLabelText("Run once in a terminal setup text").textContent).toContain("perfectPlannerMcpServer.mjs");
     expect(window.location.search).toContain("workspace=structure");
-    // The drawer moves focus and installs its Escape listener in the same
-    // effect, which can run after findByRole resolves on a slow machine.
+    // The drawer is lazy-loaded; its key handler attaches in the same effect that moves focus
+    // into it, so wait for that before pressing Escape (slower runners, e.g. macOS, lag here).
     await waitFor(() => expect(dialog.contains(document.activeElement)).toBe(true));
     fireEvent.keyDown(document, { key: "Escape" });
     expect(screen.queryByRole("dialog", { name: "Connect agent" })).toBeNull();
