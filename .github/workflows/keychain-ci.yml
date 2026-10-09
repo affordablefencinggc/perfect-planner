@@ -1,0 +1,46 @@
+name: Real OS keychain
+
+# Signing keys in the real OS keychain on each OS: Windows Credential
+# Locker, the macOS keychain, and the Linux Secret Service (gnome-keyring
+# in a private D-Bus session). It installs system packages and starts a
+# keyring daemon, so it is a platform probe on every push, not a gate the
+# app can reproduce locally; the provider's logic is tested in Core loop CI.
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: keychain-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  keychain:
+    name: Real keychain on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    env:
+      PP_KEYCHAIN_TEST: "1"
+      PP_KEYCHAIN_REQUIRED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - name: Keychain (Windows, macOS)
+        if: runner.os != 'Linux'
+        run: npx vitest run -c vitest.core.config.mjs core/ledger/keychain.test.ts --reporter=verbose
+      - name: Keychain (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libsecret-tools gnome-keyring dbus
+          dbus-run-session -- sh -c 'printf "ci-only-password" | gnome-keyring-daemon --unlock --components=secrets >/dev/null && npx vitest run -c vitest.core.config.mjs core/ledger/keychain.test.ts --reporter=verbose'

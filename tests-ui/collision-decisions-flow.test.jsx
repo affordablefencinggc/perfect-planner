@@ -5,7 +5,7 @@ import React from "react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 vi.mock("../src/project/taskFormRecovery.js", async (importOriginal) => { const actual = await importOriginal(), { createMemoryTaskFormRecovery } = await import("./fixtures/memoryTaskFormRecovery.js"); return { ...actual, createTaskFormRecovery: () => createMemoryTaskFormRecovery(actual.appendTaskFormHistory) }; });
 import { withMemoryTaskSaveIntents } from "./fixtures/memoryTaskSaveIntents.js";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { PlanApprovalStep } from "../src/components/PlanApprovalStep.jsx";
 import { ProjectCollisionPanel } from "../src/components/ProjectCollisionPanel.jsx";
@@ -38,6 +38,12 @@ function Pages({ store }) {
 }
 
 const headline = (name) => screen.getByRole("group", { name }).querySelector("summary").textContent;
+// Plan, Collision and Ledger each read the store on their own, so one page having loaded (or
+// updated) says nothing about the others: wait for each page's own state, never a fixed delay.
+// Under a loaded CI runner a first render can take longer than Testing Library's 1 s default.
+const wait = { timeout: 10_000 };
+const loaded = () => Promise.all([screen.findByRole("heading", { name: "Cache" }, wait), screen.findByRole("group", { name: "Plan overlaps" }, wait), screen.findByRole("group", { name: "Ledger overlaps" }, wait)]);
+const expectHeadline = (name, text) => waitFor(() => expect(headline(name)).toBe(text), wait);
 
 beforeEach(() => { localStorage.clear(); });
 afterEach(cleanup);
@@ -49,27 +55,25 @@ test("Plan and Ledger count overlaps as decided once Collision saves a decision;
   const store = memoryStore(ledger);
   const view = render(<Pages store={store} />);
 
-  await screen.findByRole("heading", { name: "Cache" });
-  // Each page reads the saved tasks on its own; wait for Plan and Ledger, not just the Ledger heading.
-  await screen.findByRole("group", { name: "Plan overlaps" }); await screen.findByRole("group", { name: "Ledger overlaps" });
+  await loaded();
   expect(headline("Plan overlaps")).toBe("2 of 2 overlaps still need a decision");
   expect(headline("Ledger overlaps")).toBe("2 of 2 overlaps still need a decision");
   expect(screen.queryByText(/task details? still missing/)).toBeNull();
   expect(screen.queryByText(/Ledger findings must be resolved/)).toBeNull();
 
   await user.click(screen.getByRole("button", { name: /Check tasks now/ }));
-  const first = await screen.findByRole("article", { name: "T0001 and T0002 overlap" });
+  const first = await screen.findByRole("article", { name: "T0001 and T0002 overlap" }, wait);
   await user.selectOptions(within(first).getByLabelText("Decision"), "first:T0001");
   await user.click(within(first).getByRole("button", { name: "Mark resolved" }));
-  await within(first).findByText(/Decided: Do T0001 · Login first/);
-  expect(headline("Plan overlaps")).toBe("1 of 2 overlaps still needs a decision");
-  expect(headline("Ledger overlaps")).toBe("1 of 2 overlaps still needs a decision");
+  await within(first).findByText(/Decided: Do T0001 · Login first/, {}, wait);
+  await expectHeadline("Plan overlaps", "1 of 2 overlaps still needs a decision");
+  await expectHeadline("Ledger overlaps", "1 of 2 overlaps still needs a decision");
 
   // Choosing "split" is not a decision yet: the scopes still overlap.
   const second = screen.getByRole("article", { name: "T0003 and T0004 overlap" });
   await user.selectOptions(within(second).getByLabelText("Decision"), "split");
   await user.click(within(second).getByRole("button", { name: "Choose split" }));
-  expect(await within(second).findByText(/Split chosen: edit the file scopes of T0003 or T0004 so they no longer overlap\./)).toBeTruthy();
+  expect(await within(second).findByText(/Split chosen: edit the file scopes of T0003 or T0004 so they no longer overlap\./, {}, wait)).toBeTruthy();
   expect(within(second).queryByText(/^Decided:/)).toBeNull();
   expect(within(second).getByRole("button", { name: /Edit file scopes in Ledger/ })).toBeTruthy();
   expect(headline("Plan overlaps")).toBe("1 of 2 overlaps still needs a decision");
@@ -79,9 +83,7 @@ test("Plan and Ledger count overlaps as decided once Collision saves a decision;
   view.unmount();
   await store.saveTask(binding, ledger.revision, { ...ledger.tasks[3], claims: [{ access: "write", path: "src/cache.js" }] });
   render(<Pages store={store} />);
-  await screen.findByRole("heading", { name: "Cache" });
-  // Each page reads the saved tasks on its own; wait for Plan and Ledger, not just the Ledger heading.
-  await screen.findByRole("group", { name: "Plan overlaps" }); await screen.findByRole("group", { name: "Ledger overlaps" });
+  await loaded();
   expect(headline("Plan overlaps")).toBe("2 overlaps decided");
   expect(headline("Ledger overlaps")).toBe("2 overlaps decided");
   expect(within(screen.getByRole("group", { name: "Ledger overlaps" })).getByText(/T0003 and T0004: split done/)).toBeTruthy();
