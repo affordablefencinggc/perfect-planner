@@ -117,14 +117,32 @@ Checked before every other rule, from `DEFAULT_PERMISSIONS` (or
 |---|---|
 | `person` | any type (`core/people` narrows this per role: owner, helper, viewer) |
 | `system` (the gate, the git watcher) | any type except `chain.acknowledged` |
-| `agent` | `task.claimed`, `task.progress`, `task.blocked`, `task.proof`, `test.defined` (a proposal), and the relay: `question.asked`, `question.answered`, `decision.made` |
+| `agent` | `task.claimed`, `task.progress`, `task.blocked`, `task.proof`, `test.defined` (a proposal), and the relay: `question.asked`, `question.answered` |
 | `jev` | `review.verdict`, `question.asked` |
 
-So approvals (`plan.approved`, `test.approved`, `release.*`), test results,
+So decisions (`decision.made`), approvals (`plan.approved`, `test.approved`, `release.*`), test results,
 `commit.observed`, `merge.done`, `task.created`, `task.done` and
 `task.reopened` never come from an agent or Jev: the gate writes results and
 done, a person approves. A helper's agent is limited by both this table and
 its person's role in `core/people`.
+
+Every open re-checks the stored entries against the same table; an entry
+its actor could not have written stops writes as a `permission` break.
+
+**Trust the author, not the payload.** Code that treats an entry as a
+person's decision, confirmation, answer, preset or budget must check
+`isAuthoritative(entry)` (person or system) or
+`isAuthoritative(entry, { personOnly: true })`, never a field inside
+`data`. An agent's `question.answered` is information, not your answer.
+
+The actor is declared by the caller, so whatever hands out ledger access
+(the MCP server, the desktop app) must bind it to a real identity: an
+agent's token can only produce agent actors.
+
+Every series number is checked by the ledger itself: `task.created`,
+`plan.approved`, `question.asked`, `decision.made`, `release.cut` and
+`release.rollback` must take exactly the next number in their series
+(`RULE` otherwise), with or without `installNumberingRules`.
 
 Extra rules: `ledger.addRule((draft, ledger) => string | null)`; return a
 message to refuse. Sibling threads use this for gate rules (for example
@@ -179,19 +197,36 @@ throws `CHAIN_BROKEN`, except `ledger.acknowledgeBreak(person, reason)`, which
 writes one `chain.acknowledged` entry naming the first bad entry and reopens
 writes. Only acknowledgements written by a person count when the chain is
 re-checked, and `append` refuses the type, so an agent cannot pre-acknowledge
-a break. A later open still reports the break, as acknowledged
+a break. The acknowledgement pins the bad entry's stored hash and the fingerprint of
+its content, so editing that entry again is a new break. After the
+acknowledgement the whole chain is re-checked, so a second break further on
+still stops writes. A later open still reports the break, as acknowledged
 (`status.acknowledged = ["L-000005"]`), so the red banner can say "a known
 break, acknowledged by …" rather than disappear. A new, unacknowledged break
 stops writes again.
 
 ## Storage (§2.6)
 
+Problems reported in `status.problem`: `hash`, `prev`, `number`, `parse`,
+`truncated`, `permission` (an entry its actor may not write) and `write`
+(a write failed; close and reopen to re-read what reached disk).
+
+What the chain cannot catch: someone who deletes the last entries and the
+`HEAD` file together, or rewrites the whole chain with fresh hashes. Git
+history of `.perfect-planner/ledger/` is the backstop for both.
+
 `FileStore(root)` keeps one JSON line per entry in
 `<root>/.perfect-planner/ledger/YYYY-MM.jsonl` (month of `at`, UTC). Files are
-appended and fsynced, never rewritten. A writer lock
+appended (in full, fsynced) and never rewritten; `HEAD` is replaced
+atomically. The writer takes its lock before it reads, and checks `HEAD`
+before every append, so files changed underneath a live writer stop it
+instead of forking the chain. A final line torn by a crash mid-write is
+repaired on the next writable open (`status.repaired` says what was done,
+and dropped bytes are kept in `torn-<time>.txt`). A writer lock
 (`.perfect-planner/ledger/.writer.lock`, holding pid and host) makes this the
 only writing process for the project; a second writer opens read-only with
-`READ_ONLY`. A lock left by a dead process on the same host is taken over, and one
+`READ_ONLY`. A lock left by a dead process on the same host is taken over by an atomic
+rename, so two processes cannot both take it, and one
 `FileStore` instance hands its lock to one `Ledger` only.
 Paths go through `node:path`, so the store behaves the same on Windows, macOS
 and Linux. `MemoryStore` is the in-memory equivalent for tests.

@@ -20,7 +20,7 @@ export const PLAN_TASK = "plan";
 
 export class PlanningError extends Error {
   constructor(
-    readonly code: "DEFERRED" | "BAD_SPIKE" | "UNKNOWN_QUESTION" | "ALREADY_ANSWERED" | "BAD_CHOICE" | "EMPTY",
+    readonly code: "DEFERRED" | "PERSON_ONLY" | "BAD_SPIKE" | "UNKNOWN_QUESTION" | "ALREADY_ANSWERED" | "BAD_CHOICE" | "EMPTY",
     message: string,
   ) {
     super(message);
@@ -170,6 +170,8 @@ export class PlanningSession {
   }
 
   answer(actor: Actor, q: string, input: AnswerInput): AnswerResult {
+    // The hard questions are the user's. installPlanningRules enforces the same on every writer.
+    if (actor.kind !== "person") throw new PlanningError("PERSON_ONLY", `${q} is for a person to answer, not ${actor.kind} ${actor.id}.`);
     const question = this.questions().find((x) => x.q === q);
     if (!question) throw new PlanningError("UNKNOWN_QUESTION", `${q} is not a planning question.`);
     if (question.status !== "open") throw new PlanningError("ALREADY_ANSWERED", `${q} was already answered: ${question.answer}`);

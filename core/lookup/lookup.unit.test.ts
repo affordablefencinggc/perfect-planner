@@ -356,3 +356,18 @@ describe("render: ledger table", () => {
     }
   });
 });
+
+describe("review fixes: plan-qualified lookup", () => {
+  it("counts only citations of that plan version (or unversioned ones)", () => {
+    const ledger = Ledger.openSync(new MemoryStore(), { now: () => new Date("2026-10-09T00:00:00Z") });
+    const owner = { kind: "person" as const, id: "owner" };
+    addPlanText(ledger, owner, "## 1. Scope\n\nDo the thing.\n");
+    appendNumbered(ledger, { actor: owner, type: "plan.approved", summary: "P-1" });
+    appendNumbered(ledger, { actor: owner, type: "plan.approved", summary: "P-2" });
+    appendNumbered(ledger, { actor: owner, type: "task.created", summary: "old", refs: ["P-1 §1.1"] });
+    appendNumbered(ledger, { actor: owner, type: "task.created", summary: "new", refs: ["P-2 §1.1"] });
+    expect(lookup(ledger.entries(), "P-1 §1.1").tasks).toEqual(["T-1"]);
+    expect(lookup(ledger.entries(), "P-2 §1.1").tasks).toEqual(["T-2"]);
+    expect(lookup(ledger.entries(), "§1.1").tasks).toEqual(["T-1", "T-2"]);
+  });
+});

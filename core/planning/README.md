@@ -125,12 +125,16 @@ line by line in a plan. A deferral must become a decision, or a spike:
   when its answer is a deferral, unless it is a spike answer.
 - A spike answer must name a `task.created` that carries `data.spike`, and a
   spike task needs a valid due date and a written risk.
+- Only a person answers a planning question: `decision.made` and
+  `question.answered` on one are refused unless the entry's own actor has
+  kind `person` (payload fields never count). `PlanningSession.answer` refuses
+  the same up front with `PERSON_ONLY`. Agents and Jev may still ask.
 - A planning question cannot be answered twice.
 
 Relay questions (no `data.planning`) are untouched.
 
 Who writes what follows the ledger's permissions table: an agent may ask
-questions and record decisions, but spike tasks and roadmap tasks are
+planning questions but never answer them, but spike tasks and roadmap tasks are
 `task.created`, so a person (or the system) writes them, and `plan.approved`
 comes from a person.
 
