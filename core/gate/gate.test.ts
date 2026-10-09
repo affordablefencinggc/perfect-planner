@@ -37,13 +37,19 @@ async function setup(taskId = "T-1") {
   return { root: repo.root, ledger, gate, worktree, branch, addWorktree };
 }
 
-/** define -> baseline fails -> approve. */
+/** define -> a person approves -> baseline fails. */
 async function approved(taskId = "T-1") {
   const ctx = await setup(taskId);
   expect(ctx.gate.define(taskId, COMMAND, WORKER).ok).toBe(true);
+  expect(ctx.gate.approve(taskId, OWNER, { cwd: ctx.root }).ok).toBe(true);
   expect((await ctx.gate.confirmFailsFirst(taskId, ctx.root)).ok).toBe(true);
-  expect(ctx.gate.approve(taskId, OWNER).ok).toBe(true);
   return ctx;
+}
+
+/** Jev approves the diff at the branch tip, then the owner merges. */
+async function reviewAndMerge(ctx: { root: string; gate: TestGate; branch: string }, taskId = "T-1", integrationBranch = "main") {
+  expect(ctx.gate.approveDiff(taskId, JEV, await head(ctx.root, ctx.branch)).ok).toBe(true);
+  return ctx.gate.mergeAndVerify(taskId, { repoRoot: ctx.root, branch: ctx.branch, integrationBranch, actor: OWNER });
 }
 
 const types = (ledger: Ledger) => ledger.entries().map((entry) => entry.type);
@@ -56,11 +62,12 @@ describe("TestGate", () => {
 
     expect(gate.define("T-1", COMMAND, WORKER, ["P-1 §2"]).ok).toBe(true);
     expect(gate.canStart("T-1").ok).toBe(false);
+    const approval = gate.approve("T-1", OWNER, { cwd: root, jevVerdict: "approve", jev: JEV });
+    expect(approval.ok).toBe(true);
+    expect(gate.canStart("T-1").ok).toBe(false);
     const baseline = await gate.confirmFailsFirst("T-1", root);
     expect(baseline.ok).toBe(true);
     expect(baseline.run?.outputTail).toContain("feature is not enabled");
-    const approval = gate.approve("T-1", OWNER, { jevVerdict: "approve", jev: JEV });
-    expect(approval.ok).toBe(true);
     expect(gate.canStart("T-1")).toMatchObject({ ok: true });
     ledger.append({ type: "task.claimed", actor: WORKER, subject: "T-1", summary: "Claimed by worker 1" });
 
@@ -74,6 +81,7 @@ describe("TestGate", () => {
     expect(gate.state("T-1").stage).toBe("proven");
 
     const before = await head(root, "main");
+    expect(gate.approveDiff("T-1", JEV).ok).toBe(true);
     const merged = await gate.mergeAndVerify("T-1", { repoRoot: root, branch, integrationBranch: "main", actor: OWNER });
     expect(merged.ok).toBe(true);
     if (!merged.ok) return;
@@ -88,22 +96,83 @@ describe("TestGate", () => {
 
     expect(types(ledger)).toEqual([
       "test.defined",
-      "test.failed",
       "review.verdict",
       "test.approved",
+      "test.failed",
       "task.claimed",
       "commit.observed",
       "test.passed",
+      "review.verdict",
       "test.passed",
       "merge.done",
       "task.done",
     ]);
-    const mergePass = ledger.entries()[7]!;
+    const mergePass = ledger.entries()[8]!;
     expect(mergePass.data).toMatchObject({ test: COMMAND, afterMerge: true, phase: "merge", commit: merged.mergeCommit });
     expect(mergePass.evidence).toContain(`commit:${merged.mergeCommit}`);
     const state = gate.state("T-1");
     expect(state).toMatchObject({ stage: "done", merged: { commit: merged.mergeCommit } });
     expect(gate.canStart("T-1").ok).toBe(false);
+  }, SLOW);
+
+  it("an agent cannot rewrite its approved test and then finish the task", async () => {
+    const { root, ledger, gate, worktree, branch, addWorktree } = await approved();
+    ledger.addRule(gateRule());
+    await addWorktree();
+    // Instead of doing the work, the agent turns the test into one that always passes.
+    writeFiles(worktree, { "check.mjs": 'console.log("ok");\n' });
+    const cheat = await commitAll(worktree, "simplify the check");
+    const proof = await gate.prove("T-1", worktree);
+    expect(proof).toMatchObject({ ok: false, reason: expect.stringContaining("check.mjs") });
+    expect(proof.ok ? "" : proof.reason).toMatch(/approved test/);
+    expect(gate.state("T-1").passedCommits).not.toContain(cheat);
+    expect(ledger.entries().filter((entry) => entry.type === "test.passed")).toHaveLength(0);
+    const merged = await gate.mergeAndVerify("T-1", { repoRoot: root, branch, integrationBranch: "main", actor: OWNER });
+    expect(merged.ok).toBe(false);
+    expect(types(ledger)).not.toContain("task.done");
+    expect(() => gate.assertCanFinish("T-1", cheat)).toThrow();
+
+    // Putting the test back and doing the real work still finishes normally.
+    writeFiles(worktree, { "check.mjs": CHECK, "feature.txt": "enabled\n" });
+    await commitAll(worktree, "restore the test and enable the feature");
+    expect((await gate.prove("T-1", worktree)).ok).toBe(true);
+    expect((await reviewAndMerge({ root, gate, branch })).ok).toBe(true);
+  }, SLOW);
+
+  it("pins the approved test by content hash, ignoring only line endings", async () => {
+    const { gate, worktree, addWorktree } = await approved();
+    const approval = gate.state("T-1").approval!;
+    expect(approval.pins).toEqual({ "check.mjs": expect.stringMatching(/^[0-9a-f]{64}$/) });
+    await addWorktree();
+    writeFiles(worktree, { "check.mjs": CHECK.replace(/\n/g, "\r\n"), "feature.txt": "enabled\n" });
+    await commitAll(worktree, "CRLF checkout of the same test");
+    expect((await gate.prove("T-1", worktree)).ok).toBe(true);
+  }, SLOW);
+
+  it("refuses to approve a test whose files it cannot pin, unless they are named", async () => {
+    const { root, gate } = await setup();
+    gate.define("T-1", 'node -e "process.exit(1)"', WORKER);
+    expect(gate.approve("T-1", OWNER, { cwd: root })).toMatchObject({ ok: false, reason: expect.stringContaining("test file") });
+    gate.define("T-1", 'node -e "process.exit(1)"', WORKER, [], { files: ["check.mjs"] });
+    expect(gate.approve("T-1", OWNER, { cwd: root }).ok).toBe(true);
+    expect((await gate.confirmFailsFirst("T-1", root)).ok).toBe(true);
+    expect(Object.keys(gate.state("T-1").approval!.pins)).toEqual(["check.mjs"]);
+  });
+
+  it("only the gate may write task.done", async () => {
+    const { root, ledger, gate, worktree, branch, addWorktree } = await approved();
+    ledger.addRule(gateRule());
+    await addWorktree();
+    writeFiles(worktree, { "feature.txt": "enabled\n" });
+    const work = await commitAll(worktree, "enable feature");
+    expect((await gate.prove("T-1", worktree)).ok).toBe(true);
+    for (const actor of [OWNER, WORKER, { kind: "system", id: "watcher" } as Actor]) {
+      // The ledger's own permission table already stops agents; the gate rule stops everyone else.
+      expect(() => ledger.append({ type: "task.done", actor, subject: "T-1", summary: "Done", evidence: [`commit:${work}`] })).toThrow(actor.kind === "agent" ? /may not write/ : /only the gate/);
+    }
+    const merged = await reviewAndMerge({ root, gate, branch });
+    expect(merged.ok).toBe(true);
+    expect(ledger.entries().at(-1)).toMatchObject({ type: "task.done", actor: { kind: "system", id: "gate" }, data: { approvedBy: OWNER } });
   }, SLOW);
 
   it("fast-forwards an integration branch that is not checked out with update-ref", async () => {
@@ -114,7 +183,7 @@ describe("TestGate", () => {
     await commitAll(worktree, "enable feature");
     expect((await gate.prove("T-1", worktree)).ok).toBe(true);
     const mainBefore = await head(root, "main");
-    const merged = await gate.mergeAndVerify("T-1", { repoRoot: root, branch, integrationBranch: "integration", actor: OWNER });
+    const merged = await reviewAndMerge({ root, gate, branch }, "T-1", "integration");
     expect(merged.ok).toBe(true);
     if (!merged.ok) return;
     expect(await head(root, "integration")).toBe(merged.mergeCommit);
@@ -123,32 +192,47 @@ describe("TestGate", () => {
 
   it("refuses a test that already passes on the current code", async () => {
     const { root, gate, ledger } = await setup();
-    gate.define("T-1", 'node -e "process.exit(0)"', WORKER);
+    gate.define("T-1", 'node -e "process.exit(0)"', WORKER, [], { files: ["check.mjs"] });
+    expect(gate.approve("T-1", OWNER, { cwd: root }).ok).toBe(true);
     const baseline = await gate.confirmFailsFirst("T-1", root);
-    expect(baseline.ok).toBe(false);
+    expect(baseline).toMatchObject({ ok: false, reason: expect.stringContaining("already passes") });
     expect(ledger.entries().at(-1)).toMatchObject({ type: "test.passed", data: { phase: "baseline" } });
-    expect(gate.approve("T-1", OWNER)).toMatchObject({ ok: false, reason: expect.stringContaining("proves nothing") });
-    expect(gate.canStart("T-1").ok).toBe(false);
+    expect(gate.canStart("T-1")).toMatchObject({ ok: false, reason: expect.stringContaining("already passes") });
     expect(gate.state("T-1").stage).toBe("baseline-passes");
   });
 
-  it("refuses approval before the baseline run", async () => {
-    const { gate, ledger } = await setup();
-    expect(gate.approve("T-1", OWNER).ok).toBe(false);
+  it("never runs an agent's test before a person approves it", async () => {
+    const { root, gate, ledger } = await setup();
+    expect(gate.approve("T-1", OWNER, { cwd: root }).ok).toBe(false);
     gate.define("T-1", COMMAND, WORKER);
-    expect(gate.approve("T-1", OWNER)).toMatchObject({ ok: false, reason: expect.stringContaining("current code first") });
+    let ran = false;
+    const watched = new TestGate({ ledger, run: async () => { ran = true; throw new Error("must not run"); } });
+    expect(await watched.confirmFailsFirst("T-1", root)).toMatchObject({ ok: false, reason: expect.stringContaining("approved by a person") });
+    expect(ran).toBe(false);
+    expect(gate.approve("T-1", WORKER, { cwd: root })).toMatchObject({ ok: false, reason: expect.stringContaining("Only a person") });
+    expect(gate.approve("T-1", JEV, { cwd: root }).ok).toBe(false);
     expect(types(ledger)).toEqual(["test.defined"]);
+  });
+
+  it("refuses the first run when the test files changed after approval", async () => {
+    const { root, gate, ledger } = await setup();
+    gate.define("T-1", COMMAND, WORKER);
+    expect(gate.approve("T-1", OWNER, { cwd: root }).ok).toBe(true);
+    writeFiles(root, { "check.mjs": "process.exit(1);\n" });
+    expect(await gate.confirmFailsFirst("T-1", root)).toMatchObject({ ok: false, reason: expect.stringContaining("check.mjs") });
+    expect(ledger.entries().at(-1)?.data).toMatchObject({ conclusive: false, tampered: ["check.mjs"] });
+    expect(gate.canStart("T-1").ok).toBe(false);
   });
 
   it("a redefined test invalidates the earlier approval", async () => {
     const { root, gate } = await approved();
     expect(gate.canStart("T-1").ok).toBe(true);
     gate.define("T-1", "node check.mjs --strict", WORKER);
+    expect(gate.canStart("T-1")).toMatchObject({ ok: false, reason: expect.stringContaining("waiting for the owner") });
+    expect((await gate.confirmFailsFirst("T-1", root)).ok).toBe(false);
+    expect(gate.approve("T-1", OWNER, { cwd: root }).ok).toBe(true);
     expect(gate.canStart("T-1")).toMatchObject({ ok: false, reason: expect.stringContaining("not been run") });
-    expect(gate.approve("T-1", OWNER).ok).toBe(false);
     expect((await gate.confirmFailsFirst("T-1", root)).ok).toBe(true);
-    expect(gate.canStart("T-1").ok).toBe(false);
-    expect(gate.approve("T-1", OWNER).ok).toBe(true);
     expect(gate.state("T-1").definition?.command).toBe("node check.mjs --strict");
     expect(gate.canStart("T-1").ok).toBe(true);
   });
@@ -178,7 +262,7 @@ describe("TestGate", () => {
     writeFiles(root, { "kill-switch.txt": "on\n" });
     const mainBefore = await commitAll(root, "add kill switch");
 
-    const merged = await gate.mergeAndVerify("T-1", { repoRoot: root, branch, integrationBranch: "main", actor: OWNER });
+    const merged = await reviewAndMerge({ root, gate, branch });
     expect(merged.ok).toBe(false);
     if (merged.ok) return;
     expect(merged.output).toContain("kill switch is on");
@@ -200,7 +284,7 @@ describe("TestGate", () => {
     writeFiles(root, { "feature.txt": "off for now\n" });
     const mainBefore = await commitAll(root, "turn feature off");
 
-    const merged = await gate.mergeAndVerify("T-1", { repoRoot: root, branch, integrationBranch: "main", actor: OWNER });
+    const merged = await reviewAndMerge({ root, gate, branch });
     expect(merged).toMatchObject({ ok: false, reason: expect.stringContaining("Merge conflict") });
     expect(await head(root, "main")).toBe(mainBefore);
     const last = ledger.entries().at(-1)!;
@@ -218,7 +302,7 @@ describe("TestGate", () => {
     expect((await gate.prove("T-1", worktree)).ok).toBe(true);
     const mainBefore = await head(root, "main");
     writeFiles(root, { "check.mjs": `${CHECK}// local edit\n` });
-    const merged = await gate.mergeAndVerify("T-1", { repoRoot: root, branch, integrationBranch: "main", actor: OWNER });
+    const merged = await reviewAndMerge({ root, gate, branch });
     expect(merged).toMatchObject({ ok: false, reason: expect.stringContaining("uncommitted changes") });
     expect(await head(root, "main")).toBe(mainBefore);
     expect(types(ledger)).not.toContain("task.done");
@@ -235,6 +319,81 @@ describe("TestGate", () => {
     expect(await gate.mergeAndVerify("T-1", { repoRoot: root, branch, integrationBranch: "main", actor: OWNER })).toMatchObject({ ok: false, reason: expect.stringContaining("Run prove first") });
   }, SLOW);
 
+  it("merges only a diff Jev or a person approved at the branch tip, on a person's say-so", async () => {
+    const { root, gate, ledger, worktree, branch, addWorktree } = await approved();
+    await addWorktree();
+    writeFiles(worktree, { "feature.txt": "enabled\n" });
+    const work = await commitAll(worktree, "enable feature");
+    expect((await gate.prove("T-1", worktree)).ok).toBe(true);
+    const merge = (actor: Actor) => gate.mergeAndVerify("T-1", { repoRoot: root, branch, integrationBranch: "main", actor });
+    expect(await merge(OWNER)).toMatchObject({ ok: false, reason: expect.stringContaining("not been approved") });
+    expect(gate.approveDiff("T-1", WORKER, work)).toMatchObject({ ok: false, reason: expect.stringContaining("Only Jev or a person") });
+    expect(gate.approveDiff("T-1", JEV).ok).toBe(true);
+    expect(await merge({ kind: "system", id: "anything" })).toMatchObject({ ok: false, reason: expect.stringContaining("A person approves the merge") });
+    expect(types(ledger)).not.toContain("merge.done");
+    expect((await merge(OWNER)).ok).toBe(true);
+  }, SLOW);
+
+  it("runs the post-merge test with the project's dependencies and leaves them in place", async () => {
+    const repo = await makeRepo({ "needs-dep.mjs": 'import { ready } from "pp-fake-dep";\nimport { readFileSync } from "node:fs";\nprocess.exit(ready && readFileSync("feature.txt", "utf8").includes("enabled") ? 0 : 1);\n', "feature.txt": "disabled\n" });
+    cleanups.push(repo.cleanup);
+    writeFileSync(path.join(repo.root, ".git", "info", "exclude"), "node_modules/\n");
+    writeFiles(repo.root, { "node_modules/pp-fake-dep/package.json": '{"name":"pp-fake-dep","type":"module","main":"index.js"}\n', "node_modules/pp-fake-dep/index.js": "export const ready = true;\n" });
+    const ledger = await memoryLedger();
+    const gate = new TestGate({ ledger, timeoutMs: 30_000 });
+    gate.define("T-1", "node needs-dep.mjs", WORKER);
+    expect(gate.approve("T-1", OWNER, { cwd: repo.root }).ok).toBe(true);
+    expect((await gate.confirmFailsFirst("T-1", repo.root)).ok).toBe(true);
+    const worktree = path.join(path.dirname(repo.root), "wt-deps");
+    cleanups.push(() => rmSync(worktree, { recursive: true, force: true }));
+    await git(repo.root, ["worktree", "add", "-q", "-b", "pp/T-1", worktree, "main"]);
+    writeFiles(worktree, { "feature.txt": "enabled\n", "node_modules/pp-fake-dep/package.json": '{"name":"pp-fake-dep","type":"module","main":"index.js"}\n', "node_modules/pp-fake-dep/index.js": "export const ready = true;\n" });
+    writeFileSync(path.join(worktree, ".gitignore"), "node_modules/\n");
+    await commitAll(worktree, "enable feature");
+    expect((await gate.prove("T-1", worktree)).ok).toBe(true);
+    const merged = await reviewAndMerge({ root: repo.root, gate, branch: "pp/T-1" });
+    expect(merged.ok).toBe(true);
+    expect(existsSync(path.join(worktree, "node_modules", "pp-fake-dep", "index.js"))).toBe(true);
+    expect(existsSync(path.join(repo.root, "node_modules", "pp-fake-dep", "index.js"))).toBe(true);
+  }, SLOW);
+
+  it("never lets a worker's own node_modules decide the merge check", async () => {
+    const dep = (body: string) => ({ "node_modules/pp-fake-dep/package.json": '{"name":"pp-fake-dep","type":"module","main":"index.js"}\n', "node_modules/pp-fake-dep/index.js": body });
+    const repo = await makeRepo({ "needs-dep.mjs": 'import { enabled } from "pp-fake-dep";\nimport { readFileSync } from "node:fs";\nprocess.exit(enabled(readFileSync("feature.txt", "utf8")) ? 0 : 1);\n', "feature.txt": "disabled\n", ".gitignore": "node_modules/\n" });
+    cleanups.push(repo.cleanup);
+    writeFiles(repo.root, dep('export const enabled = (text) => text.includes("enabled") && !text.includes("disabled");\n'));
+    const ledger = await memoryLedger();
+    const gate = new TestGate({ ledger, timeoutMs: 30_000 });
+    gate.define("T-1", "node needs-dep.mjs", WORKER);
+    expect(gate.approve("T-1", OWNER, { cwd: repo.root }).ok).toBe(true);
+    expect((await gate.confirmFailsFirst("T-1", repo.root)).ok).toBe(true);
+    const worktree = path.join(path.dirname(repo.root), "wt-cheat");
+    cleanups.push(() => rmSync(worktree, { recursive: true, force: true }));
+    await git(repo.root, ["worktree", "add", "-q", "-b", "pp/T-1", worktree, "main"]);
+    // The worker leaves the feature off but rewrites its ignored copy of the dependency to always say yes.
+    writeFiles(worktree, { ...dep("export const enabled = () => true;\n"), "notes.txt": "no real change\n" });
+    await commitAll(worktree, "looks done");
+    expect((await gate.prove("T-1", worktree)).ok).toBe(true);
+    const merged = await reviewAndMerge({ root: repo.root, gate, branch: "pp/T-1" });
+    expect(merged.ok).toBe(false);
+    expect(types(ledger)).not.toContain("task.done");
+  }, SLOW);
+
+  it("asks a person, not only Jev, to approve a diff that touches package files, configs or test helpers", async () => {
+    for (const [file, content] of [["package.json", '{"scripts":{"test":"exit 0"}}\n'], ["vitest.config.mjs", "export default {};\n"], ["tests/helpers/check-helper.mjs", "export const ok = true;\n"]] as const) {
+      const ctx = await approved();
+      await ctx.addWorktree();
+      writeFiles(ctx.worktree, { "feature.txt": "enabled\n", [file]: content });
+      const tip = await commitAll(ctx.worktree, `enable feature and touch ${file}`);
+      expect((await ctx.gate.prove("T-1", ctx.worktree)).ok).toBe(true);
+      expect(ctx.gate.approveDiff("T-1", JEV, tip).ok).toBe(true);
+      const merge = () => ctx.gate.mergeAndVerify("T-1", { repoRoot: ctx.root, branch: ctx.branch, integrationBranch: "main", actor: OWNER });
+      expect(await merge()).toMatchObject({ ok: false, reason: expect.stringContaining(file) });
+      expect(ctx.gate.approveDiff("T-1", OWNER, tip).ok).toBe(true);
+      expect((await merge()).ok).toBe(true);
+    }
+  }, SLOW);
+
   it("reject bumps the attempt and the new attempt keeps the approved test", async () => {
     const { gate, ledger } = await approved("T-14");
     expect(nextAttemptId("T-14")).toBe("T-14.a2");
@@ -246,20 +405,20 @@ describe("TestGate", () => {
     expect(gate.reject("T-14", JEV, "again").ok).toBe(false);
     expect(gate.canStart("T-14.a2").ok).toBe(true);
     expect(gate.reject("T-14.a2", JEV, "Still missing")).toMatchObject({ ok: true, newTaskId: "T-14.a3" });
-    expect(gate.state("T-14.a3")).toMatchObject({ baseId: "T-14", attempt: 3, stage: "approved" });
+    expect(gate.state("T-14.a3")).toMatchObject({ baseId: "T-14", attempt: 3, stage: "baseline-confirmed" });
     expect(() => gate.reject("T-14.a3", JEV, "  ")).toThrow(/notes/);
   });
 
   it("Jev's gaps refuse approval until a clean verdict", async () => {
     const { root, gate, ledger } = await setup();
     gate.define("T-1", COMMAND, WORKER);
-    await gate.confirmFailsFirst("T-1", root);
-    const gaps = gate.approve("T-1", OWNER, { jevVerdict: ["Does not cover the disabled state", "No check for the kill switch path"], jev: JEV });
+    const gaps = gate.approve("T-1", OWNER, { cwd: root, jevVerdict: ["Does not cover the disabled state", "No check for the kill switch path"], jev: JEV });
     expect(gaps).toMatchObject({ ok: false, reason: expect.stringContaining("Does not cover") });
     expect(types(ledger)).not.toContain("test.approved");
     expect(gate.state("T-1").jev).toMatchObject({ verdict: "gaps", gaps: ["Does not cover the disabled state", "No check for the kill switch path"] });
-    expect(gate.approve("T-1", OWNER)).toMatchObject({ ok: false, reason: expect.stringContaining("open gaps") });
-    expect(gate.approve("T-1", OWNER, { jevVerdict: "approve", jev: JEV }).ok).toBe(true);
+    expect(gate.approve("T-1", OWNER, { cwd: root })).toMatchObject({ ok: false, reason: expect.stringContaining("open gaps") });
+    expect(gate.approve("T-1", OWNER, { cwd: root, jevVerdict: "approve", jev: JEV }).ok).toBe(true);
+    await gate.confirmFailsFirst("T-1", root);
     expect(gate.canStart("T-1").ok).toBe(true);
   });
 
@@ -275,9 +434,10 @@ describe("TestGate", () => {
       expect((error as Error).message).toContain("no done-when test");
     }
     gate.define("T-1", COMMAND, WORKER);
-    await gate.confirmFailsFirst("T-1", root);
     expect(claim).toThrow(/waiting for the owner/);
-    gate.approve("T-1", OWNER);
+    gate.approve("T-1", OWNER, { cwd: root });
+    expect(claim).toThrow(/not been run/);
+    await gate.confirmFailsFirst("T-1", root);
     expect(claim().type).toBe("task.claimed");
     // Other entry types and non-task subjects are not the rule's business.
     expect(ledger.append({ type: "task.progress", actor: WORKER, subject: "T-2", summary: "Looking around" }).type).toBe("task.progress");
@@ -308,8 +468,8 @@ describe("TestGate", () => {
     cleanups.push(repo.cleanup);
     const gate = new TestGate({ ledger });
     gate.define("T-3", COMMAND, WORKER);
+    gate.approve("T-3", OWNER, { cwd: repo.root, jevVerdict: "approve", jev: JEV });
     await gate.confirmFailsFirst("T-3", repo.root);
-    gate.approve("T-3", OWNER, { jevVerdict: "approve", jev: JEV });
     gate.reject("T-3", JEV, "Wrong approach");
     const before = ["T-3", "T-3.a2"].map((id) => gate.state(id));
 
@@ -317,7 +477,7 @@ describe("TestGate", () => {
     ledger.close();
     const reopened = await Ledger.open(store, { readOnly: true });
     expect(["T-3", "T-3.a2"].map((id) => deriveState(reopened.entries(), id))).toEqual(before);
-    expect(before[1]).toMatchObject({ stage: "approved", attempt: 2 });
+    expect(before[1]).toMatchObject({ stage: "baseline-confirmed", attempt: 2 });
   });
 
   it("a timeout, crash or missing command does not count as the required failing run", async () => {
@@ -325,18 +485,21 @@ describe("TestGate", () => {
     writeFiles(root, { "hang.mjs": "setInterval(() => {}, 1000);\n" });
     const slow = new TestGate({ ledger, timeoutMs: 1000 });
     expect(slow.define("T-1", "node hang.mjs", WORKER).ok).toBe(true);
+    expect(slow.approve("T-1", OWNER, { cwd: root }).ok).toBe(true);
     const timedOut = await slow.confirmFailsFirst("T-1", root);
     expect(timedOut).toMatchObject({ ok: false, reason: expect.stringMatching(/timed out, crashed or could not start/) });
     expect(timedOut.entry?.data).toMatchObject({ conclusive: false });
     expect(gate.state("T-1").baseline).toBeUndefined();
-    expect(gate.approve("T-1", OWNER).ok).toBe(false);
+    expect(gate.canStart("T-1").ok).toBe(false);
 
-    expect(gate.define("T-1", "pp-no-such-command-anywhere", WORKER).ok).toBe(true);
+    expect(gate.define("T-1", "pp-no-such-command-anywhere", WORKER, [], { files: ["check.mjs"] }).ok).toBe(true);
+    expect(gate.approve("T-1", OWNER, { cwd: root }).ok).toBe(true);
     expect((await gate.confirmFailsFirst("T-1", root)).ok).toBe(false);
-    expect(gate.approve("T-1", OWNER).ok).toBe(false);
+    expect(gate.canStart("T-1").ok).toBe(false);
 
-    // A real failure afterwards is accepted, and a later inconclusive run withdraws it again.
+    // A real failure afterwards is accepted.
     expect(gate.define("T-1", COMMAND, WORKER).ok).toBe(true);
+    expect(gate.approve("T-1", OWNER, { cwd: root }).ok).toBe(true);
     expect((await gate.confirmFailsFirst("T-1", root)).ok).toBe(true);
     expect(gate.state("T-1").stage).toBe("baseline-confirmed");
   }, SLOW);

@@ -90,7 +90,8 @@ export class GitWatcher {
   private readonly onError?: (error: unknown) => void;
 
   private seeded = false;
-  private readonly seen = new Set<string>();
+  /** taskId -> commits already written, for tasks with a worktree; rebuilt from the ledger when a task comes back. */
+  private readonly seen = new Map<string, Set<string>>();
   /** pair key -> open collision and its file-set key. */
   private readonly open = new Map<string, { collision: Collision; set: string }>();
   private readonly progress = new Map<string, TaskProgress>();
@@ -142,20 +143,25 @@ export class GitWatcher {
     await this.running?.catch(() => undefined);
   }
 
-  private seenKey(taskId: string, sha: string): string {
-    return `${taskId}\0${sha}`;
+  private seenFor(taskId: string): Set<string> {
+    let shas = this.seen.get(taskId);
+    if (!shas) {
+      shas = new Set();
+      for (const entry of this.ledger.bySubject(taskId)) {
+        if (entry.type !== "commit.observed") continue;
+        const sha = entry.data?.sha;
+        if (typeof sha === "string" && sha) shas.add(sha);
+        for (const item of entry.evidence ?? []) if (item.startsWith("commit:")) shas.add(item.slice(7));
+      }
+      this.seen.set(taskId, shas);
+    }
+    return shas;
   }
 
   /** Rebuild dedupe state from the ledger so a restart never writes the same fact twice. */
   private seed(): void {
     for (const entry of this.ledger.entries()) {
-      if (entry.type === "commit.observed") {
-        const sha = entry.data?.sha;
-        if (typeof sha === "string" && sha) this.seen.add(this.seenKey(entry.subject, sha));
-        for (const item of entry.evidence ?? []) {
-          if (item.startsWith("commit:")) this.seen.add(this.seenKey(entry.subject, item.slice(7)));
-        }
-      } else if (entry.type === "collision.detected" || entry.type === "collision.resolved") {
+      if (entry.type === "collision.detected" || entry.type === "collision.resolved") {
         const tasks = (entry.evidence ?? []).filter((item) => item.startsWith("task:")).map((item) => item.slice(5));
         const pair = tasks.length === 2 ? pairKey(tasks) : pairKey(entry.subject.split("+"));
         if (entry.type === "collision.resolved") {
@@ -210,15 +216,17 @@ export class GitWatcher {
       }
     }
     for (const taskId of [...this.progress.keys()]) if (!listed.has(taskId)) this.progress.delete(taskId);
+    // Memory stays bounded by the running tasks; a task that comes back is re-read from the ledger.
+    for (const taskId of [...this.seen.keys()]) if (!listed.has(taskId)) this.seen.delete(taskId);
 
     await this.reconcileCollisions(read, listed, failed, result);
     return result;
   }
 
   private async observeCommits(info: WorktreeInfo, commits: ObservedCommit[], result: TickResult): Promise<void> {
+    const seen = this.seenFor(info.taskId);
     for (const commit of commits) {
-      const key = this.seenKey(info.taskId, commit.sha);
-      if (this.seen.has(key)) continue;
+      if (seen.has(commit.sha)) continue;
       let files: string[] = [];
       try {
         files = await commitFiles(info.path, commit.sha);
@@ -241,7 +249,7 @@ export class GitWatcher {
         info,
       );
       if (!ok) continue;
-      this.seen.add(key);
+      seen.add(commit.sha);
       result.observed.push({ ...commit, taskId: info.taskId });
     }
   }

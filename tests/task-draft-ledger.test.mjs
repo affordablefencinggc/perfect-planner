@@ -1,3 +1,4 @@
+import "./helpers/hermetic-env.mjs";
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { emptyTaskDraftLedger, updateTaskDraft, inspectTaskDraft, validateDraftTask, validateTaskDraftLedger, sameTaskDraftBinding, rebindTaskDraft, importTaskDraft, parseTaskDraftImport } from '../src/project/taskDraftLedger.js';

@@ -7,7 +7,7 @@ import { surfacesOverlap } from "../../src/engine/collisionEngine.js";
 import { git, GitError, runGit } from "./git";
 import { isWithin, lines, realDir, samePath, toRepoPath } from "./platform";
 import { type Actor, type LedgerPort, WORKTREES_ACTOR } from "./ports";
-import { copyLocalSettings } from "./settings";
+import { copyLocalSettings, placeholderSecrets } from "./settings";
 import { branchFor, TASK_ID, type WorktreeInfo } from "./types";
 
 export type Installer = (worktreePath: string) => Promise<void>;
@@ -146,10 +146,11 @@ export class WorktreeManager {
       await this.writeRegistry(registry);
       this.ledger.append({
         type: "worktree.created",
-        actor,
+        // Agents may not write git entries; the manager records the launch and names who asked.
+        actor: WORKTREES_ACTOR,
         subject: taskId,
         summary: `Worktree for ${taskId} on ${branch}, port ${port}`,
-        data: { branch, baseRef: base, baseSha, port, path: toRepoPath(path.relative(this.repoRoot, realPath)), claims: info.claims },
+        data: { launchedBy: actor, branch, baseRef: base, baseSha, port, path: toRepoPath(path.relative(this.repoRoot, realPath)), claims: info.claims },
         evidence: [`branch:${branch}`, `base:${base}`, `commit:${baseSha}`, `port:${port}`, `path:${toRepoPath(path.relative(this.repoRoot, realPath))}`, ...settings.map((name) => `settings:${name}`), ...info.claims.map((file) => `claim:${file}`)],
       });
       return info;
@@ -198,6 +199,9 @@ export class WorktreeManager {
       if (existsSync(info.path)) {
         const dirty = await git(info.path, ["status", "--porcelain=v1", "--untracked-files=all"]);
         if (dirty) throw new WorktreeError(`${taskId} has uncommitted changes; commit or move them before removing the worktree.`);
+        // git worktree remove also deletes ignored files, which can be real work (notes, data, edited settings).
+        const kept = await this.ignoredWork(info.path);
+        if (kept.length) throw new WorktreeError(`${taskId} has ignored files that would be deleted with the worktree; move them first: ${kept.slice(0, 10).join(", ")}`);
         await git(this.repoRoot, ["worktree", "remove", info.path]);
       } else {
         await git(this.repoRoot, ["worktree", "prune"]);
@@ -215,14 +219,31 @@ export class WorktreeManager {
       await this.writeRegistry(registry);
       this.ledger.append({
         type: "worktree.removed",
-        actor,
+        actor: WORKTREES_ACTOR,
         subject: taskId,
         summary: branchDeleted ? `Removed worktree and merged branch ${info.branch}` : `Removed worktree; kept unmerged branch ${info.branch}`,
         reason: branchKeptReason,
         evidence: [`branch:${info.branch}`, `port:${info.port}`],
-        data: { branch: info.branch, branchDeleted },
+        data: { removedBy: actor, branch: info.branch, branchDeleted },
       });
       return { taskId, branchDeleted, branchKeptReason };
+    });
+  }
+
+  /**
+   * Ignored files in a worktree that removal would destroy. Dependencies (node_modules) can be
+   * reinstalled, and settings copied in at launch that still match what the copy produced are
+   * placeholders; anything else counts as work.
+   */
+  private async ignoredWork(worktreePath: string): Promise<string[]> {
+    const ignored = lines(await git(worktreePath, ["status", "--porcelain=v1", "--ignored=matching", "--untracked-files=all"]))
+      .filter((line) => line.startsWith("!! "))
+      .map((line) => line.slice(3).replace(/^"(.*)"$/, "$1"));
+    return ignored.filter((file) => {
+      if (/(^|\/)node_modules(\/|$)/.test(file)) return false;
+      if (!/^\.env(?:\..+)?$/.test(file)) return true;
+      const source = path.join(this.repoRoot, file);
+      return !existsSync(source) || readFileSync(path.join(worktreePath, file), "utf8") !== placeholderSecrets(readFileSync(source, "utf8"));
     });
   }
 

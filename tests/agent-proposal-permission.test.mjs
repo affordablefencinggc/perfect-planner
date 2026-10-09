@@ -1,3 +1,4 @@
+import "./helpers/hermetic-env.mjs";
 import test from 'node:test';import assert from 'node:assert/strict';
 import {createAgentSessionBroker} from '../mcp/agentSessionBroker.mjs';
 const binding={projectId:'pp_permission',workspaceId:'workspace-permission',rootIdentity:'a'.repeat(64),registryRevision:1};

@@ -51,12 +51,12 @@ jobs:
           TMPDIR: ${{ runner.temp }}
           TEMP: ${{ runner.temp }}
           TMP: ${{ runner.temp }}
-      - run: npm test
+      - run: npm run test:report
         env:
           TMPDIR: ${{ runner.temp }}
           TEMP: ${{ runner.temp }}
           TMP: ${{ runner.temp }}
-      - run: npm run test:ui
+      - run: npm run test:ui:report
         env:
           TMPDIR: ${{ runner.temp }}
           TEMP: ${{ runner.temp }}
