@@ -24,3 +24,15 @@ export {
   type TrustedKey,
 } from "./signing";
 export { KeychainKeyProvider, osSecretStore, type SecretStore } from "./keychain";
+export {
+  checkRecoveryCode,
+  deriveRecoveryKey,
+  formatRecoveryCode,
+  OWNER_RECOVERY_PATH,
+  ownerChain,
+  parseRecoveryCode,
+  recoveryStatement,
+  type OwnerChain,
+  type RecoveryCheck,
+} from "./recovery";
+export { FileHeadWitness, MemoryHeadWitness, witnessIdFor, type HeadWitness, type WitnessedHead } from "./witness";
