@@ -219,13 +219,14 @@ describe("what each role may write", () => {
     expect(refusal(() => appendNumbered(ledger, { actor: mia, type: "plan.approved", summary: "Plan", evidence: [], refs: [] }))).toMatch(/plan approval/);
   });
 
-  it("leaves the owner, unlisted agents, Jev and the watcher alone", () => {
+  it("leaves the owner, their listed agents, Jev and the watcher alone", () => {
     const ledger = team();
+    changeMember(ledger, owner, "looplet-spare", { agents: ["claude-code"] });
     createTask(ledger, owner);
     write(ledger, { actor: ownersAgent, type: "task.progress", subject: "T-1" });
     write(ledger, { actor: { kind: "jev", id: "jev", model: "jev-1" }, type: "review.verdict", subject: "T-1" });
     write(ledger, { actor: { kind: "system", id: "watcher" }, type: "commit.observed", subject: "T-1", data: { sha: "abc1234" } });
-    expect(ledger.entries()).toHaveLength(7);
+    expect(ledger.entries()).toHaveLength(8);
   });
 
   it("closes the door on removed members", () => {
@@ -263,14 +264,14 @@ describe("profile photos", () => {
   it("writes no file when the ledger refuses", () => {
     const ledger = team();
     const saved: string[] = [];
-    const store: PhotoStore = { save: (file) => void saved.push(file), load: () => undefined };
+    const store: PhotoStore = { save: (file) => void saved.push(file), load: () => undefined, remove: () => {} };
     refusal(() => setPhoto(ledger, store, mia, "sam", png()));
     expect(saved).toEqual([]);
   });
 
   it("clears the photo again when the file cannot be saved", () => {
     const ledger = team();
-    const store: PhotoStore = { save: () => { throw new Error("disk full"); }, load: () => undefined };
+    const store: PhotoStore = { save: () => { throw new Error("disk full"); }, load: () => undefined, remove: () => {} };
     expect(() => setPhoto(ledger, store, mia, "mia", png())).toThrow("disk full");
     expect(peopleEvent(ledger.last()!)).toEqual({ op: "photo.cleared", person: "mia" });
     expect(buildPeopleView(ledger.entries()).members.find((m) => m.person === "mia")?.photo).toBeUndefined();
@@ -431,5 +432,69 @@ describe("the view", () => {
     expect(entry.summary).toBe("Mia is now called Mia Chen");
     const mias = buildPeopleView(ledger.entries()).members.find((m) => m.person === "mia")!;
     expect(mias).toMatchObject({ name: "Mia Chen", since: "L-000002" });
+  });
+});
+
+describe("review fixes: authority comes from the ledger, not the payload", () => {
+  /** A ledger with no people rules installed, as any reader of a synced ledger sees it. */
+  function bare(): Ledger {
+    return Ledger.openSync(new MemoryStore(), { now: clock() });
+  }
+  const people = (event: Record<string, unknown>) => ({ people: event });
+
+  it("ignores an agent that writes itself in as owner, even with no rules installed", () => {
+    const ledger = bare();
+    appendNumbered(ledger, { actor: ownersAgent, type: "decision.made", summary: "I own this", reason: "x", evidence: [], refs: [], data: people({ op: "member.added", person: "claude-code", name: "Claude", role: "owner" }) });
+    expect(buildPeopleView(ledger.entries()).members).toEqual([]);
+  });
+
+  it("ignores people changes that the rules would have refused", () => {
+    const ledger = bare();
+    appendNumbered(ledger, { actor: owner, type: "decision.made", summary: "Mine", reason: "x", evidence: [], refs: [], data: people({ op: "member.added", person: "looplet-spare", name: "Looplet Spare", role: "owner" }) });
+    appendNumbered(ledger, { actor: mia, type: "decision.made", summary: "Me too", reason: "x", evidence: [], refs: [], data: people({ op: "member.added", person: "mia", name: "Mia", role: "helper" }) });
+    appendNumbered(ledger, { actor: ownersAgent, type: "decision.made", summary: "Promote", reason: "x", evidence: [], refs: [], data: people({ op: "member.changed", person: "looplet-spare", role: "viewer" }) });
+    const view = buildPeopleView(ledger.entries());
+    expect(view.members.map((m) => [m.person, m.role])).toEqual([["looplet-spare", "owner"]]);
+  });
+
+  it("installs the people rules on the first people write", () => {
+    const ledger = bare();
+    claimOwnership(ledger, owner, "Looplet Spare");
+    expect(refusal(() => createTask(ledger, stranger))).toMatch(/not a member/);
+  });
+
+  it("only lets the person who started the project claim it later", () => {
+    const ledger = open();
+    createTask(ledger, owner);
+    expect(refusal(() => claimOwnership(ledger, stranger, "Stranger"))).toMatch(/looplet-spare started this project/);
+    claimOwnership(ledger, owner, "Looplet Spare");
+    expect(buildPeopleView(ledger.entries()).owner?.person).toBe("looplet-spare");
+  });
+
+  it("refuses agents nobody on the project has listed", () => {
+    const ledger = team();
+    createTask(ledger);
+    expect(refusal(() => write(ledger, { actor: ownersAgent, type: "task.progress", subject: "T-1" }))).toMatch(/claude-code is not listed/);
+    changeMember(ledger, owner, "looplet-spare", { agents: ["claude-code"] });
+    write(ledger, { actor: ownersAgent, type: "task.progress", subject: "T-1" });
+  });
+
+  it("shares only project-relative paths or https links", () => {
+    const ledger = team();
+    for (const path of ["/etc/passwd", "C:\\\\secrets.txt", "C:/x.md", "../outside.md", "docs/../../x.md", "javascript:alert(1)", "http://example.com", "file:///etc/passwd"]) {
+      expect(() => shareDoc(ledger, owner, { title: "Bad", path }), path).toThrow(PeopleError);
+    }
+    shareDoc(ledger, owner, { title: "Fine", path: "docs/specs/plan.md" });
+    shareDoc(ledger, owner, { title: "Link", path: "https://example.com/doc" });
+    expect(buildPeopleView(ledger.entries()).docs).toHaveLength(2);
+  });
+
+  it("deletes the photo file when the photo is cleared", () => {
+    const ledger = team();
+    const store = new MemoryPhotoStore();
+    const entry = setPhoto(ledger, store, mia, "mia", png());
+    const file = entry.evidence[0]!.slice("file:".length);
+    clearPhoto(ledger, mia, "mia", store);
+    expect(store.load(file)).toBeUndefined();
   });
 });

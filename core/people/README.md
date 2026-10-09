@@ -60,9 +60,19 @@ names on every OS.
 
 ## Rules (`installPeopleRules`)
 
+The write helpers install these rules on the ledger the first time they are
+used (installing twice is a no-op). The same checks also run on **replay**:
+`replayRoster` and `buildPeopleView` ignore any people entry the rules would
+have refused, so an entry appended directly (by an agent, or to a ledger that
+never installed the rules) cannot add an owner or change a role. Authority
+comes from the actor of each entry and the ledger's history, never from the
+payload alone; who the actor really is, is the ledger's job (#4).
+
 - **Solo first.** Until the first member is added nobody is restricted, so a
   project that never adds helpers behaves exactly as before. The first member
-  must be the person writing, as owner.
+  must be the person writing, as owner, and if the ledger already has
+  entries by a person, only the first such person (who started the project)
+  can claim it.
 - Only a person (never an agent) changes people. Only the owner adds,
   changes or removes people and shares documents. One owner, who cannot be
   removed or demoted. Approvals belong to helpers only.
@@ -74,8 +84,11 @@ names on every OS.
   actor kind; roles are per person, so they live here as a ledger rule rather
   than in the table.
 - A member's agents (`agents`) are held to that member's role, and an agent of
-  a removed member is refused. Unlisted agents, Jev and the watcher are not
-  restricted, since they report into the one project ledger (§9.5).
+  a removed member is refused. Once there is a roster, an agent nobody has
+  listed is refused (default deny). Jev and the system actors (gate, watcher)
+  are governed by the ledger's permission table only.
+- Shared document paths are relative to the project (no leading `/`, no
+  `..`, no drive letter or scheme) or an https link.
 - Photos: people set their own (the owner may set anyone's). The file must be
   `.perfect-planner/people/photos/<person>-<first 12 of sha256>.<ext>`.
 
@@ -88,7 +101,8 @@ bytes (SVG and anything else refused), at most 512 KB (`PHOTO_MAX_BYTES`).
 ledger. The ledger records the fingerprint; `loadPhoto` and `photoSources`
 drop a photo whose bytes no longer match, so a swapped file is never shown.
 `setPhoto` writes the entry first (a refused change leaves no file) and clears
-the photo again if the file cannot be saved.
+the photo again if the file cannot be saved. `clearPhoto(ledger, actor,
+person, store)` deletes the file as well.
 
 ## Reading
 

@@ -1,8 +1,11 @@
 import type { LedgerEntry } from "../ledger/index";
+import type { EntryDraft } from "../ledger/index";
 import { isSlug } from "./errors";
+import { isPhotoFile } from "./photos";
 import {
   APPROVALS,
   PEOPLE_OPS,
+  PHOTO_DIR,
   PHOTO_MAX_BYTES,
   PHOTO_MIMES,
   ROLES,
@@ -29,6 +32,17 @@ const isApprovals = (v: unknown): v is Approval[] =>
   Array.isArray(v) && v.every((a) => (APPROVALS as readonly unknown[]).includes(a)) && new Set(v).size === v.length;
 const isIds = (v: unknown): v is string[] =>
   Array.isArray(v) && v.length <= 50 && v.every((a) => isText(a, 100)) && new Set(v).size === v.length;
+/**
+ * A document path is relative to the project root (forward slashes, no
+ * "..", no drive or scheme) or an https link.
+ */
+export function isDocPath(v: unknown): v is string {
+  if (!isText(v, 500) || v !== v.trim()) return false;
+  if (/^https:\/\/[^\s/]+\S*$/.test(v)) return true;
+  if (/[\\:\0]/.test(v) || v.startsWith("/")) return false;
+  return v.split("/").every((part) => part !== "" && part !== "." && part !== "..");
+}
+
 const optional = <T>(v: unknown, check: (x: unknown) => x is T): boolean => v === undefined || check(v);
 
 /** Validates the shape of a `data.people` payload. Permission checks live in rules.ts. */
@@ -57,7 +71,7 @@ export function parsePeopleEvent(raw: unknown): PeopleEvent | undefined {
       if (!(PHOTO_MIMES as readonly unknown[]).includes(e.mime)) return undefined;
       return raw as PeopleEvent;
     case "doc.shared":
-      if (!isSlug(e.doc) || !isText(e.title, 200) || !isText(e.path, 500)) return undefined;
+      if (!isSlug(e.doc) || !isText(e.title, 200) || !isDocPath(e.path)) return undefined;
       if (!optional(e.clauses, isIds)) return undefined;
       return raw as PeopleEvent;
     case "doc.removed":
@@ -93,16 +107,26 @@ export interface Roster {
   docs: Map<string, DocState>;
   /** Agents of people who were removed; they may no longer write. */
   retiredAgents: Set<string>;
+  /** The first person who wrote to the ledger; only they can start the roster. */
+  starter?: string;
 }
 
 export function emptyRoster(): Roster {
   return { members: new Map(), docs: new Map(), retiredAgents: new Set() };
 }
 
-/** Applies one entry to the roster in place. Entries that are not people entries are ignored. */
+/**
+ * Applies one entry to the roster in place. Entries that are not people
+ * entries are ignored, and so are people entries the rules would refuse
+ * (written by an agent, by someone without the right, or before the rules
+ * were installed): the roster's authority comes from the ledger's history,
+ * never from a payload alone.
+ */
 export function applyEntry(roster: Roster, entry: LedgerEntry): void {
   const event = peopleEvent(entry);
-  if (!event) return;
+  const refused = event ? peopleOpRefusal(entry, roster) !== null : true;
+  if (roster.starter === undefined && entry.actor.kind === "person") roster.starter = entry.actor.id;
+  if (!event || refused) return;
   const { members, docs, retiredAgents } = roster;
   if ("agents" in event && event.agents) for (const agent of event.agents) retiredAgents.delete(agent);
   switch (event.op) {
@@ -178,4 +202,70 @@ export function memberForActor(roster: Roster, actor: LedgerEntry["actor"]): Mem
     for (const m of roster.members.values()) if (m.agents.includes(actor.id)) return m;
   }
   return undefined;
+}
+
+/**
+ * Why a people change may not be made, or null when it may. Used both by the
+ * ledger rule (refuse on append) and by replay (ignore on read).
+ */
+export function peopleOpRefusal(draft: Pick<EntryDraft, "actor" | "data">, roster: Roster): string | null {
+  const event = parsePeopleEvent(draft.data?.people);
+  if (!event) return "data.people is not a valid people event";
+  const { actor } = draft;
+  if (actor.kind !== "person") return "only a person can change who is on the project";
+  const owner = ownerOf(roster);
+  const isOwner = owner?.person === actor.id;
+  const bootstrap = roster.members.size === 0;
+
+  switch (event.op) {
+    case "member.added":
+      if (bootstrap) {
+        if (event.role !== "owner") return "the first member of a project is its owner";
+        if (event.person !== actor.id) return "the owner adds themselves first";
+        if (roster.starter !== undefined && roster.starter !== actor.id) return `${roster.starter} started this project, so only they can claim it`;
+        return null;
+      }
+      if (!isOwner) return "only the owner adds people";
+      if (roster.members.has(event.person)) return `${event.person} is already on the project`;
+      if (event.role === "owner") return "a project has one owner";
+      if (event.role === "viewer" && event.approves?.length) return "a viewer cannot approve anything";
+      return null;
+    case "member.changed": {
+      if (!isOwner) return "only the owner changes people";
+      const target = roster.members.get(event.person);
+      if (!target) return `${event.person} is not on the project`;
+      if (target.role === "owner" && event.role !== undefined && event.role !== "owner") return "the owner's role cannot be changed";
+      if (target.role !== "owner" && event.role === "owner") return "a project has one owner";
+      const role = event.role ?? target.role;
+      if (role !== "helper" && event.approves?.length) return `a ${role} has no approvals to set`;
+      return null;
+    }
+    case "member.removed": {
+      if (!isOwner) return "only the owner removes people";
+      const target = roster.members.get(event.person);
+      if (!target) return `${event.person} is not on the project`;
+      if (target.role === "owner") return "the owner cannot be removed";
+      return null;
+    }
+    case "photo.set":
+    case "photo.cleared": {
+      if (bootstrap) return "add the owner before setting photos";
+      if (!roster.members.has(event.person)) return `${event.person} is not on the project`;
+      if (event.person !== actor.id && !isOwner) return "people set their own photo";
+      if (event.op === "photo.set") {
+        if (!isPhotoFile(event.file) || !event.file.startsWith(`${PHOTO_DIR}/${event.person}-`)) {
+          return `a photo lives at ${PHOTO_DIR}/${event.person}-<hash>.<ext>`;
+        }
+        if (!event.file.includes(`-${event.sha256.slice(0, 12)}.`)) return "the photo file name does not match its fingerprint";
+      }
+      return null;
+    }
+    case "doc.shared":
+    case "doc.removed":
+      if (bootstrap) {
+        if (roster.starter !== undefined && roster.starter !== actor.id) return `${roster.starter} started this project, so only they share documents`;
+      } else if (!isOwner) return "only the owner shares documents";
+      if (event.op === "doc.removed" && !roster.docs.has(event.doc)) return `${event.doc} is not shared`;
+      return null;
+  }
 }
