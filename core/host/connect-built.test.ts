@@ -96,7 +96,9 @@ appendFileSync(${JSON.stringify(report)}, JSON.stringify({ args: process.argv.sl
           } catch {
             // missing folders cannot hold a program
           }
-          expect(path.relative(realRepo, real).startsWith(".."), dir).toBe(true);
+          // On another drive path.relative gives an absolute path: that folder is outside the repo too.
+          const rel = path.relative(realRepo, real);
+          expect(rel.startsWith("..") || path.isAbsolute(rel), dir).toBe(true);
         }
       }
     }
