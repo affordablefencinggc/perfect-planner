@@ -59,6 +59,10 @@ export interface NpmRunOptions {
 /** Said when an install fails with scripts skipped, so the person knows the switch exists and that it is theirs. */
 export const INSTALL_SCRIPTS_HINT = "Install scripts were skipped; only a person can allow them (allowInstallScripts).";
 
+/** Said on every failed host install: npm ran without the user's own config, so a private registry login or proxy is missing. */
+export const NPM_CONFIG_HINT =
+  "Perfect Planner installs ignore your own npm settings (~/.npmrc and npm_config_* variables), including a private registry login and proxy. If this project needs them, a person can install its dependencies in the worktree themselves, or set the install option to their own installer.";
+
 /**
  * Run npm (e.g. ["ci", ...]) through Node with no shell. Adds --ignore-scripts unless allowed. The
  * project's own .npmrc is agent-controlled, so every setting that names a program is fixed on the
