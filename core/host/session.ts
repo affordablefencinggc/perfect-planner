@@ -84,6 +84,16 @@ export class PersonSessions {
     return { cookie, csrf };
   }
 
+  /**
+   * True for a request carrying a claimed window's cookie. Reads need only this: the cookie is
+   * HttpOnly and SameSite=Strict, so a page on another site cannot send it, and a local process
+   * that forges Origin or sec-fetch-site still has no cookie. Writes also need isPerson below.
+   */
+  hasSession(req: IncomingMessage): boolean {
+    const cookie = cookieValue(req);
+    return Boolean(cookie && this.sessions.has(digest(cookie)));
+  }
+
   /** True only for a request from a claimed window: cookie, matching CSRF token and the app's Origin. */
   isPerson(req: IncomingMessage): boolean {
     const cookie = cookieValue(req);

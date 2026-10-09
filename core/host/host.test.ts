@@ -2,7 +2,7 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createCoreHost, type CoreHost } from "./index";
-import { claimLaunch, hostCall, hostOf, startTestHost } from "./testing";
+import { claimLaunch, hostCall, hostOf, personHeaders, startTestHost } from "./testing";
 
 let dir: string;
 let host: CoreHost;
@@ -17,9 +17,8 @@ describe("core host", () => {
   afterEach(async () => stop());
 
   it("reports ledger status per project", async () => {
-    const res = await fetch(`${base}/status?project=demo`);
-    const body = (await res.json()) as any;
-    expect(res.status).toBe(200);
+    const { status, body } = await hostCall(base, "GET", "/status?project=demo");
+    expect(status).toBe(200);
     expect(body.ok).toBe(true);
     expect(body.result.project).toBe("demo");
     expect(body.result.ledger.ok).toBe(true);
@@ -27,12 +26,12 @@ describe("core host", () => {
   });
 
   it("falls back to the default project for unsafe keys", async () => {
-    const body = (await (await fetch(`${base}/status?project=${encodeURIComponent("../etc")}`)).json()) as any;
+    const { body } = await hostCall(base, "GET", `/status?project=${encodeURIComponent("../etc")}`);
     expect(body.result.project).toBe("default");
   });
 
   it("answers 404 and 405 in JSON", async () => {
-    const missing = await fetch(`${base}/nope`);
+    const missing = await fetch(`${base}/nope`, { headers: personHeaders(base) });
     expect(missing.status).toBe(404);
     expect(((await missing.json()) as any).code).toBe("NOT_FOUND");
     const wrong = await fetch(`${base}/status`, { method: "POST", body: "{}" });
@@ -83,6 +82,24 @@ describe("person-only writes", () => {
     expect(claimed.status).toBe(200);
     expect(claimed.cookie).toMatch(/^pp_core_person=[\w-]{20,}$/);
     expect(claimed.csrf).toMatch(/^[\w-]{20,}$/);
+  });
+
+  it("refuses every read without the session cookie, even with forged Origin and sec-fetch-site", async () => {
+    const origin = url.replace(/\/api\/core$/, "");
+    const forged = { origin, "sec-fetch-site": "same-origin", "sec-fetch-mode": "cors", referer: `${origin}/` };
+    for (const route of ["/status", "/summary", "/plan", "/planning", "/tasks", "/decisions", "/people", "/agents", "/recent", "/verify"]) {
+      const res = await fetch(`${url}${route}`, { headers: forged });
+      expect(res.status, route).toBe(401);
+      const body = (await res.json()) as any;
+      expect(body.code, route).toBe("PERSON_REQUIRED");
+      expect(body.result).toBeUndefined();
+    }
+    const claimed = await claimLaunch(url, hostOf(url).issueLaunch());
+    const withCookie = await fetch(`${url}/status`, { headers: { ...forged, cookie: claimed.cookie! } });
+    expect(withCookie.status).toBe(200);
+    expect(((await withCookie.json()) as any).ok).toBe(true);
+    const madeUp = await fetch(`${url}/status`, { headers: { ...forged, cookie: "pp_core_person=not-a-real-session-cookie-value" } });
+    expect(madeUp.status).toBe(401);
   });
 
 });
