@@ -107,6 +107,7 @@ const ZERO = /^0+$/;
 // git by absolute path from PATH, never a git.exe planted in the repo (Windows searches the
 // current folder first); NO_CWD_SEARCH_ENV stops git's own children doing the same.
 function git(args) {
+  // Git runs this hook at the top of the worktree, so cwd is the repo root it protects.
   return execFileSync(gitExecutable(process.cwd()), args, {
     encoding: "utf8", maxBuffer: 256 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"], windowsHide: true,
     env: { ...process.env, ...NO_CWD_SEARCH_ENV },

@@ -103,9 +103,11 @@ const SHIM_MARK = "# Perfect Planner: whole-branch secret scan before any push (
  * every platform (Git for Windows ships one), so the same text works on
  * Windows, macOS and Linux. Paths use forward slashes.
  */
-export function prePushShim(hookScriptPath: string): string {
-  const path = hookScriptPath.replace(/\\/g, "/").replace(/"/g, '\\"');
-  return `#!/bin/sh\n${SHIM_MARK}\nexec node "${path}" "$@"\n`;
+export function prePushShim(hookScriptPath: string, nodePath: string = process.execPath): string {
+  const quote = (p: string) => p.replace(/\\/g, "/").replace(/"/g, '\\"');
+  // node by absolute path: a bare "node" would be looked up on PATH by sh, and a PATH folder
+  // inside (or linked into) the repo could hold a planted one.
+  return `#!/bin/sh\n${SHIM_MARK}\nexec "${quote(nodePath)}" "${quote(hookScriptPath)}" "$@"\n`;
 }
 
 async function hooksDir(run: CommandRunner, cwd: string): Promise<string> {

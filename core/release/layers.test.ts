@@ -48,9 +48,15 @@ describe("secret posture", () => {
   });
 
   it("writes a hook shim with forward slashes", () => {
-    const shim = prePushShim("C:\\repos\\pp\\core\\release\\hooks\\pre-push.mjs");
+    const shim = prePushShim("C:\\repos\\pp\\core\\release\\hooks\\pre-push.mjs", "C:\\Program Files\\nodejs\\node.exe");
     expect(shim.startsWith("#!/bin/sh\n")).toBe(true);
-    expect(shim).toContain('exec node "C:/repos/pp/core/release/hooks/pre-push.mjs" "$@"');
+    expect(shim).toContain('exec "C:/Program Files/nodejs/node.exe" "C:/repos/pp/core/release/hooks/pre-push.mjs" "$@"');
+  });
+
+  it("starts node by absolute path, never a bare node that sh would look up on PATH", () => {
+    const shim = prePushShim("/opt/pp/pre-push.mjs");
+    expect(shim).toContain(`exec "${process.execPath.replace(/\\/g, "/")}" "/opt/pp/pre-push.mjs"`);
+    expect(shim).not.toMatch(/exec node /);
   });
 });
 
