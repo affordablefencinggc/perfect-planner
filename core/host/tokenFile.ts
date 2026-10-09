@@ -8,6 +8,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { isLocalWindowsPath } from "../exec/index";
 
 /**
  * True for anything that is not a plain local path. On Windows only a drive-letter path (C:\...) is
@@ -15,7 +16,7 @@ import path from "node:path";
  * \??\UNC) reach SMB, and rooted or relative paths depend on the current drive. Elsewhere //host is refused.
  */
 export function isNetworkPath(value: string, platform: NodeJS.Platform = process.platform): boolean {
-  if (platform === "win32") return !/^[A-Za-z]:\\/.test(value);
+  if (platform === "win32") return !isLocalWindowsPath(value);
   return value.startsWith("//");
 }
 
