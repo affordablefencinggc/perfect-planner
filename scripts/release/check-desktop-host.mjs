@@ -14,7 +14,7 @@
 // Prints a JSON summary; exits non-zero on any failure. No secret is printed.
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -238,9 +238,53 @@ export async function runLoop(origin, headers, work, appNode) {
   return steps;
 }
 
+/**
+ * Loading the bundled core host must run nothing: bundling put the commit-time secret scan
+ * (core/worktrees/hooks/secret-scan.mjs) inside index.mjs, and its "am I the script?" check once
+ * matched the bundle, so `node index.mjs` scanned (and ran git in) whatever folder it started in.
+ * Run it from a non-repo folder and from a repo with a staged secret and a planted `git` reachable
+ * through a PATH entry that links into the repo: no scan output, and the planted git never runs.
+ */
+export function bundleRunsNothingOnLoad(folder, node) {
+  const entry = path.join(folder, "core-host", "index.mjs");
+  const base = mkdtempSync(path.join(tmpdir(), "pp-bundle-load-"));
+  try {
+    const plain = path.join(base, "plain");
+    const repo = path.join(base, "repo");
+    mkdirSync(plain);
+    mkdirSync(path.join(repo, "tools"), { recursive: true });
+    execFileSync("git", ["init", "-q", repo]);
+    const marker = path.join(base, "planted-git-ran");
+    const windows = process.platform === "win32";
+    if (windows) writeFileSync(path.join(repo, "tools", "git.cmd"), `@echo off\r\necho ran> "${marker}"\r\n`);
+    else writeFileSync(path.join(repo, "tools", "git"), `#!/bin/sh\necho ran > "${marker}"\n`, { mode: 0o755 });
+    const link = path.join(base, "tools-link");
+    try { symlinkSync(path.join(repo, "tools"), link, windows ? "junction" : "dir"); } catch { /* no links here: the direct entry below still covers it */ }
+    // Built at run time so no key-shaped text sits in this file.
+    const planted = `AKIA${Array.from(randomBytes(16), (b) => "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"[b % 32]).join("")}`;
+    writeFileSync(path.join(repo, "config.js"), `export const awsKeyId = "${planted}";\n`);
+    execFileSync("git", ["add", "config.js"], { cwd: repo });
+    const pathKey = Object.keys(process.env).find((k) => k.toUpperCase() === "PATH") ?? "PATH";
+    const env = { ...process.env, [pathKey]: [link, path.join(repo, "tools"), process.env[pathKey] ?? ""].join(path.delimiter) };
+    delete env.NODE_OPTIONS;
+    const runs = {};
+    for (const [name, cwd] of [["plainFolder", plain], ["repoWithSecret", repo]]) {
+      const run = spawnSync(node, [entry], { cwd, env, encoding: "utf8", timeout: 30_000 });
+      const said = `${run.stdout}${run.stderr}`;
+      runs[name] = { exit: run.status, quiet: !/secret scan|blocked this commit/i.test(said) };
+      if (run.status !== 0 || !runs[name].quiet) throw new Error(`Loading the bundled core host from ${name} ran something (exit ${run.status}): ${said.trim().slice(0, 300)}`);
+    }
+    if (existsSync(marker)) throw new Error("Loading the bundled core host ran a git planted in the folder it started in.");
+    return { ...runs, plantedGitRan: false };
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+}
+
 export async function checkDesktopHost(folder = path.join(projectRoot, "dist", "desktop-host"), { port = "0" } = {}) {
   const manifest = JSON.parse(readFileSync(path.join(folder, "desktop-host.json"), "utf8"));
   const node = path.join(folder, manifest.node.binary);
+  const loadRunsNothing = bundleRunsNothingOnLoad(folder, node);
   const data = mkdtempSync(path.join(tmpdir(), "pp-desktop-check-"));
   const work = path.join(data, "work");
   mkdirSync(path.join(work, "notes-app"), { recursive: true });
@@ -283,7 +327,7 @@ export async function checkDesktopHost(folder = path.join(projectRoot, "dist", "
     child.stdin.end();
     const stopped = await Promise.race([exited, new Promise((resolve) => setTimeout(() => resolve(null), 10_000))]);
     if (!stopped) throw new Error("The service did not stop when its stdin closed.");
-    return { ok: true, target: manifest.target, node: manifest.node.version, origin: ready.origin, launchLink: true, refusedWithoutTheWindow: { before, after }, agent: { ranAsCopied: agent.ranAsCopied, skillAcceptsLine: agent.skillAcceptsLine, usesBundledNode: agent.registered.usesLineNode, checkedInAs: agent.checkedInAs, skillInstalled: agent.skillInstalled }, appListsAgent: true, loop, stoppedWithStdin: true };
+    return { ok: true, target: manifest.target, node: manifest.node.version, origin: ready.origin, launchLink: true, refusedWithoutTheWindow: { before, after }, agent: { ranAsCopied: agent.ranAsCopied, skillAcceptsLine: agent.skillAcceptsLine, usesBundledNode: agent.registered.usesLineNode, checkedInAs: agent.checkedInAs, skillInstalled: agent.skillInstalled }, appListsAgent: true, loop, loadRunsNothing, stoppedWithStdin: true };
   } finally {
     if (child.exitCode === null) child.kill();
     rmSync(data, { recursive: true, force: true });
