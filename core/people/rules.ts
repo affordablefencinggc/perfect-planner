@@ -1,5 +1,6 @@
 import { isAuthoritative, Ledger, type EntryDraft, type LedgerEntry, type LedgerStore, type OpenOptions } from "../ledger/index";
 import { PeopleError } from "./errors";
+import { noOwnerKey } from "./view";
 import { applyEntry, claimsPeople, emptyRoster, memberForActor, peopleOpRefusal, replayRoster, type Roster } from "./model";
 import { APPROVAL_TYPES, type Approval } from "./types";
 
@@ -62,6 +63,7 @@ export function auditPeople(entries: readonly LedgerEntry[], owner?: string): Pe
  * through this rather than `Ledger.open`.
  */
 export async function openPeopleLedger(store: LedgerStore, options: OpenOptions = {}): Promise<Ledger> {
+  if (!options.ownerKey) throw noOwnerKey();
   const ledger = await Ledger.open(store, options);
   const violations = auditPeople(ledger.entries(), ledger.owner);
   if (violations.length > 0 && ledger.status.writable) {
