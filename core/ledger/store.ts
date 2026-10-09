@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { ledgerNumber } from "./chain";
+import { MemoryKeyProvider, type KeyProvider } from "./signing";
 import type { LedgerEntry } from "./types";
 
 export interface LoadResult {
@@ -30,10 +31,14 @@ export interface LedgerStore {
   acquireWriter(): boolean;
   releaseWriter(): void;
   readonly description: string;
+  /** Keys used when Ledger.open is given none; only MemoryStore has them (test keys). */
+  readonly defaultKeys?: KeyProvider;
 }
 
 export class MemoryStore implements LedgerStore {
   readonly description = "memory";
+  /** Test keys shared by every ledger opened on this store; nothing in memory is persisted. */
+  readonly defaultKeys = new MemoryKeyProvider();
   lines: string[] = [];
   head?: { n: string; hash: string };
   private locked = false;
