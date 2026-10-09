@@ -22,7 +22,8 @@ let ctx: Awaited<ReturnType<typeof startTestHost>>;
 const q = "?project=loop";
 
 beforeEach(async () => {
-  repo = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "pp-tasks-repo-")));
+  // native: Windows runners hand out 8.3 short temp paths (RUNNER~1); git reports the long form.
+  repo = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "pp-tasks-repo-")));
   git(repo, "init", "-q", "-b", "main");
   git(repo, "config", "commit.gpgsign", "false");
   // The gate's merge commit needs an identity; CI runners have no global one.
