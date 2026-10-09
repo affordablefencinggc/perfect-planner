@@ -102,6 +102,12 @@ backstop is the person's signed merge approval, which every merge needs: the
 person approving a merge should look at the whole diff, not only the files flagged
 here.
 
+`.perfect-planner/` holds the ledger and worker tokens and is never committed.
+The gate adds it to `.git/info/exclude` when it runs, `prove` refuses a commit whose
+index has anything under it (a `git add -f`, say), and `mergeAndVerify` refuses a
+branch where any commit since it left the integration branch touched it, even if a
+later commit removed it again.
+
 The task's own `node_modules` is never used for the merge check, because it is
 ignored by git and a worker could edit it unseen. When the candidate's package
 files match the integration checkout's, that checkout's `node_modules` is linked

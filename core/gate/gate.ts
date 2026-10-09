@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, u
 import os from "node:os";
 import path from "node:path";
 import { git, runGit } from "../worktrees/git";
+import { ensureRequiredIgnores, PRIVATE_DIR, privatePaths, stagedPrivatePaths } from "../worktrees/ignores";
 import { lines, realDir, samePath } from "../worktrees/platform";
 import { isAuthoritative } from "../ledger/index";
 import { GATE_ACTOR, evidenceValue, type Actor, type EntryDraft, type LedgerEntry, type LedgerPort } from "../worktrees/ports";
@@ -240,6 +241,12 @@ async function changedTestFiles(cwd: string, pins: Pins): Promise<string[]> {
     if (committed?.code === 0 && contentHash(committed.stdoutBytes) !== hash) changed.add(file);
   }
   return [...changed].sort();
+}
+
+/** The ledger, worker tokens and task worktrees in .perfect-planner/ must never be committed. */
+function privateRefusal(paths: readonly string[]): string {
+  const shown = paths.slice(0, 5).join(", ");
+  return `${PRIVATE_DIR}/ holds the ledger and worker tokens and must never be committed, but these are staged or committed: ${shown}${paths.length > 5 ? ` and ${paths.length - 5} more` : ""}. Remove them from the branch's commits (git rm --cached alone leaves them in history), then prove again.`;
 }
 
 /** Replay the ledger into one task's gate state. Pure. */
@@ -560,6 +567,8 @@ export class TestGate {
     const definition = state.definition;
     const approval = state.approval;
     const commit = await headOf(cwd);
+    // The ledger and worker tokens live in .perfect-planner/; keep `git add -A` from ever picking them up.
+    if (commit) await ensureRequiredIgnores(cwd);
     const base = {
       actor: GATE_ACTOR,
       subject: taskId,
@@ -683,6 +692,9 @@ export class TestGate {
     if (status.code !== 0) return { ok: false, reason: `git status failed in ${worktreePath}: ${status.stderr.trim()}` };
     const dirty = lines(status.stdout);
     if (dirty.length) return { ok: false, reason: `Commit or remove these changes first; the test only counts against a commit: ${dirty.slice(0, 10).join(", ")}` };
+    await ensureRequiredIgnores(worktreePath);
+    const leaked = await stagedPrivatePaths(worktreePath);
+    if (leaked.length) return { ok: false, reason: privateRefusal(leaked) };
     const approval = state.approval!;
     const base = {
       actor: GATE_ACTOR,
@@ -789,7 +801,13 @@ export class TestGate {
     }
     const forkPoint = await runGit(repoRoot, ["merge-base", `refs/heads/${integrationBranch}`, branchTip]);
     if (forkPoint.code !== 0) return refuse(`Could not find where ${branch} left ${integrationBranch}, so its changes cannot be checked.`);
-    const changed = lines((await runGit(repoRoot, ["diff", "--name-only", "--no-renames", forkPoint.stdout.trim(), branchTip])).stdout);
+    const changed = lines((await runGit(repoRoot, ["-c", "core.quotePath=false", "diff", "--name-only", "--no-renames", forkPoint.stdout.trim(), branchTip])).stdout);
+    await ensureRequiredIgnores(repoRoot);
+    // Any commit on the branch, not only its tip: a token committed and later removed is still in history.
+    const history = await runGit(repoRoot, ["-c", "core.quotePath=false", "log", "--name-only", "--format=", "--no-renames", `${forkPoint.stdout.trim()}..${branchTip}`, "--", `:(icase)${PRIVATE_DIR}`]);
+    if (history.code !== 0) return refuse(`Could not check ${branch}'s commits for ${PRIVATE_DIR}/ files: ${oneLine(history.stderr)}`);
+    const leaked = [...new Set(privatePaths([...changed, ...lines(history.stdout)]))];
+    if (leaked.length) return refuse(privateRefusal(leaked));
     const support = await testSupportFiles(repoRoot, [forkPoint.stdout.trim(), branchTip], Object.keys(approval.pins), definition.command);
     const sensitive = sensitiveChanges(changed, Object.keys(approval.pins), support);
     if (sensitive.length && !state.diffApproval.byPerson) {
