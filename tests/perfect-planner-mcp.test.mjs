@@ -1,3 +1,4 @@
+import "./helpers/hermetic-env.mjs";
 import assert from "node:assert/strict";
 import { access, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { execFile } from "node:child_process";

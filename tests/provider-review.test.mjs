@@ -1,3 +1,4 @@
+import "./helpers/hermetic-env.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { assessPeerReview, openPortableProviderVault, openProviderVault, redactProviderVault, sealPortableProviderVault, sealProviderVault } from "../src/node/providerReview.mjs";

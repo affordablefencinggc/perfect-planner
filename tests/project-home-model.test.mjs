@@ -1,3 +1,4 @@
+import "./helpers/hermetic-env.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
 
@@ -207,4 +208,37 @@ test("stale and unavailable session states override fully authoritative underlyi
   assert.ok(unavailable.blockers.some((item) => item.id === "project-unavailable"));
   assertOneAction(stale);
   assertOneAction(unavailable);
+});
+
+test("Home reads saved collision decisions: open overlaps block, decided ones do not, a pending split stays open", async () => {
+  const { emptyTaskDraftLedger, updateTaskDraft } = await import("../src/project/taskDraftLedger.js");
+  const { buildCollisionRecord, createResolution } = await import("../src/project/taskCoordination.js");
+  const ready = withAuthorities(imported("c", { name: "Overlap Home", discovery: discovery() }));
+  const binding = { projectId: ready.projectId, rootIdentity: ready.registration.rootIdentity, censusDigest: ready.census.digest };
+  const task = (title, path) => ({ id: null, title, description: "", owner: "", acceptance: "", recovery: "", claims: [{ access: "write", path }], dependsOn: [], archived: false });
+  const ledger = [task("A", "src/x.js"), task("B", "src/x.js"), task("C", "src/y.js"), task("D", "src/y.js")].reduce((value, item) => updateTaskDraft(value, item, at), emptyTaskDraftLedger(binding));
+  const record = buildCollisionRecord({ ledger, censusDigest: binding.censusDigest, now: at });
+  const records = (data) => ({ sections: { collisions: { revision: 1, recordedAt: at, data } } });
+  const [first, second] = record.collisions;
+
+  const open = deriveProjectHomeModel(ready, records(record));
+  const blocker = open.blockers.find((item) => item.id === "collisions-undecided");
+  assert.ok(blocker);
+  assert.match(blocker.reason, /2 of 2 overlaps still need a decision/);
+  assert.equal(open.summary.overlaps.total, 2);
+  assert.equal(open.summary.overlaps.decided, 0);
+
+  const oneSplit = { ...record, resolutions: { [first.key]: createResolution(first, "order", first.tasks[0]), [second.key]: createResolution(second, "split") } };
+  const pending = deriveProjectHomeModel(ready, records(oneSplit));
+  const splitBlocker = pending.blockers.find((item) => item.id === "collisions-undecided");
+  assert.match(splitBlocker.reason, /1 of 2 overlaps still needs a decision/);
+  assert.match(splitBlocker.reason, /Split chosen: edit the file scopes of T0003 or T0004 so they no longer overlap/);
+
+  const decided = { ...record, resolutions: { [first.key]: createResolution(first, "order", first.tasks[0]), [second.key]: createResolution(second, "accept") } };
+  const clear = deriveProjectHomeModel(ready, records(decided));
+  assert.equal(clear.blockers.some((item) => item.id === "collisions-undecided"), false);
+  assert.equal(clear.summary.overlaps.decided, 2);
+  assert.equal(clear.summary.overlaps.text, "2 overlaps decided");
+
+  assert.equal(deriveProjectHomeModel(ready).summary.overlaps.state, "unavailable");
 });
