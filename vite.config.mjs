@@ -2,6 +2,7 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import { readFileSync } from "node:fs";
 import { localAuthorityVitePlugin } from "./src/node/localAuthorityHost.mjs";
+import { createLaunchFolderMiddleware, resolveLaunchFolder } from "./src/node/launchFolderHost.mjs";
 import { defaultRegistryRoot, mcpServerPath } from "./mcp/agentSetupPaths.mjs";
 
 // The atlas displays the first diagram, not the surrounding authoring notes.
@@ -56,5 +57,10 @@ export default defineConfig(({ command }) => ({
     },
   },
   // Local saving APIs (shared with scripts/serve-local.mjs for production use).
-  plugins: [mermaidDocuments(), localAuthorityVitePlugin(), react()],
+  plugins: [
+    mermaidDocuments(),
+    { name: "perfect-planner-launch-folder", configureServer: (server) => { server.middlewares.use(createLaunchFolderMiddleware({ folder: resolveLaunchFolder() })); } },
+    localAuthorityVitePlugin(),
+    react(),
+  ],
 }));

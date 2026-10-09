@@ -52,3 +52,10 @@ export function assertTaskSaveIntentCapacity(records){
  for(const record of records){validateTaskSaveIntent(record);bytes+=taskSaveIntentBytes(record);if(record.outcome===null)bytes+=1024*1024+1024;if(record.acknowledgment===null)bytes+=2*65536+2048;}
  if(bytes>TASK_SAVE_INTENT_BYTES)fail('Save intent history is full. Receipt space and existing records were preserved.');
 }
+// A finished Save (outcome written and acknowledged) is already in the Ledger's revision history, so when the
+// bounded history is full the oldest finished ones make room. Unfinished Saves are never dropped.
+export function saveIntentsToEvict(records,incoming){
+ if(records.some(row=>row.original.requestId===incoming.original.requestId))return [];
+ const excess=records.length+1-TASK_SAVE_INTENT_LIMIT;if(excess<=0)return [];
+ return records.filter(row=>row.outcome!==null&&row.acknowledgment!==null).sort((a,b)=>a.original.baseLedger.revision-b.original.baseLedger.revision||(a.original.requestId<b.original.requestId?-1:1)).slice(0,excess).map(row=>row.original.requestId);
+}
