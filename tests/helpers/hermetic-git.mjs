@@ -8,9 +8,10 @@
 // per process:
 //   - removes inherited GIT_* routing, config and override variables;
 //   - points HOME, USERPROFILE and XDG_CONFIG_HOME at a private temp profile
-//     whose .gitconfig sets a fixed identity, no signing and no hooks path.
+//     whose .gitconfig sets a fixed identity, no signing and no hooks path;
+//   - points TMPDIR/TMP/TEMP at the canonical (symlink-free) temp folder.
 // Child processes spawned with `{ ...process.env }` inherit the same profile.
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
@@ -42,7 +43,18 @@ function gitConfigText() {
   ].join("\n");
 }
 
+// The stores under test refuse redirected paths, and the system temp folder
+// is itself an alias on macOS (/var -> /private/var) and on Windows runners
+// (8.3 short names). Point every temp variable at the canonical path so
+// fixtures created under os.tmpdir() are not mistaken for redirections.
+function canonicalTemp(env) {
+  let canonical;
+  try { canonical = realpathSync.native(tmpdir()); } catch { return; }
+  for (const key of ["TMPDIR", "TMP", "TEMP"]) if (key in env || key === (process.platform === "win32" ? "TEMP" : "TMPDIR")) env[key] = canonical;
+}
+
 export function applyHermeticGitEnv(env = process.env) {
+  canonicalTemp(env);
   for (const key of Object.keys(env)) {
     const upper = key.toUpperCase();
     if (upper.startsWith("GIT_") && !keep.has(upper)) delete env[key];
