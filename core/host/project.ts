@@ -8,6 +8,7 @@ import { installClauseRules } from "../lookup/index";
 import { TestGate, gateRule, type GatePolicy } from "../gate/index";
 import { AgentService } from "../mcp/index";
 import type { HostKeys } from "./keys";
+import { hostWitness } from "./witness";
 import { readOwnerPin, rememberedGenesis, rememberFolder, writeOwnerPin, type OwnerPin } from "./owner";
 import { DEFAULT_LOCAL_PERSON } from "./routes/people";
 import { installNumberingRules } from "../numbering/index";
@@ -160,12 +161,40 @@ function ownerFromSource(source: OwnerKeySource, key: string, root: string, keys
   return principal ? { state: "pinned", ownerKey, principal } : { state: "key-missing", ownerKey, reason: `The owner's key ${ownerKey} is not on this device.` };
 }
 
+export type IntegrityState =
+  /** The chain checks out and the head matches the copy kept outside the project. */
+  | "ok"
+  /** Entries this computer saw written are gone: an older copy of the ledger was put back, or its end was cut. */
+  | "rolled-back"
+  /** The ledger fails its fingerprint or signature check for another reason. */
+  | "damaged"
+  /** The chain checks out, but the head copy outside the project cannot be read or updated. */
+  | "witness-problem";
+
+export interface LedgerIntegrity {
+  state: IntegrityState;
+  reason?: string;
+  /** Whether the ledger accepts writes (a broken chain refuses them until a person acknowledges it). */
+  writesStopped: boolean;
+}
+
+/** What GET /status reports about the ledger's own integrity, in one place for the window's stop notice. */
+export function ledgerIntegrity(ledger: Ledger): LedgerIntegrity {
+  const status = ledger.status;
+  if (!status.ok) {
+    return { state: status.problem === "truncated" ? "rolled-back" : "damaged", ...(status.detail ? { reason: status.detail } : {}), writesStopped: true };
+  }
+  if (status.witnessProblem) return { state: "witness-problem", reason: status.witnessProblem, writesStopped: false };
+  return { state: "ok", writesStopped: false };
+}
+
 export function openCoreProject(baseRoot: string, key: string, override: string | undefined, keys: HostKeys, ownerKeyFor?: OwnerKeySource): CoreProject {
   const root = projectRootFor(baseRoot, key, override);
   fs.mkdirSync(root, { recursive: true });
   keys.ensureSystemKey();
   const owner = ownerKeyFor ? ownerFromSource(ownerKeyFor, key, root, keys) : ownerPinFor(baseRoot, root, keys);
-  const ledger = Ledger.openSync(new FileStore(root), { keys, ...(owner.ownerKey ? { ownerKey: owner.ownerKey } : {}) });
+  // The head copy outside the project folder (core/host/witness.ts): an older valid ledger put back reads as cut short.
+  const ledger = Ledger.openSync(new FileStore(root), { keys, witness: hostWitness(baseRoot, keys), ...(owner.ownerKey ? { ownerKey: owner.ownerKey } : {}) });
   // The same rules every core module assumes: numbering (D-/Q-/T-/R- subjects), clauses, people, planning gates.
   installNumberingRules(ledger);
   installClauseRules(ledger);
