@@ -19,6 +19,7 @@ export function CoreScreen({ id, title, purpose, actions = null, resource, empty
       </header>
       <ReadOnlyNotice />
       <OwnerNotice />
+      <StartHistoryNotice />
       {status === "loading" && <CoreLoading label={`Loading ${title.toLowerCase()}`} />}
       {status === "error" && <CoreError error={resource.error} onRetry={resource.reload} />}
       {status === "empty" && <div className="core-empty" role="status">{empty}</div>}
@@ -97,6 +98,50 @@ export function OwnerNotice() {
         <strong>{problem}</strong>
         <p>{OWNER_NEXT[owner.state] ?? OWNER_NEXT.default}</p>
         {owner.reason && <AdvancedOnly as="p">{owner.reason}</AdvancedOnly>}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * A folder nobody has written to here: nothing is written until the person starts its history. When the
+ * folder's repo shows earlier Perfect Planner use (a history may have been wiped), say so first.
+ */
+export function StartHistoryNotice() {
+  const status = useCoreResource("/status");
+  const person = usePersonSession();
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const owner = status.data?.owner;
+  if (!person || owner?.state !== "new" || owner.started) return null;
+  const signals = Array.isArray(owner.signals) ? owner.signals : [];
+  const start = async () => {
+    setBusy(true);
+    setError("");
+    try {
+      await status.post("/owner/start", {});
+    } catch (failure) {
+      setError(failure?.message ?? "The history could not be started.");
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className={signals.length ? "core-owner-stop core-start-history" : "core-start-history"} role={signals.length ? "alert" : "region"} aria-label="Start a new history" data-start-history={signals.length ? "warn" : "new"}>
+      {signals.length ? <WarningCircleIcon weight="fill" aria-hidden="true" /> : null}
+      <div>
+        <strong>{signals.length ? "This folder may have had a Perfect Planner history before." : "This folder has no Perfect Planner history yet."}</strong>
+        {signals.length > 0 && (
+          <>
+            <p>These are signs, not proof. If you did not delete its history yourself, stop and check the folder before starting again:</p>
+            <ul>{signals.map((signal) => <li key={signal}>{signal}</li>)}</ul>
+          </>
+        )}
+        <p>Nothing is written to this project until you start its history. You become its owner on this computer.</p>
+        {error && <p role="alert">{error}</p>}
+        <button type="button" className="core-button primary" onClick={start} disabled={busy}>
+          {busy ? "Starting…" : "Start a new history for this folder"}
+        </button>
       </div>
     </div>
   );

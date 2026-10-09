@@ -144,6 +144,38 @@ function ownerPinFor(baseRoot: string, root: string, keys: HostKeys): OwnerPin {
 }
 
 /**
+ * Signs that Perfect Planner was used in a folder's repo before: our pre-push scan hook, pp/* task
+ * branches, or .perfect-planner in the repo's info/exclude. Read before the app touches the repo (the open
+ * itself adds the exclude line and the hook). Signals, not proof; never throws.
+ */
+export async function priorUseSignals(dir: string): Promise<string[]> {
+  const signals: string[] = [];
+  const gitPath = async (name: string) => {
+    const result = await runCommand("git", ["rev-parse", "--git-path", name], { cwd: dir });
+    return result.code === 0 && result.stdout.trim() ? path.resolve(dir, result.stdout.trim()) : null;
+  };
+  const read = (file: string | null) => {
+    try {
+      return file ? fs.readFileSync(file, "utf8") : "";
+    } catch {
+      return "";
+    }
+  };
+  try {
+    if ((await runCommand("git", ["rev-parse", "--is-inside-work-tree"], { cwd: dir })).code !== 0) return [];
+    const hooks = await gitPath("hooks");
+    if (read(hooks && path.join(hooks, "pre-push")).includes("Perfect Planner")) signals.push("This repo has Perfect Planner's pre-push scan installed.");
+    const branches = await runCommand("git", ["for-each-ref", "--format=%(refname:short)", "refs/heads/pp/"], { cwd: dir });
+    const names = branches.code === 0 ? branches.stdout.split(/\r?\n/).filter(Boolean) : [];
+    if (names.length) signals.push(`This repo has ${names.length} Perfect Planner task branch${names.length === 1 ? "" : "es"} (${names.slice(0, 3).join(", ")}${names.length > 3 ? ", ..." : ""}).`);
+    if (/\.perfect-planner\//.test(read(await gitPath("info/exclude")))) signals.push("This repo already keeps a .perfect-planner folder out of git.");
+  } catch {
+    return signals;
+  }
+  return signals;
+}
+
+/**
  * Pins a new project's owner after a write from the person's own window (host.ts): the ledger now has a
  * genesis, and the pin for it is signed and kept in the app's data folder.
  */

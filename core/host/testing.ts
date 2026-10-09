@@ -11,6 +11,8 @@ import { HostKeys } from "./keys";
 
 interface PersonWindow {
   host: CoreHost;
+  /** Take "Start a new history" automatically when a first write asks for it (default true). */
+  autoStart?: boolean;
   origin: string;
   cookie?: string;
   csrf?: string;
@@ -51,14 +53,14 @@ class UnownedKeys extends HostKeys {
  * A test host with memory keys. The owner is pinned the way the app does it: on the first write from
  * the person's window (core/host/owner.ts). Pass { owned: false } for a project with no owner key here.
  */
-export async function startTestHost({ owned = true, ...options }: { projectRootOverride?: string; owned?: boolean } = {}): Promise<{ host: CoreHost; base: string; dir: string; stop: () => Promise<void> }> {
+export async function startTestHost({ owned = true, autoStart = true, ...options }: { projectRootOverride?: string; owned?: boolean; autoStart?: boolean } = {}): Promise<{ host: CoreHost; base: string; dir: string; stop: () => Promise<void> }> {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "pp-core-host-"));
   const inner = new MemoryKeyProvider({ autoCreate: false });
   const h = createCoreHost({ root, bridge: true, ...options, keys: owned ? new HostKeys(inner) : new UnownedKeys(inner) });
   const s = http.createServer((req, res) => h.middleware(req, res, () => { res.statusCode = 404; res.end(); }));
   await new Promise<void>((resolve) => s.listen(0, "127.0.0.1", resolve));
   const url = `http://127.0.0.1:${(s.address() as AddressInfo).port}/api/core`;
-  const window: PersonWindow = { host: h, origin: url.replace(/\/api\/core$/, "") };
+  const window: PersonWindow = { host: h, origin: url.replace(/\/api\/core$/, ""), autoStart };
   windows.set(url, window);
   const claimed = await claimLaunch(url, h.issueLaunch());
   window.cookie = claimed.cookie;
@@ -80,7 +82,16 @@ export async function startTestHost({ owned = true, ...options }: { projectRootO
 export async function hostCall(base: string, method: "GET" | "POST", route: string, body?: unknown, { asAgent = false }: { asAgent?: boolean } = {}): Promise<{ status: number; body: { ok: boolean; result?: any; code?: string; message?: string } }> {
   const headers: Record<string, string> = { ...(asAgent ? {} : personHeaders(base)), ...(body === undefined ? {} : { "content-type": "application/json" }) };
   const res = await fetch(`${base}${route}`, { method, headers, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
-  return { status: res.status, body: (await res.json()) as { ok: boolean; result?: any; code?: string; message?: string } };
+  const result = { status: res.status, body: (await res.json()) as { ok: boolean; result?: any; code?: string; message?: string } };
+  // A new project's first write waits for "Start a new history for this folder" (host.ts). Tests that are
+  // not about that step take it the way the person would, in their window, then make their call.
+  if (result.body.code === "START_HISTORY" && !asAgent && windows.get(base)?.autoStart !== false) {
+    const project = new URL(route, "http://local").searchParams.get("project");
+    const started = await hostCall(base, "POST", `/owner/start${project ? `?project=${encodeURIComponent(project)}` : ""}`, {});
+    if (started.status !== 200) return started;
+    return hostCall(base, method, route, body, { asAgent });
+  }
+  return result;
 }
 
 /**
