@@ -107,7 +107,7 @@ export async function smokeInstalledApp({ installer, out, installDir = "C:\\PP S
     summary.lineUsesBundledNode = line.startsWith(`& '${installDir}\\desktop-host\\node.exe'`);
     await client.screenshot(path.join(out, "2-connect-line.png"));
     const agent = await checkAgentConnect(line);
-    summary.agent = { checkedInAs: agent.checkedInAs, registeredWithBundledNode: agent.registered.usesLineNode, skillInstalled: agent.skillInstalled };
+    summary.agent = { skillAcceptsLine: agent.skillAcceptsLine, checkedInAs: agent.checkedInAs, registeredWithBundledNode: agent.registered.usesLineNode, skillInstalled: agent.skillInstalled };
     await until("the window to say the agent connected", () => client.evaluate(`document.querySelector(".core-screen-connect")?.innerText?.includes("Connected:")`), 30_000);
     await client.screenshot(path.join(out, "3-agent-connected.png"));
     summary.windowSaysConnected = true;

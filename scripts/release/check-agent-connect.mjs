@@ -9,7 +9,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 /**
  * Splits the pasted line into words the way its shell would: 'single-quoted' (POSIX '\'' or
@@ -116,6 +116,12 @@ export async function checkAgentConnect(line) {
   try {
     const steps = {};
     if (!existsSync(parsed.node) && parsed.node !== "node") throw new Error(`The line's Node runtime is missing: ${parsed.node}`);
+    // The rule the installed skill tells agents to follow, from the installed connect.mjs itself.
+    const { validateConnectLine } = await import(pathToFileURL(parsed.connect).href);
+    if (typeof validateConnectLine !== "function") throw new Error("The installed connect.mjs does not export validateConnectLine.");
+    steps.skillAcceptsLine = validateConnectLine(line, { connectProgram: parsed.connect });
+    if (steps.skillAcceptsLine !== null) throw new Error(`The skill's rule refuses this line: ${steps.skillAcceptsLine}`);
+    steps.skillAcceptsLine = true;
     const run = spawnSync(parsed.node, [parsed.connect, parsed.bridgeUrl, parsed.tokenFile, ...parsed.options], { cwd: work, env, encoding: "utf8", timeout: 60_000 });
     steps.connectExit = run.status;
     steps.connectSaid = String(run.stdout).trim();
