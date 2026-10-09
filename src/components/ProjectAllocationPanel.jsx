@@ -85,7 +85,7 @@ export function ProjectAllocationPanel({ project, records, onWorkspace, store, s
           const kind = ownerKind(value.owner.trim());
           return <div role="row" className="coord-row" key={task.id}>
             <span role="cell"><code>{task.id}</code> {task.title}</span>
-            <span role="cell" className="coord-owner">{kind === "agent" ? <RobotIcon aria-hidden="true" /> : <UserIcon aria-hidden="true" />}<input aria-label={`Owner for ${task.id}`} maxLength={OWNER_MAX} value={value.owner} placeholder="Name or agent: name" onChange={(event) => change(task.id, "owner", event.target.value)} />{value.fromLedger && <><small>{`From the Ledger: ${value.owner}`}</small><button type="button" aria-label={`Confirm Ledger owner for ${task.id}`} onClick={() => confirmOwner(task.id)}>Confirm</button></>}</span>
+            <span role="cell" className="coord-owner">{kind === "agent" ? <RobotIcon aria-hidden="true" /> : <UserIcon aria-hidden="true" />}<input aria-label={`Owner for ${task.id}`} maxLength={OWNER_MAX} value={value.owner} placeholder="Name or agent: name" onChange={(event) => change(task.id, "owner", event.target.value)} />{value.fromLedger && <><small title={`From the Ledger: ${value.owner}`}>{`From the Ledger: ${value.owner}`}</small><button type="button" aria-label={`Confirm Ledger owner for ${task.id}`} onClick={() => confirmOwner(task.id)}>Confirm</button></>}</span>
             <span role="cell"><input aria-label={`Wave for ${task.id}`} type="number" min={1} max={WAVE_MAX} value={value.wave} onChange={(event) => change(task.id, "wave", event.target.value)} /></span>
           </div>;
         })}
