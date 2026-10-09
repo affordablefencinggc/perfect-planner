@@ -3,6 +3,8 @@ import { Ledger, LedgerError, MemoryStore, type Actor, type EntryDraft, type Led
 import { appendNumbered, installNumberingRules } from "../numbering/index";
 import {
   addMember,
+  auditPeople,
+  openPeopleLedger,
   buildPeopleView,
   changeMember,
   claimOwnership,
@@ -135,7 +137,7 @@ describe("solo first", () => {
     const ledger = open();
     expect(refusal(() => addMember(ledger, owner, { person: "looplet-spare", name: "L", role: "helper" }))).toMatch(/first member .* owner/);
     expect(refusal(() => addMember(ledger, owner, { person: "mia", name: "Mia", role: "owner" }))).toMatch(/adds themselves first/);
-    expect(refusal(() => claimOwnership(ledger, ownersAgent, "Agent"))).toMatch(/only a person/);
+    expect(() => claimOwnership(ledger, ownersAgent, "Agent")).toThrow(expect.objectContaining({ code: "NOT_PERMITTED" }));
     claimOwnership(ledger, owner, "Looplet Spare");
     expect(buildPeopleView(ledger.entries()).owner?.person).toBe("looplet-spare");
   });
@@ -198,8 +200,9 @@ describe("what each role may write", () => {
   it("makes viewers read-only, including their agents", () => {
     const ledger = team();
     changeMember(ledger, owner, "sam", { agents: ["sam-bot"] });
+    createTask(ledger);
     expect(refusal(() => createTask(ledger, sam))).toMatch(/viewer/);
-    expect(refusal(() => createTask(ledger, { kind: "agent", id: "sam-bot", model: "m" }))).toMatch(/working for sam/);
+    expect(refusal(() => write(ledger, { actor: { kind: "agent", id: "sam-bot", model: "m" }, type: "task.progress", subject: "T-1" }))).toMatch(/working for sam/);
   });
 
   it("lets helpers claim and progress tasks but approve only what the owner granted", () => {
@@ -208,26 +211,32 @@ describe("what each role may write", () => {
     write(ledger, { actor: mia, type: "task.claimed", subject: "T-1" });
     write(ledger, { actor: mia, type: "test.defined", subject: "T-1", data: { test: "npm test" } });
     expect(refusal(() => write(ledger, { actor: mia, type: "test.approved", subject: "T-1", data: { test: "npm test" } }))).toMatch(/without test approval/);
-    expect(refusal(() => write(ledger, { actor: miasAgent, type: "test.approved", subject: "T-1", data: { test: "npm test" } }))).toMatch(/mia-worker \(working for mia\)/);
+    write(ledger, { actor: miasAgent, type: "task.progress", subject: "T-1" });
     changeMember(ledger, owner, "mia", { approves: ["test"] });
+    // The ledger never lets an agent approve, whatever its person may do.
+    expect(() => write(ledger, { actor: miasAgent, type: "test.approved", subject: "T-1", data: { test: "npm test" } })).toThrow(
+      expect.objectContaining({ code: "NOT_PERMITTED" }),
+    );
     write(ledger, { actor: mia, type: "test.approved", subject: "T-1", data: { test: "npm test" } });
     expect(refusal(() => appendNumbered(ledger, { actor: mia, type: "plan.approved", summary: "Plan", evidence: [], refs: [] }))).toMatch(/plan approval/);
   });
 
-  it("leaves the owner, unlisted agents, Jev and the watcher alone", () => {
+  it("leaves the owner, their listed agents, Jev and the watcher alone", () => {
     const ledger = team();
+    changeMember(ledger, owner, "looplet-spare", { agents: ["claude-code"] });
     createTask(ledger, owner);
     write(ledger, { actor: ownersAgent, type: "task.progress", subject: "T-1" });
     write(ledger, { actor: { kind: "jev", id: "jev", model: "jev-1" }, type: "review.verdict", subject: "T-1" });
     write(ledger, { actor: { kind: "system", id: "watcher" }, type: "commit.observed", subject: "T-1", data: { sha: "abc1234" } });
-    expect(ledger.entries()).toHaveLength(7);
+    expect(ledger.entries()).toHaveLength(8);
   });
 
   it("closes the door on removed members", () => {
     const ledger = team();
+    createTask(ledger);
     removeMember(ledger, owner, "mia", "Finished her part");
     expect(refusal(() => createTask(ledger, mia))).toMatch(/not a member/);
-    expect(refusal(() => createTask(ledger, miasAgent)).length).toBeGreaterThan(0);
+    expect(refusal(() => write(ledger, { actor: miasAgent, type: "task.progress", subject: "T-1" }))).toMatch(/has left the project/);
   });
 });
 
@@ -257,14 +266,14 @@ describe("profile photos", () => {
   it("writes no file when the ledger refuses", () => {
     const ledger = team();
     const saved: string[] = [];
-    const store: PhotoStore = { save: (file) => void saved.push(file), load: () => undefined };
+    const store: PhotoStore = { save: (file) => void saved.push(file), load: () => undefined, remove: () => {} };
     refusal(() => setPhoto(ledger, store, mia, "sam", png()));
     expect(saved).toEqual([]);
   });
 
   it("clears the photo again when the file cannot be saved", () => {
     const ledger = team();
-    const store: PhotoStore = { save: () => { throw new Error("disk full"); }, load: () => undefined };
+    const store: PhotoStore = { save: () => { throw new Error("disk full"); }, load: () => undefined, remove: () => {} };
     expect(() => setPhoto(ledger, store, mia, "mia", png())).toThrow("disk full");
     expect(peopleEvent(ledger.last()!)).toEqual({ op: "photo.cleared", person: "mia" });
     expect(buildPeopleView(ledger.entries()).members.find((m) => m.person === "mia")?.photo).toBeUndefined();
@@ -306,11 +315,11 @@ describe("where everyone is", () => {
     createTask(ledger);
     createTask(ledger);
     write(ledger, { actor: mia, type: "task.claimed", subject: "T-1", summary: "Mia took the login screen" });
-    write(ledger, { actor: miasAgent, type: "commit.observed", subject: "T-1", summary: "Commit 9f3c2e1", data: { sha: "9f3c2e1" } });
+    write(ledger, { actor: miasAgent, type: "task.blocked", subject: "T-1", summary: "Waiting on the login API" });
     write(ledger, { actor: owner, type: "question.asked", subject: "Q-1", summary: "Which font?", data: { task: "T-2" } });
     const view = buildPeopleView(ledger.entries());
     const by = Object.fromEntries(view.members.map((m) => [m.person, m.presence]));
-    expect(by.mia).toMatchObject({ stage: "git", subject: "T-1", task: "T-1", via: "mia-worker", summary: "Commit 9f3c2e1" });
+    expect(by.mia).toMatchObject({ stage: "task", subject: "T-1", task: "T-1", via: "mia-worker", summary: "Waiting on the login API" });
     expect(by["looplet-spare"]).toMatchObject({ stage: "relay", subject: "Q-1", via: "looplet-spare", task: "T-2" });
     expect(by.sam).toBeUndefined();
   });
@@ -425,5 +434,141 @@ describe("the view", () => {
     expect(entry.summary).toBe("Mia is now called Mia Chen");
     const mias = buildPeopleView(ledger.entries()).members.find((m) => m.person === "mia")!;
     expect(mias).toMatchObject({ name: "Mia Chen", since: "L-000002" });
+  });
+});
+
+describe("review fixes: authority comes from the ledger, not the payload", () => {
+  /** A ledger with no people rules installed yet. */
+  function bare(): Ledger {
+    return Ledger.openSync(new MemoryStore(), { now: clock() });
+  }
+  const people = (event: Record<string, unknown>) => ({ people: event });
+
+  /** Entries as a reader sees them: replay is pure over the list, so forged entries can be fed straight in. */
+  function entry(n: number, actor: Actor, event: Record<string, unknown>): LedgerEntry {
+    const num = `L-${String(n).padStart(6, "0")}`;
+    return { n: num, at: "2026-10-09T02:00:00Z", actor, type: "decision.made", subject: `D-${n}`, summary: "x", reason: "x", evidence: [], refs: [], data: people(event), prev: "0".repeat(64), hash: "0".repeat(64) };
+  }
+
+  it("refuses an agent that tries to write itself in as owner", () => {
+    const ledger = open();
+    expect(() =>
+      appendNumbered(ledger, { actor: ownersAgent, type: "decision.made", summary: "I own this", reason: "x", evidence: [], refs: [], data: people({ op: "member.added", person: "claude-code", name: "Claude", role: "owner" }) }),
+    ).toThrow(expect.objectContaining({ code: "NOT_PERMITTED" }));
+  });
+
+  it("ignores roster changes in entries not written by a person, whatever their payload says", () => {
+    const forged = [
+      entry(1, ownersAgent, { op: "member.added", person: "claude-code", name: "Claude", role: "owner" }),
+      entry(2, { kind: "system", id: "watcher" }, { op: "member.added", person: "watcher", name: "Watcher", role: "owner" }),
+      entry(3, { kind: "jev", id: "jev", model: "j" }, { op: "member.added", person: "jev", name: "Jev", role: "owner" }),
+    ];
+    expect(buildPeopleView(forged).members).toEqual([]);
+  });
+
+  it("ignores people changes that the rules would have refused", () => {
+    // The owner's claim is a real, signed entry; the rest are hand-built and unsigned.
+    const real = open();
+    claimOwnership(real, owner, "Looplet Spare");
+    const entries = [
+      ...real.entries(),
+      entry(2, mia, { op: "member.added", person: "mia", name: "Mia", role: "helper" }),
+      entry(3, ownersAgent, { op: "member.changed", person: "looplet-spare", role: "viewer" }),
+      entry(4, stranger, { op: "member.removed", person: "looplet-spare" }),
+    ];
+    expect(buildPeopleView(entries).members.map((m) => [m.person, m.role])).toEqual([["looplet-spare", "owner"]]);
+  });
+
+  it("installs the people rules on the first people write", () => {
+    const ledger = bare();
+    claimOwnership(ledger, owner, "Looplet Spare");
+    expect(refusal(() => createTask(ledger, stranger))).toMatch(/not a member/);
+  });
+
+  it("only lets the person who started the project claim it later", () => {
+    const ledger = open();
+    createTask(ledger, owner);
+    expect(refusal(() => claimOwnership(ledger, stranger, "Stranger"))).toMatch(/looplet-spare started this project/);
+    claimOwnership(ledger, owner, "Looplet Spare");
+    expect(buildPeopleView(ledger.entries()).owner?.person).toBe("looplet-spare");
+  });
+
+  it("refuses agents nobody on the project has listed", () => {
+    const ledger = team();
+    createTask(ledger);
+    expect(refusal(() => write(ledger, { actor: ownersAgent, type: "task.progress", subject: "T-1" }))).toMatch(/claude-code is not listed/);
+    changeMember(ledger, owner, "looplet-spare", { agents: ["claude-code"] });
+    write(ledger, { actor: ownersAgent, type: "task.progress", subject: "T-1" });
+  });
+
+  it("shares only project-relative paths or https links", () => {
+    const ledger = team();
+    for (const path of ["/etc/passwd", "C:\\\\secrets.txt", "C:/x.md", "../outside.md", "docs/../../x.md", "javascript:alert(1)", "http://example.com", "file:///etc/passwd"]) {
+      expect(() => shareDoc(ledger, owner, { title: "Bad", path }), path).toThrow(PeopleError);
+    }
+    shareDoc(ledger, owner, { title: "Fine", path: "docs/specs/plan.md" });
+    shareDoc(ledger, owner, { title: "Link", path: "https://example.com/doc" });
+    expect(buildPeopleView(ledger.entries()).docs).toHaveLength(2);
+  });
+
+  it("deletes the photo file when the photo is cleared", () => {
+    const ledger = team();
+    const store = new MemoryPhotoStore();
+    const entry = setPhoto(ledger, store, mia, "mia", png());
+    const file = entry.evidence[0]!.slice("file:".length);
+    clearPhoto(ledger, mia, "mia", store);
+    expect(store.load(file)).toBeUndefined();
+  });
+});
+
+describe("opening a ledger with people rules", () => {
+  /** Writes a project to a store with the rules off, as a process that skipped them would. */
+  function unchecked(write: (ledger: Ledger) => void): MemoryStore {
+    const store = new MemoryStore();
+    const ledger = Ledger.openSync(store, { now: clock() });
+    write(ledger);
+    ledger.close();
+    return store;
+  }
+  const people = (event: Record<string, unknown>) => ({ people: event });
+  const raw = (ledger: Ledger, actor: Actor, event: Record<string, unknown>) =>
+    appendNumbered(ledger, { actor, type: "decision.made", summary: "x", reason: "x", evidence: [], refs: [], data: people(event) });
+
+  it("opens a clean project with the rules installed", async () => {
+    const store = unchecked((l) => {
+      raw(l, owner, { op: "member.added", person: "looplet-spare", name: "Looplet Spare", role: "owner" });
+      raw(l, owner, { op: "member.added", person: "sam", name: "Sam", role: "viewer" });
+    });
+    const ledger = await openPeopleLedger(store, { now: clock() });
+    expect(refusal(() => createTask(ledger, sam))).toMatch(/viewer/);
+    ledger.close();
+  });
+
+  it("refuses to open when a stored entry breaks the people rules", async () => {
+    const store = unchecked((l) => {
+      raw(l, owner, { op: "member.added", person: "looplet-spare", name: "Looplet Spare", role: "owner" });
+      raw(l, owner, { op: "member.added", person: "sam", name: "Sam", role: "viewer" });
+      appendNumbered(l, { actor: sam, type: "task.created", summary: "Sneaky task", evidence: [], refs: [] });
+    });
+    await expect(openPeopleLedger(store)).rejects.toMatchObject({ code: "STORED_VIOLATION", message: expect.stringMatching(/L-000003.*viewer/) });
+  });
+
+  it("can open read-only to show the violations instead", async () => {
+    const store = unchecked((l) => {
+      raw(l, owner, { op: "member.added", person: "looplet-spare", name: "Looplet Spare", role: "owner" });
+      raw(l, mia, { op: "member.added", person: "mia", name: "Mia", role: "owner" });
+      appendNumbered(l, { actor: stranger, type: "task.created", summary: "Who am I", evidence: [], refs: [] });
+    });
+    const ledger = await openPeopleLedger(store, { readOnly: true });
+    expect(auditPeople(ledger.entries()).map((v) => v.n)).toEqual(["L-000002", "L-000003"]);
+    expect(buildPeopleView(ledger.entries()).members.map((m) => m.person)).toEqual(["looplet-spare"]);
+  });
+
+  it("treats a solo project's history as clean", () => {
+    const ledger = open();
+    createTask(ledger, owner);
+    write(ledger, { actor: ownersAgent, type: "task.progress", subject: "T-1" });
+    claimOwnership(ledger, owner, "Looplet Spare");
+    expect(auditPeople(ledger.entries())).toEqual([]);
   });
 });

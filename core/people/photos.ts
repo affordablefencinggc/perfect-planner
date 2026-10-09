@@ -86,6 +86,8 @@ export function isPhotoFile(file: string): boolean {
 export interface PhotoStore {
   save(file: string, bytes: Uint8Array): void;
   load(file: string): Uint8Array | undefined;
+  /** Deletes the file; does nothing when it is already gone. */
+  remove(file: string): void;
 }
 
 /** In-memory store, for tests and for previews that never touch disk. */
@@ -99,6 +101,10 @@ export class MemoryPhotoStore implements PhotoStore {
   load(file: string): Uint8Array | undefined {
     const bytes = this.files.get(file);
     return bytes ? new Uint8Array(bytes) : undefined;
+  }
+
+  remove(file: string): void {
+    this.files.delete(file);
   }
 }
 
@@ -123,6 +129,10 @@ export class FilePhotoStore implements PhotoStore {
       rmSync(temp, { force: true });
       throw err;
     }
+  }
+
+  remove(file: string): void {
+    rmSync(this.resolve(file), { force: true });
   }
 
   load(file: string): Uint8Array | undefined {

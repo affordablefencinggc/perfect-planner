@@ -86,6 +86,10 @@ export const appMapRegistry = {
     // The core loop modules (ledger, numbering, lookup, worktrees, gate, relay)
     // are built beside the app and carry their own READMEs and tests. The
     // People panel (src/people/) is self-contained until a UI thread mounts it.
+<<<<<<< HEAD
     prefixes: ["docs/architecture/maps/", "core/", "src/people/", "tests-ui/people/", "src/core-screens/", "tests-ui/core-screens/", "scripts/e2e-core-screens/"],
+=======
+    prefixes: ["docs/architecture/maps/", "core/", "src/people/", "tests-ui/people/"],
+>>>>>>> origin/claude/core-people
   },
 };
