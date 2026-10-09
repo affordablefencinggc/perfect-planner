@@ -8,6 +8,8 @@ export {
   parseTaskId,
   attemptId,
   nextAttemptId,
+  sensitiveChanges,
+  testSupportFiles,
   type GatePolicy,
   type GateState,
   type TestOutcome,
