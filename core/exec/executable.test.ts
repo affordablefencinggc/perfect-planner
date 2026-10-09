@@ -158,23 +158,3 @@ describe("isLocalWindowsPath", () => {
     ]) expect(isLocalWindowsPath(bad)).toBe(false);
   });
 });
-
-describe("isLocalWindowsPath", () => {
-  it("accepts only local drive-letter paths and refuses UNC in every spelling", () => {
-    for (const ok of ["C:\\Program Files\\Git\\cmd", "c:/tools/git", "D:\\"]) expect(isLocalWindowsPath(ok)).toBe(true);
-    for (const bad of [
-      "\\\\server\\share\\git",
-      "//server/share/git",
-      "\\/server\\share",
-      "/\\server/share",
-      "\\\\?\\UNC\\server\\share",
-      "\\??\\UNC\\server\\share",
-      "\\\\?\\C:\\tools",
-      "\\\\.\\pipe\\x",
-      "\\tools\\git",
-      "C:tools",
-      "tools\\git",
-      "",
-    ]) expect(isLocalWindowsPath(bad)).toBe(false);
-  });
-});
