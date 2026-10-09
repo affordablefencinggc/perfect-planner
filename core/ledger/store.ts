@@ -119,7 +119,7 @@ export class FileStore implements LedgerStore {
   }
 
   acquireWriter(): boolean {
-    if (this.holdsLock) return true;
+    if (this.holdsLock) return false;
     fs.mkdirSync(this.dir, { recursive: true });
     const mine = JSON.stringify({ pid: process.pid, host: os.hostname(), since: new Date().toISOString() });
     for (let attempt = 0; attempt < 2; attempt += 1) {
