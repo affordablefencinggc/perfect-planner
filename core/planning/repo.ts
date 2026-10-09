@@ -120,7 +120,8 @@ export function readRepoStack(root: string): RepoStack {
 
   // offline
   if (hasPrefix("@powersync/")) add({ id: "offline.sync-engine", choice: "powersync", text: "PowerSync", evidence: [PKG] });
-  else if (has("electric-sql") || hasPrefix("@electric-sql/")) add({ id: "offline.sync-engine", choice: "electric", text: "ElectricSQL", evidence: [PKG] });
+  // @electric-sql/pglite is an embedded Postgres, often only for tests; it is not the sync engine.
+  else if (has("electric-sql") || has("@electric-sql/client") || has("@electric-sql/react")) add({ id: "offline.sync-engine", choice: "electric", text: "ElectricSQL", evidence: [PKG] });
 
   // platforms
   if (has("electron")) {

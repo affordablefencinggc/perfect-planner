@@ -26,7 +26,7 @@ function tmp(files: Record<string, string>): string {
 const looplet = () =>
   tmp({
     "package.json": JSON.stringify({
-      dependencies: { react: "18", "@supabase/supabase-js": "2", "@stripe/stripe-js": "4", "@capacitor/core": "6", "better-sqlite3": "11" },
+      dependencies: { react: "18", "@supabase/supabase-js": "2", "@stripe/stripe-js": "4", "@capacitor/core": "6", "better-sqlite3": "11", "@electric-sql/pglite": "0.3" },
       devDependencies: { vite: "5", typescript: "5", electron: "31" },
     }),
     "tsconfig.json": "{}",
@@ -53,6 +53,8 @@ describe("readRepoStack", () => {
     expect(by["platforms.desktop-shell"]).toMatchObject({ choice: "electron" });
     expect(by["platforms.mobile-stack"]).toMatchObject({ text: "Capacitor (android, ios)", evidence: ["package.json", "android", "ios"] });
     expect(by["ai.model"]).toBeUndefined();
+    // An embedded test database is not a sync engine.
+    expect(by["offline.sync-engine"]).toBeUndefined();
     expect(stack.signals.sort()).toEqual(["desktop", "mobile", "payments", "web"]);
   });
 
@@ -86,6 +88,7 @@ describe("planning an existing repo", () => {
 
     const answers = Object.fromEntries(planningAnswers(ledger.entries()).map((a) => [a.questionId, a]));
     expect(answers["platforms.desktop-shell"]).toMatchObject({ choice: "electron", text: "Electron" });
+    expect(answers["stack.language"]).toMatchObject({ choice: "typescript", text: "TypeScript everywhere" });
     expect(answers["data.store"]).toMatchObject({ choice: "postgres", text: "Hosted Postgres: Supabase (Postgres)" });
     expect(answers["platforms.mobile-stack"]).toMatchObject({ choice: "custom", text: "Capacitor (android, ios)" });
 

@@ -105,7 +105,8 @@ export class PlanningSession {
       const label = fact.choice ? question.options.find((o) => o.id === fact.choice)?.label : undefined;
       const result = this.answer(actor, q, {
         ...(label ? { choice: fact.choice } : {}),
-        ...(!label || label !== fact.text ? { text: fact.text } : {}),
+        // "TypeScript everywhere" already says "TypeScript"; add the repo's words only when they say more.
+        ...(!label || !label.toLowerCase().includes(fact.text.toLowerCase()) ? { text: fact.text } : {}),
         reason: `Found in the repo: ${fact.evidence.join(", ")}`,
         evidence: fact.evidence,
       });
