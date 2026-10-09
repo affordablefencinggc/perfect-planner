@@ -1,5 +1,5 @@
 import { projectAuthorityKinds, validateProjectSession } from "./projectSession.js";
-import { deriveDiscoveryReview } from "./discoveryReviewModel.js";
+import { deriveDiscoveryReview, discoveryAreaCounts } from "./discoveryReviewModel.js";
 import { effectivePlanAuthority } from "./planApproval.js";
 import { overlapReviewText, recordOverlapReview } from "./taskCoordination.js";
 
@@ -60,13 +60,10 @@ function summarizeCensus(project) {
 // A recorded user review of every open area for this exact scan resolves the discovery gaps.
 const discoveryReviewed = (project, records) => deriveDiscoveryReview(project, records).state === "recorded";
 
+// Home follows the same review as "Review what we found": every standard area
+// (missing ones count as unanswered) that is not fully observed needs an answer.
 function discoveryNeedsReview(discovery, reviewed = false) {
-  if (!discovery || reviewed) return false;
-  return discovery.counts.observed === 0
-    || discovery.counts.signals > 0
-    || discovery.counts.unanswered > 0
-    || discovery.categories.length === 0
-    || discovery.categories.some((category) => category.state !== "observed");
+  return Boolean(discovery) && !reviewed;
 }
 
 function summarizeDiscovery(project, records = null) {
@@ -77,11 +74,16 @@ function summarizeDiscovery(project, records = null) {
   else if (discovery?.state === "unavailable") recordedState = "unavailable";
   else if (discoveryNeedsReview(discovery, review?.state === "recorded")) recordedState = "review";
   else if (discovery) recordedState = "available";
+  // Counted in areas, the same unit as "Review what we found". Signal and
+  // unanswered areas the user has already answered no longer count.
+  const areas = review ? discoveryAreaCounts(review) : null;
   return {
     state: effectiveFactState(project?.state, recordedState),
-    observed: discovery?.counts.observed ?? null,
-    signals: discovery?.counts.signals ?? null,
-    unanswered: discovery?.counts.unanswered ?? null,
+    unit: "areas",
+    observed: areas?.observed ?? null,
+    signals: areas?.signals ?? null,
+    unanswered: areas?.unanswered ?? null,
+    findingCounts: discovery ? { observed: discovery.counts.observed, signals: discovery.counts.signals, unanswered: discovery.counts.unanswered } : null,
     categoryCount: discovery?.categories.length ?? null,
     censusDigest: discovery?.censusDigest ?? null,
     generatedAt: discovery?.generatedAt ?? null,
@@ -204,8 +206,9 @@ function collectBlockers(project, records = null) {
     if (discovery.state === "stale") blockers.push(blocker("discovery-stale", "discovery", "stale", "The discovery snapshot is stale."));
     if (discovery.state === "unavailable") blockers.push(blocker("discovery-unavailable", "discovery", "unavailable", "The discovery snapshot is unavailable."));
     if (discovery.counts.observed === 0) blockers.push(blocker("discovery-observations-missing", "discovery", "review", "The discovery snapshot contains no observed project facts."));
-    if (discovery.counts.signals > 0) blockers.push(blocker("discovery-signals-unreviewed", "discovery", "review", `${discovery.counts.signals} discovery signal${discovery.counts.signals === 1 ? " needs" : "s need"} review.`));
-    if (discovery.counts.unanswered > 0) blockers.push(blocker("discovery-questions-unanswered", "discovery", "review", `${discovery.counts.unanswered} discovery categor${discovery.counts.unanswered === 1 ? "y is" : "ies are"} unanswered.`));
+    const areas = discoveryAreaCounts(deriveDiscoveryReview(project, records));
+    if (areas.signals > 0) blockers.push(blocker("discovery-signals-unreviewed", "discovery", "review", `${areas.signals} discovery area${areas.signals === 1 ? " has" : "s have"} possible matches to check.`));
+    if (areas.unanswered > 0) blockers.push(blocker("discovery-questions-unanswered", "discovery", "review", `${areas.unanswered} discovery area${areas.unanswered === 1 ? " is" : "s are"} unanswered.`));
     if (discovery.categories.length === 0) blockers.push(blocker("discovery-categories-missing", "discovery", "review", "No discovery categories are recorded."));
   }
 

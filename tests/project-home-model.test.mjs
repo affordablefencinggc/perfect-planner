@@ -12,7 +12,11 @@ function discovery({ signals = 0, unanswered = 0 } = {}) {
   const categories = [{ id: "A01", state: "observed", findings: [{ id: "S001" }] }];
   if (signals > 0) categories.push({ id: "A02", state: "signal", findings: Array.from({ length: signals }, (_, index) => ({ id: `S01${index + 3}` })) });
   if (unanswered > 0) categories.push(...Array.from({ length: unanswered }, (_, index) => ({ id: `A${String(index + 3).padStart(2, "0")}`, state: "unanswered", findings: [] })));
-  return { categories, counts: { observed: 1, signals, unanswered }, state: "generated", generatedAt: at };
+  // Like the engine, list all eight areas; the rest have clear (observed) findings.
+  const present = new Set(categories.map((category) => category.id));
+  const filled = ["A01", "A02", "A03", "A04", "A05", "A06", "A07", "A08"].filter((id) => !present.has(id));
+  categories.push(...filled.map((id) => ({ id, state: "observed", findings: [{ id: `S9${id.slice(1)}` }] })));
+  return { categories, counts: { observed: 1 + filled.length, signals, unanswered }, state: "generated", generatedAt: at };
 }
 
 function imported(seed, {
