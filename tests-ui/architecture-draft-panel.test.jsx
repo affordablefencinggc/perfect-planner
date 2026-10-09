@@ -33,4 +33,13 @@ describe('architecture draft authoring',()=>{
   fireEvent.click(screen.getByText('Review draft'));expect(screen.getByLabelText('Architecture review').textContent).toContain('Required planning answers are present');
   const confirmation=await screen.findByLabelText('I reviewed these answers and want to publish this planning contract.');fireEvent.click(confirmation);expect(screen.getByText('Publish architecture').disabled).toBe(false);fireEvent.click(screen.getByText('Publish architecture'));await waitFor(()=>expect(publishArchitecture).toHaveBeenCalledTimes(1));expect(publishArchitecture.mock.calls[0][1].template).toEqual(expect.objectContaining({id:'tauri-local-desktop',platform:'tauri'}));expect(await screen.findByText(/Architecture contract published/)).toBeTruthy();
  });
+ // Trial define-11/13: the review named code keys ("Template Id", "definitiveOutcome").
+ it('a blank review reads as plain sentences in Simple view',async()=>{
+  render(<ArchitectureDraftPanel projectId="pp_plain"/>);
+  fireEvent.click(screen.getByText('Review draft'));
+  const review=await screen.findByLabelText('Architecture review');
+  expect(review.textContent).toContain('Choose an architecture template in step 1.');
+  expect(review.textContent).toContain('Architecture template');
+  expect(review.textContent).not.toMatch(/Template Id|Template Version|templateId|registered architecture template id/);
+ });
 });
