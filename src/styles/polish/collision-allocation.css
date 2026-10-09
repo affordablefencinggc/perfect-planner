@@ -574,3 +574,42 @@
 .app-shell .coord-row {
   padding: var(--space-2) var(--space-3);
 }
+
+/* Owner cell: the input never collapses. A Ledger proposal note shortens with an
+   ellipsis (full text in its title) and the row wraps before anything squeezes. */
+.app-shell .coord-row:not(.head) {
+  grid-template-columns: minmax(0, 1.5fr) minmax(300px, 1.6fr) 90px;
+}
+.app-shell .coord-row.head {
+  grid-template-columns: minmax(0, 1.5fr) minmax(300px, 1.6fr) 90px;
+}
+.app-shell .coord-owner {
+  flex-wrap: wrap;
+  row-gap: var(--space-1);
+  min-width: 0;
+}
+.app-shell .coord-owner > svg {
+  flex: 0 0 auto;
+}
+.app-shell .coord-owner > input {
+  flex: 1 1 140px;
+  min-width: 140px;
+  text-overflow: ellipsis;
+}
+.app-shell .coord-owner > small {
+  flex: 1 1 120px;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+}
+.app-shell .coord-owner > button {
+  flex: 0 0 auto;
+}
+@media (max-width: 700px) {
+  .app-shell .coord-row:not(.head) {
+    grid-template-columns: 1fr;
+  }
+}
