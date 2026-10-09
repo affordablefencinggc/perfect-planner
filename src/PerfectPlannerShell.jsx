@@ -2848,8 +2848,8 @@ function ProjectHomeWorkspace({
             </article>
             <article data-fact-state={summary.discovery.state}>
               <small>DISCOVERY</small>
-              <strong>{unavailableValue(summary.discovery.observed, summary.discovery.state, " observed")}</strong>
-              <p>{unavailableValue(summary.discovery.signals, summary.discovery.state, " review signals")} · {unavailableValue(summary.discovery.unanswered, summary.discovery.state, " unanswered")}</p>
+              <strong>{unavailableValue(summary.discovery.observed, summary.discovery.state, summary.discovery.observed === 1 ? " area clear" : " areas clear")}</strong>
+              <p>{unavailableValue(summary.discovery.signals, summary.discovery.state, summary.discovery.signals === 1 ? " area to check" : " areas to check")} · {unavailableValue(summary.discovery.unanswered, summary.discovery.state, " unanswered")}</p>
               <StatusChip status={summary.discovery.state === "available" ? "verified" : summary.discovery.state === "unavailable" || summary.discovery.state === "stale" ? "risk" : "active"}>{summary.discovery.state}</StatusChip>
             </article>
             <article className="project-home-authorities">

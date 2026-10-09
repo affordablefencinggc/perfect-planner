@@ -293,8 +293,8 @@ describe("project Home consumes the project-home model", () => {
       name: "Project evidence summary",
     });
     // Counted in areas, like "Review what we found": 6 clear areas, 1 to check, 1 empty.
-    expect(summary.textContent).toContain("6 observed");
-    expect(summary.textContent).toMatch(/(^|\D)1 review signal/);
+    expect(summary.textContent).toContain("6 areas clear");
+    expect(summary.textContent).toMatch(/(^|\D)1 area to check/);
     expect(summary.textContent).toContain("1 unanswered");
     const blockerText = screen.getByRole("region", {
       name: "Project blockers",
@@ -326,9 +326,10 @@ describe("project Home consumes the project-home model", () => {
       const summary = screen.getByRole("region", {
         name: "Project evidence summary",
       });
-      expect(summary.textContent).toMatch(/(^|\D)0 review signal/);
+      expect(summary.textContent).toMatch(/(^|\D)0 areas to check/);
+      expect(summary.textContent).toMatch(/(^|\D)6 areas clear/);
       expect(summary.textContent).toContain("0 unanswered");
-      expect(summary.textContent).not.toMatch(/(^|\D)5 review signal/);
+      expect(summary.textContent).not.toMatch(/review signal/);
       expect(
         screen.getByRole("region", { name: "Project blockers" }).textContent,
       ).not.toContain("discovery-signals-unreviewed");
