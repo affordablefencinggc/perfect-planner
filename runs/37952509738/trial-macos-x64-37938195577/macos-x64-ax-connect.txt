@@ -1,0 +1,98 @@
+Perfect Planner | standard window
+group
+group
+Perfect Planner
+Connect agent | Connect agent
+READ-ONLY PLANNING CONTEXT
+Connect agent
+Connect agent
+Close | Close
+Connect an agent | Connect an agent
+Connect an agent
+Connect an agent
+Give your coding agent its own way to check in. The first agent you connect becomes your main chat: it answers questions from the agents working on tasks.
+Open a terminal in the folder your agent will work in and paste this one line. It connects Claude Code to Perfect Planner for that folder and installs the Perfect Planner skill for every Claude Code session on this computer. Then start Claude Code there and say
+check in with Perfect Planner
+. Already in Claude Code? Paste the line into the chat; it shows you the line and runs it only after you say yes.
+Claude Code command
+Copy the Claude Code command | Copy the Claude Code command
+Claude Code command | Claude Code command
+'/Applications/Perfect Planner.app/Contents/Resources/desktop-host/node' '/Applications/Perfect Planner.app/Contents/Resources/desktop-host/core-host/connect.mjs' http://127.0.0.1:49187 '/Users/runner/Library/Application Support/com.perfectplanner.desktop/authority/core/projects/default/.perfect-planner/tokens/connect-C-e1df81e7.token'
+Using another agent? Copy the settings instead
+Using another agent? Copy the settings instead
+The line holds no key: it names a file on this computer that only you can read. Disconnecting deletes that file.
+Waiting for the agent to check in…
+Install the skill only
+Install the skill only
+Let your coding agent read the apps you added to Perfect Planner. It can look, search and suggest tasks. It cannot change Perfect Planner, approve plans or edit your files through this connection.
+Agent | Agent
+Claude Code
+Codex
+VS Code / Cursor
+Claude Code | Claude Code
+Run once in a terminal
+Copy Run once in a terminal | Copy Run once in a terminal
+Run once in a terminal setup text | Run once in a terminal setup text
+claude mcp add --transport stdio --env PERFECT_PLANNER_REGISTRY_ROOT="<Perfect Planner app data>/com.perfectplanner.desktop/workspace-registry-v1" perfect-planner -- node "<path-to-perfect-planner>/mcp/perfectPlannerMcpServer.mjs"
+Then run /mcp inside Claude Code to check that perfect-planner is listed.
+Before you paste | Before you paste
+Before you paste
+Before you paste
+This build does not know where Perfect Planner is on your computer. Replace <path-to-perfect-planner> with the folder you cloned, or start the app with npm run dev to fill it in.
+•
+This build does not know where Perfect Planner is on your computer. Replace 
+<path-to-perfect-planner>
+ with the folder you cloned, or start the app with 
+npm run dev
+ to fill it in.
+Replace the app data placeholder with your Perfect Planner app data folder (on Windows: %APPDATA%\com.perfectplanner.desktop\workspace-registry-v1).
+•
+Replace the app data placeholder with your Perfect Planner app data folder (on Windows: 
+%APPDATA%\com.perfectplanner.desktop\workspace-registry-v1
+).
+Run npm install in the Perfect Planner folder first. The server uses that folder's node_modules and needs Node.js 18 or newer.
+•
+Run 
+npm install
+ in the Perfect Planner folder first. The server uses that folder's 
+node_modules
+ and needs Node.js 18 or newer.
+Your agent only sees app folders you have added in the Perfect Planner desktop app. If none are added, it will find an empty list.
+•
+Your agent only sees app folders you have added in the Perfect Planner desktop app. If none are added, it will find an empty list.
+To try the server by hand, run npm run --silent mcp. It waits quietly for an agent to talk to it.
+•
+To try the server by hand, run 
+npm run --silent mcp
+. It waits quietly for an agent to talk to it.
+What your agent can do | What your agent can do
+What your agent can do
+What your agent can do
+List the app folders you added to Perfect Planner
+planner_list_registered_apps
+Read a folder tree and architecture overview of one app
+planner_map_app
+Search text across one app's readable files
+planner_search_app
+List local branches and working copies
+planner_git_inventory
+Look at saved work kept for recovery (when set up)
+planner_inspect_recovery
+Check a task proposal and return it for you to import in Ledger
+planner_prepare_task_draft
+Write a short context note before a separate computer-use tool runs
+planner_prepare_computer_use
+All of these only read. Task proposals come back to you to review and import in Ledger; nothing is added to your plan on its own.
+Hand your plan to the agent | Hand your plan to the agent
+Hand your plan to the agent
+Hand your plan to the agent
+Once your plan is approved, open Build and use 
+Copy brief
+ to paste the current task into your agent's chat.
+Open Build
+close button
+full screen button
+group
+group
+minimize button
+text | Perfect Planner

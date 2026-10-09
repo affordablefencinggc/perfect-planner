@@ -1,0 +1,43 @@
+{
+  "label": "ubuntu-22.04-appimage",
+  "app": "/home/runner/work/perfect-planner/perfect-planner/installers/PerfectPlanner-dry-run-v0.1.0-58ff834-linux-x64.AppImage",
+  "platform": "linux",
+  "checks": [
+    {
+      "name": "launch",
+      "pass": true,
+      "seen": "WebDriver session up after 342 ms"
+    },
+    {
+      "name": "first-run screen",
+      "pass": true,
+      "seen": "\"PP Perfect Planner v0.1 clean-room · Friday, 9 October 2026 Home 01Define 02Coordinate 03Build 04Prove 05Release Index Roster not connected Agent connection · unverified No forecast Collision check unavailable Connect ag\""
+    },
+    {
+      "name": "settings opens",
+      "pass": false,
+      "seen": "no Settings control in the top bar or More actions"
+    },
+    {
+      "name": "open project folder",
+      "pass": false,
+      "seen": "dialog: xdg-desktop-portal-gtk (exit 2); app shows: \" PP Perfect Planner v0.1 clean-room · Friday, 9 October 2026 Home 01Define 02Coordinate 03Build 04Prove 05Release Inde\""
+    },
+    {
+      "name": "connect agent shows a line",
+      "pass": true,
+      "seen": "first line: \"claude mcp add --transport stdio --env PERFECT_PLANNER_REGISTRY_ROOT=\\\"<Perfect Planner app data>/com.perfectplanner.desktop/workspace-registry-v1\\\" perfect-planner -- node \\\"<path-to-perfect-planner>/mcp/perfectPlannerMcpServer.mjs\\\"\""
+    },
+    {
+      "name": "connect lines runnable as copied",
+      "pass": false,
+      "seen": "14 copyable block(s); with placeholders: \"claude mcp add --transport stdio --env PERFECT_PLANNER_REGISTRY_ROOT=\\\"<Perfect Planner app data>/com.perfectplanner.desktop/workspace-registry-v1\\\" perfect-plann\" | \"<path-to-perfect-planner>\""
+    },
+    {
+      "name": "close",
+      "pass": true,
+      "seen": "session closed in 44 ms"
+    }
+  ],
+  "fatal": null
+}

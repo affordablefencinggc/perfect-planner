@@ -1,0 +1,97 @@
+Perfect Planner | standard window
+group
+group
+Perfect Planner
+Open Perfect Planner home | Open Perfect Planner home
+Build stages | Build stages
+Home
+Define | Define
+Coordinate | Coordinate
+Build | Build
+Prove | Prove
+Release | Release
+Index
+Roster not connected
+Agent connection · unverified
+No forecast
+Collision check unavailable
+Connect agent
+More actions | More actions
+Current workspace context | Current workspace context
+Open project folders | Open project folders
+Open projects | Open projects
+No project selected
+PURPOSE
+Choose a local app folder without inventing project facts.
+REQUIRED OUTCOME
+One stable project identity and a redacted census receipt.
+UNLOCK NEXT
+Add a project folder or open the clearly labelled Demo.
+View detail level | View detail level
+Simple
+Advanced
+PROJECT
+Project Home
+Project Home workspace | Project Home workspace
+NO PROJECT SELECTED · HONEST EMPTY STATE
+Bring in a real app to begin
+Bring in a real app to begin
+No project evidence is active.
+Current project stage | Current project stage
+CURRENT STAGE
+No project selected
+empty
+ · 
+1
+ blocking item
+Project next action | Project next action
+NEXT STEP
+Choose an app folder
+Save a redacted registration record before any project status is shown.
+Choose an app folder
+Explore the explicit Demo
+Project intake evidence | Project intake evidence
+No app folder registered
+Registration unavailable
+Project evidence summary | Project evidence summary
+PROJECT-BOUND EVIDENCE
+No project selected
+empty
+REGISTRATION
+Unavailable
+Unavailable
+ · 
+Unavailable
+unavailable
+FOLDER SCAN
+Unavailable
+Unavailable
+unavailable
+DISCOVERY
+Unavailable
+Unavailable
+ · 
+Unavailable
+unavailable
+SAVED RECORDS
+Architecture
+Unavailable
+Folder
+Unavailable
+Component
+Unavailable
+Saved Plan Record
+Unavailable
+Project blockers | Project blockers
+BLOCKING ITEMS
+1 item prevent promotion
+Project
+No project identity is active.
+unavailable
+Open Repositories | Open Repositories
+Operations no diagnostic errorscollision check not connectedtask outcomes unverifiedbranches unavailablequeue unavailable
+close button
+full screen button
+group
+minimize button
+text | Perfect Planner

@@ -1,0 +1,43 @@
+{
+  "label": "ubuntu-24.04-appimage",
+  "app": "/home/runner/work/perfect-planner/perfect-planner/installers/PerfectPlanner-dry-run-v0.1.0-726eb0d-linux-x64.AppImage",
+  "platform": "linux",
+  "checks": [
+    {
+      "name": "launch",
+      "pass": true,
+      "seen": "WebDriver session up after 655 ms"
+    },
+    {
+      "name": "first-run screen",
+      "pass": true,
+      "seen": "\"Perfect Planner Starting Perfect Planner…\""
+    },
+    {
+      "name": "settings opens",
+      "pass": true,
+      "seen": "opened via \"Settings\""
+    },
+    {
+      "name": "open project folder",
+      "pass": false,
+      "seen": "dialog: xdg-desktop-portal-gtk (exit 2); app never showed \"trial-sample-app\" or a read-only scan step"
+    },
+    {
+      "name": "connect agent shows a line",
+      "pass": true,
+      "seen": "first line: \"'/tmp/.mount_PerfecahAOcO/usr/lib/Perfect Planner/desktop-host/node' '/tmp/.mount_PerfecahAOcO/usr/lib/Perfect Planner/desktop-host/core-host/connect.mjs' http://127.0.0.1:39855 '/home/runner/.local/share/com.perfectplanner.desktop/authorit\""
+    },
+    {
+      "name": "connect lines runnable as copied",
+      "pass": false,
+      "seen": "15 copyable block(s); with placeholders: \"claude mcp add --transport stdio --env PERFECT_PLANNER_REGISTRY_ROOT=\\\"<Perfect Planner app data>/com.perfectplanner.desktop/workspace-registry-v1\\\" perfect-plann\" | \"<path-to-perfect-planner>\""
+    },
+    {
+      "name": "close",
+      "pass": true,
+      "seen": "session closed in 60 ms"
+    }
+  ],
+  "fatal": null
+}

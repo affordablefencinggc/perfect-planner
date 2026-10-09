@@ -1,0 +1,38 @@
+{
+  "label": "windows-nsis",
+  "app": "C:\\Users\\runneradmin\\AppData\\Local\\Perfect Planner\\perfect-planner-desktop.exe",
+  "platform": "win32",
+  "checks": [
+    {
+      "name": "launch",
+      "pass": true,
+      "seen": "WebDriver session up after 756 ms"
+    },
+    {
+      "name": "first-run screen",
+      "pass": true,
+      "seen": "\"PP Perfect Planner v0.1 clean-room · Friday 9 October 2026 Home 01Define 02Coordinate 03Build 04Prove 05Release Index / Connect agent No project selected PURPOSE Choose a local app folder without inventing project facts.\""
+    },
+    {
+      "name": "settings opens",
+      "pass": true,
+      "seen": "opened via \"Settings\""
+    },
+    {
+      "name": "open project folder",
+      "pass": false,
+      "seen": "dialog: dialog-not-found (exit 2); app never showed \"trial-sample-app\" or a read-only scan step"
+    },
+    {
+      "name": "connect agent shows a line",
+      "pass": true,
+      "seen": "first line: \"& 'C:\\\\Users\\\\runneradmin\\\\AppData\\\\Local\\\\Perfect Planner\\\\desktop-host\\\\node.exe' 'C:\\\\Users\\\\runneradmin\\\\AppData\\\\Local\\\\Perfect Planner\\\\desktop-host\\\\core-host\\\\connect.mjs' http://127.0.0.1:65529 'C:\\\\Users\\\\runneradmin\\\\AppData\\\\Roaming\\\\com.perfectpla\""
+    },
+    {
+      "name": "connect lines runnable as copied",
+      "pass": false,
+      "seen": "15 copyable block(s); with placeholders: \"claude mcp add --transport stdio --env PERFECT_PLANNER_REGISTRY_ROOT=\\\"<Perfect Planner app data>/com.perfectplanner.desktop/workspace-registry-v1\\\" perfect-plann\" | \"<path-to-perfect-planner>\""
+    }
+  ],
+  "fatal": null
+}

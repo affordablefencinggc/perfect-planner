@@ -1,0 +1,15 @@
+{"label":"macos-arm64","name":"dmg contents","pass":true,"seen":"Applications Perfect Planner.app  (Applications shortcut: yes)"}
+{"label":"macos-arm64","name":"install","pass":true,"seen":"/Applications/Perfect Planner.app; Mach-O 64-bit executable arm64; LSMinimumSystemVersion 10.13"}
+{"label":"macos-arm64","name":"installed files","pass":true,"seen":"Contents/MacOS: perfect-planner-desktop planner-agent-helper"}
+{"label":"macos-arm64","name":"code signature","pass":false,"seen":"verify: /Applications/Perfect Planner.app: code has no resources but signature indicates they must be present ; Signature=adhoc TeamIdentifier=not set"}
+{"label":"macos-arm64","name":"gatekeeper (downloaded copy)","pass":false,"seen":"/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/tmp.4sVDg9flzB/Perfect Planner.app: code has no resources but signature indicates they must be present  (a downloaded copy shows 'damaged' or 'unidentified developer'; Developer ID signing + notarization needed)"}
+{"label":"macos-arm64","name":"launch","pass":true,"seen":"pid 4694; still running after 12 s: yes"}
+{"label":"macos-arm64","name":"window shown","pass":true,"seen":"windows: count=1 \"Perfect Planner\""}
+{"label":"macos-arm64","name":"first-run screen","pass":true,"seen":"Perfect Planner | standard window group group Perfect Planner Open Perfect Planner home | Open Perfect Planner home Build stages | Build stages Home Define | Define Coordinate | Coordinate Build | Build Prove | Prove Rel"}
+{"label":"macos-arm64","name":"settings opens","pass":false,"seen":"no element matching /^settings$/i among 94 labelled elements"}
+{"label":"macos-arm64","name":"connect agent shows a line","pass":false,"seen":"pressed /^connect agent$/i (first of 1); no element matching /^connect agent$/i among 81 labelled elements; line: claude mcp add --transport stdio --env PERFECT_PLANNER_REGISTRY_ROOT=\"<Perfect Planner app data>/com.perfectplanner.desktop/workspace-registry-v1\" perfect-planner -- node \"<path-to-perfect-planner>/mcp/perfectPlannerMcpServer.mjs\"; panel says: This build does not know where Perfect Planner is on your computer. Replace <path-to-perfect-planner> with the folder you cloned, or start the app with npm run dev to fill it in."}
+{"label":"macos-arm64","name":"connect lines runnable as copied","pass":false,"seen":"placeholders shown: <path-to-perfect-planner> <Perfect Planner app data>"}
+{"label":"macos-arm64","name":"open project folder","pass":false,"skipped":true,"seen":"native NSOpenPanel is not driven on macOS runners; covered on Windows and Linux"}
+{"label":"macos-arm64","name":"quits cleanly","pass":true,"seen":"exited within 1 s"}
+{"label":"macos-arm64","name":"uninstall program files","pass":true,"seen":"app bundle removed"}
+{"label":"macos-arm64","name":"uninstall user data","pass":false,"seen":"~/Library/Caches/com.perfectplanner.desktop (2 files);~/Library/WebKit/com.perfectplanner.desktop (12 files);"}
