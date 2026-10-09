@@ -1,7 +1,7 @@
 // The MVP board: a view of the ledger. Every change is a decision.made entry
 // with data.mvp; the board is rebuilt by replaying them.
 
-import type { Actor, Ledger, LedgerEntry } from "../ledger/index";
+import { isAuthoritative, type Actor, type Ledger, type LedgerEntry } from "../ledger/index";
 import { appendNumbered } from "../numbering/index";
 import {
   DEFAULT_STAGE_NAMES,
@@ -59,11 +59,11 @@ function write(ledger: Ledger, actor: Actor, summary: string, reason: string, mv
 }
 
 /**
- * Whether a confirm entry was written by a person. This is the single place
- * the MVP trusts an identity, so the ledger's actor verification plugs in here.
+ * Whether a confirm entry was written by a person, judged by the ledger's own
+ * isAuthoritative check on the entry's author, never a field inside data.
  */
 export function confirmedByPerson(entry: LedgerEntry): boolean {
-  return entry.actor.kind === "person";
+  return isAuthoritative(entry, { personOnly: true });
 }
 
 /**
