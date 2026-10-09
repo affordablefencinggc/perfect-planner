@@ -14,7 +14,7 @@ chat (helpers get their own, §9.5). Only SHA-256 digests of tokens are kept.
 | `attach_proof(T, kind, link)` | worker | `task.proof` |
 | `ask_main(T, question, options?, blocking?, wait_seconds?)` | worker | `question.asked` (+ `question.answered` when settled) |
 | `check_inbox()` | main: digest; worker: its answers and pause state | nothing |
-| `answer(Q, text)` | main | `decision.made`, `question.answered` |
+| `answer(Q, text)` | main | `question.answered` (information, not a decision) |
 | `lookup(ref)` | any | nothing |
 | `release_task(T, reason, blocked?)` | worker | `task.blocked` or `task.progress`; revokes the token |
 
@@ -30,6 +30,7 @@ const bridge = await startBridge(service);               // 127.0.0.1 only, Bear
 const mcp = createAgentMcpServer(bridgeCall(bridge.url, token));   // connect to a stdio transport
 // In-process (desktop app, tests): createAgentMcpServer(directCall(service, token))
 service.pauseAll(owner, "reason"); service.resumeAll(owner);
+service.decide(owner, "Q-3", "ISO dates");   // the person's answer: decision.made D-n + question.answered
 ```
 
 Identity: issue each token with the agent's `model` (the person sets it at

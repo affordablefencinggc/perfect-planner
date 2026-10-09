@@ -265,6 +265,16 @@ export class AgentService {
     return released;
   }
 
+  /**
+   * The person answers a question in Perfect Planner itself. Unlike the main
+   * chat's answer, this is a decision: it gets a D number and answers the same
+   * question from any of this person's workers later.
+   */
+  decide(person: Actor, q: string, text: string): { q: string; decision: string | null; worker: string } {
+    if (person.kind !== "person") throw new ToolError("FORBIDDEN", "Only a person makes decisions.");
+    return this.relay.answer(person, person.id, q, text);
+  }
+
   /** Owner control (spec §4.5): stop every worker at once. */
   pauseAll(by: Actor, reason: string): void {
     this.relay.pauseAll(by, reason, this.activeTasks());

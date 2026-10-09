@@ -2,7 +2,7 @@
 
 A worker's question gets the next `Q-n` and lands in its person's main chat.
 
-1. An earlier decision by the same person's main chat, with the identical question (case, punctuation and
+1. An earlier decision by the same person, with the identical question (case, punctuation and
    option order ignored) answers it at once: `question.answered` by the system,
    citing the `D-n`.
 2. Otherwise an optional `SettledAnswerer` may answer: `JevReviewer` does so
@@ -13,9 +13,12 @@ A worker's question gets the next `Q-n` and lands in its person's main chat.
 3. Otherwise it waits in `digest(person)`: open questions, blocking first.
    Questions answered automatically (steps 1 and 2) also appear there, marked
    `autoAnswered: true`, until the main chat has seen them once.
-4. `answer(main, person, Q, text)` writes `decision.made` (`D-n`, with the
-   question key so step 1 can reuse it) and `question.answered`, then wakes any
-   `waitFor(Q)` and queues the answer for `answersFor(worker)`.
+4. `answer(by, person, Q, text)` writes `question.answered`, wakes any
+   `waitFor(Q)` and queues the answer for `answersFor(worker)`. When `by` is a
+   person (or the system), it first writes `decision.made` (`D-n`, with the
+   question key so step 1 can reuse it). The main chat is an agent, so its
+   answers are information only; step 1 only trusts entries that pass
+   `isAuthoritative`.
 
 A blocking question pauses only its asker (`blockingFor`). `pauseAll` writes one
 `task.blocked` per active task with `data.pauseAll`; `resumeAll` writes

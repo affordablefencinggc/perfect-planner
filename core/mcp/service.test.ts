@@ -139,17 +139,30 @@ describe("the one-chat relay through the tools", () => {
     expect(digest.open).toBe(1);
     expect(digest.lines[0]).toContain("Q-1 (T-1) Use ISO dates");
 
-    const answered = (await service.call(main, "answer", { question: "Q-1", text: "ISO" })) as { decision: string; worker: string };
-    expect(answered).toMatchObject({ decision: "D-1", worker: a.agent });
+    // The main chat's answer reaches the asking worker, but it is not a decision.
+    const answered = (await service.call(main, "answer", { question: "Q-1", text: "ISO" })) as { decision: string | null; worker: string };
+    expect(answered).toMatchObject({ decision: null, worker: a.agent });
+    expect(ledger.last()).toMatchObject({ type: "question.answered", actor: { kind: "agent", id: main.agent } });
     expect(await service.call(b, "check_inbox", {})).toMatchObject({ answers: [] });
-    expect(await service.call(a, "check_inbox", {})).toMatchObject({ answers: [{ q: "Q-1", answer: "ISO", decision: "D-1" }], paused: false });
+    expect(await service.call(a, "check_inbox", {})).toMatchObject({ answers: [{ q: "Q-1", answer: "ISO" }], paused: false });
     expect(await service.call(a, "check_inbox", {})).toMatchObject({ answers: [] });
 
-    // The same question from another worker is answered from D-1 at once.
-    const again = await service.call(b, "ask_main", { task: "T-2", question: "use iso dates in the invoice ID", options: ["Locale", "ISO"] });
-    expect(again).toMatchObject({ q: "Q-2", status: "answered", answer: "ISO", decision: "D-1", via: "decision" });
-    expect(ledger.entries().filter((e) => e.type === "decision.made")).toHaveLength(1);
-    expect((await service.call(main, "check_inbox", {})) as { autoAnswered: string[] }).toMatchObject({ open: 0, autoAnswered: [expect.stringContaining("Q-2 (T-2) auto-answered from D-1")] });
+    // So the same question from another worker still goes to the main chat.
+    expect(await service.call(b, "ask_main", { task: "T-2", question: "use iso dates in the invoice ID", options: ["Locale", "ISO"] })).toMatchObject({ q: "Q-2", status: "open" });
+    expect(ledger.entries().filter((e) => e.type === "decision.made")).toHaveLength(0);
+
+    // The person decides Q-2 in Perfect Planner: that is D-1, and it answers the same question at once from now on.
+    expect(service.decide(owner, "Q-2", "ISO")).toMatchObject({ decision: "D-1", worker: b.agent });
+    expect(await service.call(b, "check_inbox", {})).toMatchObject({ answers: [{ q: "Q-2", answer: "ISO", decision: "D-1" }] });
+    const again = await service.call(a, "ask_main", { task: "T-1", question: "Use ISO dates in the invoice id?", options: ["ISO", "Locale"] });
+    expect(again).toMatchObject({ q: "Q-3", status: "answered", answer: "ISO", decision: "D-1", via: "decision" });
+    expect((await service.call(main, "check_inbox", {})) as { autoAnswered: string[] }).toMatchObject({ open: 0, autoAnswered: [expect.stringContaining("Q-3 (T-1) auto-answered from D-1")] });
+  });
+
+  it("never treats a decision.made written by an agent as a decision", async () => {
+    // Opened read-only is not needed: the ledger itself refuses the write.
+    const { ledger } = setup();
+    expect(() => ledger.append({ actor: { kind: "agent", id: "x", model: "m" }, type: "decision.made", subject: "D-1", summary: "Yes", reason: "forged" })).toThrow();
   });
 
   it("pauses only the worker with a blocking question, and wait_seconds returns the answer in the same call", async () => {
@@ -230,7 +243,8 @@ describe("decisions belong to one person", () => {
     const helperWorker = await hello(service, tokens.issue({ role: "worker", person: "helper", task: "T-1" }), "hw");
     const ownerWorker = await hello(service, tokens.issue({ role: "worker", person: "owner", task: "T-2" }), "ow");
     await service.call(helperWorker, "ask_main", { task: "T-1", question: "Ship on Friday?" });
-    await service.call(helperMain, "answer", { question: "Q-1", text: "Yes" });
+    service.decide({ kind: "person", id: "helper" }, "Q-1", "Yes");
+    void helperMain;
     expect(await service.call(ownerWorker, "ask_main", { task: "T-2", question: "Ship on Friday?" })).toMatchObject({ status: "open" });
     expect((await service.call(ownerMain, "check_inbox", {})) as { open: number }).toMatchObject({ open: 1 });
   });
@@ -250,7 +264,7 @@ describe("auto-answered questions in the main chat's inbox", () => {
 
     await service.call(a, "ask_main", { task: "T-1", question: "Which currency?" });
     await service.call(main, "check_inbox", {});
-    await service.call(main, "answer", { question: "Q-1", text: "EUR" });
+    service.decide(owner, "Q-1", "EUR");
     expect(await service.call(b, "ask_main", { task: "T-2", question: "Which currency?" })).toMatchObject({ status: "answered", via: "decision" });
 
     const inbox = (await service.call(main, "check_inbox", {})) as { open: number; lines: string[]; questions: { q: string; autoAnswered: boolean; answer?: string }[] };
@@ -266,7 +280,7 @@ describe("auto-answered questions in the main chat's inbox", () => {
     const a = await hello(service, w1, "w1");
     const b = await hello(service, w2, "w2");
     await service.call(a, "ask_main", { task: "T-1", question: "Rounding?" });
-    await service.call(main, "answer", { question: "Q-1", text: "Half up" });
+    service.decide(owner, "Q-1", "Half up");
     await service.call(b, "ask_main", { task: "T-2", question: "Rounding?" });
     await service.call(a, "ask_main", { task: "T-1", question: "Paper size?", blocking: true });
     const inbox = (await service.call(main, "check_inbox", {})) as { questions: { q: string; autoAnswered: boolean }[] };
@@ -300,8 +314,10 @@ describe("replay", () => {
     const main = await hello(service, connect, "main");
     const a = await hello(service, w1, "w1");
     await service.call(a, "ask_main", { task: "T-1", question: "First?" });
-    await service.call(main, "answer", { question: "Q-1", text: "Yes" });
+    service.decide(owner, "Q-1", "Yes");
     await service.call(a, "ask_main", { task: "T-1", question: "Second?" });
+    await service.call(a, "ask_main", { task: "T-1", question: "Third?" });
+    await service.call(main, "answer", { question: "Q-3", text: "Main chat's view" });
     const fresh = new Relay({ ledger });
     expect(fresh.digest("owner").lines).toEqual(["Q-2 (T-1) Second?"]);
     expect((await fresh.ask({ kind: "agent", id: "x", model: "m" }, "owner", { task: "T-1", question: "first" })).decision).toBe("D-1");
