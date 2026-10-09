@@ -1,6 +1,17 @@
 import { acknowledgesExactly, hashEntry, ledgerNumber, parseLedgerNumber, verifyWithAcknowledgements } from "./chain";
 import type { LedgerStore } from "./store";
 import {
+  keyFromData,
+  markVerified,
+  needsSignature,
+  principalOf,
+  signatureProblem,
+  signedBytes,
+  trustedKeySet,
+  type KeyProvider,
+  type TrustedKey,
+} from "./signing";
+import {
   ACTOR_KINDS,
   ENTRY_TYPES,
   GENESIS_PREV,
@@ -22,6 +33,12 @@ export interface OpenOptions {
   /** Who may write which entry types; defaults to DEFAULT_PERMISSIONS. */
   permissions?: PermissionTable;
   readOnly?: boolean;
+  /**
+   * Signs person and system entries and supplies the keys this device
+   * trusts. MemoryStore brings test keys; a FileStore ledger without keys
+   * refuses person and system writes and cannot verify existing ones.
+   */
+  keys?: KeyProvider;
   /** Clock for `at`; tests pass a fixed one. */
   now?: () => Date;
 }
@@ -41,6 +58,9 @@ export class Ledger {
   private chain: ChainResult;
   private repaired?: string;
   private acknowledged: string[];
+  private readonly keys?: KeyProvider;
+  private anchors: TrustedKey[];
+  private trusted: Map<string, TrustedKey>;
 
   private constructor(
     store: LedgerStore,
@@ -50,6 +70,9 @@ export class Ledger {
     writable: boolean,
     now: () => Date,
     permissions: PermissionTable,
+    keys: KeyProvider | undefined,
+    anchors: TrustedKey[],
+    trusted: Map<string, TrustedKey>,
   ) {
     this.store = store;
     this.list = entries;
@@ -59,6 +82,9 @@ export class Ledger {
     this.writable = writable;
     this.now = now;
     this.permissions = permissions;
+    this.keys = keys;
+    this.anchors = anchors;
+    this.trusted = trusted;
   }
 
   /** Loads and re-checks the whole chain (spec §2.5), then takes the writer lock unless read-only. */
@@ -72,12 +98,15 @@ export class Ledger {
     const repaired = writable ? store.repairTornTail?.() : undefined;
     const loaded = store.load();
     const permissions = options.permissions ?? DEFAULT_PERMISSIONS;
-    let { chain, acknowledged } = assess(loaded.entries, permissions);
+    const keys = options.keys ?? store.defaultKeys;
+    const anchors = readAnchors(keys);
+    let { chain, acknowledged, trusted } = assess(loaded.entries, permissions, anchors);
     if (chain.ok && loaded.parseError) {
       chain = { ok: false, firstBad: loaded.parseError.n, problem: "parse", detail: loaded.parseError.detail };
     }
     const last = loaded.entries[loaded.entries.length - 1];
-    if (chain.ok && loaded.head) {
+    // A missing tail or a rewritten last entry is the more basic finding than a bad signature.
+    if ((chain.ok || chain.problem === "signature") && loaded.head) {
       const head = loaded.head;
       if (!last || (parseLedgerNumber(last.n) ?? 0) < (parseLedgerNumber(head.n) ?? 0)) {
         chain = { ok: false, firstBad: head.n, problem: "truncated", detail: `the ledger ends at ${last?.n ?? "nothing"} but ${head.n} was written` };
@@ -89,11 +118,12 @@ export class Ledger {
       // A crash between writing the line and the head leaves the head behind; catch it up.
       store.resetHead({ n: last.n, hash: last.hash });
     }
-    const ledger = new Ledger(store, loaded.entries, chain, acknowledged, writable, options.now ?? (() => new Date()), permissions);
+    const ledger = new Ledger(store, loaded.entries, chain, acknowledged, writable, options.now ?? (() => new Date()), permissions, keys, anchors, trusted);
     ledger.repaired = repaired;
     if (repaired && chain.ok && last) {
-      // Leave a record in the ledger itself of what the repair did.
-      ledger.append({
+      // Leave a record in the ledger itself of what the repair did, when this device can sign it.
+      try {
+        ledger.append({
         actor: { kind: "system", id: "ledger" },
         type: "correction",
         subject: last.n,
@@ -101,7 +131,11 @@ export class Ledger {
         reason: "A write was cut short by a crash before it finished",
         corrects: last.n,
         data: { repaired },
-      });
+        });
+      } catch (error) {
+        if (!(error instanceof LedgerError && error.code === "NOT_SIGNED")) throw error;
+        ledger.repaired = `${repaired} (not recorded in the ledger: ${error.message})`;
+      }
     }
     return ledger;
   }
@@ -213,9 +247,31 @@ export class Ledger {
       true,
     );
     // Re-check everything: a second break further on still stops writes.
-    const reassessed = assess(this.list, this.permissions);
-    this.chain = reassessed.chain;
-    this.acknowledged = reassessed.acknowledged;
+    return entry;
+  }
+
+  /**
+   * A person trusts a public key: a new device, a helper, or their own key
+   * from before a lost keychain, after checking its fingerprint. Allowed
+   * while the only problem is signatures this device could not check.
+   */
+  trustKey(person: Actor, key: TrustedKey, reason: string): LedgerEntry {
+    if (!this.writable) throw new LedgerError("READ_ONLY", `this ledger is read-only (${this.store.description})`);
+    if (person?.kind !== "person") throw new LedgerError("BAD_ACTOR", "only a person can trust a key");
+    if (!this.chain.ok && this.chain.problem !== "signature") {
+      throw new LedgerError("CHAIN_BROKEN", `writes are stopped: ${this.chain.firstBad} failed the fingerprint check (${this.chain.problem}); acknowledge it first`);
+    }
+    // The hash chain is intact here, so the tip is safe to record as HEAD.
+    const tip = this.last();
+    if (!this.chain.ok && tip) this.store.resetHead({ n: tip.n, hash: tip.hash });
+    const entry = this.write({
+      actor: person,
+      type: "key.trusted",
+      subject: key.keyId,
+      summary: `Trusted ${key.principal}'s key ${key.keyId}`,
+      reason,
+      data: { keyId: key.keyId, principal: key.principal, publicKey: key.publicKey, ...(key.retired ? { retired: true } : {}) },
+    });
     return entry;
   }
 
@@ -245,6 +301,7 @@ export class Ledger {
       data: draft.data,
       prev: previous?.hash ?? GENESIS_PREV,
     }) as Omit<LedgerEntry, "hash">;
+    if (needsSignature(draft.actor)) unsigned.sig = this.signEntry(unsigned);
     const entry = deepFreeze({ ...unsigned, hash: hashEntry(unsigned) }) as LedgerEntry;
     try {
       this.store.append(entry, previous && { n: previous.n, hash: previous.hash });
@@ -255,6 +312,14 @@ export class Ledger {
     }
     this.index.set(entry.n, this.list.length);
     this.list.push(entry);
+    if (entry.sig) markVerified(entry);
+    if (entry.type === "key.trusted" || entry.type === "chain.acknowledged" || !this.chain.ok) {
+      // A newly trusted key can make earlier signatures check out; re-check everything.
+      const reassessed = assess(this.list, this.permissions, this.anchors);
+      this.chain = reassessed.chain;
+      this.acknowledged = reassessed.acknowledged;
+      this.trusted = reassessed.trusted;
+    }
     for (const listener of this.listeners) {
       try {
         listener(entry);
@@ -263,6 +328,31 @@ export class Ledger {
       }
     }
     return entry;
+  }
+
+  /** Signs on behalf of a person or the system, or refuses: never stored unsigned. */
+  private signEntry(unsigned: Omit<LedgerEntry, "hash">): { key: string; value: string } {
+    const principal = principalOf(unsigned.actor);
+    if (!this.keys) {
+      throw new LedgerError("NOT_SIGNED", `${unsigned.actor.kind} entries must be signed, and this ledger was opened without keys (${this.store.description})`);
+    }
+    const state = this.keys.state();
+    if (!state.available) throw new LedgerError("NOT_SIGNED", `cannot sign for ${principal}: ${state.reason ?? "the key store is unavailable"}`);
+    let signed: { keyId: string; signature: string };
+    try {
+      signed = this.keys.sign(principal, signedBytes(unsigned));
+    } catch (error) {
+      throw new LedgerError("NOT_SIGNED", `cannot sign for ${principal}: ${(error as Error).message}`);
+    }
+    const sig = { key: signed.keyId, value: signed.signature };
+    if (!this.trusted.has(sig.key)) {
+      // A key made since open (first use, or a rotation): pick up the device's keys again.
+      this.anchors = readAnchors(this.keys);
+      this.trusted = trustedKeySet(this.anchors, this.list);
+    }
+    const problem = signatureProblem({ ...unsigned, sig, hash: "" } as LedgerEntry, this.trusted);
+    if (problem) throw new LedgerError("NOT_SIGNED", `the signature for ${principal} did not check out: ${problem}`);
+    return sig;
   }
 
   private validate(draft: EntryDraft): void {
@@ -300,6 +390,7 @@ export class Ledger {
     this.checkSeries(draft);
     if (draft.type === "task.done") this.checkDone(draft.subject.trim());
     if (draft.type === "test.approved") this.checkApproved(draft);
+    if (draft.type === "key.trusted") this.checkKeyTrusted(draft);
     for (const rule of this.rules) {
       const refusal = rule(draft, this);
       if (refusal) throw new LedgerError("RULE", refusal);
@@ -363,6 +454,14 @@ export class Ledger {
     }
   }
 
+  /** key.trusted comes from a person and names a well-formed Ed25519 key. */
+  private checkKeyTrusted(draft: EntryDraft): void {
+    if (draft.actor.kind !== "person") throw new LedgerError("NOT_PERMITTED", "only a person can trust a key");
+    const key = keyFromData(draft.data);
+    if (!key) throw new LedgerError("RULE", "key.trusted needs data.keyId, data.principal (person:<id> or system) and an Ed25519 data.publicKey that match");
+    if (draft.subject.trim() !== key.keyId) throw new LedgerError("RULE", `key.trusted must be about the key itself, ${key.keyId}`);
+  }
+
   /** test.approved must approve a command that was defined for the same task. */
   private checkApproved(draft: EntryDraft): void {
     const test = draft.data?.test;
@@ -376,9 +475,22 @@ export class Ledger {
 }
 
 /** Chain check plus who-wrote-what check, with person acknowledgements applied to both. */
-function assess(entries: readonly LedgerEntry[], permissions: PermissionTable): { chain: ChainResult; acknowledged: string[] } {
+function assess(
+  entries: readonly LedgerEntry[],
+  permissions: PermissionTable,
+  anchors: readonly TrustedKey[],
+): { chain: ChainResult; acknowledged: string[]; trusted: Map<string, TrustedKey> } {
+  const trusted = trustedKeySet(anchors, entries);
+  // Mark every entry whose signature holds, whatever else is wrong: authority is per entry.
+  const problems = new Map<LedgerEntry, string>();
+  for (const entry of entries) {
+    if (!needsSignature(entry.actor)) continue;
+    const problem = signatureProblem(entry, trusted);
+    if (problem) problems.set(entry, problem);
+    else markVerified(entry);
+  }
   const { result, acknowledged } = verifyWithAcknowledgements(entries);
-  if (!result.ok) return { chain: result, acknowledged };
+  if (!result.ok) return { chain: result, acknowledged, trusted };
   for (const entry of entries) {
     if (permitted(permissions, entry.actor?.kind, entry.type)) continue;
     const acked = entries.some(
@@ -391,9 +503,44 @@ function assess(entries: readonly LedgerEntry[], permissions: PermissionTable): 
     return {
       chain: { ok: false, firstBad: entry.n, problem: "permission", detail: `${entry.actor?.kind ?? "unknown"} ${entry.actor?.id ?? ""} may not write ${entry.type}` },
       acknowledged,
+      trusted,
     };
   }
-  return { chain: { ok: true }, acknowledged };
+  for (const entry of entries) {
+    const problem = problems.get(entry);
+    if (!problem || acknowledged.includes(entry.n)) continue;
+    // An acknowledged signature break lets writes continue; the entry still never counts as
+    // authoritative. A prev-break acknowledgement also covers the rewritten entry it pins.
+    const acked = entries.some(
+      (e) =>
+        e.type === "chain.acknowledged" &&
+        e.actor?.kind === "person" &&
+        !problems.has(e) &&
+        (e.data?.firstBad === entry.n || pinsEntry(e, entry)) &&
+        acknowledgesExactly(e, entries.find((b) => b.n === e.data?.firstBad) ?? entry, entries),
+    );
+    if (acked) {
+      acknowledged.push(entry.n);
+      continue;
+    }
+    return { chain: { ok: false, firstBad: entry.n, problem: "signature", detail: problem }, acknowledged, trusted };
+  }
+  return { chain: { ok: true }, acknowledged, trusted };
+}
+
+function pinsEntry(ack: LedgerEntry, entry: LedgerEntry): boolean {
+  const pins = Array.isArray(ack.data?.pins) ? (ack.data.pins as { n?: unknown }[]) : [];
+  return pins.some((pin) => pin.n === entry.n);
+}
+
+function readAnchors(keys: KeyProvider | undefined): TrustedKey[] {
+  if (!keys) return [];
+  try {
+    return keys.trustedKeys();
+  } catch {
+    // An unreadable key store trusts nothing; signed entries then show as unchecked.
+    return [];
+  }
 }
 
 const SERIES_NUMBER = /^([PTQDR])-(\d+)$/;
