@@ -96,6 +96,8 @@ export interface SecretMatch {
   start: number;
   end: number;
   value: string;
+  /** The secret's name, for rules that capture one (DB_PASSWORD in DB_PASSWORD="..."). */
+  name?: string;
 }
 
 /**
@@ -123,37 +125,49 @@ export function findSecrets(file: string, line: string, options: { everywhere?: 
       taken.push([valueStart, valueStart + value.length]);
       if (rule.nameGroup !== undefined && value.length < minValueLength(m[rule.nameGroup]!)) continue;
       if (isPlaceholder(value) || !/[A-Za-z]/.test(value)) continue;
-      found.push({ rule: rule.id, description: rule.description, start: valueStart, end: valueStart + value.length, value });
+      found.push({ rule: rule.id, description: rule.description, start: valueStart, end: valueStart + value.length, value, ...(rule.nameGroup !== undefined ? { name: m[rule.nameGroup]! } : {}) });
     }
   }
   return found;
 }
 
-// ---------- redaction ----------
+// ---------- redaction and the diff check ----------
+//
+// detectSecrets (one line of a known file, used by Jev's diff check) and
+// redactSecrets (any text) share every rule below. Redaction is broader in two
+// places only: long high-entropy runs and cookie values, which would turn
+// ordinary fixtures in a diff into rejections.
 
 export const REDACTED = "[redacted-secret]";
 
 // A whole PEM block, BEGIN through END; with no END line, to the end of the text.
 const PEM_BLOCK = /-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?-----[\s\S]*?(?:-----END (?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?-----|$(?![\s\S]))/g;
 
-/** Formats the scanner leaves to review but redaction always hides; the value is group 1. */
-const REDACT_VALUES: readonly RegExp[] = [
-  // Authorization: Bearer x / Basic x, and a bare "Bearer x" in logs
-  /\b(?:proxy-)?authorization["']?\s*[:=]\s*["']?(?:bearer|basic|token|digest)\s+([A-Za-z0-9._~+/=-]{4,})/gi,
-  /\bbearer\s+([A-Za-z0-9._~+/-]{12,}=*)/gi,
-  // scheme://user:password@host
-  /\b[a-z][a-z0-9+.-]*:\/\/[^\s:@/]*:([^\s@/]+)@/gi,
-  // mysql -uroot -pSECRET (the password is glued to -p)
-  /\b(?:mysql|mysqldump|mysqladmin|mariadb|mariadb-dump)\b[^\n]*?\s-p([^\s-][^\s]*)/gi,
-  // --password=x / --password x
-  /--(?:password|passwd|pass|token|secret|api-key|apikey|auth-token)(?:=|\s+)([^\s"'-][^\s"']*)/gi,
-  // npm automation tokens
-  /\b(npm_[A-Za-z0-9]{36})\b/g,
+interface ValueRule {
+  id: string;
+  description: string;
+  /** The secret value is group 1. */
+  pattern: RegExp;
+  /** Count a value that is just a word like "password" (otherwise read as documentation). */
+  words?: boolean;
+}
+
+/** Formats beyond SECRET_RULES; both redaction and the diff check use them. */
+const VALUE_RULES: readonly ValueRule[] = [
+  { id: "auth-header", description: "Authorization header", pattern: /\b(?:proxy-)?authorization["']?\s*[:=]\s*["']?(?:bearer|basic|token|digest)\s+([A-Za-z0-9._~+/=-]{4,})/gi },
+  { id: "bearer-token", description: "Bearer token", pattern: /\bbearer\s+([A-Za-z0-9._~+/-]{12,}=*)/gi },
+  { id: "connection-string", description: "password in a connection string", pattern: /\b[a-z][a-z0-9+.-]*:\/\/[^\s:@/"'`]*:([^\s@/"'`]+)@/gi },
+  { id: "mysql-password", description: "mysql -p password", pattern: /\b(?:mysql|mysqldump|mysqladmin|mariadb|mariadb-dump)\b[^\n]*?\s-p([^\s-][^\s]*)/gi },
+  { id: "password-flag", description: "password on a command line", pattern: /--(?:password|passwd|pass|token|secret|api-key|apikey|auth-token)(?:=|\s+)([^\s"'`-][^\s"'`]*)/gi },
+  // curl -u user:password / --user user:password ("pass" counts: a real password can be a word)
+  { id: "curl-user", description: "password in curl -u", pattern: /\bcurl\b[^\n]*?\s(?:-u|--user)(?:\s+|=)["']?[^\s:"'$]+:([^\s"'$][^\s"']*)/gi, words: true },
+  { id: "npm-token", description: "npm token", pattern: /\b(npm_[A-Za-z0-9]{36})\b/g },
+  { id: "stripe-test-key", description: "Stripe test key", pattern: /\b([rs]k_test_[A-Za-z0-9]{16,})/g },
 ];
 
 // NAME = value, NAME: value, "NAME": "value", with or without quotes and spaces.
 // "scheme://" is not an assignment, so a URL's query string still gets checked.
-const ASSIGNMENT = /([A-Za-z_][A-Za-z0-9_.-]*)["']?[ \t]*[:=][ \t]*(?!\/\/)(?:"([^"\n]+)"|'([^'\n]+)'|([^\s"'#;,&)]+))/g;
+const ASSIGNMENT = /([A-Za-z_][A-Za-z0-9_.-]*)["']?[ \t]*[:=][ \t]*(?!\/\/)(?:"([^"\n]+)"|'([^'\n]+)'|([^\s"'`#;,&)]+))/g;
 
 const SECRET_WORDS = new Set(["password", "passwd", "pass", "pwd", "passphrase", "pgpass", "pgpassword", "secret", "token", "apikey", "auth"]);
 const KEY_PAIRS = new Set(["api", "private", "access", "secret", "signing", "encryption", "master", "session", "client"]);
@@ -165,28 +179,53 @@ function nameWords(name: string): string[] {
 /** True for names that hold secrets: DB_PASSWORD, apiKey, client_secret, PGPASS, AUTH. */
 export function isSecretName(name: string): boolean {
   // The secret word must end the name: GITHUB_TOKEN and apiKey hold secrets,
-  // TOKEN_URL, tokenRef and AUTH-FOLDER do not.
+  // TOKEN_URL, tokenType, passwordLabel and AUTH-FOLDER do not.
   const words = nameWords(name);
   const last = words[words.length - 1];
   if (last === undefined) return false;
+  // A lone "pass" is usually a result ("PASS: 18/18"); DB_PASS and userPass are secrets.
+  if (last === "pass") return words.length > 1;
   if (SECRET_WORDS.has(last)) return true;
   return last === "key" && words.length > 1 && KEY_PAIRS.has(words[words.length - 2]!);
 }
 
 // SHOUTY_ENV_NAMES ending in _KEY (STRIPE_KEY=...) are keys when assigned a bare
-// value; a quoted one is usually a storage key name ("app.last-name").
+// value; a quoted one is usually a storage key name ("auth.session.token").
 const ENV_KEY_NAME = /^[A-Z0-9_]+_KEY$/;
 
-// A bare value that is code, not a literal: an expression, a call, a member
-// access, a type, an identifier, or a reference to the environment.
-const CODE_START = /^(?:[-+!~(\[{`/<>=?:&|*@]|\$\{|\$[A-Za-z_]|%[A-Za-z_]|process\.env|os\.environ)/;
-const IDENTIFIER_CHAIN = /^[A-Za-z_$][A-Za-z_$]*(?:\.[A-Za-z_$][\w$]*)*(?:\(.*)?$|^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)+(?:\(.*)?$|^[A-Za-z_$][\w$]*\(/;
+// A value that starts like code: an expression, a template, a reference to the environment.
+const CODE_START = /^(?:[-+!~(\[{`/<>=?:&|*@\\]|\$\{|\$[A-Za-z_(]|%[A-Za-z_]|process\.env|os\.environ|import\.meta)/;
+const CODE_CHARS = /=>|[[\](){}<>]/;
+// Words that follow "token:" as a type or a keyword, not a value.
+const CODE_WORDS = new Set(["string", "number", "boolean", "bigint", "symbol", "object", "unknown", "any", "void", "never", "null", "undefined", "true", "false", "none", "nil", "await", "new", "this", "self", "typeof", "function", "async", "return", "const", "let", "var", "str", "int", "bytes", "buffer", "uint8array", "readonly", "optional"]);
+const IDENTIFIER_CHAIN = /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*$/;
+// An env-style line: NAME=value with no spaces around "=", optionally exported.
+const ENV_LINE = /^\s*(?:export\s+|set\s+|setx\s+)?[A-Za-z_][A-Za-z0-9_]*=/;
+// A whole line that is one `name: value` pair, as in YAML.
+const YAML_LINE = /^\s*(?:-\s+)?["']?[A-Za-z_][\w.-]*["']?\s*:\s*[^\s,;{}()]+\s*(?:#.*)?$/;
+const SHELL_FILE = /\.(?:sh|bash|zsh|ps1|psm1|bat|cmd|envrc)$|(?:^|\/)\.envrc$/i;
 
-function isLiteralSecret(value: string, quoted: boolean): boolean {
-  if (value.length < 3 || value.includes(REDACTED) || isPlaceholder(value)) return false;
-  // Quoted prose ("Secret check") or a URL-ish word list is not a credential.
-  if (quoted) return !/\s/.test(value);
-  return !CODE_START.test(value) && !IDENTIFIER_CHAIN.test(value) && !/=>|[[\](){}<>]/.test(value);
+type Mode = "redact" | "detect";
+
+function isLiteralSecret(name: string, value: string, quoted: boolean, context: { mode: Mode; envLine: boolean; configFile: boolean; yamlLine: boolean }): boolean {
+  if (value.length < 3 || value.includes(REDACTED) || isPlaceholder(value) || !/[A-Za-z0-9]/.test(value)) return false;
+  // In source code the diff check keeps the release scanner's minimum lengths, so
+  // test strings ("forged") pass; configuration lines and redaction take any length.
+  if (context.mode === "detect" && !context.envLine && !context.configFile && value.length < minValueLength(name)) return false;
+  if (quoted) {
+    // Prose ("Secret check") is not a credential; neither is a value that only names a field ("Password").
+    if (/\s/.test(value) || SECRET_WORDS.has(value.toLowerCase())) return false;
+    return true;
+  }
+  if (CODE_START.test(value) || CODE_CHARS.test(value) || CODE_WORDS.has(value.toLowerCase())) return false;
+  if (!IDENTIFIER_CHAIN.test(value)) return true;
+  // A bare identifier: code (token = value, token: string, a.b.c) unless the
+  // line is plainly configuration (DB_PASSWORD=letmein, password: hunter in YAML).
+  if (context.envLine || context.configFile) return !value.includes(".") || /\d/.test(value);
+  // Redaction also hides identifiers with digits ("hunter2"); plain words stay
+  // unless the line is a lone `name: value` (YAML in a log or a paste).
+  if (context.mode !== "redact" || value.includes(".") || /^[_$]/.test(value) || /[a-z][A-Z]/.test(value) || SECRET_WORDS.has(value.toLowerCase())) return false;
+  return /\d/.test(value) || context.yamlLine;
 }
 
 function entropy(s: string): number {
@@ -199,45 +238,103 @@ function entropy(s: string): number {
 
 // Long mixed-case-and-digit runs with high entropy: generated tokens nobody named.
 const LONG_RUN = /[A-Za-z0-9+_-]{32,}={0,2}/g;
+// A label glued to a hash ("SHA256468ca0...", "Overlay442fde...") is a digest, not a credential.
+const LABELLED_HEX = /^[A-Za-z]{0,16}(?:[0-9a-f]{32,}|[0-9A-F]{32,})$/;
 function looksGenerated(run: string): boolean {
+  if (LABELLED_HEX.test(run.replace(/=+$/, ""))) return false;
   return /[a-z]/.test(run) && /[A-Z]/.test(run) && /[0-9]/.test(run) && entropy(run) >= 4;
 }
 
-function replaceGroup(text: string, pattern: RegExp, keep: (value: string) => boolean = () => false): string {
-  return text.replace(pattern, (...args: unknown[]) => {
-    const match = args[0] as string;
-    const value = args[1] as string | undefined;
-    if (!value || value.includes(REDACTED) || keep(value)) return match;
-    const at = match.lastIndexOf(value);
-    return `${match.slice(0, at)}${REDACTED}${match.slice(at + value.length)}`;
-  });
+// Cookie: a=1; b=2 and Set-Cookie: sid=...; Path=/
+const COOKIE_HEADER = /\b(?:set-)?cookie\s*:\s*([^\n]+)/gi;
+const SESSION_COOKIE = /sess|sid|token|auth|jwt|login|remember/i;
+const COOKIE_ATTRIBUTES = new Set(["path", "domain", "expires", "max-age", "samesite", "secure", "httponly", "priority", "partitioned"]);
+
+export interface SecretSpan {
+  rule: string;
+  description: string;
+  start: number;
+  end: number;
+}
+
+function scanLine(line: string, mode: Mode, file: string): SecretSpan[] {
+  const spans: SecretSpan[] = [];
+  const add = (rule: string, description: string, start: number, end: number) => {
+    if (end > start && !spans.some((s) => start < s.end && end > s.start)) spans.push({ rule, description, start, end });
+  };
+  // Shell scripts count only their NAME=value lines as configuration; YAML, ini and .env files count every line.
+  const configFile = isConfigLikeFile(file);
+  const envLine = ENV_LINE.test(line) || (SHELL_FILE.test(file.replace(/\\/g, "/")) && /^\s*(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*=/.test(line));
+  const context = { mode, envLine, configFile, yamlLine: YAML_LINE.test(line) };
+
+  for (const f of findSecrets(file, line, { everywhere: mode === "redact" })) {
+    // The scanner's generic rule matches any name containing a secret word; here the word must end the name.
+    if (f.name !== undefined && !isSecretName(f.name)) continue;
+    add(f.rule, f.description, f.start, f.end);
+  }
+  for (const rule of VALUE_RULES) {
+    for (const m of line.matchAll(rule.pattern)) {
+      const value = m[1];
+      if (!value || isPlaceholder(value) || CODE_START.test(value) || value.includes(REDACTED) || !/[A-Za-z0-9]/.test(value) || (!rule.words && SECRET_WORDS.has(value.toLowerCase()))) continue;
+      const start = (m.index ?? 0) + m[0].lastIndexOf(value);
+      add(rule.id, rule.description, start, start + value.length);
+    }
+  }
+  for (const m of line.matchAll(ASSIGNMENT)) {
+    const [, name, dq, sq, bare] = m;
+    const value = dq ?? sq ?? bare ?? "";
+    const secretName = isSecretName(name!) || (bare !== undefined && ENV_KEY_NAME.test(name!));
+    if (!secretName || !isLiteralSecret(name!, value, bare === undefined, context)) continue;
+    const start = (m.index ?? 0) + m[0].lastIndexOf(value);
+    add("secret-assignment", `value assigned to ${name}`, start, start + value.length);
+  }
+  // Redaction hides every cookie value; the diff check flags session-like ones (URL-encoded or not).
+  for (const m of line.matchAll(COOKIE_HEADER)) {
+    const base = (m.index ?? 0) + m[0].length - m[1]!.length;
+    for (const pair of m[1]!.matchAll(/([^=;\s]+)=([^;\s]+)/g)) {
+      const [, cookie, value] = pair;
+      if (COOKIE_ATTRIBUTES.has(cookie!.toLowerCase())) continue;
+      if (mode === "detect" && !(SESSION_COOKIE.test(cookie!) && value!.length >= 8 && !isPlaceholder(value!) && !CODE_START.test(value!))) continue;
+      const start = base + (pair.index ?? 0) + pair[0].length - value!.length;
+      add("cookie", "cookie value", start, start + value!.length);
+    }
+  }
+  if (mode === "redact") {
+    for (const m of line.matchAll(LONG_RUN)) {
+      if (looksGenerated(m[0])) add("high-entropy", "generated token", m.index ?? 0, (m.index ?? 0) + m[0].length);
+    }
+  }
+  return spans.sort((a, b) => a.start - b.start);
+}
+
+/**
+ * Secrets on one line of a file, for Jev's diff check: the release scanner's
+ * rules plus every format redaction knows, without flagging ordinary code.
+ */
+export function detectSecrets(file: string, line: string): SecretSpan[] {
+  if (/-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?-----/.test(line)) return [{ rule: "private-key", description: "Private key block", start: 0, end: line.length }];
+  return scanLine(line, "detect", file);
 }
 
 /** Hides every secret Perfect Planner can recognise; the names stay so a reader still sees what was there. */
 export function redactSecrets(text: string): string {
-  let out = text.replace(PEM_BLOCK, REDACTED);
-  for (const pattern of REDACT_VALUES) out = replaceGroup(out, pattern);
-  out = out
+  return text
+    .replace(PEM_BLOCK, REDACTED)
     .split("\n")
     .map((line) => {
-      // Config-only rules stay with the scanner; ASSIGNMENT below covers those lines with a code check.
-      const found = findSecrets("", line).filter((f) => !line.slice(f.start, f.end).includes(REDACTED));
-      let next = line;
-      for (const f of found.sort((a, b) => b.start - a.start)) next = `${next.slice(0, f.start)}${REDACTED}${next.slice(f.end)}`;
-      return next;
+      let out = line;
+      for (const span of scanLine(line, "redact", "").reverse()) out = `${out.slice(0, span.start)}${REDACTED}${out.slice(span.end)}`;
+      return out;
     })
     .join("\n");
-  out = out.replace(ASSIGNMENT, (match: string, name: string, dq?: string, sq?: string, bare?: string) => {
-    const value = dq ?? sq ?? bare ?? "";
-    const secretName = isSecretName(name) || (bare !== undefined && ENV_KEY_NAME.test(name));
-    if (!secretName || !isLiteralSecret(value, bare === undefined)) return match;
-    const at = match.lastIndexOf(value);
-    return `${match.slice(0, at)}${REDACTED}${match.slice(at + value.length)}`;
-  });
-  return out.replace(LONG_RUN, (run) => (looksGenerated(run) ? REDACTED : run));
 }
 
 /** True when redactSecrets would hide something in the text. */
 export function looksSecret(text: string): boolean {
   return redactSecrets(text) !== text;
+}
+
+/** What redactSecrets would hide on one line, and why. */
+export function redactionSpans(line: string): SecretSpan[] {
+  return scanLine(line, "redact", "");
 }
