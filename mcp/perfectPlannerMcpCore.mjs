@@ -449,3 +449,20 @@ export async function buildComputerUseBrief(registryRoot, workspaceId, input = {
     });
   });
 }
+
+/**
+ * Write mode for the §4 relay tools is opt-in: PP_MCP_WRITE=1 plus a ledger root given as
+ * `--ledger-root <dir>` (or `--ledger-root=<dir>`) or PP_LEDGER_ROOT. Anything else stays read-only.
+ */
+export function resolveRelayWriteConfig(env = {}, argv = []) {
+  if (env.PP_MCP_WRITE !== "1") return Object.freeze({ write: false, ledgerRoot: null });
+  let ledgerRoot = null;
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    if (arg === "--ledger-root" && typeof argv[i + 1] === "string") { ledgerRoot = argv[i + 1]; break; }
+    if (typeof arg === "string" && arg.startsWith("--ledger-root=")) { ledgerRoot = arg.slice("--ledger-root=".length); break; }
+  }
+  ledgerRoot ??= env.PP_LEDGER_ROOT || null;
+  if (!ledgerRoot || !ledgerRoot.trim()) throw mcpError("MCP_WRITE_LEDGER_ROOT_REQUIRED", "PP_MCP_WRITE=1 needs --ledger-root <repo> or PP_LEDGER_ROOT.");
+  return Object.freeze({ write: true, ledgerRoot: path.resolve(ledgerRoot) });
+}
