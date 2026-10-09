@@ -1,6 +1,5 @@
 // One open core project: its ledger (single writer, spec §2.6) and the agent
 // service that agents check in through. The host keeps one per project key.
-import { execFile } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -16,8 +15,8 @@ import { installNumberingRules } from "../numbering/index";
 import { installPeopleRules } from "../people/index";
 import { installPlanningRules } from "../planning/index";
 import { installReleaseRules, protectProject, type CommandRunner, type ProtectionReport } from "../release/index";
-import { ensureRequiredIgnores, PRIVATE_DIR } from "../worktrees/index";
-import { gitExecutable, NO_CWD_SEARCH_ENV, protectRoots, registeredRoots } from "../exec/index";
+import { ensureRequiredIgnores, PRIVATE_DIR, runGit } from "../worktrees/index";
+import { protectRoots, registeredRoots } from "../exec/index";
 
 export interface CoreProject {
   /** Safe key from the client ("default" when none was given). */
@@ -58,22 +57,19 @@ export function projectKey(raw: string | null | undefined): string {
 }
 
 /**
- * Runs git (and only what protectProject asks for) without a shell. git is started by absolute path
- * with the current folder left out of the program search, never a git found in the user's repo (core/exec).
+ * Runs git, and only git, for what the host asks (protectProject, the private-folder exclude, earlier-use
+ * signals) through core/worktrees' runner: git by absolute path, never one in the user's repo, with the
+ * runner's own protections against repo configuration. Anything else is refused.
  */
-export const runCommand: CommandRunner = (command, args, options) =>
-  new Promise((resolve) => {
-    let program = command;
-    try {
-      if (command === "git") program = gitExecutable(options?.cwd ?? process.cwd());
-    } catch (error) {
-      return resolve({ code: 127, stdout: "", stderr: (error as Error).message });
-    }
-    execFile(program, [...args], { cwd: options?.cwd, encoding: "utf8", windowsHide: true, maxBuffer: 4 * 1024 * 1024, env: { ...process.env, ...NO_CWD_SEARCH_ENV } }, (error, stdout, stderr) => {
-      const code = error ? (typeof (error as { code?: unknown }).code === "number" ? ((error as { code: number }).code) : 1) : 0;
-      resolve({ code, stdout: String(stdout ?? ""), stderr: String(stderr ?? (error ? error.message : "")) });
-    });
-  });
+export const runCommand: CommandRunner = async (command, args, options) => {
+  if (command !== "git") return { code: 127, stdout: "", stderr: `The host only runs git, not ${command}.` };
+  try {
+    const result = await runGit(options?.cwd ?? process.cwd(), [...args]);
+    return { code: result.code, stdout: result.stdout, stderr: result.stderr };
+  } catch (error) {
+    return { code: 127, stdout: "", stderr: (error as Error).message };
+  }
+};
 
 /**
  * protectProject for a folder, but only when the folder is itself the top of a git repository: a

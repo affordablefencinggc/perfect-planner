@@ -9,7 +9,6 @@
 // cookie the app window holds, so a person's signed entry can only come from
 // this screen. Agents never reach these routes; they use the MCP tools.
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { deriveState, type GateState } from "../../gate/index";
 import type { Actor } from "../../ledger/index";
@@ -23,6 +22,10 @@ import { AGENT_SERVER_NAME, agentEntryPath, connectLine, quoteFor, tokenFilePath
 export { quoteFor };
 import { localPerson, localPersonId } from "./people";
 import { protectRepository } from "../project";
+import { chosenRepoRoot, repoRefusal } from "../protectedRoots";
+
+// Kept here too for older imports; they live in ../protectedRoots so connect.mjs can use them without the routes.
+export { chosenRepoRoot, repoRefusal };
 
 const REPO_FILE = "repo.json";
 const MANAGER = "tasks.worktrees";
@@ -63,19 +66,6 @@ function repoFile(project: CoreProject): string {
   return path.join(project.root, ".perfect-planner", REPO_FILE);
 }
 
-/**
- * The repo folder the person picked for a project (kept in its .perfect-planner/), read without running
- * anything, so the host can protect it before its first git run. Never a whole drive or the home folder.
- */
-export function chosenRepoRoot(projectRoot: string): string | undefined {
-  try {
-    const root = (JSON.parse(fs.readFileSync(path.join(projectRoot, ".perfect-planner", REPO_FILE), "utf8")) as { root?: unknown }).root;
-    return typeof root === "string" && path.isAbsolute(root) && !repoRefusal(root) ? root : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 async function gitTop(dir: string): Promise<string | null> {
   if (!fs.existsSync(dir)) return null;
   const top = await runGit(dir, ["rev-parse", "--show-toplevel"]).catch(() => null);
@@ -106,23 +96,6 @@ export async function repoState(project: CoreProject): Promise<RepoState> {
       ? `${chosen} is no longer a git repository with a commit. Choose your project's git folder again.`
       : "Workers need your project's git folder (with at least one commit) to branch from. Choose it below.",
   };
-}
-
-/** Folders that are never a project to hand to workers: a whole drive or the home folder itself. */
-export function repoRefusal(top: string, home = os.homedir()): string | null {
-  // Same test as isHomeOrDrive (project.ts), with the home folder passable for tests.
-  const real = (p: string) => {
-    try {
-      return fs.realpathSync.native(p);
-    } catch {
-      return path.resolve(p);
-    }
-  };
-  const same = (a: string, b: string) => (process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b);
-  const dir = real(top);
-  if (same(path.dirname(dir), dir)) return `${dir} is a whole drive. Choose your project's own git folder.`;
-  if (same(dir, real(home))) return `${dir} is your home folder. Choose your project's own git folder.`;
-  return null;
 }
 
 async function requireRepo(project: CoreProject): Promise<string> {
@@ -375,6 +348,27 @@ async function releaseClaim(project: CoreProject, id: string, body: Record<strin
   return { released: label, from: owner, entry: entry.n, ...(await overview(project)) };
 }
 
+/**
+ * Changed files that can run code or change how git, npm or CI behave on the person's machine (install
+ * scripts, lockfiles, git attributes and hooks, workflows, npm settings). The diff screen lists them in a
+ * block that needs its own confirmation before the diff can be approved. Stand-in until core/worktrees
+ * exports its own list.
+ */
+const SENSITIVE: readonly RegExp[] = [
+  /(^|\/)package\.json$/,
+  /(^|\/)(package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lockb?)$/,
+  /(^|\/)\.gitattributes$/,
+  /^\.gitmodules$/,
+  /^\.github\/workflows\//,
+  /(^|\/)\.githooks\//,
+  /(^|\/)\.husky\//,
+  /(^|\/)\.npmrc$/,
+];
+
+export function sensitiveFiles(files: readonly string[]): string[] {
+  return files.filter((file) => SENSITIVE.some((pattern) => pattern.test(file.replace(/\\/g, "/")))).sort();
+}
+
 export function registerTaskRoutes(router: Router): void {
   router.get("/tasks", ({ project }) => overview(project));
 
@@ -467,7 +461,7 @@ export function registerTaskRoutes(router: Router): void {
     const tip = await git(tree.path, ["rev-parse", "HEAD"]);
     const files = (await git(tree.path, ["diff", "--name-only", "--no-renames", tree.baseSha, tip])).split(/\r?\n/).filter(Boolean).sort();
     const text = await git(tree.path, ["diff", "--no-color", "--no-renames", tree.baseSha, tip]);
-    return { task: attemptLabel(task), base: tree.baseSha, commit: tip, files, text: text.length > MAX_DIFF ? `${text.slice(0, MAX_DIFF)}\n… diff cut at ${MAX_DIFF} characters` : text, truncated: text.length > MAX_DIFF };
+    return { task: attemptLabel(task), base: tree.baseSha, commit: tip, files, sensitive: sensitiveFiles(files), text: text.length > MAX_DIFF ? `${text.slice(0, MAX_DIFF)}\n… diff cut at ${MAX_DIFF} characters` : text, truncated: text.length > MAX_DIFF };
   });
 
   /** POST /tasks/:id/approve-diff: the person approves the diff at the commit the test passed on. */
@@ -479,6 +473,14 @@ export function registerTaskRoutes(router: Router): void {
     // Bound to the commit the person reviewed, which must still be the tip the test passed on.
     if (!sameCommit(bodyOf(body).commit, tip) || !passed?.passed || !sameCommit(passed.commit, tip)) {
       throw stale("The work changed since you reviewed it. Check it again and read the new diff before approving.");
+    }
+    // Files that can run code on this machine need their own confirmation, naming exactly those files.
+    const tree = await worktreeFor(project, label);
+    const changed = (await git(tree.path, ["diff", "--name-only", "--no-renames", tree.baseSha, tip])).split(/\r?\n/).filter(Boolean);
+    const sensitive = sensitiveFiles(changed);
+    const confirmed = bodyOf(body).confirmSensitive;
+    if (sensitive.length && !(Array.isArray(confirmed) && confirmed.length === sensitive.length && sensitive.every((file) => confirmed.includes(file)))) {
+      throw new HttpError(409, "CONFIRM_SENSITIVE", `This diff changes files that can run code on your computer (${sensitive.join(", ")}). Confirm you read them before approving.`);
     }
     refuse(project.service.gate.approveDiff(attemptLabel(task), localPerson(project)));
     return overview(project);

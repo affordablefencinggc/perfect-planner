@@ -102,6 +102,28 @@ function OwnTestForm({ onSave }) {
   );
 }
 
+/** Files in the diff that can run code on this computer: listed loudly, with their own confirmation. */
+function SensitiveBlock({ diff, confirmed, onConfirm, canConfirm }) {
+  const files = diff.sensitive ?? [];
+  if (!files.length) return null;
+  return (
+    <div className="core-tasks-sensitive" role="alert" aria-label={`Files that can run code in ${diff.task}`}>
+      <WarningCircleIcon weight="fill" aria-hidden="true" />
+      <div>
+        <strong>This diff changes {files.length === 1 ? "a file" : `${files.length} files`} that can run code on your computer.</strong>
+        <p>Install scripts, lockfiles, git settings and hooks, CI workflows and npm settings run or change programs when you install, push or merge. Read each one in the diff below before approving.</p>
+        <ul>{files.map((file) => <li key={file}><code>{file}</code></li>)}</ul>
+        {canConfirm && (
+          <label className="core-tasks-sensitive-confirm">
+            <input type="checkbox" checked={confirmed} onChange={(e) => onConfirm(e.target.checked)} />
+            I read the changes to {files.length === 1 ? "this file" : `these ${files.length} files`} and they are safe to run on my computer
+          </label>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function DiffView({ diff }) {
   return (
     <div className="core-tasks-diff">
@@ -119,6 +141,7 @@ function TaskCard({ task, project, act, busy, notice, dispatchFor, onDispatched,
   const [model, setModel] = useState(task.dispatch?.model ?? DEFAULT_WORKER_MODEL);
   const [diff, setDiff] = useState(null);
   const [diffError, setDiffError] = useState(null);
+  const [sensitiveConfirmed, setSensitiveConfirmed] = useState(false);
   const [sendBack, setSendBack] = useState(false);
   const [notes, setNotes] = useState("");
   const [releasing, setReleasing] = useState(false);
@@ -131,6 +154,7 @@ function TaskCard({ task, project, act, busy, notice, dispatchFor, onDispatched,
 
   const showDiff = async () => {
     setDiffError(null);
+    setSensitiveConfirmed(false);
     try { setDiff(await coreGet(`/tasks/${id}/diff`, project)); } catch (error) { setDiffError(error); }
   };
 
@@ -198,7 +222,7 @@ function TaskCard({ task, project, act, busy, notice, dispatchFor, onDispatched,
           <>
             <button type="button" className="core-button" onClick={showDiff}>Show diff</button>
             {task.stage === "review-diff" && (
-              <button type="button" className="core-button primary" onClick={() => run("approve-diff", `/tasks/${id}/approve-diff`, { commit: diff.commit })} disabled={working || !diff} title={diff ? undefined : "Read the diff first"}>
+              <button type="button" className="core-button primary" onClick={() => run("approve-diff", `/tasks/${id}/approve-diff`, { commit: diff.commit, ...(diff.sensitive?.length ? { confirmSensitive: diff.sensitive } : {}) })} disabled={working || !diff || (diff.sensitive?.length > 0 && !sensitiveConfirmed)} title={!diff ? "Read the diff first" : diff.sensitive?.length > 0 && !sensitiveConfirmed ? "Confirm the files that can run code first" : undefined}>
                 Approve diff{diff ? ` at ${String(diff.commit).slice(0, 12)}` : ""}
               </button>
             )}
@@ -235,6 +259,7 @@ function TaskCard({ task, project, act, busy, notice, dispatchFor, onDispatched,
       )}
 
       {diffError && <p className="core-tasks-warn" role="alert">{diffError.message}</p>}
+      {diff && <SensitiveBlock diff={diff} confirmed={sensitiveConfirmed} onConfirm={setSensitiveConfirmed} canConfirm={task.stage === "review-diff"} />}
       {diff && <DiffView diff={diff} />}
 
       {dispatchFor && <DispatchPanel dispatch={dispatchFor} onClose={onHideDispatch} />}

@@ -3,9 +3,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { agentLaunch, bundledNodePath, childEnv, claudeLaunch, runConnect, connectArgsProblem, protectFor, connectLineProblem, validateConnectLine, connectPlan, detectAgent, installSkill, keepOutOfGit, parseArgs, SKILL_NODE_PLACEHOLDER, SKILL_PROGRAM_PLACEHOLDER } from "./agentConnect";
+import { agentLaunch, bundledNodePath, claudeLaunch, runConnect, connectArgsProblem, connectLineProblem, validateConnectLine, connectPlan, detectAgent, installSkill, keepOutOfGit, parseArgs, SKILL_NODE_PLACEHOLDER, SKILL_PROGRAM_PLACEHOLDER } from "./agentConnect";
 import { AGENT_KINDS } from "./agentKinds";
 import { connectLine } from "./routes/agents";
+import { childEnv, protectFor } from "./protectedRoots";
 
 describe("connect line", () => {
   it("replaces this folder's registration and adds the server with the token file, never the token", () => {
@@ -349,9 +350,74 @@ describe("finding Claude Code", () => {
     }
   });
 
-  it("puts this Node's folder first on PATH, so a wrapper script that calls node gets this Node", () => {
-    expect(childEnv({ PATH: "/usr/bin" }, "linux", "/app/node/bin/node").PATH).toBe("/app/node/bin:/usr/bin");
-    expect(childEnv({ Path: "C:\\Windows" }, "win32", "C:\\app\\node.exe").Path).toBe("C:\\app;C:\\Windows");
+  for (const [agent, pkg, added] of [
+    ["gemini", "@google/gemini-cli/bundle/gemini.js", "mcp add -s project perfect-planner-core"],
+    ["codex", "@openai/codex/bin/codex.js", "mcp add perfect-planner-core"],
+  ] as const) {
+    it(`gives ${agent} a PATH with no folder in the project or repo, and never runs a ${agent} or git planted there through a link`, () => {
+      // The agent's npm layout, whose package entry runs under this Node on every OS.
+      const npmAgent = (dir: string, body: string) => {
+        const cli = path.join(dir, "node_modules", ...pkg.split("/"));
+        fs.mkdirSync(path.dirname(cli), { recursive: true });
+        fs.writeFileSync(cli, `#!/usr/bin/env node\n${body}\n`, { mode: 0o755 });
+        if (windows) fs.writeFileSync(path.join(dir, `${agent}.cmd`), "@echo off\r\n");
+        else fs.symlinkSync(cli, path.join(dir, agent));
+      };
+      const project = temp();
+      const repo = temp();
+      const outside = temp();
+      spawnSync("git", ["init", "-q", repo]);
+      fs.mkdirSync(path.join(repo, "src"), { recursive: true });
+      const tokenFile = path.join(project, ".perfect-planner", "tokens", "T-1.token");
+      fs.mkdirSync(path.dirname(tokenFile), { recursive: true });
+      fs.writeFileSync(tokenFile, "");
+      fs.writeFileSync(tokenFile.replace(/\.token$/, ".roots.json"), JSON.stringify({ roots: [project, repo] }));
+      const marker = path.join(outside, "planted-ran");
+      const plant = `require("fs").writeFileSync(${JSON.stringify(marker)}, "x");`;
+      npmAgent(path.join(repo, "tools"), plant);
+      // A git planted beside it: keepOutOfGit (Gemini) must find the real one.
+      const plantedGit = path.join(repo, "tools", windows ? "git.exe" : "git");
+      fs.writeFileSync(plantedGit, windows ? "" : `#!/bin/sh\necho x > "${marker}"\n`, { mode: 0o755 });
+      link(path.join(repo, "tools"), path.join(outside, "to-repo"));
+      const seen = path.join(outside, "seen");
+      npmAgent(path.join(outside, "safe"), `require("fs").appendFileSync(${JSON.stringify(seen)}, JSON.stringify({ args: process.argv.slice(2).join(" "), path: process.env.PATH ?? process.env.Path }) + "\\n");`);
+      const PATH = [path.join(outside, "to-repo"), path.join(repo, "tools"), path.join(outside, "safe"), process.env.PATH ?? ""].join(sep);
+      const cwd = path.join(repo, "src");
+      const output: string[] = [];
+      const code = runConnect(["--agent", agent, "http://127.0.0.1:5555", tokenFile], { cwd, env: { ...process.env, PATH, Path: PATH }, home: temp(), here: path.join(outside, "core-host"), out: (t) => output.push(t), err: (t) => output.push(t) });
+      expect(code, output.join("")).toBe(0);
+      expect(fs.existsSync(marker)).toBe(false);
+      const runs = fs.readFileSync(seen, "utf8").trim().split("\n").map((line) => JSON.parse(line) as { args: string; path: string });
+      expect(runs.map((r) => r.args).join("\n")).toContain(added);
+      const realRoots = [project, repo].map((root) => fs.realpathSync(root));
+      for (const run of runs) {
+        for (const dir of run.path.split(sep).filter(Boolean)) {
+          let real = dir;
+          try {
+            real = fs.realpathSync(dir);
+          } catch {
+            // a folder that does not exist reaches nothing
+          }
+          expect(realRoots.some((root) => real === root || real.startsWith(root + path.sep)), `${dir} reaches the project or repo`).toBe(false);
+        }
+      }
+      if (agent === "gemini") expect(fs.readFileSync(path.join(repo, ".git", "info", "exclude"), "utf8")).toContain("/.gemini/settings.json");
+    });
+  }
+
+  it("gives the agent a PATH with this Node first and no folder inside a protected root, as written or through a link", () => {
+    const project = temp();
+    const outside = temp();
+    const node = path.join(outside, "node-home", "bin");
+    for (const dir of [path.join(project, "tools"), path.join(outside, "usr-bin"), node]) fs.mkdirSync(dir, { recursive: true });
+    link(path.join(project, "tools"), path.join(outside, "to-project"));
+    const cwd = temp();
+    const PATH = [".", "", "relative/bin", path.join(project, "tools"), path.join(outside, "to-project"), path.join(outside, "missing"), path.join(outside, "usr-bin"), path.join(cwd)].join(sep);
+    // Windows keeps one PATH variable whatever its case; the agent gets it as Path.
+    const env = childEnv({ PATH, OTHER: "kept" }, { cwd, protect: [project], execPath: path.join(node, windows ? "node.exe" : "node") });
+    expect(env[windows ? "Path" : "PATH"]).toBe([node, path.join(outside, "usr-bin")].join(sep));
+    expect(env.OTHER).toBe("kept");
+    if (windows) expect(env.PATH).toBeUndefined();
   });
 
   it("returns null when Claude Code is not installed", () => {

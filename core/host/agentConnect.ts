@@ -18,7 +18,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { findExecutable, isWithin, NO_CWD_SEARCH_ENV, registeredRoots } from "../exec/index";
 import { AGENT_KINDS, AGENTS, type AgentKind } from "./agentKinds";
-import { chosenRepoRoot, repoRefusal } from "./routes/tasks";
+import { childEnv, protectFor } from "./protectedRoots";
 import { isNetworkPath } from "./tokenFile";
 
 const SERVER = "perfect-planner-core";
@@ -152,28 +152,6 @@ export interface Launch {
 }
 
 /**
- * The folders no agent CLI may be started from, beyond the current folder: the project folder that owns
- * the token file (<project>/.perfect-planner/tokens/x.token), the repo the person picked for it, and the
- * folders the host recorded beside the token (x.roots.json: the repo git found, the worktree folders).
- * Never found by walking up to .git.
- */
-export function protectFor(tokenFile: string | null): string[] {
-  if (!tokenFile) return [];
-  const project = path.dirname(path.dirname(path.dirname(tokenFile)));
-  const repo = chosenRepoRoot(project);
-  let recorded: unknown[] = [];
-  try {
-    const roots = (JSON.parse(fs.readFileSync(tokenFile.replace(/\.token$/, ".roots.json"), "utf8")) as { roots?: unknown }).roots;
-    if (Array.isArray(roots)) recorded = roots;
-  } catch {
-    // an older app wrote no roots file
-  }
-  const roots = [project, ...(repo ? [repo] : []), ...recorded].filter((root): root is string => typeof root === "string" && path.isAbsolute(root));
-  // A whole drive or the home folder is never a protected root: it would hide ~/.local/bin/claude.
-  return [...new Set(roots)].filter((root) => !repoRefusal(root));
-}
-
-/**
  * How to start an agent CLI (claude, gemini, codex) without a shell, by core/exec's finder, so one planted in the project,
  * the picked repo or a PATH folder that links into either never runs. On Windows a claude.exe runs as
  * itself; on macOS and Linux an npm-installed claude (a node script) runs under this Node, never
@@ -241,17 +219,6 @@ function safeReal(p: string): string {
   }
 }
 
-/**
- * The environment for Claude Code: PATH starts with this Node's own folder, so a wrapper script (a
- * /bin/sh claude that calls `node`) gets this Node rather than one planted further along PATH.
- */
-export function childEnv(env: NodeJS.ProcessEnv, platform: NodeJS.Platform = process.platform, execPath = process.execPath): NodeJS.ProcessEnv {
-  const p = platform === "win32" ? path.win32 : path.posix;
-  const key = Object.keys(env).find((name) => (platform === "win32" ? name.toUpperCase() === "PATH" : name === "PATH")) ?? "PATH";
-  const rest = env[key];
-  return { ...env, [key]: rest ? `${p.dirname(execPath)}${p.delimiter}${rest}` : p.dirname(execPath) };
-}
-
 /** Where connect.mjs runs: the terminal's folder and environment, and where it writes. */
 export interface ConnectIo {
   cwd: string;
@@ -265,14 +232,16 @@ export interface ConnectIo {
 
 /** Runs the agent's CLI from the project folder (its mcp add registers that folder). */
 function run(agent: AgentKind, args: string[], tokenFile: string | null, io: ConnectIo) {
-  const launch = agentLaunch(agent, args, io.env, io.cwd, protectFor(tokenFile));
+  const protect = protectFor(tokenFile);
+  const launch = agentLaunch(agent, args, io.env, io.cwd, protect);
   if (!launch) return { error: Object.assign(new Error(`${AGENTS[agent].cli} not found`), { code: "ENOENT" }), status: null, stdout: "", stderr: "" };
   return spawnSync(launch.command, launch.args, {
     cwd: io.cwd,
     encoding: "utf8",
     windowsHide: true,
-    // Windows: never resolve a bare program name (node, git) from the current folder either.
-    env: { ...childEnv(io.env), ...NO_CWD_SEARCH_ENV },
+    // The agent's own lookups (git, node) see only PATH folders outside the protected roots; on Windows
+    // nothing is ever resolved from the current folder either.
+    env: { ...childEnv(io.env, { cwd: io.cwd, protect }), ...NO_CWD_SEARCH_ENV },
   });
 }
 
@@ -286,10 +255,16 @@ export function detectAgent(isInstalled: (agent: AgentKind) => boolean = (agent)
  * computer's token file and Node, so in a git checkout list it in .git/info/exclude; the exclude
  * file is local to this checkout and changes nothing anyone else sees.
  */
-export function keepOutOfGit(folder: string, env: NodeJS.ProcessEnv = process.env): boolean {
-  const git = findExecutable("git", env, folder, process.platform, []);
+export function keepOutOfGit(folder: string, env: NodeJS.ProcessEnv = process.env, protect: readonly string[] = []): boolean {
+  // Never a git planted in the project, the picked repo or a PATH folder reaching them.
+  const git = findExecutable("git", env, folder, process.platform, protect);
   if (!git) return false;
-  const probe = spawnSync(git, ["rev-parse", "--git-path", "info/exclude"], { cwd: folder, encoding: "utf8", windowsHide: true, env: { ...env, ...NO_CWD_SEARCH_ENV } });
+  const probe = spawnSync(git, ["rev-parse", "--git-path", "info/exclude"], {
+    cwd: folder,
+    encoding: "utf8",
+    windowsHide: true,
+    env: { ...childEnv(env, { cwd: folder, protect }), ...NO_CWD_SEARCH_ENV },
+  });
   if (probe.error || probe.status !== 0) return false;
   const exclude = path.resolve(folder, probe.stdout.trim());
   const line = "/.gemini/settings.json";
@@ -369,7 +344,7 @@ export function runConnect(all: string[], io: ConnectIo): number {
     );
     return 1;
   }
-  const ignored = agent === "gemini" && keepOutOfGit(io.cwd, io.env);
+  const ignored = agent === "gemini" && keepOutOfGit(io.cwd, io.env, protectFor(tokenFile));
   io.out(
     [
       agent === "codex" ? "Connected Codex CLI to Perfect Planner (Codex keeps one connection for this computer)." : `Connected ${label} in this folder (${io.cwd}) to Perfect Planner.`,
