@@ -4,7 +4,7 @@ import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { StructureWorkspace } from "../src/components/StructureWorkspace.jsx";
 import { BlueprintWorkspace } from "../src/components/BlueprintWorkspace.jsx";
-import { ComponentPlansWorkspace } from "../src/components/ComponentPlansWorkspace.jsx";
+import { ComponentPlansWorkspace, readableTime } from "../src/components/ComponentPlansWorkspace.jsx";
 import { createImportedProjectSession } from "../src/project/projectSession.js";
 
 beforeEach(() => {
@@ -93,7 +93,8 @@ describe("Define controls", () => {
     await user.click(screen.getByRole("button", { name: /Open structure builder/ }));
     expect(onOpenStructure).toHaveBeenCalledTimes(1);
     await user.click(screen.getAllByRole("button", { name: /required/ })[0]);
-    expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({ status: "blocked" }));
+    // define-19: an unanswered contract is open work ("queued"), not a red hard stop.
+    expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({ status: "queued" }));
   });
 
   test("Component contracts: Review Structure intake navigates and the map atlas opens", async () => {
@@ -109,5 +110,55 @@ describe("Define controls", () => {
     const atlas = document.querySelector(".component-map-atlas");
     await user.click(within(atlas).getAllByRole("button")[1]);
     expect(within(atlas).getByLabelText(/Mermaid source/)).toBeTruthy();
+  });
+  // Trial define-24: a search with no match left a blank list, "27" in the
+  // header and the hidden C001 open in the dossier.
+  test("Demo component search with no match says so, counts matches and hides the dossier", async () => {
+    const user = userEvent.setup();
+    render(<ComponentPlansWorkspace activeProject={{ kind: "demo" }} />);
+    const total = document.querySelectorAll(".component-catalog-list > button").length;
+    expect(total).toBeGreaterThan(1);
+    await user.type(screen.getByLabelText("Find component, scope, or purpose"), "zzzz-nothing");
+    expect(screen.getByRole("status").textContent).toMatch(/No component matches “zzzz-nothing”/);
+    expect(screen.getByText(`0 of ${total} dossiers match`)).toBeTruthy();
+    expect(document.querySelector(".component-dossier h2")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Clear search" }));
+    expect(document.querySelectorAll(".component-catalog-list > button").length).toBe(total);
+    expect(document.querySelector(".component-dossier h2")).toBeTruthy();
+  });
+
+  test("Demo search that hides the selected component shows the first match instead", async () => {
+    const user = userEvent.setup();
+    render(<ComponentPlansWorkspace activeProject={{ kind: "demo" }} />);
+    const second = document.querySelectorAll(".component-catalog-list > button")[1];
+    const name = second.querySelector("strong").textContent;
+    await user.type(screen.getByLabelText("Find component, scope, or purpose"), name);
+    expect(document.querySelector(".component-dossier h2").textContent).toBe(name);
+    expect(document.querySelector(".component-catalog-list > button.active strong").textContent).toBe(name);
+  });
+
+  // Trial define-20: the sample catalog read as a green, saved 100%.
+  test("Demo catalog coverage is labelled as an unsaved sample", () => {
+    render(<ComponentPlansWorkspace activeProject={{ kind: "demo" }} />);
+    const state = document.querySelector(".component-catalog-state");
+    expect(state.classList.contains("ready")).toBe(false);
+    expect(state.textContent).toMatch(/Sample · not saved/);
+  });
+
+  // Trial define-26 (Components half): the discovery time was a raw ISO string.
+  test("imported Components shows the discovery time as a readable date, not ISO", () => {
+    const withDiscovery = createImportedProjectSession({
+      name: "Audit app",
+      adapter: "browser",
+      registration: { workspaceId: "ws_audit", registryRevision: 1, rootIdentity: root, access: "metadata-read-only", canonicalRoot: "browser://Audit/x" },
+      census: { workspaceId: "ws_audit", registryRevision: 1, rootIdentity: root, digest: "3".repeat(64), fileCount: 2, generatedAt: "2026-10-01T09:30:00.000Z", skipped: [] },
+      discovery: { state: "generated", generatedAt: "2026-10-01T09:30:00.000Z", counts: { observed: 1, signals: 0, unanswered: 7 }, categories: [{ id: "A01", state: "observed", findings: [{ id: "S001" }] }] },
+      now: Date.parse("2026-10-01T09:30:00.000Z"),
+    });
+    render(<ComponentPlansWorkspace activeProject={withDiscovery} />);
+    const facts = screen.getByRole("region", { name: "Available project facts" }).textContent;
+    expect(facts).not.toContain("2026-10-01T09:30:00.000Z");
+    expect(facts).toContain(readableTime("2026-10-01T09:30:00.000Z"));
+    expect(readableTime("not a date")).toBe("time unknown");
   });
 });
