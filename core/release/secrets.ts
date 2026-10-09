@@ -153,7 +153,13 @@ export async function scanBranch(
   opts: { cwd: string; base: string; head?: string; approved?: ReadonlySet<string> },
 ): Promise<BranchScanResult> {
   const head = opts.head ?? "HEAD";
-  const list = await run("git", ["diff", "--name-only", "--diff-filter=ACMR", `${opts.base}...${head}`], { cwd: opts.cwd });
+  // base...head is the diff from their merge-base. Tree-to-tree (diff-tree) never reads the working
+  // tree, so no filter program can run, and the host git runner does not refuse it as it does `diff`.
+  const mergeBase = await run("git", ["merge-base", opts.base, head], { cwd: opts.cwd });
+  if (mergeBase.code !== 0) {
+    throw new Error(`git merge-base failed (exit ${mergeBase.code}): ${mergeBase.stderr.trim().split(/\r?\n/)[0] ?? ""}`);
+  }
+  const list = await run("git", ["diff-tree", "-r", "--name-only", "--no-commit-id", "--diff-filter=ACMR", mergeBase.stdout.trim(), head], { cwd: opts.cwd });
   if (list.code !== 0) {
     throw new Error(`git diff failed (exit ${list.code}): ${list.stderr.trim().split(/\r?\n/)[0] ?? ""}`);
   }

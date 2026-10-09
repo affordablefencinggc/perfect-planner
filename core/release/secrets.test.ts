@@ -325,7 +325,8 @@ describe("scanBranch", () => {
   };
   const make = (calls: string[][]): CommandRunner => async (_cmd, args) => {
     calls.push([...args]);
-    if (args[0] === "diff") return { code: 0, stdout: Object.keys(files).join("\n") + "\n", stderr: "" };
+    if (args[0] === "merge-base") return { code: 0, stdout: "b0b0\n", stderr: "" };
+    if (args[0] === "diff-tree") return { code: 0, stdout: Object.keys(files).join("\n") + "\n", stderr: "" };
     const path = args[1].split(":").slice(1).join(":");
     return { code: 0, stdout: files[path], stderr: "" };
   };
@@ -333,8 +334,9 @@ describe("scanBranch", () => {
   it("scans full content of each changed file at head", async () => {
     const calls: string[][] = [];
     const res = await scanBranch(make(calls), { cwd: "/r", base: "origin/main" });
-    expect(calls[0]).toEqual(["diff", "--name-only", "--diff-filter=ACMR", "origin/main...HEAD"]);
-    expect(calls[1]).toEqual(["show", "HEAD:src/a.ts"]);
+    expect(calls[0]).toEqual(["merge-base", "origin/main", "HEAD"]);
+    expect(calls[1]).toEqual(["diff-tree", "-r", "--name-only", "--no-commit-id", "--diff-filter=ACMR", "b0b0", "HEAD"]);
+    expect(calls[2]).toEqual(["show", "HEAD:src/a.ts"]);
     expect(res.ok).toBe(false);
     expect(res.filesScanned).toBe(4);
     expect(res.findings.map((f) => `${f.file}:${f.rule}`).sort()).toEqual(["secrets/.env:env-file", "src/a.ts:aws-access-key"]);
@@ -345,17 +347,19 @@ describe("scanBranch", () => {
     const calls: string[][] = [];
     const run: CommandRunner = async (_c, args) => {
       calls.push([...args]);
-      return args[0] === "diff" ? { code: 0, stdout: "a.ts\n", stderr: "" } : { code: 0, stdout: "clean", stderr: "" };
+      if (args[0] === "merge-base") return { code: 0, stdout: "b0b0\n", stderr: "" };
+      return args[0] === "diff-tree" ? { code: 0, stdout: "a.ts\n", stderr: "" } : { code: 0, stdout: "clean", stderr: "" };
     };
     const res = await scanBranch(run, { cwd: "/r", base: "main", head: "feat" });
     expect(res).toEqual({ ok: true, findings: [], filesScanned: 1 });
-    expect(calls[0][3]).toBe("main...feat");
-    expect(calls[1][1]).toBe("feat:a.ts");
+    expect(calls[0]).toEqual(["merge-base", "main", "feat"]);
+    expect(calls[1].slice(-2)).toEqual(["b0b0", "feat"]);
+    expect(calls[2][1]).toBe("feat:a.ts");
   });
 
   it("throws a clear error when git fails", async () => {
     const run: CommandRunner = async () => ({ code: 128, stdout: "", stderr: "fatal: bad revision 'x'\n" });
-    await expect(scanBranch(run, { cwd: "/r", base: "x" })).rejects.toThrow(/git diff failed.*bad revision/);
+    await expect(scanBranch(run, { cwd: "/r", base: "x" })).rejects.toThrow(/git merge-base failed.*bad revision/);
   });
 });
 
@@ -365,7 +369,8 @@ describe("scanBranch honours only ledger approvals, never a file on a branch", (
   const fp = fingerprintOf("src/a.ts", "github-token", ghp);
   const runner = (head: Record<string, string>, base: Record<string, string>, calls: string[][] = []): CommandRunner => async (_c, args) => {
     calls.push([...args]);
-    if (args[0] === "diff") return { code: 0, stdout: Object.keys(head).join("\n") + "\n", stderr: "" };
+    if (args[0] === "merge-base") return { code: 0, stdout: "b0b0\n", stderr: "" };
+    if (args[0] === "diff-tree") return { code: 0, stdout: Object.keys(head).join("\n") + "\n", stderr: "" };
     const [rev, ...rest] = args[1].split(":");
     const path = rest.join(":");
     const tree = rev === "main" ? base : head;
