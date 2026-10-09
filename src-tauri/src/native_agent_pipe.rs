@@ -539,7 +539,9 @@ socket.on('close',()=>process.exit(bytes.length===6?0:6));"#;
         assert_eq!(pipe.read_frame(Duration::from_secs(3)).unwrap(),b"{}");
         // Re-observe the authorized child immediately before returning a response.
         pipe.verify_client(&peer).unwrap();pipe.write_frame(b"ok",Duration::from_secs(3)).unwrap();
-        assert!(child.0.wait().unwrap().success());
+        // Child::wait closes stdin first, which would race the child's own exit; hold it open across the wait.
+        let stdin=child.0.stdin.take();
+        assert!(child.0.wait().unwrap().success());drop(stdin);
         assert_eq!(pipe.verify_client(&peer).unwrap_err(),"AGENT_PEER_NOT_LIVE");
     }
     #[test] fn verifies_both_actual_pipe_endpoint_processes() {
