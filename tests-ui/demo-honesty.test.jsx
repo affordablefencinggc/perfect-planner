@@ -129,6 +129,50 @@ describe("Demo controls are honest about being sample data", () => {
     expect(freeze.disabled).toBe(true);
     expect(freeze.parentElement.textContent).toContain("Demo only — sample data");
   });
+
+  test("Demo canvas, calendar, ledger and merge queue stay consistent (proverel-12, 13, 16, 17, 27)", async () => {
+    const user = userEvent.setup();
+    try { window.sessionStorage.clear(); } catch { /* ignore */ }
+    const { container, unmount } = renderShell({ route: "evidence" });
+    const slider = screen.getByRole("slider", { name: /Journey time/ });
+    fireEvent.change(slider, { target: { value: "100" } });
+    expect(slider.getAttribute("aria-valuetext")).toBe("02 Sep 2026 · 18:00 AEST");
+    fireEvent.change(slider, { target: { value: "0" } });
+    expect(slider.getAttribute("aria-valuetext")).toBe("02 Sep 2026 · 08:00 AEST");
+    expect(container.textContent).not.toMatch(/2[4-9]:00/);
+
+    await user.click(within(screen.getByRole("group", { name: "Evidence views" })).getByRole("button", { name: /Screenshot proof/ }));
+    const zoom = screen.getByRole("group", { name: "Canvas zoom" });
+    const zoomIn = within(zoom).getByRole("button", { name: "Zoom in" });
+    for (let step = 0; step < 6 && !zoomIn.disabled; step += 1) await user.click(zoomIn);
+    expect(zoomIn.disabled).toBe(true);
+    expect(zoom.textContent).toContain("120%");
+    // The zoom controls are outside the scrolling canvas.
+    expect(screen.getByRole("region", { name: "Screenshot proof canvas" }).contains(zoom)).toBe(false);
+    unmount();
+
+    // 27: the chosen Evidence view survives leaving the page.
+    renderShell({ route: "evidence" });
+    expect(screen.getByRole("group", { name: "Canvas zoom" })).toBeTruthy();
+    cleanup();
+    try { window.sessionStorage.clear(); } catch { /* ignore */ }
+
+    const ledger = renderShell({ route: "ledger" });
+    const register = within(ledger.container).getByRole("region", { name: "Source document register" });
+    expect(register.textContent).not.toMatch(/\d+%/);
+    expect(register.textContent).not.toContain("Danie + Codex");
+    cleanup();
+
+    const ops = renderShell({ route: "plan" });
+    fireEvent.click(ops.container.querySelector(".ops-handle"));
+    await user.click(screen.getByRole("button", { name: /Merge queue/ }));
+    const conveyor = ops.container.querySelector(".merge-conveyor");
+    expect(conveyor.querySelectorAll(".merge-station.complete")).toHaveLength(0);
+    const stationText = [...conveyor.querySelectorAll(".merge-station")].map((station) => station.textContent);
+    expect(stationText).toContain("READYB09");
+    expect(stationText).toContain("BUILDINGB07");
+    expect(stationText).toContain("PROOFB08");
+  });
 });
 
 describe("Plan quick brief copy and demo drawer labels", () => {

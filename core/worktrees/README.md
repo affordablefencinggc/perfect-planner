@@ -95,6 +95,7 @@ line, diffs get `--no-ext-diff --no-textconv`, and display settings that would c
 person reviews (`diff.relative`, `diff.noprefix`, colour, order file) are reset. System and global
 config are replaced by an app-owned file holding only the user's identity, `safe.directory` and
 line-ending settings (`GIT_CONFIG_NOSYSTEM`, `GIT_CONFIG_GLOBAL`, `GIT_ATTR_NOSYSTEM`), and
-inherited `GIT_CONFIG_*`, `GIT_EXEC_PATH`, `GIT_EXTERNAL_DIFF` and similar are dropped. A command
-that checks out, compares, adds or merges files is refused (`GitProgramRefusedError`) while the repo
+inherited `GIT_CONFIG_*`, `GIT_EXEC_PATH`, `GIT_EXTERNAL_DIFF` and similar are dropped. Any command
+outside a short allow-list (rev-parse, show-ref, ls-tree, merge-base, update-ref, config, plain
+cat-file, worktree list/remove/prune and similar) is refused (`GitProgramRefusedError`) while the repo
 config names a filter program or merge driver (`filterPrograms`): a person must review and remove it.

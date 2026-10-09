@@ -111,6 +111,7 @@
 .imported-blueprint-verdict strong { font: 800 17px var(--mono); }
 .imported-blueprint-verdict em { color: var(--muted); font: normal 10px/1.4 var(--mono); }
 .imported-blueprint-verdict.verdict-observed > svg { color: var(--green); }
+.imported-blueprint-verdict.verdict-neutral > svg { color: var(--ink, #27302c); }
 .imported-blueprint-verdict.verdict-review > svg { color: var(--amber); }
 .imported-blueprint-verdict.verdict-unavailable > svg { color: var(--red); }
 

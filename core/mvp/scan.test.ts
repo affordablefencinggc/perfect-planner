@@ -130,6 +130,21 @@ describe("folderSource", () => {
     expect(r.features.find((f) => f.id === "view-mode-toggle")?.status).toBe("done");
     expect(r.features.find((f) => f.id === "home")?.status).toBe("partial");
   });
+  it("counts co-located and dotted tests anywhere under src", () => {
+    // Found on Looplet: 2,018 tests live beside the code, so 580 features read as untested.
+    const root = tmp({
+      "src/components/SiteAuditModal.tsx": "export default 1;",
+      "src/components/SiteAuditModal.pricing-visibility.test.tsx": "",
+      "src/components/ui/Stepper.tsx": "export default 2;",
+      "src/components/ui/__tests__/Stepper.test.tsx": "",
+      "src/pages/Quotes.tsx": "export default 3;",
+      "src/services/quotes.test.ts": "",
+      "src/pages/Lonely.tsx": "export default 4;",
+    });
+    const r = scanFeatures(root, { sources: [folderSource()] });
+    const status = Object.fromEntries(r.features.map((f) => [f.id, f.status]));
+    expect(status).toEqual({ "site-audit-modal": "done", stepper: "done", quotes: "done", lonely: "partial" });
+  });
 });
 
 describe("scanFeatures", () => {

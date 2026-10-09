@@ -110,3 +110,21 @@ test.each(['other-project','return-to-project','new-generation'])('delayed succe
  await userEvent.setup().click(screen.getByRole('button',{name:'Check agent sessions'}));expect(onObservation).toHaveBeenCalledTimes(1);
  expect(onObservation.mock.calls[0][0].projectId).toBe(change==='return-to-project'?project.projectId:next.projectId);
 });
+test('a failed broker stop is reported as a failed stop, not a failed inspection',async()=>{
+ window.__TAURI_INTERNALS__={};const recordFailure=vi.fn(()=>({id:'stored'}));
+ const invoke=vi.fn(async()=>{throw 'AGENT_BROKER_STOP_FAILED';});
+ render(<AgentSessionsPanel project={project} invoke={invoke} recordFailure={recordFailure}/>);
+ await userEvent.setup().click(screen.getByRole('button',{name:'Stop this project broker'}));
+ expect(await screen.findByText(/Stopping the project broker failed/)).toBeTruthy();
+ expect(screen.queryByText(/Session inspection failed/)).toBeNull();
+ expect(invoke.mock.calls[0][0]).toBe('stop_project_agent_broker');expect(recordFailure.mock.calls[0][2]).toBe(true);
+});
+test('a later session check clears a stale pairing failure',async()=>{
+ window.__TAURI_INTERNALS__={};
+ const invoke=vi.fn(async(command,{request})=>{if(command==='prepare_agent_pairing')throw 'AGENT_HELPER_MISSING';return {...request,sessions:[],stopped:false,executionAuthorized:false,externalEndpointAvailable:false};});
+ render(<AgentSessionsPanel project={project} invoke={invoke} recordFailure={()=>({id:'stored'})}/>);const user=userEvent.setup();
+ await user.click(screen.getByRole('button',{name:'Connect an IDE agent'}));expect(await screen.findByText(/Pairing setup failed/)).toBeTruthy();
+ await user.click(screen.getByRole('button',{name:'Check agent sessions'}));
+ expect(await screen.findByText(/No paired sessions returned/)).toBeTruthy();
+ expect(screen.queryByText(/Pairing setup failed/)).toBeNull();
+});

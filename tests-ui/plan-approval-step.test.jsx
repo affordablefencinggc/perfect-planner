@@ -69,6 +69,10 @@ describe("PlanApprovalStep", () => {
     view.rerender(<PlanApprovalStep project={project} records={live(project)} store={store} onWorkspace={vi.fn()} />);
     expect(screen.getByText(/2 tasks approved/)).toBeTruthy();
     expect(screen.getByRole("button", { name: "Approve the current tasks" }).disabled).toBe(true);
+    // Gap 17: the person's approval is named distinctly from the ledger-bound saved-plan check.
+    expect(screen.getByText("Approved by you")).toBeTruthy();
+    expect(screen.getByText(/^Plan approved by you:/)).toBeTruthy();
+    expect(screen.getByText(/separate saved-plan check/)).toBeTruthy();
 
     // The workspace-level watcher records that the tasks changed after approval.
     const watcherStore = fakeStore(first);
@@ -92,6 +96,45 @@ describe("PlanApprovalStep", () => {
     expect(screen.getByRole("button", { name: "Approve this plan" }).disabled).toBe(true);
     await user.click(screen.getByRole("button", { name: /Edit tasks in the Ledger/ }));
     expect(onWorkspace).toHaveBeenCalledWith("ledger");
+    expect(localStorage.getItem(workRecordsKey(project.projectId))).toBeNull();
+  });
+});
+
+// Trial define-04: a dependency cycle plus an overlapping write was approved
+// ("2 tasks approved") and listed as "task details still missing".
+describe("PlanApprovalStep blocks plans with no runnable order", () => {
+  function cyclePlan(project) {
+    const binding = taskDraftBinding(project);
+    const two = updateTaskDraft(updateTaskDraft(emptyTaskDraftLedger(binding), draft("Add login form")), { ...draft("Store sessions"), dependsOn: ["T0001"] });
+    return updateTaskDraft(two, { ...two.tasks[0], dependsOn: ["T0002"] });
+  }
+  test("a dependency cycle disables approval, is named as the reason, and overlaps stay separate", async () => {
+    const project = session();
+    render(<PlanApprovalStep project={project} records={live(project)} store={fakeStore(cyclePlan(project))} onWorkspace={vi.fn()} />);
+    expect(await screen.findByText("Add login form")).toBeTruthy();
+    const note = screen.getByRole("note", { name: "Problems that block approval" });
+    expect(note.textContent).toMatch(/1 dependency problem blocks approval/);
+    expect(note.textContent).toMatch(/T0001, T0002/);
+    expect(screen.getByRole("button", { name: "Approve this plan" }).disabled).toBe(true);
+    expect(screen.queryByText(/task details? still missing/)).toBeNull();
+    expect(screen.getByLabelText("Plan overlaps").textContent).toMatch(/overlap/i);
+    expect(localStorage.getItem(workRecordsKey(project.projectId))).toBeNull();
+  });
+  test("approve() itself refuses a cycle or an archived dependency, saving nothing", async () => {
+    const project = session();
+    const binding = taskDraftBinding(project);
+    const { planBlockingFindings } = await import("../src/project/usePlanApproval.js");
+    expect(planBlockingFindings(cyclePlan(project)).map((item) => item.kind)).toEqual(["dependency-cycle"]);
+    const base = updateTaskDraft(updateTaskDraft(emptyTaskDraftLedger(binding), draft("Old")), { ...draft("New"), claims: [{ access: "write", path: "src/other.js" }], dependsOn: ["T0001"] });
+    const archived = updateTaskDraft(base, { ...base.tasks[0], archived: true });
+    expect(planBlockingFindings(archived).map((item) => item.kind)).toEqual(["archived-dependency"]);
+    const user = userEvent.setup();
+    render(<PlanApprovalStep project={project} records={live(project)} store={fakeStore(archived)} onWorkspace={vi.fn()} />);
+    expect(await screen.findByText("New")).toBeTruthy();
+    expect(screen.getByRole("note", { name: "Problems that block approval" }).textContent).toMatch(/depends on archived T0001/);
+    const button = screen.getByRole("button", { name: "Approve this plan" });
+    expect(button.disabled).toBe(true);
+    await user.click(button);
     expect(localStorage.getItem(workRecordsKey(project.projectId))).toBeNull();
   });
 });

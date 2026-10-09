@@ -46,3 +46,34 @@ test('successful empty read establishes zero and history browsing discloses paus
  expect(screen.queryByText(/Automatic refresh is paused/)).toBeNull();
  expect(screen.queryByText('Report 0 · recorded by Planner')).toBeNull();
 });
+
+test('a view change (generation bump) keeps the panel open and the unsaved draft intact',()=>{
+ const events=fixture();const view=render(<DeveloperNotes project={project} events={events}/>);
+ fireEvent.click(screen.getByRole('button',{name:'Developer notes'}));fireEvent.click(screen.getByText('Add exchange note'));
+ fireEvent.change(screen.getByLabelText('Request summary'),{target:{value:'Half-written draft'}});
+ view.rerender(<DeveloperNotes project={{...project,generation:2}} events={events}/>);
+ expect(screen.getByLabelText('Developer notes')).toBeTruthy();
+ expect(screen.getByLabelText('Request summary').value).toBe('Half-written draft');
+});
+test('after a generation bump, report reads send and accept the current generation',async()=>{
+ const binding={projectId:project.projectId,workspaceId:'notes',registryRevision:1,rootIdentity:'a'.repeat(64)};
+ const sent=[];
+ const invoke=async(_command,{request})=>{sent.push(request.generation);return {projectId:project.projectId,generation:request.generation,data:{binding,executionAuthorized:false,coverage:'reported-exchanges-only',total:0,nextOffset:null,records:[]}};};
+ const events=fixture();const native={...project,registration:{...binding,adapter:'native'}};
+ const view=render(<DeveloperNotes project={native} events={events} invoke={invoke}/>);
+ fireEvent.click(screen.getByRole('button',{name:'Developer notes'}));await screen.findByText('Agent reports · 0 recorded');
+ view.rerender(<DeveloperNotes project={{...native,generation:5}} events={events} invoke={invoke}/>);
+ fireEvent.click(screen.getByText('Refresh latest report'));
+ await act(async()=>{await Promise.resolve();await Promise.resolve();});
+ expect(sent.at(-1)).toBe(5);
+ expect(screen.queryByText(/Report refresh failed/)).toBeNull();
+});
+test('a different folder registration for the same project clears displayed owner reports',async()=>{
+ const binding={projectId:project.projectId,workspaceId:'notes',registryRevision:1,rootIdentity:'a'.repeat(64)};
+ const invoke=async()=>({projectId:project.projectId,generation:1,data:{binding,executionAuthorized:false,coverage:'reported-exchanges-only',total:1,nextOffset:null,records:[{binding,exchangeId:'agent-1',summary:{turn:'Old folder report',request:'Inspect',response:'Read',observed:'',error:'',explanation:'',solution:'',evidence:''},sessionId:'b'.repeat(32),digest:'c'.repeat(64),receivedAt:'2026-09-14T00:00:00.000Z',origin:'authenticated-agent-report',verification:'not-verified'}]}});
+ const events=fixture();const native={...project,registration:{...binding,adapter:'native'}};
+ const view=render(<DeveloperNotes project={native} events={events} invoke={invoke}/>);
+ fireEvent.click(screen.getByRole('button',{name:'Developer notes'}));await screen.findByText('Old folder report · recorded by Planner');
+ view.rerender(<DeveloperNotes project={{...native,registration:{...native.registration,registryRevision:2}}} events={events} invoke={()=>new Promise(()=>{})}/>);
+ expect(screen.queryByText('Old folder report · recorded by Planner')).toBeNull();
+});

@@ -1,7 +1,7 @@
 import "./helpers/hermetic-env.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createPlannerGitInventoryController, validateGitInventory } from "../src/runtime/plannerGitInventory.js";
+import { createPlannerGitInventoryController, GIT_INSPECTION_UNCERTAIN_REASON, validateGitInventory } from "../src/runtime/plannerGitInventory.js";
 
 const project = (projectId = "project-one") => ({ projectId, generation: 1, kind: "imported", state: "observed", registration: { adapter: "native", access: "metadata-read-only", workspaceId: "workspace-one", registryRevision: 1, rootIdentity: "a".repeat(64) } });
 const observation = () => ({ schemaVersion: 1, kind: "git-inventory", state: "observed", localOnly: true, worktrees: [{ path: "C:/fixture", headSha: "b".repeat(40), branchRef: "refs/heads/main", mode: "branch", locked: true, prunable: false, cleanState: "not-inspected", canAutomaticallyDelete: false }], branches: [{ ref: "refs/heads/main", headSha: "b".repeat(40) }], cleanState: "not-inspected", ciState: "not-inspected", productionState: "not-inspected", promotionAuthority: false, canAutomaticallyDelete: false, consistency: "two-matching-reads-not-atomic" });
@@ -90,4 +90,32 @@ test("uncertain cleanup survives disposal and cannot be cleared by a late succes
   reopened.dispose();
   const again = createPlannerGitInventoryController(options({ runtime, invoke })); again.setProject(project("project-two"));
   await again.check(); assert.equal(calls, 1); assert.equal(again.getSnapshot().canCheck, false); again.dispose();
+});
+
+test("a view change (generation only) keeps the observation and the next request carries the new generation", async () => {
+  const sent = [];
+  const c = createPlannerGitInventoryController(options({ invoke: async (_cmd, args) => { sent.push(args.request.generation); return wire(args.request); } }));
+  c.setProject(project()); await c.check();
+  assert.equal(c.getSnapshot().status, "observed");
+  c.setProject({ ...project(), generation: 7 });
+  assert.equal(c.getSnapshot().status, "observed"); assert.ok(c.getSnapshot().result);
+  await c.check(); assert.deepEqual(sent, [1, 7]); c.dispose();
+});
+
+test("a different folder registration still discards the observation", async () => {
+  const c = createPlannerGitInventoryController(options({ invoke: async (_cmd, args) => wire(args.request) }));
+  c.setProject(project()); await c.check();
+  const moved = project(); moved.registration = { ...moved.registration, registryRevision: 2 };
+  c.setProject(moved);
+  assert.equal(c.getSnapshot().result, null); assert.equal(c.getSnapshot().status, "idle"); c.dispose();
+});
+
+test("first uncertain failure says how to recover and never says 'previous request' or points to a missing control", async () => {
+  const c = createPlannerGitInventoryController(options({ runtime: { __TAURI_INTERNALS__: {} }, invoke: async () => { throw new Error("native rejected"); } }));
+  c.setProject(project()); await c.check();
+  const reason = c.getSnapshot().reason;
+  assert.equal(reason, GIT_INSPECTION_UNCERTAIN_REASON);
+  assert.match(reason, /Reload Perfect Planner to try again/);
+  assert.doesNotMatch(reason, /Previous request|Reconcile/);
+  assert.equal(c.getSnapshot().canCheck, false); c.dispose();
 });

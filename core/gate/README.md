@@ -87,7 +87,11 @@ branch (`git merge --no-ff`), runs the test there, and only on a pass moves the
 integration branch: `git merge --ff-only` in its checkout if it is checked out
 (refused when that checkout has uncommitted changes or has moved), else
 `git update-ref` with the expected old value. Conflicts and failures leave
-the integration branch untouched. The temporary worktree is always removed.
+the integration branch untouched. Before the integration branch moves, the gate checks that the
+candidate's commit is still HEAD, has exactly the integration tip and the approved commit as parents,
+and holds the same tree as `git merge-tree --write-tree <tip> <approved>` (a pure in-memory merge that
+runs no hooks or filters; needs Git 2.38 or later), so nothing that changed the merge while git ran
+can land. The temporary worktree is always removed.
 It merges only when the branch tip has an approving diff verdict and a merge
 approval for that exact tip in the person's own signed entry (`approveMerge`,
 `review.verdict` with `scope:merge`). Passing a person as `actor` is not approval:
