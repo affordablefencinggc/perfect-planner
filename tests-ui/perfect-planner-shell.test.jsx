@@ -158,7 +158,9 @@ describe("Perfect Planner shell interaction and accessibility", () => {
     }
     await user.click(screen.getByRole("button", { name: /2 demo agents/ }));
     expect(await screen.findByRole("region", { name: "Runtime and connections" })).toBeTruthy();
-    expect(await screen.findByRole("region", { name: "Connect your agent" })).toBeTruthy();
+    const connectCard = await screen.findByRole("region", { name: "Connect your agent" });
+    expect(connectCard.textContent).not.toMatch(/Antigravity/);
+    expect(connectCard.textContent).toMatch(/Use Connect agent in the top bar instead/);
     expect(window.location.search).toContain("workspace=ledger");
   });
 
