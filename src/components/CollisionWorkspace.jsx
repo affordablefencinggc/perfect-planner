@@ -46,6 +46,7 @@ export function CollisionWorkspace({ onGateChange, onToast }) {
     }
     const snapshot = await authorityClient.approve(censusDigest, collision);
     setAuthority(snapshot); setLedgerIntegrity("unchecked");
+    if (!snapshot.approvedIds.includes(collision.id)) onToast(`Approval for ${collision.id} was not recorded: ${snapshot.reason ?? "the authority did not confirm it"}`);
   };
   const commitAssessment = async () => {
     const surfaces = [...new Set(assessment.claims.map((claim) => `${claim.access}:${claim.surface}`))];

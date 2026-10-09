@@ -26,6 +26,7 @@ import {
   buildWorkspaceDiscovery,
   buildWorkspaceStructureTree,
 } from "../engine/workspaceDiscoveryEngine.js";
+import { DEMO_ONLY_REASON, DemoOnlyReason } from "../demo/DemoSampleNotice.jsx";
 import { createStableProjectId } from "../project/projectIds.js";
 import { projectLabelFromRoot, projectRegistrationLabelFromRoot } from "../project/projectLabel.js";
 import { boundedFetch } from "../runtime/boundedFetch.js";
@@ -193,6 +194,7 @@ export function StructureWorkspace({
 }) {
   const projectContext = useOptionalProject();
   const imported = activeProject && activeProject.kind !== "demo";
+  const demo = activeProject?.kind === "demo";
   const planId = imported ? activeProject.projectId : currentFolderContractInput.planId;
   const [draft, setDraft] = useState(cloneSeed);
   const [architecture, setArchitecture] = useState({ head: null, error: null });
@@ -1064,8 +1066,11 @@ export function StructureWorkspace({
           <button
             className="soft-button"
             onClick={() => {
-              setDraft(cloneSeed());
-              setSelectedId("F001");
+              // A real project starts from an empty plan, never the sample folders.
+              setDraft(imported
+                ? { ...cloneSeed(), planId, nodes: [], architectureContractDigest: architecture.head?.contractDigest ?? null, architectureRevision: architecture.head?.revision ?? null }
+                : cloneSeed());
+              setSelectedId(imported ? undefined : "F001");
             }}
           >
             <ShieldCheckIcon /> Reset proposal
@@ -1771,11 +1776,13 @@ export function StructureWorkspace({
           </button>
           <button
             className="primary-button"
-            disabled={!assessment.ready || !registry.available || publishing}
+            disabled={demo || !assessment.ready || !registry.available || publishing}
+            title={demo ? `${DEMO_ONLY_REASON}: sample folder plans are never saved.` : !assessment.ready ? "Resolve the folder plan blockers first." : !registry.available ? "The saved registry is unavailable." : undefined}
             onClick={publish}
           >
             <ShieldCheckIcon /> {publishing ? "Freezing…" : "Freeze revision"}
           </button>
+          {demo && <DemoOnlyReason>sample folder plans are never saved.</DemoOnlyReason>}
         </header>
         {openSections.validation && (
           <div id="structure-validation-detail">
