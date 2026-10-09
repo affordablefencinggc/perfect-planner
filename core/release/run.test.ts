@@ -207,7 +207,7 @@ describe("host git never runs the repo's own hooks or programs", () => {
       // Its hooks folder is the repo's own (.git/hooks here; the trap hooks are not named in config).
       const installed = await installPrePushHook(safeRunner, { cwd: root, hookScript: "/opt/pp/pre-push.mjs" });
       expect(installed.installed).toBe(false);
-      expect(fs.realpathSync(installed.path)).toBe(fs.realpathSync(path.join(root, ".git", "hooks", "pre-push")));
+      expect(fs.realpathSync.native(installed.path)).toBe(fs.realpathSync.native(path.join(root, ".git", "hooks", "pre-push")));
       expect(await prePushInstalled(safeRunner, { cwd: root })).toBe(false);
       const ledger = Ledger.openSync(new MemoryStore());
       installNumberingRules(ledger);
@@ -225,7 +225,7 @@ describe("host git never runs the repo's own hooks or programs", () => {
       execFileSync(gitExecutable(os.tmpdir()), ["config", "core.hooksPath", "own-hooks"], { cwd: root, env });
       const installed = await installPrePushHook(safeRunner, { cwd: root, hookScript: "/opt/pp/pre-push.mjs" });
       expect(installed).toMatchObject({ installed: true });
-      expect(fs.realpathSync(installed.path)).toBe(fs.realpathSync(path.join(root, "own-hooks", "pre-push")));
+      expect(fs.realpathSync.native(installed.path)).toBe(fs.realpathSync.native(path.join(root, "own-hooks", "pre-push")));
       expect(await prePushInstalled(safeRunner, { cwd: root })).toBe(true);
       expect(fs.existsSync(marker)).toBe(false);
     } finally {
