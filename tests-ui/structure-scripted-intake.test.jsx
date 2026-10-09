@@ -44,8 +44,7 @@ describe("scripted intake through the real Structure buttons", () => {
     render(<StructureWorkspace activeProject={null} workspaceAdapter={browserWorkspaceAdapter} onProjectCaptured={onProjectCaptured} />);
 
     await user.click(screen.getByRole("button", { name: "Choose app folder" }));
-    await waitFor(() => expect(screen.getByPlaceholderText("Choose a folder above").value).toMatch(/^browser:\/\/notes-app\//));
-    await user.click(screen.getByRole("button", { name: /Approve read-only analysis/ }));
+    await user.click(await screen.findByRole("button", { name: "Approve read-only scan" }));
 
     await waitFor(() => expect(onProjectCaptured).toHaveBeenCalledTimes(1));
     const captured = onProjectCaptured.mock.calls[0][0];

@@ -9110,3 +9110,26 @@ code {
   cursor: not-allowed;
   opacity: 0.55;
 }
+
+/* No-project Home: one headline, one primary action, one quiet demo link. */
+.project-home-empty-body {
+  display: grid;
+  justify-items: center;
+  gap: 14px;
+  max-width: 520px;
+  margin: 12vh auto 0;
+  text-align: center;
+}
+.project-home-empty-body h1 { margin: 0; }
+.project-home-empty-body p { margin: 0; color: var(--muted, inherit); }
+.project-home-empty-action { padding: 14px 28px; font-size: 1.05rem; }
+.project-home-empty-demo {
+  background: none;
+  border: 0;
+  padding: 4px;
+  font: inherit;
+  font-size: 0.9rem;
+  color: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}

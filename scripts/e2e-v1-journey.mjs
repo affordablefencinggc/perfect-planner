@@ -213,9 +213,9 @@ async function openPage(cdp) {
   return page;
 }
 
-async function startServer(appData) {
+async function startServer(appData, launchFolder) {
   const port = await freePort();
-  const child = spawn(process.execPath, [path.join(projectRoot, "scripts", "serve-local.mjs")], { cwd: projectRoot, env: { ...process.env, LOCALAPPDATA: appData, PORT: String(port), PP_OPEN: "0" }, stdio: ["ignore", "pipe", "pipe"] });
+  const child = spawn(process.execPath, [path.join(projectRoot, "scripts", "serve-local.mjs")], { cwd: projectRoot, env: { ...process.env, LOCALAPPDATA: appData, PORT: String(port), PP_OPEN: "0", PP_FOLDER: launchFolder }, stdio: ["ignore", "pipe", "pipe"] });
   let output = ""; child.stdout.on("data", (d) => { output += d; }); child.stderr.on("data", (d) => { output += d; });
   const url = await waitFor(() => output.match(/running at (http:\/\/\S+)/)?.[1], { label: `server start (${output.trim()})` });
   return { url: url.endsWith("/") ? url : `${url}/`, stop: () => new Promise((resolve) => { child.once("exit", resolve); child.kill(); setTimeout(resolve, 2000); }), output: () => output };
@@ -276,7 +276,13 @@ async function main() {
   const seeded = seedRegistryValue();
   if (seeded.projectId !== projectId) throw new Error("Seeded project id mismatch.");
 
-  const server = await startServer(appData);
+  // A tiny app folder the server offers for the one-click scan (the picker itself cannot be automated).
+  const launchFolder = path.join(appData, "notes-app");
+  await mkdir(path.join(launchFolder, "src"), { recursive: true });
+  await writeFile(path.join(launchFolder, "package.json"), JSON.stringify({ name: "notes-app", private: true }));
+  await writeFile(path.join(launchFolder, "README.md"), "# Notes app\n");
+  await writeFile(path.join(launchFolder, "src", "main.js"), "export const notes = [];\n");
+  const server = await startServer(appData, launchFolder);
   log(`server ${server.url} using ${executable}`);
   const browser = await launchBrowser(executable);
   const steps = []; let failure = null;
@@ -300,6 +306,13 @@ async function main() {
       await page.expectText("E2E Notes App");
     });
     await journey(page, at, step);
+    await step("launch-folder-scan", async () => {
+      await page.goto(at("structure"));
+      await page.click({ role: "button", name: re("^Use launch folder · notes-app") });
+      await page.click({ role: "button", name: "Approve read-only scan" });
+      await page.expectText("3 files indexed");
+      await page.expectText(/notes-app/);
+    });
   } catch (error) { failure = error; }
   finally {
     if (page.errors.length) log(`page errors:\n  ${page.errors.join("\n  ")}`);
