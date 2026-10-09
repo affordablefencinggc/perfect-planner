@@ -22,9 +22,9 @@ function memoryStorage() {
   return { getItem: (key) => map.get(key) ?? null, setItem: (key, value) => map.set(key, String(value)), removeItem: (key) => map.delete(key) };
 }
 const store = { read: async () => ledger, subscribe: () => () => {} };
-function Harness({ Panel, storage, onWorkspace }) {
+function Harness({ Panel, storage, onWorkspace, storeOverride }) {
   const records = useProjectWorkRecords(project.projectId, storage);
-  return <Panel project={project} records={records} store={store} storage={storage} onWorkspace={onWorkspace} />;
+  return <Panel project={project} records={records} store={storeOverride ?? store} storage={storage} onWorkspace={onWorkspace} />;
 }
 
 test("collision panel checks saved tasks, explains overlaps and records a decision", async () => {
@@ -66,6 +66,11 @@ test("allocation panel saves owners and waves that follow the collision decision
   render(<Harness Panel={ProjectAllocationPanel} storage={storage} />);
   const owner1 = await screen.findByLabelText("Owner for T0001");
   expect(owner1.value).toBe("Ana");
+  // Suggestions are placeholders until the user takes them.
+  expect(screen.getByLabelText("Wave for T0002").value).toBe("");
+  expect(screen.getByLabelText("Wave for T0002").placeholder).toBe("1?");
+  expect(screen.getByLabelText("Wave for T0001").placeholder).toBe("2?");
+  await user.click(screen.getByRole("button", { name: "Use suggested waves" }));
   expect(screen.getByLabelText("Wave for T0002").value).toBe("1");
   expect(screen.getByLabelText("Wave for T0001").value).toBe("2");
   await user.click(screen.getByRole("button", { name: "Confirm Ledger owner for T0001" }));
@@ -148,4 +153,87 @@ test("allocation without an overlap check says so instead of implying clearance"
   render(<Harness Panel={ProjectAllocationPanel} storage={memoryStorage()} />);
   expect(await screen.findByText(/have not been checked for overlapping files yet/)).toBeTruthy();
   expect(screen.getByText(/Branches and separate working folders are not tracked/)).toBeTruthy();
+});
+
+test("collision summary counts undecided 'needs an order' pairs and keeps the all-clear banner back until every pair is decided", async () => {
+  const user = userEvent.setup();
+  const storage = memoryStorage();
+  const ordered = [task("Editor", [["write", "src/notes/editor.js"]]), task("Search", [["read", "src/notes/editor.js"], ["write", "src/search.js"]])]
+    .reduce((current, item) => updateTaskDraft(current, item), emptyTaskDraftLedger(binding));
+  render(<Harness Panel={ProjectCollisionPanel} storage={storage} storeOverride={{ read: async () => ordered, subscribe: () => () => {} }} />);
+  await user.click(await screen.findByRole("button", { name: /Check tasks now/ }));
+  const card = await screen.findByRole("article", { name: "T0001 and T0002 overlap" });
+  expect(within(card).getByText("Needs an order")).toBeTruthy();
+  expect(screen.getByRole("status").textContent).toMatch(/1 overlap, 0 must not run at the same time · 1 undecided/);
+  expect(screen.queryByText(/Every overlap has a decision/)).toBeNull();
+  expect(screen.getByText(/1 overlap still needs a decision/)).toBeTruthy();
+  await user.click(within(card).getByRole("button", { name: "Mark resolved" }));
+  expect(await screen.findByText(/Every overlap has a decision/)).toBeTruthy();
+  expect(screen.getByRole("status").textContent).toMatch(/0 undecided/);
+});
+
+test("allocation refuses invalid waves and a bare 'agent:' owner inline and saves nothing", async () => {
+  const user = userEvent.setup();
+  const storage = memoryStorage();
+  render(<Harness Panel={ProjectAllocationPanel} storage={storage} />);
+  const wave = await screen.findByLabelText("Wave for T0001");
+  for (const bad of ["0", "-3", "1.5", "1000"]) {
+    await user.clear(wave); await user.type(wave, bad);
+    expect(screen.getByText(/Wave must be a whole number from 1 to 999/)).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Save assignments" }));
+    expect(screen.getByText(/Nothing was saved. Fix 1 row marked below first/)).toBeTruthy();
+    expect(readSection(project.projectId, "allocation", storage)).toBeNull();
+  }
+  await user.clear(wave); await user.type(wave, "2");
+  await user.type(screen.getByLabelText("Owner for T0002"), "agent:");
+  expect(screen.getByText(/Name the agent after “agent:”/)).toBeTruthy();
+  expect(screen.getByText("Unsaved changes")).toBeTruthy();
+  await user.click(screen.getByRole("button", { name: "Save assignments" }));
+  expect(readSection(project.projectId, "allocation", storage)).toBeNull();
+  const long = "x".repeat(130);
+  await user.clear(screen.getByLabelText("Owner for T0002"));
+  await user.click(screen.getByLabelText("Owner for T0002")); await user.paste(long);
+  expect(screen.getByText(/at most 120 characters \(this one is 130\)/)).toBeTruthy();
+  await user.clear(screen.getByLabelText("Owner for T0002")); await user.type(screen.getByLabelText("Owner for T0002"), "agent: builder");
+  await user.click(screen.getByRole("button", { name: "Confirm Ledger owner for T0001" }));
+  await user.click(screen.getByRole("button", { name: "Save assignments" }));
+  expect(await screen.findByText(/^Saved\./)).toBeTruthy();
+  expect(readSection(project.projectId, "allocation", storage).data.assignments.T0001).toEqual({ owner: "Ana", wave: 2 });
+  expect(screen.queryByText("Unsaved changes")).toBeNull();
+});
+
+test("allocation warns when waves contradict a recorded overlap decision", async () => {
+  const user = userEvent.setup();
+  const storage = memoryStorage();
+  const first = render(<Harness Panel={ProjectCollisionPanel} storage={storage} />);
+  await user.click(await screen.findByRole("button", { name: /Check tasks now/ }));
+  const card = await screen.findByRole("article", { name: "T0001 and T0002 overlap" });
+  await user.selectOptions(within(card).getByLabelText("Decision"), "first:T0002");
+  await user.click(within(card).getByRole("button", { name: "Mark resolved" }));
+  first.unmount();
+  render(<Harness Panel={ProjectAllocationPanel} storage={storage} />);
+  await user.type(await screen.findByLabelText("Wave for T0001"), "1");
+  await user.type(screen.getByLabelText("Wave for T0002"), "1");
+  expect(screen.getByRole("alert").textContent).toMatch(/T0001 is in wave 1 but the overlap decision says T0002 goes first \(wave 1\)/);
+  await user.clear(screen.getByLabelText("Wave for T0001")); await user.type(screen.getByLabelText("Wave for T0001"), "2");
+  expect(screen.queryByText(/These waves contradict the plan/)).toBeNull();
+});
+
+// Gap 20: a folder claim against three files inside it showed three "src/components (…)" lines.
+test("a folder overlapping several files in it is listed once per kind of overlap", async () => {
+  const user = userEvent.setup();
+  const folderLedger = [task("Folder", [["write", "src/Components"]]), task("Files", [["write", "src/components/A.jsx"], ["write", "src/components/B.jsx"], ["write", "src/components/C.jsx"]])]
+    .reduce((current, item) => updateTaskDraft(current, item), emptyTaskDraftLedger(binding));
+  const folderStore = { read: async () => folderLedger, subscribe: () => () => {} };
+  function FolderHarness({ storage }) {
+    const records = useProjectWorkRecords(project.projectId, storage);
+    return <ProjectCollisionPanel project={project} records={records} store={folderStore} storage={storage} />;
+  }
+  render(<FolderHarness storage={memoryStorage()} />);
+  await user.click(await screen.findByRole("button", { name: /Check tasks now/ }));
+  const card = await screen.findByRole("article", { name: "T0001 and T0002 overlap" });
+  const items = within(card).getAllByRole("listitem");
+  expect(items).toHaveLength(1);
+  expect(items[0].textContent).toContain("src/Components");
+  expect(items[0].textContent).toContain("(src/components/A.jsx, src/components/B.jsx, src/components/C.jsx)");
 });

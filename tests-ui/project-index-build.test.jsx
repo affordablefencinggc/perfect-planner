@@ -32,10 +32,55 @@ afterEach(() => { cleanup(); window.history.replaceState(null, "", "/"); });
 test("build board waits for an approved plan instead of inventing cards", async () => {
   const onWorkspace = vi.fn();
   render(<Live Panel={ProjectBuildBoard} context={{ planStatuses: {} }} onWorkspace={onWorkspace} />);
-  expect(await screen.findByText(/No approved plan yet/)).toBeTruthy();
+  expect(await screen.findByText("No plan approved yet. Approve the plan on the Plan page first.")).toBeTruthy();
   expect(screen.queryByRole("article")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: /Open Plan/ }));
+  expect(onWorkspace).toHaveBeenCalledWith("plan");
+});
+
+test("an unchecked planning status before any approval is not called out of date (gap 26)", async () => {
+  render(<Live Panel={ProjectBuildBoard} context={{ planStatuses: { [project.projectId]: { state: "stale", projectId: project.projectId, reason: "ledger-context-changed" } } }} />);
+  expect(await screen.findByText("No plan approved yet. Approve the plan on the Plan page first.")).toBeTruthy();
+  expect(screen.queryByText(/out of date/)).toBeNull();
+});
+
+// The pending original request is reconciled in the Ledger's plan-approval panel, so that is where the button goes.
+for (const state of ["pending", "unfinished"]) test(`an approval still ${state} sends the user to the Ledger, where it is finished`, async () => {
+  const onWorkspace = vi.fn();
+  render(<Live Panel={ProjectBuildBoard} context={{ planStatuses: { [project.projectId]: { state, projectId: project.projectId } } }} onWorkspace={onWorkspace} />);
+  expect(await screen.findByText("A plan approval is still in progress in the Ledger.")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: /Open Plan/ })).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: /Open Ledger/ }));
   expect(onWorkspace).toHaveBeenCalledWith("ledger");
+});
+
+test("Done is refused inline while something is in the way, and a self-reported Done is not shown as verified", async () => {
+  // T0002 loses its owner in Allocation: the saved row wins over the draft owner.
+  writeSection(project.projectId, "allocation", { taskIds: ["T0001", "T0002"], assignments: { T0001: { owner: "Sam", wave: 1 }, T0002: { owner: "", wave: 1 } } });
+  render(<Live Panel={ProjectBuildBoard} />);
+  const second = await screen.findByRole("article", { name: "T0002 Write cart tests" });
+  expect(within(second).getByText(/No owner named yet/)).toBeTruthy();
+  fireEvent.change(within(second).getByLabelText("Status for T0002"), { target: { value: "done" } });
+  expect(within(second).getByRole("alert").textContent).toMatch(/Can’t mark Done while 1 thing is in the way: No owner named yet/);
+  expect(within(second).getByRole("button", { name: "Save status" }).disabled).toBe(true);
+  expect(within(second).getByText("Unsaved changes")).toBeTruthy();
+  expect(readSection(project.projectId, "build")).toBeNull();
+
+  const first = screen.getByRole("article", { name: "T0001 Add checkout page" });
+  fireEvent.change(within(first).getByLabelText("Status for T0001"), { target: { value: "done" } });
+  fireEvent.click(within(first).getByRole("button", { name: "Save status" }));
+  await waitFor(() => expect(within(first).getByText(/Done \(self-reported, no proof yet\)/)).toBeTruthy());
+});
+
+test("unsaved build edits ask before the page is left", async () => {
+  render(<Live Panel={ProjectBuildBoard} />);
+  const card = await screen.findByRole("article", { name: "T0001 Add checkout page" });
+  const unload = () => { const event = new Event("beforeunload", { cancelable: true }); window.dispatchEvent(event); return event.defaultPrevented; };
+  expect(unload()).toBe(false);
+  fireEvent.change(within(card).getByLabelText("Note for T0001"), { target: { value: "half way" } });
+  expect(unload()).toBe(true);
+  fireEvent.change(within(card).getByLabelText("Note for T0001"), { target: { value: "" } });
+  expect(unload()).toBe(false);
 });
 
 test("each approved task gets a card whose status is saved to the project and drives BUILD-RUN", async () => {
@@ -94,6 +139,22 @@ test("index panel searches saved tasks and opens the matching Ledger task", asyn
   expect(within(screen.getByRole("list", { name: "Search results" })).getByText("tests/cart.test.js")).toBeTruthy();
   fireEvent.change(screen.getByPlaceholderText(/Search tasks, areas/), { target: { value: "nothing like this" } });
   expect(screen.getByText(/Nothing in this project matches/)).toBeTruthy();
+});
+
+test("index search announces the result count and says when a long paste was cut", async () => {
+  render(<Live Panel={ProjectIndexPanel} />);
+  await waitFor(() => expect(screen.getByLabelText("What is searchable").textContent).toContain("2 tasks"));
+  const input = screen.getByRole("searchbox", { name: "Search this project" });
+  fireEvent.change(input, { target: { value: "cart.test" } });
+  expect(screen.getByRole("status").textContent).toMatch(/^1 result for “cart\.test”$/);
+  fireEvent.change(input, { target: { value: "nothing like this" } });
+  expect(screen.getByRole("status").textContent).toMatch(/^0 results/);
+  expect(screen.queryByText(/Search uses the first 160 characters/)).toBeNull();
+  fireEvent.change(input, { target: { value: "x".repeat(400) } });
+  expect(input.value).toHaveLength(160);
+  expect(screen.getByText(/Search uses the first 160 characters/)).toBeTruthy();
+  fireEvent.change(input, { target: { value: "cart" } });
+  expect(screen.queryByText(/Search uses the first 160 characters/)).toBeNull();
 });
 
 // Regression (screen tour, 9 Oct 2026): proof saved on the Evidence page is stored

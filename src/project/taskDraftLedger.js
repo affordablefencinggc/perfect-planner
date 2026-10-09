@@ -117,6 +117,30 @@ export function rebindTaskDraft(ledger, binding, review, now=new Date().toISOStr
   return validateTaskDraftLedger({...current,binding:{...binding},revision:current.revision+1,updatedAt:now});
 }
 
+// Advisory only: compares file scopes with the paths seen in the last folder
+// scan. A claim may name a file the task will create, so this never refuses a
+// save. Returns one entry per claim: null (found, or no scan list to compare
+// against) or {kind,message}. Letter case is ignored, like overlap checks.
+export const CLAIM_SCAN_MESSAGES = Object.freeze({'new-file':'New file (not in the last scan)','no-match':'Matches no scanned file yet'});
+export function claimScanMarkers(claims, scannedPaths) {
+  const list=Array.isArray(claims)?claims:[];
+  if(!Array.isArray(scannedPaths))return list.map(()=>null);
+  const known=new Set();
+  for(const raw of scannedPaths){
+    if(typeof raw!=='string')continue;
+    const parts=raw.replaceAll('\\','/').toLowerCase().split('/').filter(Boolean);
+    // A plain claim may name a file or any folder that holds a scanned file.
+    for(let i=1;i<=parts.length;i++)known.add(parts.slice(0,i).join('/'));
+  }
+  const files=scannedPaths.filter(path=>typeof path==='string');
+  return list.map(claim=>{
+    const path=typeof claim?.path==='string'?claim.path:'';
+    if(!path)return null;
+    if(isClaimPattern(path))return files.some(file=>claimPatternsOverlap(path,file))?null:{kind:'no-match',message:CLAIM_SCAN_MESSAGES['no-match']};
+    return known.has(path.toLowerCase())?null:{kind:'new-file',message:CLAIM_SCAN_MESSAGES['new-file']};
+  });
+}
+
 // Review findings only. Dependency order is not proof of completed work, a
 // collision clearance, an exclusive lease, or permission to execute either task.
 export function inspectTaskDraft(ledger) {

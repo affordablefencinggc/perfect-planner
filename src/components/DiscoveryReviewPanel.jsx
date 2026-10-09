@@ -1,12 +1,23 @@
-import { useMemo, useState } from "react";
+import React, { useMemo, useState } from "react";
 import { CheckCircleIcon, ChatTextIcon, MinusCircleIcon, ArrowCounterClockwiseIcon, ListChecksIcon } from "@phosphor-icons/react";
 import { writeSection } from "../project/projectWorkRecords.js";
 import { useProjectWorkRecords } from "../project/useProjectWorkRecords.js";
-import { deriveDiscoveryReview, nextDiscoveryReviewData, DISCOVERY_NOTE_LIMIT } from "../project/discoveryReviewModel.js";
+import { deriveDiscoveryReview, nextDiscoveryReviewData, savedDiscoveryFindings, DISCOVERY_NOTE_LIMIT } from "../project/discoveryReviewModel.js";
 import "./DiscoveryReviewPanel.css";
 
 const FOUND_LABEL = { observed: "Found in your files", signal: "Possible match — please check", unanswered: "Nothing found" };
 const DECISION_LABEL = { confirmed: "Looks right", "not-applicable": "Not applicable", answered: "Answered" };
+
+function Evidence({ finding }) {
+  const paths = Array.isArray(finding.evidence) ? finding.evidence : [];
+  if (!paths.length) return null;
+  const more = Math.max(0, (Number.isSafeInteger(finding.evidenceCount) ? finding.evidenceCount : paths.length) - paths.length);
+  return (
+    <small className="discovery-review-evidence" aria-label={`Files behind ${finding.label}`}>
+      Seen in {paths.map((path, index) => <React.Fragment key={path}>{index ? ", " : ""}<code>{path}</code></React.Fragment>)}{more ? ` and ${more} more` : ""}
+    </small>
+  );
+}
 
 function CategoryRow({ item, findings, disabled, onDecide }) {
   const [answering, setAnswering] = useState(false);
@@ -20,10 +31,10 @@ function CategoryRow({ item, findings, disabled, onDecide }) {
       </div>
       {findings?.length ? (
         <ul className="discovery-review-findings">
-          {findings.map((finding) => <li key={finding.id}><b>{finding.certainty === "observed" ? "Found" : "Maybe"}</b> {finding.label}<small>{finding.detail}</small></li>)}
+          {findings.map((finding) => <li key={finding.id}><b>{finding.certainty === "observed" ? "Found" : "Maybe"}</b> {finding.label}<small>{finding.detail}</small><Evidence finding={finding} /></li>)}
         </ul>
       ) : (
-        <p className="discovery-review-empty">{item.findingCount ? `${item.findingCount} finding${item.findingCount === 1 ? "" : "s"} from the last scan. Scan the folder again in this session to see the details.` : "The scan found nothing for this area."}</p>
+        <p className="discovery-review-empty">{item.findingCount ? `${item.findingCount} finding${item.findingCount === 1 ? "" : "s"} from the last scan. Their details were not saved with this scan, so scan the folder again in this session to see them.` : "The scan found nothing for this area."}</p>
       )}
       {item.questions.length > 0 && <p className="discovery-review-questions">{item.questions.join(" ")}</p>}
       {item.decision && (
@@ -64,10 +75,13 @@ export function DiscoveryReviewPanel({ project, liveDiscovery = null, liveCensus
   const review = useMemo(() => deriveDiscoveryReview(project, records), [project, records]);
   const [error, setError] = useState("");
   const discovery = project?.discovery ?? null;
+  // Finding details come from this session's scan when it matches the saved one,
+  // otherwise from the labels and evidence paths saved with that scan.
   const findingsById = useMemo(() => {
-    if (!liveDiscovery?.categories || !discovery || liveCensusDigest !== discovery.censusDigest) return new Map();
-    return new Map(liveDiscovery.categories.map((category) => [category.id, category.findings ?? []]));
-  }, [liveDiscovery, liveCensusDigest, discovery]);
+    if (liveDiscovery?.categories && discovery && liveCensusDigest === discovery.censusDigest)
+      return new Map(liveDiscovery.categories.map((category) => [category.id, category.findings ?? []]));
+    return discovery ? savedDiscoveryFindings(project, records) : new Map();
+  }, [liveDiscovery, liveCensusDigest, discovery, project, records]);
   if (!project || project.kind === "demo") return null;
 
   const usable = discovery?.state === "generated" && project.state !== "stale" && project.state !== "unavailable";

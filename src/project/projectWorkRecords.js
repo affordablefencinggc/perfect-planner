@@ -5,6 +5,7 @@
 export const WORK_RECORDS_SCHEMA_VERSION = 1;
 export const WORK_RECORD_SECTIONS = Object.freeze([
   "discoveryReview", // per-category confirm/dismiss/answer (Structure)
+  "discoveryFindings", // finding labels + evidence paths for the saved scan (metadata only)
   "planAuthority",   // approved plan revision bound to this project (Plan/Ledger)
   "collisions",      // evaluated task write-claim collisions (Collision)
   "allocation",      // owner + order per task (Allocation)

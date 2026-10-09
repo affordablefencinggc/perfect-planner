@@ -16,6 +16,10 @@ export const MAX_TEXT_CHARS = 20_000;
 const KIND_IDS = new Set(PROOF_KINDS.map((kind) => kind.id));
 const TASK_ID = /^T\d{4,6}$/;
 const fail = (message) => { throw new Error(message); };
+// Control characters and bidirectional overrides/isolates can visually reorder the
+// text around a name (for example a sign-off date), so names and notes refuse them.
+const UNSAFE_TEXT = /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/;
+export const hasUnsafeText = (value) => typeof value === "string" && UNSAFE_TEXT.test(value);
 
 export const kindLabel = (kind) => PROOF_KINDS.find((item) => item.id === kind)?.label ?? kind;
 
@@ -50,6 +54,8 @@ function planDigest(planAuthority) {
 }
 
 export const activeDrafts = (ledger) => (ledger?.tasks ?? []).filter((task) => !task.archived);
+/** Fingerprint of the live task drafts that decide the scope when no plan is approved. */
+export const draftsDigest = (ledger) => fingerprint(activeDrafts(ledger).map((task) => [task.id, task.title, task.acceptance, task.claims]));
 
 /**
  * Which tasks need proof. The approved plan wins; otherwise the live task drafts;
@@ -60,8 +66,7 @@ export function proofScope(sections = {}, ledger = null) {
   const planIds = planTaskIds(sections.planAuthority);
   if (planIds) return { source: "plan", taskIds: planIds, digest: planDigest(sections.planAuthority), seenAt: sections.planAuthority.recordedAt ?? null };
   if (ledger) {
-    const tasks = activeDrafts(ledger);
-    return { source: "drafts", taskIds: tasks.map((task) => task.id), digest: fingerprint(tasks.map((task) => [task.id, task.title, task.acceptance, task.claims])), seenAt: null };
+    return { source: "drafts", taskIds: activeDrafts(ledger).map((task) => task.id), digest: draftsDigest(ledger), seenAt: null };
   }
   const snapshots = [
     sections.proof?.data?.scope && { ...sections.proof.data.scope, seenAt: sections.proof.recordedAt },
@@ -78,7 +83,10 @@ export const proofItems = (sections = {}) => {
   return items && typeof items === "object" && !Array.isArray(items) ? items : {};
 };
 
-/** A task is covered for a kind when it has that proof (a test must have passed) or it is marked not needed. */
+/**
+ * A task is covered for a kind when it has that proof (a test must have passed) or it is marked not needed.
+ * A task whose every kind is only marked not needed is "waived", never "complete": it has no real proof.
+ */
 function kindStatus(list, kind) {
   if (list.some((item) => item.kind === kind && (kind !== "test" || item.outcome === "passed"))) return "proof";
   if (list.some((item) => item.kind === "skip" && item.covers === kind)) return "skipped";
@@ -91,7 +99,9 @@ export function proofCoverage(scope, items) {
     const list = Array.isArray(items[taskId]) ? items[taskId] : [];
     const kinds = Object.fromEntries(REQUIRED_PROOF_KINDS.map((kind) => [kind, kindStatus(list, kind)]));
     const covered = REQUIRED_PROOF_KINDS.filter((kind) => kinds[kind] === "proof" || kinds[kind] === "skipped").length;
-    return { taskId, count: list.length, kinds, covered, status: covered === REQUIRED_PROOF_KINDS.length ? "complete" : covered || list.length ? "partial" : "none" };
+    const proven = REQUIRED_PROOF_KINDS.some((kind) => kinds[kind] === "proof");
+    const status = covered === REQUIRED_PROOF_KINDS.length ? (proven ? "complete" : "waived") : covered || list.length ? "partial" : "none";
+    return { taskId, count: list.length, kinds, covered, status };
   });
   const byKind = Object.fromEntries(REQUIRED_PROOF_KINDS.map((kind) => {
     const covered = tasks.filter((task) => task.kinds[kind] === "proof" || task.kinds[kind] === "skipped");
@@ -101,6 +111,7 @@ export function proofCoverage(scope, items) {
     tasks,
     total: tasks.length,
     complete: tasks.filter((task) => task.status === "complete").length,
+    waived: tasks.filter((task) => task.status === "waived").length,
     partial: tasks.filter((task) => task.status === "partial").length,
     none: tasks.filter((task) => task.status === "none").length,
     byKind,
@@ -124,6 +135,8 @@ export function validateProofItem(input) {
   if (!kind.formats.includes(item.format)) fail(`${kind.label} proof cannot be stored in that form.`);
   const addedBy = typeof item.addedBy === "string" ? item.addedBy.trim() : "";
   if (!addedBy || addedBy.length > 120) fail("Say who is adding this proof (up to 120 characters).");
+  if (hasUnsafeText(addedBy)) fail("The name contains hidden control or text-direction characters. Type it again.");
+  if (hasUnsafeText(item.label)) fail("The title contains hidden control or text-direction characters. Type it again.");
   const label = typeof item.label === "string" ? item.label.trim().slice(0, 160) : "";
   const value = typeof item.value === "string" ? (item.format === "image" ? item.value : item.value.trim()) : "";
   if (!value) fail(item.kind === "skip" ? "Explain why this proof is not needed." : "Add the proof itself: an image, a link, or pasted text.");
@@ -165,14 +178,27 @@ export function removeProofItem(sections, taskId, itemId, scope) {
 
 const scopeSnapshot = (scope) => scope && scope.source !== "none" ? { source: scope.source === "snapshot" ? "drafts" : scope.source, taskIds: [...scope.taskIds], digest: scope.digest } : null;
 
-/** Review section data for a named sign-off on the current plan version. */
-export function signOffRecord({ scope, reviewer, notes, now = new Date().toISOString() }) {
+export const MAX_NOTES_CHARS = 4000;
+const MAX_EARLIER_SIGN_OFFS = 20;
+
+/**
+ * Review section data for a named sign-off on the current plan version. A
+ * `previous` sign-off is kept (newest first) in `earlier`, never silently dropped.
+ */
+export function signOffRecord({ scope, reviewer, notes, now = new Date().toISOString(), previous = null }) {
   const name = typeof reviewer === "string" ? reviewer.trim() : "";
   if (!name || name.length > 120) fail("Enter the reviewer's name (up to 120 characters).");
+  if (hasUnsafeText(name)) fail("The reviewer's name contains hidden control or text-direction characters. Type it again.");
   if (!scope?.digest || !scope.taskIds.length) fail("There are no tasks to sign off yet.");
   const text = typeof notes === "string" ? notes.trim() : "";
-  if (text.length > 4000) fail("Notes are limited to 4,000 characters.");
-  return { planDigest: scope.digest, planSource: scope.source === "snapshot" ? "drafts" : scope.source, taskIds: [...scope.taskIds], reviewer: name, signedAt: now, notes: text };
+  if (text.length > MAX_NOTES_CHARS) fail(`Notes are limited to ${MAX_NOTES_CHARS.toLocaleString()} characters.`);
+  if (hasUnsafeText(text)) fail("The notes contain hidden control or text-direction characters. Type them again.");
+  const record = { planDigest: scope.digest, planSource: scope.source === "snapshot" ? "drafts" : scope.source, taskIds: [...scope.taskIds], reviewer: name, signedAt: now, notes: text };
+  if (previous?.planDigest && previous.reviewer) {
+    const { earlier = [], ...last } = previous;
+    record.earlier = [last, ...(Array.isArray(earlier) ? earlier : [])].slice(0, MAX_EARLIER_SIGN_OFFS);
+  }
+  return record;
 }
 
 /** True for the browser's "storage full" errors across engines. */
