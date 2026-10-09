@@ -234,3 +234,157 @@
 .app-shell .top-metrics {
   gap: 4px;
 }
+
+/* Shell trial fixes ----------------------------------------------------------
+   Header popovers sit above the Operations dock (35) and below drawer scrims (40). */
+.app-shell .topbar {
+  z-index: 38;
+}
+/* Popovers stay inside the window: no wider than the space left of their anchor,
+   no taller than the space between header and Operations bar, scrolling inside. */
+.app-shell .topbar-popover,
+.app-shell .runtime-connections-popover {
+  max-width: calc(100vw - var(--page-gutter) - 12px);
+  max-height: calc(100dvh - var(--app-header-height) - 56px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+@media (max-width: 900px) {
+  .app-shell .topbar-popover,
+  .app-shell .runtime-connections-popover {
+    position: fixed;
+    top: calc(var(--app-header-height) + 6px);
+    left: 12px;
+    right: 12px;
+    width: auto;
+    max-width: none;
+  }
+}
+/* The dark header's icon button keeps its light-on-dark look when hovered or open. */
+.app-shell .topbar .icon-button:hover:not(:disabled),
+.app-shell .topbar .icon-button[aria-expanded="true"] {
+  border-color: rgba(255, 255, 255, 0.4);
+  background: rgba(255, 255, 255, 0.16);
+  color: #fff;
+}
+/* Only verified success is green: selection uses the blue focus token. */
+.app-shell .workspace-tab.active {
+  box-shadow: inset 0 -2px 0 var(--blue-focus);
+}
+.app-shell .project-tabs button.active {
+  box-shadow: inset 0 -3px 0 var(--blue-focus);
+}
+.app-shell .developer-popover i {
+  background: var(--muted);
+}
+.app-shell .project-tabs button.empty:disabled {
+  cursor: default;
+  opacity: 1;
+}
+/* An unresolved collision count reads as a stop on the dark header. */
+.app-shell .topbar .top-metric-button.metric-stop {
+  border-color: rgba(239, 128, 120, 0.75);
+  background: rgba(189, 75, 69, 0.28);
+  color: #ffd8d4;
+}
+/* Narrow windows: keep only "Unlock next" in the context strip, and fade the
+   edge of the stage tabs that hides more tabs. */
+@media (max-width: 700px) {
+  .app-shell .workspace-context .workspace-intent {
+    grid-template-columns: 1fr;
+  }
+  .app-shell .workspace-context .workspace-intent span:not(:last-child) {
+    display: none;
+  }
+}
+.app-shell .workspace-nav[data-more-right="true"] {
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 40px), transparent);
+  mask-image: linear-gradient(to right, #000 calc(100% - 40px), transparent);
+}
+.app-shell .workspace-nav[data-more-left="true"] {
+  -webkit-mask-image: linear-gradient(to left, #000 calc(100% - 40px), transparent);
+  mask-image: linear-gradient(to left, #000 calc(100% - 40px), transparent);
+}
+.app-shell .workspace-nav[data-more-left="true"][data-more-right="true"] {
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 40px, #000 calc(100% - 40px), transparent);
+  mask-image: linear-gradient(to right, transparent, #000 40px, #000 calc(100% - 40px), transparent);
+}
+/* Toasts wrap long text instead of running off-screen. */
+.toast > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+/* Brand date and project names get room to show in full on wide windows. */
+.app-shell .brand-lockup {
+  max-width: clamp(190px, 16vw, 340px);
+}
+.app-shell .brand-lockup strong {
+  white-space: nowrap;
+}
+.app-shell .project-tabs button {
+  max-width: clamp(140px, 18vw, 280px);
+}
+/* The Operations bar is one scrollable line at every width. */
+.app-shell .ops-dock .ops-handle {
+  overflow-x: auto;
+  overflow-y: hidden;
+  white-space: nowrap;
+  scrollbar-width: none;
+}
+.app-shell .ops-dock .ops-handle > *,
+.app-shell .ops-status-explained > * {
+  flex-shrink: 0;
+}
+.app-shell .ops-dock .ops-status-explained {
+  flex-wrap: nowrap;
+}
+/* Simple view hides the blocker ID; its state chip stays in the last column. */
+.app-shell .project-home-blockers li > .status-chip {
+  grid-column: 3;
+}
+.app-shell :is(.project-home-authorities li, .project-home-blockers li > span strong) {
+  text-transform: none;
+}
+.app-shell :is(.project-home-authorities li > span, .project-home-blockers li > span strong)::first-letter {
+  text-transform: uppercase;
+}
+/* Connection tools use the app's mono face; the drawer is portalled outside .app-shell. */
+.app-shell .runtime-connections-popover,
+.connect-agent-drawer {
+  font-family: var(--mono);
+}
+/* Edge handles centre in the workspace, never under the header. */
+.app-shell .edge-handle {
+  top: calc(var(--app-header-height) + (100dvh - var(--app-header-height) - 42px) / 2);
+}
+@media (max-width: 600px) {
+  .app-shell .edge-handle {
+    height: 120px;
+  }
+}
+/* Developer notes stays clear of the open Operations console's controls. */
+.ops-is-open .developer-notes-toggle {
+  display: none;
+}
+.folder-intake-message.is-error {
+  color: var(--red);
+  font-weight: 700;
+}
+.project-gate-demo {
+  justify-self: start;
+  margin-top: 8px;
+}
+/* Narrow windows: page tabs get the full row and scroll, so every tab stays reachable. */
+@media (max-width: 700px) {
+  .app-shell .workspace-route-controls {
+    flex: 1 1 100%;
+    min-width: 0;
+    justify-content: flex-start;
+  }
+  .app-shell .workspace-route-controls .stage-subnav {
+    max-width: 100%;
+    min-width: 0;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+}
