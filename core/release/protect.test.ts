@@ -98,6 +98,18 @@ describe("protectProject: shipping safety is on by default", () => {
     expect((await protectProject(ledger, { run, cwd: dir })).prePush.state).toBe("installed");
   }));
 
+  it("rewrites its own hook on open when the Node or script path changed, so pushes never fail on a stale path", withRepo(async (dir) => {
+    const hook = join(dir, ".git", "hooks", "pre-push");
+    const ledger = open();
+    await protectProject(ledger, { run, cwd: dir });
+    const fresh = readFileSync(hook, "utf8");
+    // The shim an older app version wrote: same mark, a Node that no longer exists.
+    writeFileSync(hook, fresh.replace(/exec '[^']*'/, "exec '/old/app/node'"));
+    const report = await protectProject(ledger, { run, cwd: dir });
+    expect(report.prePush.state).toBe("installed");
+    expect(readFileSync(hook, "utf8")).toBe(fresh);
+  }));
+
   it("leaves someone else's hook alone and says so", withRepo(async (dir) => {
     const hook = join(dir, ".git", "hooks", "pre-push");
     writeFileSync(hook, "#!/bin/sh\necho mine\n");

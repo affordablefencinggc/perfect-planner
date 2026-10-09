@@ -1,5 +1,7 @@
 // The project owner pin (core/host/owner.ts) and key rotation (POST /keys/rotate).
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { appendNumbered } from "../../numbering/index";
@@ -125,6 +127,70 @@ describe("project owner pin", () => {
       expect(lost.ledger.owner).toBeUndefined();
     } finally {
       await closeProject(lost);
+    }
+  });
+});
+
+describe("starting a new history", () => {
+  const gitIn = (cwd: string, ...args: string[]) => execFileSync("git", ["-c", "user.name=Owner", "-c", "user.email=owner@example.invalid", ...args], { cwd, encoding: "utf8" });
+  const repoWithCommit = () => {
+    const repo = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "pp-start-")));
+    gitIn(repo, "init", "-q", "-b", "main");
+    fs.writeFileSync(path.join(repo, "README.md"), "# App\n");
+    gitIn(repo, "add", "-A");
+    gitIn(repo, "commit", "-qm", "init");
+    return repo;
+  };
+
+  it("refuses a new project's first write until the person starts its history, then pins on the next write", async () => {
+    const repo = repoWithCommit();
+    const host = await startTestHost({ projectRootOverride: repo, autoStart: false });
+    try {
+      const status = (await hostCall(host.base, "GET", "/status?project=s")).body.result;
+      expect(status.owner).toMatchObject({ state: "new", signals: [], started: false });
+      const refused = await hostCall(host.base, "POST", "/people/claim?project=s", { name: "Solo" });
+      expect(refused.status).toBe(409);
+      expect(refused.body.code).toBe("START_HISTORY");
+      expect(host.host.project("s").entries()).toHaveLength(0);
+      // Agents never reach it: no session, no start.
+      expect((await hostCall(host.base, "POST", "/owner/start?project=s", {}, { asAgent: true })).status).toBe(401);
+      expect((await hostCall(host.base, "POST", "/owner/start?project=s", {})).status).toBe(200);
+      expect((await hostCall(host.base, "POST", "/people/claim?project=s", { name: "Solo" })).status).toBe(200);
+      expect(host.host.project("s").owner.state).toBe("pinned");
+      expect((await hostCall(host.base, "POST", "/owner/start?project=s", {})).body.code).toBe("NOT_NEW");
+    } finally {
+      await host.stop();
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("warns when the folder's repo shows earlier Perfect Planner use, as a wiped history would", async () => {
+    const repo = repoWithCommit();
+    const first = await startTestHost({ projectRootOverride: repo });
+    let appData: string;
+    try {
+      expect((await hostCall(first.base, "POST", "/people/claim?project=w", { name: "Solo" })).status).toBe(200);
+      await first.host.project("w").protection;
+      gitIn(repo, "branch", "pp/T-1");
+      appData = first.dir;
+    } finally {
+      await first.host.close();
+    }
+    // Ledger, pin and the app's record of the folder all deleted: the app cannot tell it was pinned.
+    fs.rmSync(path.join(repo, ".perfect-planner"), { recursive: true, force: true });
+    fs.rmSync(path.join(appData!, "owners"), { recursive: true, force: true });
+    const second = await startTestHost({ projectRootOverride: repo, autoStart: false });
+    try {
+      const owner = (await hostCall(second.base, "GET", "/status?project=w")).body.result.owner;
+      expect(owner.state).toBe("new");
+      expect(owner.signals.join(" ")).toMatch(/pre-push scan/);
+      expect(owner.signals.join(" ")).toMatch(/task branch/);
+      expect(owner.signals.join(" ")).toMatch(/\.perfect-planner/);
+      expect((await hostCall(second.base, "POST", "/people/claim?project=w", { name: "Solo" })).body.code).toBe("START_HISTORY");
+    } finally {
+      await second.stop();
+      await first.stop().catch(() => undefined);
+      fs.rmSync(repo, { recursive: true, force: true });
     }
   });
 });

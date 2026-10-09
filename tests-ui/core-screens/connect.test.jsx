@@ -53,6 +53,7 @@ describe("CoreAgentConnect", () => {
     routeFetch({ "GET /agents": () => new Promise((resolve) => { release = () => resolve(ok(list())); }) });
     renderWith();
     expect(screen.getByRole("status", { name: "Loading connected agents" })).toBeTruthy();
+    await waitFor(() => expect(release).toBeTypeOf("function")); // the read starts after the window's launch claim
     await act(async () => release());
     expect(await screen.findByText("No agents are connected yet.")).toBeTruthy();
     expect(screen.getByRole("button", { name: /Connect agent/ })).toBeTruthy();

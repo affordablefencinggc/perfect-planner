@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, u
 import os from "node:os";
 import path from "node:path";
 import { git, runGit } from "../worktrees/git";
+import { INSTALL_SCRIPTS_HINT, NPM_CONFIG_HINT, runNpm } from "../worktrees/npm";
 import { ensureRequiredIgnores, PRIVATE_DIR, privatePaths, stagedPrivatePaths } from "../worktrees/ignores";
 import { lines, realDir, samePath } from "../worktrees/platform";
 import { isAuthoritative } from "../ledger/index";
@@ -111,6 +112,8 @@ export interface TestGateOptions {
   timeoutMs?: number;
   /** See GatePolicy.requireJevTestReview. Default false. */
   requireJevTestReview?: boolean;
+  /** Let the merge candidate's clean install run packages' install scripts. Only a person turns this on; default false. */
+  allowInstallScripts?: boolean;
 }
 
 export interface GatePolicy {
@@ -437,7 +440,7 @@ function sameFile(a: string, b: string): boolean {
  * lockfile) runs in the candidate.
  * Returns the link path so the caller can remove it before the candidate.
  */
-async function cleanDependencies(repoRoot: string, integrationBranch: string, candidate: string, run: TestRunner, timeoutMs: number): Promise<{ linked?: string; failure?: string }> {
+async function cleanDependencies(repoRoot: string, integrationBranch: string, candidate: string, timeoutMs: number, allowInstallScripts: boolean): Promise<{ linked?: string; failure?: string }> {
   let checkout = repoRoot;
   let current: string | undefined;
   for (const line of lines(await git(repoRoot, ["worktree", "list", "--porcelain"]))) {
@@ -454,9 +457,16 @@ async function cleanDependencies(repoRoot: string, integrationBranch: string, ca
   }
   if (unchanged || !existsSync(path.join(candidate, "package.json"))) return {};
   const lock = ["package-lock.json", "npm-shrinkwrap.json"].some((file) => existsSync(path.join(candidate, file)));
-  const command = lock ? "npm ci --prefer-offline --no-audit --no-fund" : "npm install --prefer-offline --no-audit --no-fund --no-package-lock";
-  const install = await run(command, candidate, { timeoutMs });
-  return install.passed ? {} : { failure: `A clean dependency install in the merge candidate failed (${describeRun(install)}).` };
+  const args = lock ? ["ci", "--prefer-offline", "--no-audit", "--no-fund"] : ["install", "--prefer-offline", "--no-audit", "--no-fund", "--no-package-lock"];
+  // npm from beside Node or PATH, never from the repo, the candidate or the integration checkout; no shell.
+  try {
+    const install = await runNpm(args, { cwd: candidate, protect: [repoRoot, checkout, candidate], timeoutMs, allowInstallScripts });
+    if (install.code === 0) return {};
+    const hint = `${allowInstallScripts ? "" : ` ${INSTALL_SCRIPTS_HINT}`} ${NPM_CONFIG_HINT}`;
+    return { failure: `A clean dependency install in the merge candidate failed (exit ${install.code}): ${oneLine(install.output.trim().split(/\r?\n/).slice(-3).join(" "))}.${hint}` };
+  } catch (error) {
+    return { failure: `A clean dependency install in the merge candidate could not start: ${(error as Error).message}` };
+  }
 }
 
 const IMPORT_SPECIFIER = /(?:\bimport\s*(?:[^"'`;]*?\bfrom\s*)?|\bexport\s*[^"'`;]*?\bfrom\s*|\bimport\s*\(\s*|\brequire\s*\(\s*)["']([^"']+)["']/g;
@@ -531,6 +541,7 @@ export class TestGate {
   private readonly run: TestRunner;
   private readonly timeoutMs: number;
   private readonly policy: GatePolicy;
+  private readonly allowInstallScripts: boolean;
 
   constructor(options: TestGateOptions) {
     this.ledger = options.ledger;
@@ -538,6 +549,7 @@ export class TestGate {
     this.run = options.run ?? runTestCommand;
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.policy = { requireJevTestReview: options.requireJevTestReview ?? false };
+    this.allowInstallScripts = options.allowInstallScripts ?? false;
   }
 
   state(taskId: string): GateState {
@@ -910,7 +922,7 @@ export class TestGate {
       // The candidate is a bare checkout; the test usually needs the project's dependencies.
       if (prepare) await prepare(candidate);
       else {
-        const deps = await cleanDependencies(repoRoot, integrationBranch, candidate, this.run, this.timeoutMs);
+        const deps = await cleanDependencies(repoRoot, integrationBranch, candidate, this.timeoutMs, this.allowInstallScripts);
         linked = deps.linked;
         if (deps.failure) return refuse(`${deps.failure} ${integrationBranch} was left untouched.`, { mergeCommit });
       }

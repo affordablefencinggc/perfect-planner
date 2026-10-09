@@ -2,6 +2,7 @@
 // service that agents check in through. The host keeps one per project key.
 import { execFile } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { FileStore, Ledger, type LedgerEntry } from "../ledger/index";
 import { installClauseRules } from "../lookup/index";
@@ -16,7 +17,7 @@ import { installPeopleRules } from "../people/index";
 import { installPlanningRules } from "../planning/index";
 import { installReleaseRules, protectProject, type CommandRunner, type ProtectionReport } from "../release/index";
 import { ensureRequiredIgnores, PRIVATE_DIR } from "../worktrees/index";
-import { gitExecutable, NO_CWD_SEARCH_ENV, protectRoots } from "../exec/index";
+import { gitExecutable, NO_CWD_SEARCH_ENV, protectRoots, registeredRoots } from "../exec/index";
 
 export interface CoreProject {
   /** Safe key from the client ("default" when none was given). */
@@ -83,13 +84,41 @@ export async function protectRepository(ledger: Ledger, dir: string): Promise<Pr
   try {
     const top = await runCommand("git", ["rev-parse", "--show-toplevel"], { cwd: dir });
     const real = (p: string) => fs.realpathSync.native(p);
-    if (top.code === 0 && top.stdout.trim() && real(top.stdout.trim()) === real(dir)) return await protectProject(ledger, { run: runCommand, cwd: dir });
+    if (top.code === 0 && top.stdout.trim() && real(top.stdout.trim()) === real(dir)) return await protectProject(ledger, { run: runCommand, cwd: dir, protect: registeredRoots() });
   } catch (error) {
     installReleaseRules(ledger);
     return { rules: "on", prePush: { state: "not-a-repo", reason: (error as Error).message } };
   }
   installReleaseRules(ledger);
   return { rules: "on", prePush: { state: "not-a-repo", reason: `${dir} is not the top of a git repository, so there is nothing to scan before a push.` } };
+}
+
+/** A whole drive or the home folder: never a project's repo, never a protected root (it would block ~/bin). */
+export function isHomeOrDrive(dir: string): boolean {
+  const real = (p: string) => {
+    try {
+      return fs.realpathSync.native(p);
+    } catch {
+      return path.resolve(p);
+    }
+  };
+  const same = (a: string, b: string) => (process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b);
+  const resolved = real(dir);
+  return same(path.dirname(resolved), resolved) || same(resolved, real(os.homedir()));
+}
+
+/**
+ * The workers' git folder a person chose for this project (POST /tasks/repo writes repo.json), if any.
+ * Never a whole drive or the home folder.
+ */
+export function chosenRepository(root: string): string | null {
+  try {
+    const chosen = (JSON.parse(fs.readFileSync(path.join(root, PRIVATE_DIR, "repo.json"), "utf8")) as { root?: unknown }).root;
+    if (typeof chosen !== "string" || !path.isAbsolute(chosen) || !fs.existsSync(chosen)) return null;
+    return isHomeOrDrive(chosen) ? null : chosen;
+  } catch {
+    return null;
+  }
 }
 
 /** Folder whose .perfect-planner/ holds a project's ledger. */
@@ -141,6 +170,38 @@ function ownerPinFor(baseRoot: string, root: string, keys: HostKeys): OwnerPin {
   const ownerKey = keys.ownerKeyFor(principal);
   if (!ownerKey) return { state: "unavailable", reason: "This device has no key store, so the project has no owner." };
   return { state: "new", ownerKey, principal, ...(genesis ? { genesis } : {}) };
+}
+
+/**
+ * Signs that Perfect Planner was used in a folder's repo before: our pre-push scan hook, pp/* task
+ * branches, or .perfect-planner in the repo's info/exclude. Read before the app touches the repo (the open
+ * itself adds the exclude line and the hook). Signals, not proof; never throws.
+ */
+export async function priorUseSignals(dir: string): Promise<string[]> {
+  const signals: string[] = [];
+  const gitPath = async (name: string) => {
+    const result = await runCommand("git", ["rev-parse", "--git-path", name], { cwd: dir });
+    return result.code === 0 && result.stdout.trim() ? path.resolve(dir, result.stdout.trim()) : null;
+  };
+  const read = (file: string | null) => {
+    try {
+      return file ? fs.readFileSync(file, "utf8") : "";
+    } catch {
+      return "";
+    }
+  };
+  try {
+    if ((await runCommand("git", ["rev-parse", "--is-inside-work-tree"], { cwd: dir })).code !== 0) return [];
+    const hooks = await gitPath("hooks");
+    if (read(hooks && path.join(hooks, "pre-push")).includes("Perfect Planner")) signals.push("This repo has Perfect Planner's pre-push scan installed.");
+    const branches = await runCommand("git", ["for-each-ref", "--format=%(refname:short)", "refs/heads/pp/"], { cwd: dir });
+    const names = branches.code === 0 ? branches.stdout.split(/\r?\n/).filter(Boolean) : [];
+    if (names.length) signals.push(`This repo has ${names.length} Perfect Planner task branch${names.length === 1 ? "" : "es"} (${names.slice(0, 3).join(", ")}${names.length > 3 ? ", ..." : ""}).`);
+    if (/\.perfect-planner\//.test(read(await gitPath("info/exclude")))) signals.push("This repo already keeps a .perfect-planner folder out of git.");
+  } catch {
+    return signals;
+  }
+  return signals;
 }
 
 /**
@@ -223,7 +284,7 @@ export function openCoreProject(baseRoot: string, key: string, override: string 
   const guarded = new Set<string>();
   const releases: (() => void)[] = [];
   const guard = (roots: readonly string[]) => {
-    const fresh = roots.filter((r) => typeof r === "string" && path.isAbsolute(r) && !guarded.has(r));
+    const fresh = roots.filter((r) => typeof r === "string" && path.isAbsolute(r) && !guarded.has(r) && !isHomeOrDrive(r));
     if (!fresh.length) return;
     fresh.forEach((r) => guarded.add(r));
     releases.push(protectRoots(fresh));
@@ -234,6 +295,16 @@ export function openCoreProject(baseRoot: string, key: string, override: string 
     guarded.clear();
   };
   const ready = excludePrivateFolder(root).then(() => undefined);
-  const protection = ready.then(() => protectRepository(ledger, root));
+  // Every open also rewrites our pre-push shim in the workers' repository, so it names the Node and
+  // hook this copy of the app ships (an app update moves both; a stale shim would refuse every push).
+  const protection = ready.then(async () => {
+    const report = await protectRepository(ledger, root);
+    const chosen = chosenRepository(root);
+    if (chosen && path.resolve(chosen) !== path.resolve(root)) {
+      guard([chosen]);
+      await protectRepository(ledger, chosen).catch(() => undefined);
+    }
+    return report;
+  });
   return { key, root, ledger, service, policy, owner, ready, protection, protectRoots: guard, releaseRoots, state: new Map(), entries: () => ledger.entries() };
 }
