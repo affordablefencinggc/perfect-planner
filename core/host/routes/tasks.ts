@@ -11,7 +11,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { deriveState, type GateState } from "../../gate/index";
+import { deriveState, sensitiveChanges, testSupportFiles, type GateState } from "../../gate/index";
 import type { Actor } from "../../ledger/index";
 import { attemptLabel, type TaskView } from "../../mcp/index";
 import { WorktreeError, WorktreeManager, git, runGit, WORKTREES_ACTOR, type WorktreeInfo } from "../../worktrees/index";
@@ -376,24 +376,17 @@ async function releaseClaim(project: CoreProject, id: string, body: Record<strin
 }
 
 /**
- * Changed files that can run code or change how git, npm or CI behave on the person's machine (install
- * scripts, lockfiles, git attributes and hooks, workflows, npm settings). The diff screen lists them in a
- * block that needs its own confirmation before the diff can be approved. Stand-in until core/worktrees
- * exports its own list.
+ * What the worker changed from where the worktree branched to the tip, plus the files among them the gate
+ * itself treats as sensitive (core/gate sensitiveChanges: install scripts, lockfiles, git attributes and
+ * hooks, workflows, npm and build settings, and the approved test's own support files). The diff screen
+ * lists those in a block that needs its own confirmation, so the person reads them before approving.
  */
-const SENSITIVE: readonly RegExp[] = [
-  /(^|\/)package\.json$/,
-  /(^|\/)(package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lockb?)$/,
-  /(^|\/)\.gitattributes$/,
-  /^\.gitmodules$/,
-  /^\.github\/workflows\//,
-  /(^|\/)\.githooks\//,
-  /(^|\/)\.husky\//,
-  /(^|\/)\.npmrc$/,
-];
-
-export function sensitiveFiles(files: readonly string[]): string[] {
-  return files.filter((file) => SENSITIVE.some((pattern) => pattern.test(file.replace(/\\/g, "/")))).sort();
+async function changedFiles(project: CoreProject, label: string, tree: { path: string; baseSha: string }, tip: string): Promise<{ files: string[]; sensitive: string[] }> {
+  const files = (await git(tree.path, ["-c", "core.quotePath=false", "diff", "--name-only", "--no-renames", tree.baseSha, tip])).split(/\r?\n/).filter(Boolean).sort();
+  const state = deriveState(project.entries(), label);
+  const pinned = Object.keys(state.approval?.pins ?? {});
+  const support = state.definition ? await testSupportFiles(tree.path, [tree.baseSha, tip], pinned, state.definition.command) : new Set<string>();
+  return { files, sensitive: sensitiveChanges(files, pinned, support).sort() };
 }
 
 export function registerTaskRoutes(router: Router): void {
@@ -486,9 +479,9 @@ export function registerTaskRoutes(router: Router): void {
     const task = findTask(project, params.id!);
     const tree = await worktreeFor(project, attemptLabel(task));
     const tip = await git(tree.path, ["rev-parse", "HEAD"]);
-    const files = (await git(tree.path, ["diff", "--name-only", "--no-renames", tree.baseSha, tip])).split(/\r?\n/).filter(Boolean).sort();
+    const { files, sensitive } = await changedFiles(project, attemptLabel(task), tree, tip);
     const text = await git(tree.path, ["diff", "--no-color", "--no-renames", tree.baseSha, tip]);
-    return { task: attemptLabel(task), base: tree.baseSha, commit: tip, files, sensitive: sensitiveFiles(files), text: text.length > MAX_DIFF ? `${text.slice(0, MAX_DIFF)}\n… diff cut at ${MAX_DIFF} characters` : text, truncated: text.length > MAX_DIFF };
+    return { task: attemptLabel(task), base: tree.baseSha, commit: tip, files, sensitive, text: text.length > MAX_DIFF ? `${text.slice(0, MAX_DIFF)}\n… diff cut at ${MAX_DIFF} characters` : text, truncated: text.length > MAX_DIFF };
   });
 
   /** POST /tasks/:id/approve-diff: the person approves the diff at the commit the test passed on. */
@@ -503,8 +496,7 @@ export function registerTaskRoutes(router: Router): void {
     }
     // Files that can run code on this machine need their own confirmation, naming exactly those files.
     const tree = await worktreeFor(project, label);
-    const changed = (await git(tree.path, ["diff", "--name-only", "--no-renames", tree.baseSha, tip])).split(/\r?\n/).filter(Boolean);
-    const sensitive = sensitiveFiles(changed);
+    const { sensitive } = await changedFiles(project, label, tree, tip);
     const confirmed = bodyOf(body).confirmSensitive;
     if (sensitive.length && !(Array.isArray(confirmed) && confirmed.length === sensitive.length && sensitive.every((file) => confirmed.includes(file)))) {
       throw new HttpError(409, "CONFIRM_SENSITIVE", `This diff changes files that can run code on your computer (${sensitive.join(", ")}). Confirm you read them before approving.`);

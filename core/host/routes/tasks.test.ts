@@ -123,7 +123,8 @@ describe("tasks routes", () => {
     expect(checked.body.result).toMatchObject({ passed: true, commit: head });
     const diff = (await hostCall(ctx.base, "GET", `/tasks/T-1/diff${q}`)).body.result;
     expect(diff.files).toEqual([".github/workflows/ci.yml", "package.json", "src/save.js", "tests/save.check.mjs"]);
-    expect(diff.sensitive).toEqual([".github/workflows/ci.yml", "package.json"]);
+    // The gate's own list: the proposed test file counts too, since a change there changes what is checked.
+    expect(diff.sensitive).toEqual([".github/workflows/ci.yml", "package.json", "tests/save.check.mjs"]);
     expect(diff.text).toContain("export const save");
     expect((await tasks()).tasks[0]).toMatchObject({ stage: "review-diff" });
     const early = await post("/tasks/T-1/merge", { commit: head });
