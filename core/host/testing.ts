@@ -73,7 +73,8 @@ export async function startTestHost({ owned = true, autoStart = true, ...options
       windows.delete(url);
       await h.close();
       await new Promise<void>((resolve) => s.close(() => resolve()));
-      fs.rmSync(root, { recursive: true, force: true });
+      // Windows can hold a just-closed file for a moment (EBUSY); retry rather than fail the test.
+      fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
     },
   };
 }

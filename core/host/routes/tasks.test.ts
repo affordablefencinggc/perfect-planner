@@ -183,7 +183,10 @@ describe("tasks routes", () => {
     expect(view.repo.reason).toMatch(/git/);
     const res = await post("/tasks/T-1/dispatch");
     expect(res.status).toBe(409);
-    fs.rmSync(plain, { recursive: true, force: true });
+    // Close the host before removing its folder: Windows refuses to delete a folder whose ledger is still open.
+    await ctx.stop();
+    fs.rmSync(plain, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+    ctx = await startTestHost({ projectRootOverride: repo });
   });
 });
 
