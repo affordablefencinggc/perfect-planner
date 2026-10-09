@@ -3,6 +3,8 @@ import { spawn, type ChildProcess } from "node:child_process";
 export interface TestRunOptions {
   /** Kill the whole process tree after this long. Default 10 minutes. */
   timeoutMs?: number;
+  /** Extra variables on top of the allow-listed environment (see TEST_ENV_ALLOW). */
+  env?: Record<string, string>;
 }
 
 export interface TestRunResult {
@@ -44,11 +46,31 @@ class Tail {
   }
 }
 
-function testEnv(): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...process.env };
-  // Inherited from a hook or parent git, these would point git inside the test at another repo.
-  for (const key of ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR"]) delete env[key];
-  return env;
+/**
+ * Variables a test command may see. Everything else (API keys, cloud credentials, tokens the
+ * user's shell happens to hold) is dropped, so agent-written tests cannot read or leak them.
+ */
+export const TEST_ENV_ALLOW = [
+  "PATH", "PATHEXT", "SYSTEMROOT", "WINDIR", "COMSPEC", "SYSTEMDRIVE",
+  "TEMP", "TMP", "TMPDIR", "HOME", "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "APPDATA", "LOCALAPPDATA",
+  "PROGRAMDATA", "PROGRAMFILES", "PROGRAMFILES(X86)", "PROGRAMW6432", "COMMONPROGRAMFILES", "COMMONPROGRAMFILES(X86)",
+  "USER", "USERNAME", "LOGNAME", "SHELL", "TERM", "LANG", "LANGUAGE", "LC_ALL", "LC_CTYPE", "TZ",
+  "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE", "OS", "CI", "NPM_CONFIG_CACHE",
+] as const;
+
+/** Copy only allow-listed variables (matched case-insensitively, as Windows does), plus explicit extras. */
+export function scrubbedEnv(source: NodeJS.ProcessEnv = process.env, extra: Record<string, string> = {}): NodeJS.ProcessEnv {
+  const allow = new Set<string>(TEST_ENV_ALLOW);
+  const env: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(source)) if (value !== undefined && allow.has(key.toUpperCase())) env[key] = value;
+  return { ...env, ...extra };
+}
+
+/** A run proves the test fails only if the test itself ran and reported failure. */
+export function isConclusiveFailure(run: TestRunResult): boolean {
+  if (run.passed || run.timedOut || run.exitCode === null) return false;
+  // Shell "cannot execute" / "command not found" (POSIX) and "not recognized" (cmd.exe) mean the test never ran.
+  return isWindows ? run.exitCode !== 9009 : run.exitCode !== 126 && run.exitCode !== 127;
 }
 
 /** Kill the child and everything it started. */
@@ -100,7 +122,7 @@ export function runTestCommand(command: string, cwd: string, options: TestRunOpt
       }, 5000);
     }, timeoutMs);
     try {
-      child = spawn(command, { cwd, env: testEnv(), shell: true, windowsHide: true, detached: !isWindows, stdio: ["ignore", "pipe", "pipe"] });
+      child = spawn(command, { cwd, env: scrubbedEnv(process.env, options.env), shell: true, windowsHide: true, detached: !isWindows, stdio: ["ignore", "pipe", "pipe"] });
     } catch (error) {
       tail.push(Buffer.from(String(error)));
       finish(null);

@@ -5,7 +5,7 @@ import { git, runGit } from "../worktrees/git";
 import { lines, realDir, samePath } from "../worktrees/platform";
 import { GATE_ACTOR, evidenceValue, type Actor, type EntryDraft, type LedgerEntry, type LedgerPort } from "../worktrees/ports";
 import { TASK_ID } from "../worktrees/types";
-import { DEFAULT_TIMEOUT_MS, runTestCommand, type TestRunResult, type TestRunner } from "./run";
+import { DEFAULT_TIMEOUT_MS, isConclusiveFailure, runTestCommand, type TestRunResult, type TestRunner } from "./run";
 
 export type Phase = "baseline" | "worktree" | "merge";
 
@@ -172,7 +172,8 @@ export function deriveState(entries: readonly LedgerEntry[], taskId: string): Ga
       case "test.failed": {
         if (!forCurrent) break;
         const outcome: TestOutcome = { n: entry.n, passed: entry.type === "test.passed", phase: phase ?? "worktree", commit: dataString(entry, "commit") ?? evidenceValue(entry, "commit") };
-        if (outcome.phase === "baseline") state.baseline = outcome;
+        // An inconclusive baseline (timeout, crash, missing command) clears any earlier one.
+        if (outcome.phase === "baseline") state.baseline = entry.data?.conclusive === false ? undefined : outcome;
         else if (outcome.phase === "worktree") state.worktree = outcome;
         else state.merge = outcome;
         if (outcome.phase !== "baseline" && outcome.passed && outcome.commit) passed.add(outcome.commit.toLowerCase());
@@ -322,6 +323,18 @@ export class TestGate {
         reason: "A test that passes on the current code proves nothing; tighten it and define it again.",
       });
       return { ok: false, reason: "The test already passes on the current code, so it cannot prove the task.", entry, run, commit };
+    }
+    if (!isConclusiveFailure(run)) {
+      // Recorded, but as inconclusive: a timeout, crash or missing command says nothing about the code.
+      const entry = this.ledger.append({
+        ...draft,
+        evidence: [...draft.evidence, "conclusive:false"],
+        data: { ...draft.data, conclusive: false },
+        type: "test.failed",
+        summary: `Done-when test for ${taskId} did not run to a result on the current code`,
+        reason: failureReason(run),
+      });
+      return { ok: false, reason: "The test timed out, crashed or could not start, so it has not shown that it fails. Fix the command and run it again.", entry, run, commit };
     }
     const entry = this.ledger.append({ ...draft, type: "test.failed", summary: `Done-when test for ${taskId} fails on the current code, as it should`, reason: failureReason(run) });
     return { ok: true, entry, run, commit };

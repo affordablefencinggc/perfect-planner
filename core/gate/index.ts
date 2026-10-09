@@ -1,4 +1,4 @@
-export { runTestCommand, killTree, DEFAULT_TIMEOUT_MS, type TestRunOptions, type TestRunResult, type TestRunner } from "./run";
+export { runTestCommand, killTree, scrubbedEnv, isConclusiveFailure, TEST_ENV_ALLOW, DEFAULT_TIMEOUT_MS, type TestRunOptions, type TestRunResult, type TestRunner } from "./run";
 export {
   TestGate,
   GateError,

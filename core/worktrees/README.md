@@ -15,7 +15,9 @@ small platform layer (`platform.ts`, `git.ts`) that `core/watcher` and `core/gat
    check one branch out in two worktrees. The folder is added to `.git/info/exclude`, so the main
    checkout stays clean without editing the tracked `.gitignore`.
 4. Picks a free dev-server port (default 5200 to 5999) that no other worktree holds and nothing is listening on.
-5. Copies untracked `.env*` files from the main checkout with every secret-looking value replaced by `PLACEHOLDER`.
+5. Copies untracked `.env*` files from the main checkout with every value replaced by `PLACEHOLDER`, except plainly
+   safe settings (ports, hosts, modes, flags) whose values don't themselves look secret. Connection strings with
+   credentials, long random strings and anything unrecognised become placeholders.
 6. Installs the commit-time secret scan (`hooks/secret-scan.mjs`) for this worktree only, through
    `core.hooksPath` in per-worktree config, so the user's own hooks in the main checkout are untouched.
 7. Installs dependencies (`npm ci --prefer-offline` when there is a `package-lock.json`, using the shared npm cache).

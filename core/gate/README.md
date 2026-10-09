@@ -51,6 +51,13 @@ the integration branch untouched. The temporary worktree is always removed.
 
 Test commands run through the platform shell; on timeout the whole process
 tree is killed (`taskkill /T /F` on Windows, process group kill elsewhere).
+They see only an allow-listed environment (`TEST_ENV_ALLOW`: PATH, temp and home
+folders, locale and similar), so API keys and tokens in the user's shell never
+reach agent-written tests; extra variables must be passed explicitly.
+
+Only a clean non-zero exit proves the test fails first. A timeout, a crash, or a
+command that could not start (exit 126/127, or 9009 on Windows) is recorded as
+an inconclusive baseline (`data.conclusive: false`) and approval stays refused.
 
 ## Entries written
 

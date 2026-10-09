@@ -6,7 +6,7 @@ import { Ledger, LedgerError, MemoryStore, type Actor } from "../ledger/index";
 import { git } from "../worktrees/git";
 import { realDir } from "../worktrees/platform";
 import { commitAll, makeRepo, memoryLedger, writeFiles } from "../worktrees/testing";
-import { TestGate, deriveState, gateRule, nextAttemptId, runTestCommand } from "./index";
+import { TestGate, deriveState, gateRule, isConclusiveFailure, nextAttemptId, runTestCommand, scrubbedEnv } from "./index";
 
 const OWNER: Actor = { kind: "person", id: "owner" };
 const WORKER: Actor = { kind: "agent", id: "worker-1", model: "test-model" };
@@ -320,6 +320,27 @@ describe("TestGate", () => {
     expect(before[1]).toMatchObject({ stage: "approved", attempt: 2 });
   });
 
+  it("a timeout, crash or missing command does not count as the required failing run", async () => {
+    const { root, ledger, gate } = await setup();
+    writeFiles(root, { "hang.mjs": "setInterval(() => {}, 1000);\n" });
+    const slow = new TestGate({ ledger, timeoutMs: 1000 });
+    expect(slow.define("T-1", "node hang.mjs", WORKER).ok).toBe(true);
+    const timedOut = await slow.confirmFailsFirst("T-1", root);
+    expect(timedOut).toMatchObject({ ok: false, reason: expect.stringMatching(/timed out, crashed or could not start/) });
+    expect(timedOut.entry?.data).toMatchObject({ conclusive: false });
+    expect(gate.state("T-1").baseline).toBeUndefined();
+    expect(gate.approve("T-1", OWNER).ok).toBe(false);
+
+    expect(gate.define("T-1", "pp-no-such-command-anywhere", WORKER).ok).toBe(true);
+    expect((await gate.confirmFailsFirst("T-1", root)).ok).toBe(false);
+    expect(gate.approve("T-1", OWNER).ok).toBe(false);
+
+    // A real failure afterwards is accepted, and a later inconclusive run withdraws it again.
+    expect(gate.define("T-1", COMMAND, WORKER).ok).toBe(true);
+    expect((await gate.confirmFailsFirst("T-1", root)).ok).toBe(true);
+    expect(gate.state("T-1").stage).toBe("baseline-confirmed");
+  }, SLOW);
+
   it("validates input", async () => {
     const { gate } = await setup();
     expect(() => gate.define("task-1", COMMAND, WORKER)).toThrow(/not a task id/);
@@ -340,6 +361,36 @@ describe("runTestCommand", () => {
     const dir = scratch();
     expect(await runTestCommand('node -e "console.log(42)"', dir)).toMatchObject({ passed: true, exitCode: 0, timedOut: false, outputTail: expect.stringContaining("42") });
     expect(await runTestCommand('node -e "console.error(7); process.exit(3)"', dir)).toMatchObject({ passed: false, exitCode: 3, outputTail: expect.stringContaining("7") });
+  });
+
+  it("runs tests with an allow-listed environment, so keys in the user's shell never reach them", async () => {
+    const dir = scratch();
+    const key = ["sk", "test", "x".repeat(24)].join("-");
+    process.env.PP_GATE_TEST_API_KEY = key;
+    process.env.ANTHROPIC_API_KEY ??= key;
+    try {
+      writeFileSync(path.join(dir, "env.mjs"), "console.log(JSON.stringify(Object.keys(process.env)));\nconsole.log(process.env.PP_GATE_TEST_API_KEY ?? 'absent');\nconsole.log(process.env.EXTRA ?? 'no-extra');\n");
+      const result = await runTestCommand("node env.mjs", dir, { env: { EXTRA: "given" } });
+      expect(result.passed).toBe(true);
+      expect(result.outputTail).not.toContain(key);
+      expect(result.outputTail).toContain("absent");
+      expect(result.outputTail).toContain("given");
+      const keys = JSON.parse(result.outputTail.split(/\r?\n/)[0]!) as string[];
+      expect(keys.some((name) => /API_KEY|TOKEN|SECRET/i.test(name))).toBe(false);
+    } finally {
+      delete process.env.PP_GATE_TEST_API_KEY;
+      if (process.env.ANTHROPIC_API_KEY === key) delete process.env.ANTHROPIC_API_KEY;
+    }
+    expect(scrubbedEnv({ Path: "C:\\bin", GITHUB_TOKEN: "t", AWS_SECRET_ACCESS_KEY: "s", HOME: "/h", GIT_DIR: "/x" })).toEqual({ Path: "C:\\bin", HOME: "/h" });
+  });
+
+  it("only a clean non-zero exit is a conclusive failure", () => {
+    const base = { passed: false, timedOut: false, durationMs: 1, outputTail: "" };
+    expect(isConclusiveFailure({ ...base, exitCode: 1 })).toBe(true);
+    expect(isConclusiveFailure({ ...base, exitCode: null })).toBe(false);
+    expect(isConclusiveFailure({ ...base, exitCode: null, timedOut: true })).toBe(false);
+    expect(isConclusiveFailure({ ...base, exitCode: process.platform === "win32" ? 9009 : 127 })).toBe(false);
+    expect(isConclusiveFailure({ ...base, passed: true, exitCode: 0 })).toBe(false);
   });
 
   it("keeps only the last ~4 KB of output", async () => {

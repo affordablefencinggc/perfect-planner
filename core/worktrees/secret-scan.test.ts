@@ -31,3 +31,35 @@ describe("placeholderSecrets", () => {
     );
   });
 });
+
+describe("placeholderSecrets on values whose names give nothing away", () => {
+  it("replaces every value except plainly safe settings", () => {
+    const pass = ["hunter2", "hunter2"].join("");
+    const input = [
+      "PORT=3000",
+      "NODE_ENV=development",
+      "DB_HOST=localhost",
+      `DATABASE_URL=postgres://app:${pass}@localhost:5432/app`,
+      `REDIS_URL="redis://:${pass}@cache:6379"`,
+      `DB_PASS=${pass}`,
+      "STRIPE=" + ["rk", "live", "a".repeat(24)].join("_"),
+      "WEBHOOK=https://hooks.example.invalid/T000/B000/" + "x".repeat(24),
+      "FEATURE_X_ENABLED=true",
+      "API_HOST=" + "A1b2C3d4E5f6G7h8I9j0K1l2M3n4",
+      "MYSTERY=anything",
+    ].join("\n");
+    expect(placeholderSecrets(input).split("\n")).toEqual([
+      "PORT=3000",
+      "NODE_ENV=development",
+      "DB_HOST=localhost",
+      "DATABASE_URL=PLACEHOLDER",
+      "REDIS_URL=PLACEHOLDER",
+      "DB_PASS=PLACEHOLDER",
+      "STRIPE=PLACEHOLDER",
+      "WEBHOOK=PLACEHOLDER",
+      "FEATURE_X_ENABLED=true",
+      "API_HOST=PLACEHOLDER",
+      "MYSTERY=PLACEHOLDER",
+    ]);
+  });
+});
