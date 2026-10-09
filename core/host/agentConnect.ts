@@ -146,23 +146,31 @@ export function installSkill(plan: Pick<ConnectPlan, "skillFrom" | "skillTo">, h
   }
 }
 
-
 export interface Launch {
   command: string;
   args: string[];
 }
 
 /**
- * The folders no agent CLI may be started from: the current folder, the project folder that owns the
- * token file (<project>/.perfect-planner/tokens/x.token) and the repo the person picked for it. Never found
- * by walking up to .git.
+ * The folders no agent CLI may be started from, beyond the current folder: the project folder that owns
+ * the token file (<project>/.perfect-planner/tokens/x.token), the repo the person picked for it, and the
+ * folders the host recorded beside the token (x.roots.json: the repo git found, the worktree folders).
+ * Never found by walking up to .git.
  */
 export function protectFor(tokenFile: string | null): string[] {
   if (!tokenFile) return [];
   const project = path.dirname(path.dirname(path.dirname(tokenFile)));
   const repo = chosenRepoRoot(project);
+  let recorded: unknown[] = [];
+  try {
+    const roots = (JSON.parse(fs.readFileSync(tokenFile.replace(/\.token$/, ".roots.json"), "utf8")) as { roots?: unknown }).roots;
+    if (Array.isArray(roots)) recorded = roots;
+  } catch {
+    // an older app wrote no roots file
+  }
+  const roots = [project, ...(repo ? [repo] : []), ...recorded].filter((root): root is string => typeof root === "string" && path.isAbsolute(root));
   // A whole drive or the home folder is never a protected root: it would hide ~/.local/bin/claude.
-  return [project, ...(repo ? [repo] : [])].filter((root) => !repoRefusal(root));
+  return [...new Set(roots)].filter((root) => !repoRefusal(root));
 }
 
 /**
@@ -205,7 +213,7 @@ export function claudeLaunch(args: string[], env: NodeJS.ProcessEnv, cwd: string
 }
 
 /**
- * True for an npm-installed agent CLI on macOS and Linux: a link to a .js file or a script starting
+ * True for an npm-installed claude on macOS and Linux: a link to a .js file or a script starting
  * `#!/usr/bin/env node`. Its shebang would look node up on PATH, where a planted node could sit, so
  * it runs under this Node instead.
  */
@@ -233,20 +241,43 @@ function safeReal(p: string): string {
   }
 }
 
-/** Windows: never resolve a bare program name (node, git) from the current folder either. */
-const SAFE_ENV = { ...process.env, ...NO_CWD_SEARCH_ENV };
-
-/** Runs the agent's CLI from the project folder (its mcp add registers that folder). */
-function run(agent: AgentKind, args: string[], tokenFile: string | null) {
-  const launch = agentLaunch(agent, args, process.env, process.cwd(), protectFor(tokenFile));
-  if (!launch) return { error: Object.assign(new Error(`${AGENTS[agent].cli} not found`), { code: "ENOENT" }), status: null, stdout: "", stderr: "" };
-  return spawnSync(launch.command, launch.args, { encoding: "utf8", windowsHide: true, env: SAFE_ENV });
+/**
+ * The environment for Claude Code: PATH starts with this Node's own folder, so a wrapper script (a
+ * /bin/sh claude that calls `node`) gets this Node rather than one planted further along PATH.
+ */
+export function childEnv(env: NodeJS.ProcessEnv, platform: NodeJS.Platform = process.platform, execPath = process.execPath): NodeJS.ProcessEnv {
+  const p = platform === "win32" ? path.win32 : path.posix;
+  const key = Object.keys(env).find((name) => (platform === "win32" ? name.toUpperCase() === "PATH" : name === "PATH")) ?? "PATH";
+  const rest = env[key];
+  return { ...env, [key]: rest ? `${p.dirname(execPath)}${p.delimiter}${rest}` : p.dirname(execPath) };
 }
 
-const installed = (agent: AgentKind) => agentLaunch(agent, [], process.env, process.cwd(), []) !== null;
+/** Where connect.mjs runs: the terminal's folder and environment, and where it writes. */
+export interface ConnectIo {
+  cwd: string;
+  env: NodeJS.ProcessEnv;
+  home: string;
+  /** The folder connect.mjs (and skill/SKILL.md) sits in. */
+  here: string;
+  out(text: string): void;
+  err(text: string): void;
+}
+
+/** Runs the agent's CLI from the project folder (its mcp add registers that folder). */
+function run(agent: AgentKind, args: string[], tokenFile: string | null, io: ConnectIo) {
+  const launch = agentLaunch(agent, args, io.env, io.cwd, protectFor(tokenFile));
+  if (!launch) return { error: Object.assign(new Error(`${AGENTS[agent].cli} not found`), { code: "ENOENT" }), status: null, stdout: "", stderr: "" };
+  return spawnSync(launch.command, launch.args, {
+    cwd: io.cwd,
+    encoding: "utf8",
+    windowsHide: true,
+    // Windows: never resolve a bare program name (node, git) from the current folder either.
+    env: { ...childEnv(io.env), ...NO_CWD_SEARCH_ENV },
+  });
+}
 
 /** The first agent CLI found on this computer, in the order Perfect Planner was built and proven with. */
-export function detectAgent(isInstalled: (agent: AgentKind) => boolean = installed): AgentKind | null {
+export function detectAgent(isInstalled: (agent: AgentKind) => boolean = (agent) => agentLaunch(agent, [], process.env, process.cwd(), []) !== null): AgentKind | null {
   return AGENT_KINDS.find(isInstalled) ?? null;
 }
 
@@ -255,10 +286,10 @@ export function detectAgent(isInstalled: (agent: AgentKind) => boolean = install
  * computer's token file and Node, so in a git checkout list it in .git/info/exclude; the exclude
  * file is local to this checkout and changes nothing anyone else sees.
  */
-export function keepOutOfGit(folder: string): boolean {
-  const git = findExecutable("git", process.env, folder, process.platform, []);
+export function keepOutOfGit(folder: string, env: NodeJS.ProcessEnv = process.env): boolean {
+  const git = findExecutable("git", env, folder, process.platform, []);
   if (!git) return false;
-  const probe = spawnSync(git, ["rev-parse", "--git-path", "info/exclude"], { cwd: folder, encoding: "utf8", windowsHide: true, env: SAFE_ENV });
+  const probe = spawnSync(git, ["rev-parse", "--git-path", "info/exclude"], { cwd: folder, encoding: "utf8", windowsHide: true, env: { ...env, ...NO_CWD_SEARCH_ENV } });
   if (probe.error || probe.status !== 0) return false;
   const exclude = path.resolve(folder, probe.stdout.trim());
   const line = "/.gemini/settings.json";
@@ -282,65 +313,66 @@ export function parseArgs(argv: string[]): { agent?: string; rest: string[] } {
   return { agent, rest };
 }
 
-function main(all: string[]): number {
-  const here = path.dirname(fileURLToPath(import.meta.url));
+/** connect.mjs itself: `[--agent claude|gemini|codex] <bridge url> <token file>`, or `--skill-only`. Returns the exit code. */
+export function runConnect(all: string[], io: ConnectIo): number {
+  const { here } = io;
   const { agent: picked, rest: argv } = parseArgs(all);
   if (picked !== undefined && !AGENT_KINDS.includes(picked as AgentKind)) {
-    process.stderr.write(`Perfect Planner: --agent must be one of ${AGENT_KINDS.join(", ")}.\n`);
+    io.err(`Perfect Planner: --agent must be one of ${AGENT_KINDS.join(", ")}.\n`);
     return 2;
   }
   if (argv.length === 1 && argv[0] === "--skill-only") {
-    const plan = connectPlan({ bridgeUrl: "", tokenFile: "", here, home: os.homedir() });
+    const plan = connectPlan({ bridgeUrl: "", tokenFile: "", here, home: io.home });
     try {
       installSkill(plan, here);
     } catch (error) {
-      process.stderr.write(`Perfect Planner: could not install the skill (${(error as Error).message}).\n`);
+      io.err(`Perfect Planner: could not install the skill (${(error as Error).message}).\n`);
       return 1;
     }
-    process.stdout.write(`Installed the ${SKILL} skill for every Claude Code, Gemini CLI and Codex CLI session on this computer.\n`);
+    io.out(`Installed the ${SKILL} skill for every Claude Code, Gemini CLI and Codex CLI session on this computer.\n`);
     return 0;
   }
   const problem = connectArgsProblem(argv) ?? (process.platform === "win32" && /[%"]/.test(here + process.execPath) ? "Perfect Planner or Node.js is installed in a folder whose name has % or \", which Windows would rewrite." : null);
   if (problem) {
-    process.stderr.write(`Perfect Planner: ${problem}\n`);
+    io.err(`Perfect Planner: ${problem}\n`);
     return 2;
   }
   const [bridgeUrl, tokenFile] = argv as [string, string];
   if (!fs.existsSync(tokenFile)) {
-    process.stderr.write("Perfect Planner: the token file is gone (the app restarted, or you disconnected). Click Connect agent again for a fresh line.\n");
+    io.err("Perfect Planner: the token file is gone (the app restarted, or you disconnected). Click Connect agent again for a fresh line.\n");
     return 2;
   }
-  const agent = (picked as AgentKind | undefined) ?? detectAgent();
+  const agent = (picked as AgentKind | undefined) ?? detectAgent((kind) => agentLaunch(kind, [], io.env, io.cwd, protectFor(tokenFile)) !== null);
   if (!agent) {
-    process.stderr.write("Perfect Planner: none of claude, gemini or codex is installed here. For another agent, use the MCP settings from Connect agent instead.\n");
+    io.err("Perfect Planner: none of claude, gemini or codex is installed here. For another agent, use the MCP settings from Connect agent instead.\n");
     return 1;
   }
   const { cli, label } = AGENTS[agent];
-  const plan = connectPlan({ bridgeUrl, tokenFile, here, home: os.homedir(), agent });
+  const plan = connectPlan({ bridgeUrl, tokenFile, here, home: io.home, agent });
 
   let skill = false;
   try {
     installSkill(plan, here);
     skill = true;
   } catch (error) {
-    process.stderr.write(`Perfect Planner: could not install the skill (${(error as Error).message}). Connecting anyway.\n`);
+    io.err(`Perfect Planner: could not install the skill (${(error as Error).message}). Connecting anyway.\n`);
   }
 
-  run(agent, plan.remove, tokenFile); // nothing to remove the first time; that is fine
-  const added = run(agent, plan.add, tokenFile);
+  run(agent, plan.remove, tokenFile, io); // nothing to remove the first time; that is fine
+  const added = run(agent, plan.add, tokenFile, io);
   if (added.error || added.status !== 0) {
     const missing = (added.error as NodeJS.ErrnoException | undefined)?.code === "ENOENT";
-    process.stderr.write(
+    io.err(
       missing
         ? `Perfect Planner: ${label} (the ${cli} command) is not installed here. Pick your agent in Connect agent, or use the MCP settings it shows.\n`
         : `Perfect Planner: ${cli} mcp add failed.\n${added.stderr || added.stdout}\n`,
     );
     return 1;
   }
-  const ignored = agent === "gemini" && keepOutOfGit(process.cwd());
-  process.stdout.write(
+  const ignored = agent === "gemini" && keepOutOfGit(io.cwd, io.env);
+  io.out(
     [
-      agent === "codex" ? "Connected Codex CLI to Perfect Planner (Codex keeps one connection for this computer)." : `Connected ${label} in this folder (${process.cwd()}) to Perfect Planner.`,
+      agent === "codex" ? "Connected Codex CLI to Perfect Planner (Codex keeps one connection for this computer)." : `Connected ${label} in this folder (${io.cwd}) to Perfect Planner.`,
       ignored ? "Kept .gemini/settings.json out of git; it belongs to this computer." : "",
       skill ? `Installed the ${SKILL} skill for ${label} on this computer.` : "",
       agent === "gemini"
@@ -351,6 +383,17 @@ function main(all: string[]): number {
       .join("\n") + "\n",
   );
   return 0;
+}
+
+function main(argv: string[]): number {
+  return runConnect(argv, {
+    cwd: process.cwd(),
+    env: process.env,
+    home: os.homedir(),
+    here: path.dirname(fileURLToPath(import.meta.url)),
+    out: (text) => process.stdout.write(text),
+    err: (text) => process.stderr.write(text),
+  });
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) process.exit(main(process.argv.slice(2)));
