@@ -2,13 +2,14 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { Ledger, MemoryStore } from "../ledger/index";
 import { appendNumbered, installNumberingRules } from "../numbering/index";
 import { ALLOWLIST_PATH, approveSecretFinding, approvedFingerprints, fingerprintOf, parseAllowlist } from "./allowlist";
 import { checkPushProtection, enablePushProtection, type Fetcher } from "./pushProtection";
 import {
-  FIELD_WORD, PLACEHOLDER, REQUIRED_IGNORES, SECRET_RULES, checkIgnoreList, isConfigLikeFile, isForbiddenFile, isPlaceholder, maskSecret, scanBranch, scanChange, scanText, withRequiredIgnores,
+  PLACEHOLDER, REQUIRED_IGNORES, SECRET_RULES, checkIgnoreList, isConfigLikeFile, isForbiddenFile, isPlaceholder, maskSecret, scanBranch, scanChange, scanText, withRequiredIgnores,
 } from "./secrets";
 import type { CommandRunner } from "./types";
 
@@ -108,10 +109,12 @@ describe("secret rules", () => {
 
   it("applies per-name minimum lengths (password/secret 8, key/token 12)", () => {
     expect(scanText("a.ts", kv("password", "=", "abcdefgh"))).toHaveLength(1);
-    expect(scanText("a.ts", kv("passwd", "=", "abcdefg"))).toHaveLength(0);
+    // in code (NAME = "value") short values pass; an env-style NAME="value" line counts at any length
+    expect(scanText("a.ts", kv("passwd", " = ", "abcdefg"))).toHaveLength(0);
+    expect(scanText("a.ts", kv("passwd", "=", "abcdefg"))).toHaveLength(1);
     expect(scanText("a.ts", kv("client_secret", "=", "abcdefgh"))).toHaveLength(1);
     expect(scanText("a.ts", kv("api_key", "=", "abcdefghijkl"))).toHaveLength(1);
-    expect(scanText("a.ts", kv("auth_token", "=", "abcdefghijk"))).toHaveLength(0);
+    expect(scanText("a.ts", kv("auth_token", " = ", "abcdefghijk"))).toHaveLength(0);
   });
 
   it("has no inline bypass marker: pp-allow-secret allows nothing", () => {
@@ -142,10 +145,11 @@ describe("secret rules", () => {
     expect(scanText("x.yaml", "- password: " + "hunter2isnotsafe # note").map((h) => h.rule)).toEqual(["generic-assignment-unquoted"]);
     expect(scanText("src/a.ts", yml)).toEqual([]);
     expect(scanText("README.md", yml)).toEqual([]);
-    // not a whole line NAME: value
-    expect(scanText("app.yml", "echo password: " + "hunter2isnotsafe")).toEqual([]);
-    // placeholders and short values stay quiet
-    expect(scanText("app.yml", ["password: ${DB_PASSWORD}", "password: changeme", "password: short", "token: " + "{{ vault_token }}", "password: secret://p/k"].join("\n"))).toEqual([]);
+    // in a config file a password after other text is still a password
+    expect(scanText("app.yml", "echo password: " + "hunter2isnotsafe")).toHaveLength(1);
+    // placeholders stay quiet; in a config file even a short password is a password
+    expect(scanText("app.yml", ["password: ${DB_PASSWORD}", "password: changeme", "token: " + "{{ vault_token }}", "password: secret://p/k"].join("\n"))).toEqual([]);
+    expect(scanText("app.yml", "password: short")).toHaveLength(1);
   });
 
   it("recognises config-like file names", () => {
@@ -534,7 +538,6 @@ describe("hooks/pre-push.mjs stays in sync", () => {
       const text = ['  "passwordLabel": "Password",', '  "tokenHeading": "Token",', '  "secretTitle": "Secret",', kv("password", " = ", "hunter2isnotsafe")].join("\n");
       writeFileSync(file, text);
       expect(scanText("src/i18n/en.json", '  "passwordLabel": "Password",')).toEqual([]);
-      expect(JSON.parse(node("--field-word"))).toEqual({ source: FIELD_WORD.source, flags: FIELD_WORD.flags });
       const expected = scanText(file, text);
       expect(expected.map((f) => f.line)).toEqual([4]);
       const fromHook = JSON.parse(node("--scan-text", file)) as Array<{ line: number; fingerprint: string }>;
@@ -542,6 +545,37 @@ describe("hooks/pre-push.mjs stays in sync", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it("is as strict as Jev's diff check: the reviewer's samples, in the gate and the hook alike", () => {
+    const dir = mkdtempSync(join(tmpdir(), "pp-hook-"));
+    try {
+      const caught: Array<[string, string]> = [
+        ["deploy.sh", "export GITHUB_" + "TOKEN=" + "q7Wm2Lp9Xz4Rt8Kd3Vn6"],
+        ["src/db.ts", "DB_PASS" + "WORD=" + "letmeinplease"],
+        ["src/db.ts", 'const url = "postgres://app:' + "s3cretPw" + '@db.internal:5432/app";'],
+        ["scripts/backup.ts", 'run("mysql -uroot -p' + "Hunter2xyz" + ' app");'],
+        ["src/pay.ts", 'const stripe = "sk_' + "test_" + "4eC39HqLyjWDarjtT1zdp7dc" + '";'],
+        ["scripts/call.ts", 'exec("curl -u admin:' + "Adm1nPass" + ' https://api.example.com");'],
+      ];
+      for (const [file, line] of caught) {
+        const local = join(dir, file.replace(/\//g, "_"));
+        writeFileSync(local, line + "\n");
+        expect(scanText(file, line + "\n").length, line).toBeGreaterThan(0);
+        expect(JSON.parse(node("--scan-text", local)).length, line).toBeGreaterThan(0);
+      }
+      const harmless = 'const TOKEN_KEY = "auth.session.token";';
+      const local = join(dir, "keys.ts");
+      writeFileSync(local, harmless + "\n");
+      expect(scanText("src/keys.ts", harmless)).toEqual([]);
+      expect(JSON.parse(node("--scan-text", local))).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("imports a generated copy of core/secrets that is up to date", () => {
+    execFileSync(process.execPath, [fileURLToPath(new URL("./hooks/build-detector.mjs", import.meta.url)), "--check"]);
   });
 
   it("scans config-only unquoted rules identically", () => {
