@@ -178,7 +178,6 @@ fn run_custody_stdio()->Result<(),&'static str>{
 #[cfg(test)]mod tests{
  use super::*;use sha2::{Digest,Sha256};use std::fs;
  fn fixture()->(PathBuf,Value){
-  assert_eq!(std::env::var("COMPUTERNAME").unwrap().to_lowercase(),"dans1");
   let root=std::env::temp_dir().join(format!("pp-execution-{}-{}",std::process::id(),std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));fs::create_dir(&root).unwrap();
   let exe=std::env::current_exe().unwrap();let pin=format!("{:x}",Sha256::digest(fs::read(&exe).unwrap()));
   let name=concat!(module_path!(),"::child").split_once("::").unwrap().1;

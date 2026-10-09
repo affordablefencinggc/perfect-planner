@@ -8,19 +8,22 @@ const args = process.argv.slice(2);
 const mode = args.includes("--staged") ? "staged" : args.includes("--push") ? "push" : "workspace";
 const limits = { files: 20_000, bytesPerFile: 5_000_000, totalBytes: 80_000_000, commits: 250, entries: 50_000, depth: 64, durationMs: 60_000, pushInputBytes: 64_000, pushInputMs: 5_000 };
 const started = Date.now();
-const ignored = new Set([".git", "node_modules", "dist", "target", "target-codex", "generated", ".codex-tmp"]);
-// Exact reviewed dummy matches only; never exempt a whole file or a source marker.
+const ignored = new Set([".git", "node_modules", "dist", "target", "target-codex", "generated", ".codex-tmp", ".local-preview-cache", ".claude"]);
+// Exact reviewed dummy matches only, keyed by path, rule and the SHA-256 of the matched dummy string.
+// Edits elsewhere in a fixture file keep its reviewed dummies exempt; any new or changed match in that
+// file (or anywhere else) is still a finding. Never exempt a whole file or a source marker.
 const fixtureMatches = new Set([
-  "scripts/generate-truth-report.mjs:generic-assignment:89bd311b7282dad1224abb5c6626b1f891a7e6a70bb72752fb7983b784cd820f:74e801ed245678d07e274cc5f005982b7bd9faa25ca54fd17cbd363804fae225",
-  "tests/ci-derivation.test.mjs:bearer-token:da44f21a888d10ac38777d4c7e7b7fd2bc174e11f3639f9e96ba12551ab9dc9b:148b9c8f7e56917766dca852b224fbd12c52f24b0955c8201dd2b18cdfc4137d",
-  "tests/identity-vault.test.mjs:generic-assignment:927b563b90b90c90f3ccfc8ee22f497e4086e33ea9f011a83acd248a71828cb6:972f076a6924708cd067d93ec0ac038dc18b8c4361511f3943771a55a0f78592",
-  "tests/provider-review-gateway.test.mjs:private-key:3021d90eb9437b2d8f30e8363695c4418b5e5f1870801b5c317e9398ee0f572d:250d9d871be05f9e3bfad5c5acd0d2b46862d1d3908ee410103cd1f65594956a",
-  "tests/provider-review.test.mjs:generic-assignment:73dc5a57856e8003501fda24b52e51bade22da6b14a878b2b3e57a7eaa931b66:45109bf7c18cbfbde91617d6626c6e76ca9e67103755408c168c2069c1424410",
-  "tests/provider-review.test.mjs:generic-assignment:686546acef73a9c5b5dc697400ef33136a9a4c4a06a7d59400e178df5b9b8fa9:45109bf7c18cbfbde91617d6626c6e76ca9e67103755408c168c2069c1424410",
-  "tests-ui/pp-diagnostics-120-runtime-event-ledger.test.jsx:generic-assignment:c106c11d0473b36618225a55cc61715b40a4af0713de6458713d7ac6697faa6f:561f7b7251ac7067096258a290cd26b4ac3a6bef423c55dde4860590a221d295",
-  "tests-ui/pp-diagnostics-120-runtime-event-ledger.test.jsx:generic-assignment:98767fffc4d4dd8d54091aaf1f826b2314f34a2a4ad881e0f5960801e1b918d8:561f7b7251ac7067096258a290cd26b4ac3a6bef423c55dde4860590a221d295",
-  "tests-ui/pp-diagnostics-120-runtime-event-ledger.test.jsx:generic-assignment:9d5ff611772d78dd28b9e0605695b8308a5e047e586190c64386fca133a2a378:561f7b7251ac7067096258a290cd26b4ac3a6bef423c55dde4860590a221d295",
-  "tests-ui/pp-diagnostics-120-runtime-event-ledger.test.jsx:openai-key:a165ce0568ce01a0486c54d64fea78c7e2dd166573d7fa2fdc5de3cb42d3d910:561f7b7251ac7067096258a290cd26b4ac3a6bef423c55dde4860590a221d295",
+  "scripts/generate-truth-report.mjs:generic-assignment:89bd311b7282dad1224abb5c6626b1f891a7e6a70bb72752fb7983b784cd820f",
+  "tests/ci-derivation.test.mjs:bearer-token:da44f21a888d10ac38777d4c7e7b7fd2bc174e11f3639f9e96ba12551ab9dc9b",
+  "tests/identity-vault.test.mjs:generic-assignment:927b563b90b90c90f3ccfc8ee22f497e4086e33ea9f011a83acd248a71828cb6",
+  "tests/provider-review-gateway.test.mjs:private-key:3021d90eb9437b2d8f30e8363695c4418b5e5f1870801b5c317e9398ee0f572d",
+  "tests/provider-review.test.mjs:generic-assignment:73dc5a57856e8003501fda24b52e51bade22da6b14a878b2b3e57a7eaa931b66",
+  "tests/provider-review.test.mjs:generic-assignment:686546acef73a9c5b5dc697400ef33136a9a4c4a06a7d59400e178df5b9b8fa9",
+  "tests/runtime-event-codec.test.mjs:generic-assignment:38388d41b2df4458f1e7e9c960ecc61ffad998f9665aada43bef3697f55a7c64",
+  "tests-ui/pp-diagnostics-120-runtime-event-ledger.test.jsx:generic-assignment:c106c11d0473b36618225a55cc61715b40a4af0713de6458713d7ac6697faa6f",
+  "tests-ui/pp-diagnostics-120-runtime-event-ledger.test.jsx:generic-assignment:98767fffc4d4dd8d54091aaf1f826b2314f34a2a4ad881e0f5960801e1b918d8",
+  "tests-ui/pp-diagnostics-120-runtime-event-ledger.test.jsx:generic-assignment:9d5ff611772d78dd28b9e0605695b8308a5e047e586190c64386fca133a2a378",
+  "tests-ui/pp-diagnostics-120-runtime-event-ledger.test.jsx:openai-key:a165ce0568ce01a0486c54d64fea78c7e2dd166573d7fa2fdc5de3cb42d3d910",
 ]);
 const patterns = [
   ["private-key", /-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----/g],
@@ -76,7 +79,7 @@ function scan(file, bytes, revision = null) {
     pattern.lastIndex = 0;
     for (const match of content.matchAll(pattern)) {
       const fingerprint = sha(match[0]);
-      if (fixtureMatches.has(file + ":" + rule + ":" + fingerprint + ":" + contentDigest)) { receipt.reviewedFixtureMatches++; continue; }
+      if (fixtureMatches.has(file + ":" + rule + ":" + fingerprint)) { receipt.reviewedFixtureMatches++; continue; }
       if (receipt.findings.length >= 200) throw new Error("finding-limit");
       receipt.findings.push({ path: safePath(file), line: content.slice(0, match.index).split("\n").length, rule, fingerprint, contentDigest, revision });
     }
@@ -91,7 +94,7 @@ async function workspace() {
     if (depth > limits.depth) throw new Error("directory-depth-limit");
     for (const entry of await readdir(directory, { withFileTypes: true })) {
       if (++entries > limits.entries) throw new Error("directory-entry-limit");
-      if (ignored.has(entry.name) && entry.isDirectory()) continue;
+      if (ignored.has(entry.name) && (entry.isDirectory() || entry.isSymbolicLink())) continue;
       const target = path.join(directory, entry.name);
       const relative = path.relative(root, target).split(path.sep).join("/");
       if (entry.isSymbolicLink()) { coverage(relative, "symbolic-link-not-scanned"); continue; }

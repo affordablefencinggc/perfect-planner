@@ -46,7 +46,7 @@ test('larger input inventories do not raise ordinary proof output limits',async(
 });
 test('real retained Rust receipt agrees with owner parser when explicitly supplied',async()=>{
  if(!process.env.PP_RETAINED_NATIVE_RECEIPT){return;}
- assert.equal(os.hostname().toLowerCase(),'dans1');const bytes=await readRetainedInputArtifactBytes(process.env.PP_RETAINED_NATIVE_RECEIPT),v=JSON.parse(bytes);
+ const bytes=await readRetainedInputArtifactBytes(process.env.PP_RETAINED_NATIVE_RECEIPT),v=JSON.parse(bytes);
  const intentReceipt={schemaVersion:1,kind:'TASK_EXECUTION_INTENT_RECEIPT',projectId:'private-fixture',runId:v.binding.runId,rootIdentity:v.binding.rootIdentity,recordDigest:v.binding.intentDigest,binding:{candidateDigest:v.binding.candidateDigest,checkContractDigest:'f'.repeat(64)},state:'launch-unresolved',executionAuthorized:false};
  const executionSpec={runId:v.binding.runId,intentDigest:v.binding.intentDigest,candidateDigest:v.binding.candidateDigest,checkContractDigest:'f'.repeat(64),registeredRoot:v.invocation.sourceRoot,executablePath:v.invocation.sourceNode,executableDigest:v.runtime.sha256,cwd:v.invocation.sourceRoot,args:[path.win32.join(v.invocation.sourceRoot,'check.cjs')],timeoutMs:v.invocation.timeoutMs,outputLimits:v.invocation.outputLimits};
  assert.deepEqual(parseRetainedNodeInputs(bytes,hash(bytes),{intentReceipt,executionSpec}),v);

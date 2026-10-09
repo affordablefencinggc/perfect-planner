@@ -23,6 +23,7 @@ import {
   ListChecksIcon,
   MagnifyingGlassIcon,
   MinusIcon,
+  PlugsConnectedIcon,
   PlusIcon,
   RobotIcon,
   ShieldCheckIcon,
@@ -58,12 +59,16 @@ import {
   guaranteeManifest,
   guaranteeSessions,
 } from "./engine/guaranteeSeed.js";
-import { BlueprintWorkspace } from "./components/BlueprintWorkspace.jsx";
+const BlueprintWorkspace = lazy(() => import("./components/BlueprintWorkspace.jsx").then((module) => ({ default: module.BlueprintWorkspace })));
 import { CollisionWorkspace } from "./components/CollisionWorkspace.jsx";
-import { StructureWorkspace } from "./components/StructureWorkspace.jsx";
-import { ComponentPlansWorkspace } from "./components/ComponentPlansWorkspace.jsx";
+const StructureWorkspace = lazy(() => import("./components/StructureWorkspace.jsx").then((module) => ({ default: module.StructureWorkspace })));
+const ComponentPlansWorkspace = lazy(() => import("./components/ComponentPlansWorkspace.jsx").then((module) => ({ default: module.ComponentPlansWorkspace })));
 import { ImportedProjectWorkflowWorkspace } from "./components/ImportedProjectWorkflowWorkspace.jsx";
+const ConnectAgentDrawer = lazy(() => import("./components/ConnectAgentDrawer.jsx").then((module) => ({ default: module.ConnectAgentDrawer })));
 import { ProjectTruthGate } from "./components/ProjectTruthGate.jsx";
+import { ViewModeToggle } from "./components/ViewModeToggle.jsx";
+import { ViewModeContext, useViewModeState } from "./project/viewMode.js";
+import { DEMO_ONLY_REASON, DemoOnlyReason, DemoSampleBadge } from "./demo/DemoSampleNotice.jsx";
 const loadRuntimeTools = (name) => import("./components/RuntimeConnectionsPanel.jsx")
   .then((module) => ({ default: module[name] })).catch(() => ({ default: RuntimeToolsUnavailable }));
 const BundledPlannerConnection = lazy(() => loadRuntimeTools("BundledPlannerConnection"));
@@ -78,6 +83,9 @@ import {
   useOptionalProject,
 } from "./project/ProjectProvider.jsx";
 import { deriveProjectHomeModel } from "./project/projectHomeModel.js";
+import { useProjectWorkRecords } from "./project/useProjectWorkRecords.js";
+import { usePlanTaskDriftWatch } from "./project/usePlanApproval.js";
+import { confirmProjectReady } from "./project/planApproval.js";
 import { createDemoProjectSession, isDemoProject } from "./demo/demoProject.js";
 import {
   createProjectHistoryState,
@@ -204,7 +212,7 @@ const workspaceContext = {
   integrity: {
     stage: "prove",
     purpose: "Test whether the plan can truthfully continue.",
-    outcome: "A fail-closed GO or NO-GO verdict.",
+    outcome: "A fail-closed Ready or Not ready verdict.",
     unlock: "Clear every release stop.",
   },
   evidence: {
@@ -259,7 +267,7 @@ const initialCollisionGate = {
   unresolved: initialCollisionAssessment.unresolved,
   hardStops: initialCollisionAssessment.hardStops,
   authorityAvailable: false,
-  authorityReason: "Collision authority has not supplied a receipt.",
+  authorityReason: "The collision check has not returned a saved record.",
 };
 const statusLabel = {
   verified: "verified",
@@ -401,6 +409,8 @@ function TopBar({
   const [inviteRole, setInviteRole] = useState("Developer");
   const [organizationName, setOrganizationName] = useState("");
   const [mcpAllowed, setMcpAllowed] = useState(true);
+  const [agentDrawerOpen, setAgentDrawerOpen] = useState(false);
+  const openAgentDrawer = () => { setOpenMenu(null); setAgentDrawerOpen(true); };
   const menuTriggerRef = useRef(null);
   const menuPopoverRef = useRef(null);
   let runtimeCapabilityMatrix = null;
@@ -514,7 +524,7 @@ function TopBar({
     anchor.download = `${activeProject.projectId}-perfect-planner.json`;
     anchor.click();
     URL.revokeObjectURL(href);
-    onToast("Current project truth exported as a redacted local JSON file.");
+    onToast("Current project status exported as a redacted local JSON file.");
     setOpenMenu(null);
   };
   return (
@@ -622,7 +632,7 @@ function TopBar({
                   <strong>People on this project</strong>
                   <span>
                     {people.length
-                      ? `${people.length} demo identities`
+                      ? `${people.length} sample people · ${DEMO_ONLY_REASON}`
                       : "No roster connected"}
                   </span>
                 </header>
@@ -648,10 +658,9 @@ function TopBar({
                   return (
                     <button
                       key={person.name}
-                      onClick={() => {
-                        onToast(`${person.name} profile opened.`);
-                        setOpenMenu(null);
-                      }}
+                      className="demo-sample-row"
+                      disabled
+                      title={`${DEMO_ONLY_REASON}: sample people have no profile pages.`}
                     >
                       <span
                         className="popover-avatar"
@@ -709,7 +718,7 @@ function TopBar({
                   <span>
                     {demoMode
                       ? "Demonstration forecast"
-                      : "No authoritative forecast"}
+                      : "No approved forecast"}
                   </span>
                 </header>
                 {demoMode ? (
@@ -729,7 +738,7 @@ function TopBar({
                   </>
                 ) : (
                   <p className="popover-note">
-                    A folder census does not create dates. Generate and approve
+                    A folder scan does not create dates. Generate and approve
                     a plan before forecasting.
                   </p>
                 )}
@@ -751,8 +760,17 @@ function TopBar({
             <ShieldCheckIcon />{" "}
             {demoMode
               ? `${collisionGate.unresolved} unresolved collisions`
-              : "Collision scan unavailable"}
+              : "Collision check unavailable"}
           </button>
+          <button
+            className="top-metric-button topbar-connect-agent"
+            aria-haspopup="dialog"
+            aria-expanded={agentDrawerOpen}
+            onClick={openAgentDrawer}
+          >
+            <PlugsConnectedIcon /> Connect agent
+          </button>
+          {agentDrawerOpen && <Suspense fallback={null}><ConnectAgentDrawer open={agentDrawerOpen} onClose={() => setAgentDrawerOpen(false)} onWorkspace={onWorkspace} /></Suspense>}
           <div className="topbar-menu-anchor more-actions-anchor">
             <IconButton
               label="More actions"
@@ -804,7 +822,7 @@ function TopBar({
                         <span>
                           <strong>Delivery calendar</strong>
                           <small>
-                            {demoMode ? "P80 · 18 days" : "No authoritative forecast"}
+                            {demoMode ? "P80 · 18 days" : "No approved forecast"}
                           </small>
                         </span>
                         <ArrowRightIcon />
@@ -835,7 +853,7 @@ function TopBar({
                           <small>
                             {demoMode
                               ? `${collisionGate.unresolved} unresolved collisions`
-                              : "Collision scan unavailable"}
+                              : "Collision check unavailable"}
                           </small>
                         </span>
                         <ArrowRightIcon />
@@ -846,7 +864,7 @@ function TopBar({
                           <strong>Runtime &amp; connections</strong>
                           <small>
                             {activeProject
-                              ? "Project-bound capability receipts"
+                              ? "Project-bound capability records"
                               : "Select a project to evaluate runtimes"}
                           </small>
                         </span>
@@ -896,7 +914,7 @@ function TopBar({
                       <button onClick={exportPlan}>
                         <ArrowRightIcon />
                         <span>
-                          <strong>Export project receipt</strong>
+                          <strong>Export project record</strong>
                           <small>
                             Download a redacted identity and evidence snapshot
                           </small>
@@ -962,13 +980,13 @@ function TopBar({
                       </p>
                     ) : (
                       <div className="more-actions-list">
+                        <DemoOnlyReason>sample people have no profile pages.</DemoOnlyReason>
                         {people.map((person) => (
                           <button
                             key={person.name}
-                            onClick={() => {
-                              onToast(`${person.name} profile opened.`);
-                              setOpenMenu(null);
-                            }}
+                            className="demo-sample-row"
+                            disabled
+                            title={`${DEMO_ONLY_REASON}: sample people have no profile pages.`}
                           >
                             <UsersThreeIcon />
                             <span>
@@ -994,7 +1012,7 @@ function TopBar({
                       </button>
                       <span>
                         <strong>Delivery calendar</strong>
-                        <small>{demoMode ? "Demonstration forecast" : "No authoritative forecast"}</small>
+                        <small>{demoMode ? "Demonstration forecast" : "No approved forecast"}</small>
                       </span>
                     </header>
                     {demoMode ? (
@@ -1005,7 +1023,7 @@ function TopBar({
                       </>
                     ) : (
                       <p className="popover-note">
-                        A folder census does not create dates. Generate and approve a plan before forecasting.
+                        A folder scan does not create dates. Generate and approve a plan before forecasting.
                       </p>
                     )}
                     <button
@@ -1045,7 +1063,7 @@ function TopBar({
                       </span>
                       <small>
                         This switch records a session preference only. A
-                        timestamped runtime capability receipt is still required
+                        timestamped runtime capability record is still required
                         before Perfect Planner may claim any MCP connection.
                       </small>
                     </div>
@@ -1062,14 +1080,8 @@ function TopBar({
                         onChange={(event) => setMcpAccess(event.target.checked)}
                       />
                     </label>
-                    <button
-                      className="popover-primary"
-                      onClick={() => {
-                        onWorkspace("structure");
-                        setOpenMenu(null);
-                      }}
-                    >
-                      Open app connection map <ArrowRightIcon />
+                    <button className="popover-primary" onClick={openAgentDrawer}>
+                      Set up an agent connection <ArrowRightIcon />
                     </button>
                   </section>
                 )}
@@ -1199,7 +1211,6 @@ function TopBar({
 function RepositoryDrawer({
   open,
   onClose,
-  onPlanSelect,
   onWorkspace,
   projectContext,
   onProjectSelect,
@@ -1283,7 +1294,7 @@ function RepositoryDrawer({
                         ? "Demo fixtures · not imported evidence"
                         : `${project.registration?.rootLabel ?? "Local folder"} · ${censusLabel}`}
                     </small>
-                    <code>{project.projectId}</code>
+                    <code className="advanced-only">{project.projectId}</code>
                   </span>
                   <StatusChip status={status}>{project.state}</StatusChip>
                 </button>
@@ -1291,6 +1302,7 @@ function RepositoryDrawer({
             })}
           </section>
         )}
+        {demoMode && <DemoOnlyReason className="demo-drawer-reason">these sample plans cannot be opened.</DemoOnlyReason>}
         {demoMode &&
           repositories.map((repo) => (
             <section className="repo-group" key={repo.key}>
@@ -1304,9 +1316,10 @@ function RepositoryDrawer({
               </div>
               {plans.slice(0, repo.key === "P" ? 2 : 1).map((plan) => (
                 <button
-                  className="plan-row"
+                  className="plan-row demo-sample-row"
                   key={`${repo.key}-${plan.id}`}
-                  onClick={() => onPlanSelect(plan)}
+                  disabled
+                  title={`${DEMO_ONLY_REASON}: this sample plan cannot be opened.`}
                 >
                   <span className="plan-row-top">
                     <strong>{plan.id}</strong>
@@ -1382,6 +1395,18 @@ function RepositoryDrawer({
   );
 }
 
+// Demo inspector shows only fields the selected sample item actually carries.
+function demoInspectorProperties(selected) {
+  const missing = "Not recorded in the sample";
+  return [
+    ["Owner", selected.owner ?? missing],
+    ["Branch", selected.branch ?? missing],
+    ["Repository", selected.repository ?? missing],
+    ["Depends on", selected.dependency ?? missing],
+    ["Files", Array.isArray(selected.files) && selected.files.length ? selected.files.join(" · ") : missing],
+  ];
+}
+
 export function InspectorDrawer({ open, onClose, selected, side = "right", demoMode = false }) {
   const dialogRef = useDialogFocus(open, onClose);
   if (!selected) return null;
@@ -1405,6 +1430,9 @@ export function InspectorDrawer({ open, onClose, selected, side = "right", demoM
     selected.proof?.screenshot ??
     selected.image ??
     "/assets/evidence/selected-spine-canvas.png";
+  const checklist = selected.items?.length
+    ? selected.items
+    : ["Exact claim surface", "Collision scan", "Safe merge order", "Proof complete"];
   return (
     <aside
       ref={dialogRef}
@@ -1429,48 +1457,31 @@ export function InspectorDrawer({ open, onClose, selected, side = "right", demoM
       <div className="drawer-scroll inspector-body">
         <div className="inspector-summary">
           <StatusChip status={selected.status} />
-          <span>{selected.estimate ?? "2h · 5k tok"}</span>
+          <span>{selected.estimate ?? "No estimate in the sample"}</span>
         </div>
+        <DemoOnlyReason>this item comes from the sample project; nothing here describes real work.</DemoOnlyReason>
         <dl className="property-list">
-          <div>
-            <dt>Owner</dt>
-            <dd>Danie</dd>
-          </div>
-          <div>
-            <dt>Branch</dt>
-            <dd>pp/pp-014/{selected.id.toLowerCase()}</dd>
-          </div>
-          <div>
-            <dt>Worktree</dt>
-            <dd>pp-014/{selected.id.toLowerCase()}</dd>
-          </div>
-          <div>
-            <dt>Depends on</dt>
-            <dd>B04 · Architecture contract</dd>
-          </div>
-          <div>
-            <dt>Files</dt>
-            <dd>src/plans/* · src/sync/plan.ts</dd>
-          </div>
-          <div>
-            <dt>Resources</dt>
-            <dd>plan-registry:v2</dd>
-          </div>
+          {demoInspectorProperties(selected).map(([label, value]) => (
+            <div key={label}>
+              <dt>{label}</dt>
+              <dd>{value}</dd>
+            </div>
+          ))}
         </dl>
         <section className="inspector-section">
           <div className="section-title">
             <ListChecksIcon />
             <strong>Proof-gated must-haves</strong>
-            <span>{proofReady ? "4/4" : "0/4"}</span>
+            <span>{proofReady ? `${checklist.length}/${checklist.length}` : `0/${checklist.length} proven`}</span>
           </div>
-          {(
-            selected.items ?? [
-              "Exact claim surface",
-              "Collision scan",
-              "Safe merge order",
-              "Proof complete",
-            ]
-          ).map((item, index) => (
+          {!proofReady && (
+            <p className="demo-inspector-status-note">
+              {selected.status === "ready" || selected.status === "active"
+                ? `Status "${statusLabel[selected.status] ?? selected.status}" means this sample work can start or is under way. None of its checks are proven yet.`
+                : "None of these sample checks are proven yet."}
+            </p>
+          )}
+          {checklist.map((item, index) => (
             <div
               className={`proof-requirement ${proofReady ? "proof-ready" : "proof-blocked"}`}
               key={item}
@@ -1489,7 +1500,7 @@ export function InspectorDrawer({ open, onClose, selected, side = "right", demoM
                   {item}
                 </span>
                 <strong className="gate-verdict">
-                  {proofReady ? "GO" : "NO-GO"}
+                  {proofReady ? "Proven" : "Not proven"}
                 </strong>
               </label>
               <div className="proof-pair">
@@ -1497,7 +1508,7 @@ export function InspectorDrawer({ open, onClose, selected, side = "right", demoM
                   {proofReady ? (
                     <img
                       src={proofImage}
-                      alt={`Verified UI state for ${item}`}
+                      alt={`Sample screenshot for ${item}`}
                       loading="lazy"
                       decoding="async"
                       width="640"
@@ -1509,7 +1520,7 @@ export function InspectorDrawer({ open, onClose, selected, side = "right", demoM
                     </div>
                   )}
                   <figcaption>
-                    SCREENSHOT · {proofReady ? "current build" : "missing"}
+                    SCREENSHOT · {proofReady ? "sample" : "missing"}
                   </figcaption>
                 </figure>
                 <div className="proof-diff">
@@ -1524,44 +1535,22 @@ export function InspectorDrawer({ open, onClose, selected, side = "right", demoM
             </div>
           ))}
         </section>
-        <section className="inspector-section">
-          <div className="section-title">
-            <WarningIcon />
-            <strong>Contingency</strong>
-            <span>ready</span>
-          </div>
-          <p>
-            Freeze <code>plan-registry:v2</code>, preserve both leases, and
-            resume C04 through the compatibility adapter.
-          </p>
-        </section>
-        <section className="inspector-section debt-section">
-          <div className="section-title">
-            <ActivityIcon />
-            <strong>Debt delta</strong>
-            <span>+0 high</span>
-          </div>
-          <p>
-            One low-severity adapter debt item is scheduled for Wave 4
-            repayment.
-          </p>
-        </section>
         {proofReady && (
           <section className="inspector-section">
             <div className="section-title">
               <ShieldCheckIcon />
               <strong>Reviewer</strong>
-              <span>matched</span>
+              <span>sample</span>
             </div>
             <p>{selected.proof.reviewer}</p>
           </section>
         )}
       </div>
       <div className="drawer-action">
-        <button className="primary-button" disabled={!proofReady}>
-          <ShieldCheckIcon weight="bold" />{" "}
-          {proofReady ? "Approve next gate" : "NO-GO · proof incomplete"}
+        <button className="primary-button" disabled title={`${DEMO_ONLY_REASON}: approvals are not recorded in the Demo.`}>
+          <ShieldCheckIcon weight="bold" /> Approve next gate
         </button>
+        <DemoOnlyReason>approvals are not recorded in the Demo.</DemoOnlyReason>
       </div>
     </aside>
   );
@@ -1815,32 +1804,32 @@ function HeadOrchestrator() {
         className="head-orchestrator-character"
         onClick={() => setChatOpen((value) => !value)}
         aria-expanded={chatOpen}
-        aria-label={`${orchestrator.label} by ${orchestrator.provider}, head orchestrator. Open worker updates.`}
-        title={`${orchestrator.label} · ${orchestrator.provider} · HEAD ORCHESTRATOR`}
+        aria-label={`${orchestrator.label} by ${orchestrator.provider}, head orchestrator. Open sample worker updates.`}
+        title={`${orchestrator.label} · ${orchestrator.provider} · sample worker updates`}
       >
         <img className="model-worker-image" src={orchestratorAsset} alt="" />
-        <span className="orchestrator-message-pip">3</span>
       </button>
       {chatOpen && (
         <div className="orchestrator-popover" aria-live="polite">
           <div className="feed-heading">
             <ChatsCircleIcon weight="fill" />
             <span>
-              {orchestrator.label} / {orchestrator.provider} · ORCHESTRATOR NOTE
-              FEED
+              {orchestrator.label} / {orchestrator.provider} · SAMPLE WORKER
+              UPDATES
             </span>
-            <small>live</small>
+            <small>sample</small>
           </div>
+          <DemoOnlyReason>no worker is connected; these messages are examples.</DemoOnlyReason>
           <div className="relay-line relay-in">
-            <span>01:18 · B07 → ORCH</span>
+            <span>Sample · B07 → ORCH</span>
             <strong>Success lap in progress. Collision surfaces 3/4.</strong>
           </div>
           <div className="relay-line relay-in">
-            <span>01:19 · B07 → ORCH</span>
+            <span>Sample · B07 → ORCH</span>
             <strong>Heartbeat good. No new file claim collision.</strong>
           </div>
           <div className="relay-line relay-out">
-            <span>01:20 · ORCH → USER</span>
+            <span>Sample · ORCH → USER</span>
             <strong>{activeLabel} working. All other workers stopped.</strong>
           </div>
         </div>
@@ -2642,6 +2631,7 @@ function WorkspaceContextBar({
         </span>
       </div>
       <div className="workspace-route-controls">
+        <ViewModeToggle />
         <div className="workspace-breadcrumb">
           <span>{stage ? `${stage.number} · ${stage.label}` : "Project"}</span>
           <CaretRightIcon />
@@ -2674,10 +2664,18 @@ function ProjectHomeWorkspace({
   const componentRefresh = projectContext?.componentRefreshStatus;
   const planRefresh = projectContext?.planRefreshStatus;
   const demoMode = isDemoProject(activeProject);
+  const workRecords = useProjectWorkRecords(demoMode ? null : activeProject?.projectId);
+  usePlanTaskDriftWatch(activeProject, workRecords);
+  const [homeActionError, setHomeActionError] = useState("");
   const homeModel = useMemo(
-    () => deriveProjectHomeModel(activeProject),
-    [activeProject],
+    () => deriveProjectHomeModel(activeProject, workRecords),
+    [activeProject, workRecords],
   );
+  const runHomeNextAction = (nextAction) => {
+    setHomeActionError("");
+    if (nextAction.id !== "confirm-project-ready") return onWorkspace(nextAction.workspace);
+    try { confirmProjectReady(activeProject.projectId); } catch (error) { setHomeActionError(error?.message ?? "The confirmation could not be saved."); }
+  };
   if (!demoMode) {
     const { binding, blockers, mode, nextAction, project, stage, summary } =
       homeModel;
@@ -2717,7 +2715,7 @@ function ProjectHomeWorkspace({
           <div>
             <span className="eyebrow">
               {hasProject
-                ? `${project.projectId} · generation ${project.generation} · ${mode}`
+                ? <><span className="advanced-only">{`${project.projectId} · scan ${project.generation} · `}</span>{mode}</>
                 : "No project selected · honest empty state"}
             </span>
             <h1>
@@ -2737,7 +2735,7 @@ function ProjectHomeWorkspace({
             <span>
               <small>CURRENT STAGE</small>
               <strong>{stage.label}</strong>
-              <em>{stage.state} · {blockers.length} blocking truth{blockers.length === 1 ? "" : "s"}</em>
+              <em>{stage.state} · {blockers.length} blocking item{blockers.length === 1 ? "" : "s"}</em>
             </span>
           </div>
         </header>
@@ -2747,18 +2745,19 @@ function ProjectHomeWorkspace({
             <small>NEXT STEP</small>
             <strong>{nextAction.label}</strong>
             <p>{nextAction.reason}</p>
-            {hasProject && <span>
-              Bound to {binding.projectId} · generation {binding.sessionGeneration ?? "unavailable"} · registry {binding.registryRevision ?? "unavailable"}
+            {hasProject && <span className="advanced-only">
+              Bound to {binding.projectId} · scan {binding.sessionGeneration ?? "unavailable"} · registry {binding.registryRevision ?? "unavailable"}
             </span>}
           </div>
           <div className="project-home-action-buttons">
             <button
               className="primary-button"
               data-home-next-action={nextAction.id}
-              onClick={() => onWorkspace(nextAction.workspace)}
+              onClick={() => runHomeNextAction(nextAction)}
             >
               {nextAction.label} <ArrowRightIcon />
             </button>
+            {homeActionError && <p role="alert">{homeActionError}</p>}
             <button className="soft-button" onClick={onOpenDemo}>
               Explore the explicit Demo
             </button>
@@ -2777,15 +2776,15 @@ function ProjectHomeWorkspace({
               {summary.census.fileCount == null ||
               summary.census.state === "unavailable"
                 ? hasProject
-                  ? "File census unavailable"
+                  ? "File scan unavailable"
                   : "No app folder registered"
                 : `${summary.census.state === "stale" ? "Last known · " : ""}${summary.census.fileCount} files captured`}
             </strong>
-            <small>
-              Skipped {unavailableValue(summary.census.skippedCount, summary.census.state)} · digest {digestValue(summary.census.digest, summary.census.state)} · registry revision {unavailableValue(binding.registryRevision, summary.registration.state)}
+            <small className="advanced-only">
+              Skipped {unavailableValue(summary.census.skippedCount, summary.census.state)} · fingerprint {digestValue(summary.census.digest, summary.census.state)} · registry revision {unavailableValue(binding.registryRevision, summary.registration.state)}
             </small>
           </div>
-          <em>
+          <em className={summary.registration.state === "unavailable" ? undefined : "advanced-only"}>
             {summary.registration.state === "unavailable"
               ? "Registration unavailable"
               : `${summary.registration.adapter} · ${summary.registration.persistence}`}
@@ -2807,13 +2806,13 @@ function ProjectHomeWorkspace({
             <article data-fact-state={summary.registration.state}>
               <small>REGISTRATION</small>
               <strong>{unavailableValue(summary.registration.rootLabel, summary.registration.state)}</strong>
-              <p>{unavailableValue(summary.registration.access, summary.registration.state)} · {unavailableValue(summary.registration.adapter, summary.registration.state)}</p>
+              <p className={summary.registration.state === "unavailable" ? undefined : "advanced-only"}>{unavailableValue(summary.registration.access, summary.registration.state)} · {unavailableValue(summary.registration.adapter, summary.registration.state)}</p>
               <StatusChip status={summary.registration.state === "available" ? "verified" : summary.registration.state === "unavailable" ? "risk" : "active"}>{summary.registration.state}</StatusChip>
             </article>
             <article data-fact-state={summary.census.state}>
-              <small>CENSUS</small>
+              <small>FOLDER SCAN</small>
               <strong>{unavailableValue(summary.census.fileCount, summary.census.state, " files")}</strong>
-              <p>{unavailableValue(summary.census.skippedCount, summary.census.state, " skipped")} · digest {digestValue(summary.census.digest, summary.census.state)}</p>
+              <p>{unavailableValue(summary.census.skippedCount, summary.census.state, " skipped")}<span className="advanced-only"> · fingerprint {digestValue(summary.census.digest, summary.census.state)}</span></p>
               <StatusChip status={summary.census.state === "available" ? "verified" : summary.census.state === "unavailable" || summary.census.state === "blocked" ? "risk" : "active"}>{summary.census.state}</StatusChip>
             </article>
             <article data-fact-state={summary.discovery.state}>
@@ -2823,13 +2822,13 @@ function ProjectHomeWorkspace({
               <StatusChip status={summary.discovery.state === "available" ? "verified" : summary.discovery.state === "unavailable" || summary.discovery.state === "stale" ? "risk" : "active"}>{summary.discovery.state}</StatusChip>
             </article>
             <article className="project-home-authorities">
-              <small>REGISTERED AUTHORITIES</small>
+              <small>SAVED RECORDS</small>
               <ul>
                 {Object.entries(summary.authorities).map(([kind, authority]) => (
                   <li key={kind} data-fact-state={authority.state}>
-                    <span>{kind === "plan" ? "Registered Plan authority" : kind}</span>
+                    <span>{kind === "plan" ? "Saved Plan record" : kind}</span>
                     <strong>{authority.state}</strong>
-                    <em>{authority.revision == null ? "revision unavailable" : `${authority.state === "unavailable" || authority.state === "stale" ? "last known · " : ""}revision ${authority.revision}`}</em>
+                    <em className="advanced-only">{authority.revision == null ? "revision unavailable" : `${authority.state === "unavailable" || authority.state === "stale" ? "last known · " : ""}revision ${authority.revision}`}</em>
                   </li>
                 ))}
               </ul>
@@ -2863,7 +2862,7 @@ function ProjectHomeWorkspace({
               <button type="button" className="soft-button" disabled={!projectContext?.refreshComponent || componentRefresh?.state === "refreshing"} onClick={() => { void projectContext?.refreshComponent(activeProject.projectId); }}>Refresh saved components</button>
             </div>
             <div aria-label="Saved planning approval status">
-              <p>Planning review check — separate from the registered Plan authority above. A checked Ledger does not promote that authority or permit execution.</p>
+              <p>Planning review check — separate from the saved Plan record above. A checked Ledger does not promote that authority or permit execution.</p>
               <p>{planRefresh?.state === "observed" && planRefresh.projectId === activeProject.projectId && planRefresh.rootIdentity === activeProject.registration?.rootIdentity && planRefresh.censusDigest === activeProject.census?.digest && !["stale", "unavailable"].includes(activeProject.state)
                 ? `Checked planning approval revision ${planRefresh.revision} · saved Ledger revision ${planRefresh.ledgerRevision}. No execution or completion is authorized.`
                 : planRefresh?.state === "refreshing" ? "Checking the saved plan and its complete Ledger…"
@@ -2882,7 +2881,7 @@ function ProjectHomeWorkspace({
           <section className="project-home-blockers" aria-label="Project blockers">
             <header>
               <span>
-                <small>BLOCKING TRUTH</small>
+                <small>BLOCKING ITEMS</small>
                 <strong>{blockers.length ? `${blockers.length} item${blockers.length === 1 ? "" : "s"} prevent promotion` : "No blockers for this revision"}</strong>
               </span>
             </header>
@@ -2890,14 +2889,14 @@ function ProjectHomeWorkspace({
               <ol>
                 {blockers.map((item) => (
                   <li key={item.id} data-blocker-state={item.state}>
-                    <code>{item.id}</code>
+                    <code className="advanced-only">{item.id}</code>
                     <span><strong>{item.scope}</strong><small>{item.reason}</small></span>
                     <StatusChip status={item.state === "unavailable" || item.state === "blocked" || item.state === "stale" ? "risk" : "active"}>{item.state}</StatusChip>
                   </li>
                 ))}
               </ol>
             ) : (
-              <p className="project-home-no-blockers">All required receipts are current for this project generation.</p>
+              <p className="project-home-no-blockers">All required records are current for this project scan.</p>
             )}
           </section>
 
@@ -3603,7 +3602,7 @@ function AllocationWorkspace({ onSelect, collisionGate, onOpenCollision }) {
       </div>
       <div className="timeline-heading">
         <div>
-          <span className="eyebrow">Live allocation</span>
+          <span className="eyebrow">Sample allocation · fixed example dates</span>
           <h1>Who is doing what, and when</h1>
         </div>
         <div className="timeline-actions">
@@ -3612,7 +3611,7 @@ function AllocationWorkspace({ onSelect, collisionGate, onOpenCollision }) {
             onClick={() =>
               onSelect({
                 id: "ROSTER",
-                title: "Active delivery roster",
+                title: "Sample delivery roster",
                 status: "active",
                 estimate: `${allocation.rows.length} workers`,
                 items: allocation.rows.map(
@@ -3629,7 +3628,7 @@ function AllocationWorkspace({ onSelect, collisionGate, onOpenCollision }) {
             onClick={() =>
               onSelect({
                 id: "CAPACITY",
-                title: "Current capacity model",
+                title: "Sample capacity model",
                 status: "ready",
                 estimate: `P80 ${allocation.metrics.p80Days} days`,
                 items: allocation.rows.map(
@@ -3645,11 +3644,9 @@ function AllocationWorkspace({ onSelect, collisionGate, onOpenCollision }) {
       </div>
       <div className="timeline-grid">
         <div className="timeline-corner">Worker / lane</div>
-        <div className="timeline-days">
-          {timelineDates.map((date, index) => (
-            <span className={index === 0 ? "today" : ""} key={date}>
-              {date}
-            </span>
+        <div className="timeline-days" title="Example dates from the sample project, not today's calendar.">
+          {timelineDates.map((date) => (
+            <span key={date}>{date}</span>
           ))}
         </div>
         {allocation.rows.map((row) => (
@@ -3678,7 +3675,6 @@ function AllocationWorkspace({ onSelect, collisionGate, onOpenCollision }) {
               </span>
             </button>
             <div className="schedule-track">
-              <div className="today-line" aria-hidden="true" />
               {row.assignments.map((assignment) => (
                 <button
                   key={`${row.name}-${assignment.id}`}
@@ -5132,9 +5128,11 @@ function OpsDock({
       <button ref={handleRef} className="ops-handle" onClick={(event) => { if (event.detail < 2) onToggle(); }} onDoubleClick={(event) => event.preventDefault()} title="Click or double-click to expand or collapse Operations." aria-expanded={open} aria-controls="operations-panel">
         {open ? <CaretDownIcon /> : <CaretUpIcon />}
         <span>Operations</span>
-        <StatusChip status={errorCount || operationalBlockerCount ? "blocked" : "unverified"}>
-          {errorCount} diagnostic errors{operationalBlockerCount ? ` · ${operationalBlockerCount} blocker` : ""} · task outcomes unverified
-        </StatusChip>
+        <span className="ops-status-explained" title={operationalBlockerCount ? `Blocked: ${collisionGate?.authorityReason ?? "The collision check is not connected."} Work cannot be cleared until it runs.` : undefined}>
+          <StatusChip status={errorCount || operationalBlockerCount ? "blocked" : "unverified"}>
+            {errorCount} diagnostic errors{operationalBlockerCount ? " · collision check not connected" : ""} · task outcomes unverified
+          </StatusChip>
+        </span>
         <span className="ops-mini-status">
           <GitBranchIcon />{" "}
           {demoMode ? "3 demo branches" : "branches unavailable"}
@@ -5381,7 +5379,7 @@ function OpsDock({
                   <button
                     className="branch-table-row"
                     key={row.branch}
-                    onClick={() => onToast(`${row.branch} selected.`)}
+                    onClick={() => onToast(`${row.branch} is a sample branch. ${DEMO_ONLY_REASON}; no branch exists.`)}
                   >
                     <span>
                       <GitBranchIcon />
@@ -5436,16 +5434,10 @@ function OpsDock({
                     {index < 4 && <small>B07</small>}
                   </div>
                 ))}
-                <button
-                  className="primary-button"
-                  onClick={() =>
-                    onToast(
-                      "Merge gate queued: collision rescan → simulated merge → CI.",
-                    )
-                  }
-                >
+                <button className="primary-button" disabled title={`${DEMO_ONLY_REASON}: there is no repository to merge.`}>
                   <GitMergeIcon /> Run merge gate
                 </button>
+                <DemoOnlyReason>this conveyor is an example; there is no repository to merge.</DemoOnlyReason>
               </div>
             )}
             {activeTab === "delivery" && (
@@ -5505,6 +5497,7 @@ function PerfectPlannerShellCore({
   runtimeCapabilityNow,
   diagnosticSession,
 }) {
+  const viewMode = useViewModeState();
   const activeProject = projectContext.activeProject;
   const demoMode = isDemoProject(activeProject);
   const projectWorkflowReady = Boolean(activeProject) && !["stale", "unavailable"].includes(activeProject.state);
@@ -6008,8 +6001,10 @@ function PerfectPlannerShellCore({
   };
 
   return (
+    <ViewModeContext.Provider value={viewMode}>
     <div
       className={`app-shell workspace-${workspace} ${opsOpen ? "ops-is-open" : ""}`}
+      data-view-mode={viewMode.mode}
     >
       <TopBar
         workspace={workspace}
@@ -6031,6 +6026,7 @@ function PerfectPlannerShellCore({
         onDisconnectPlannerConnection={disconnectPlannerConnection}
       />
       <main className="app-main">
+        {demoMode && <DemoSampleBadge />}
         <div className={`workspace-stage${stageForWorkspace(workspace)?.id === "coordinate" ? " workspace-stage-coordinate" : ""}`} key={workspace}>
           {stageForWorkspace(workspace)?.id === "coordinate" && <WorkspacePageNavigation stage={stageForWorkspace(workspace)} workspace={workspace} onWorkspace={navigateWorkspace} />}
           {workspace === "home" && (
@@ -6044,7 +6040,7 @@ function PerfectPlannerShellCore({
           )}
           {workspace === "blueprint" &&
             (projectWorkflowReady ? (
-              <BlueprintWorkspace
+              <Suspense fallback={<p role="status" className="workspace-loading">Opening…</p>}><BlueprintWorkspace
                 activeProject={activeProject}
                 onOpenStructure={() => navigateWorkspace("structure")}
                 onSelect={(item) => {
@@ -6052,7 +6048,7 @@ function PerfectPlannerShellCore({
                   setInspectorSide("right");
                   setRightOpen(true);
                 }}
-              />
+              /></Suspense>
             ) : (
               <ProjectWorkspaceGate
                 workspace="blueprint"
@@ -6061,7 +6057,7 @@ function PerfectPlannerShellCore({
               />
             ))}
           {workspace === "structure" && (
-            <StructureWorkspace
+            <Suspense fallback={<p role="status" className="workspace-loading">Opening…</p>}><StructureWorkspace
               activeProject={activeProject}
               onOpenBlueprint={() => navigateWorkspace("blueprint")}
               onToast={showToast}
@@ -6069,14 +6065,14 @@ function PerfectPlannerShellCore({
               onProjectCaptured={registerCapturedProject}
               onProjectUnavailable={markCapturedProjectUnavailable}
               onDiagnostic={recordDiagnostic}
-            />
+            /></Suspense>
           )}
           {workspace === "components" && (
-            <ComponentPlansWorkspace
+            <Suspense fallback={<p role="status" className="workspace-loading">Opening…</p>}><ComponentPlansWorkspace
               onToast={showToast}
               activeProject={activeProject}
               onOpenStructure={() => navigateWorkspace("structure")}
-            />
+            /></Suspense>
           )}
           {workspace === "plan" &&
             (demoMode ? (
@@ -6327,9 +6323,6 @@ function PerfectPlannerShellCore({
         open={leftOpen}
         onClose={() => setLeftOpen(false)}
         onWorkspace={navigateWorkspace}
-        onPlanSelect={(plan) =>
-          showToast(`${plan.id} loaded into the current workspace.`)
-        }
         projectContext={projectContext}
         onProjectSelect={selectProject}
       />
@@ -6383,6 +6376,7 @@ function PerfectPlannerShellCore({
         </div>
       )}
     </div>
+    </ViewModeContext.Provider>
   );
 }
 

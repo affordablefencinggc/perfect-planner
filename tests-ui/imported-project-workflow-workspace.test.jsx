@@ -77,7 +77,7 @@ describe("ImportedProjectWorkflowWorkspace", () => {
     ["build", "Build readiness"],
     ["evidence", "Evidence register"],
     ["integrity", "Integrity readiness"],
-    ["ledger", "Project receipt ledger"],
+    ["ledger", "Project record ledger"],
     ["index", "Project evidence index"],
   ])("renders the %s route from one project-bound model", (workspace, heading) => {
     const project = importedProject();
@@ -99,7 +99,7 @@ describe("ImportedProjectWorkflowWorkspace", () => {
     expect(region.getAttribute("data-project-id")).toBe(project.projectId);
     expect(region.getAttribute("data-page-state")).toBe("unanswered");
     expect(screen.getByRole("heading", { name: "Planning intake" })).toBeTruthy();
-    expect(screen.getByText("EXPLICITLY UNANSWERED")).toBeTruthy();
+    expect(screen.getByText("Not done yet")).toBeTruthy();
     expect(screen.getByText("463 files", { exact: false })).toBeTruthy();
     expect(screen.getByText("Which runtime and framework are present?")).toBeTruthy();
     expect(screen.getByText("S013", { exact: false })).toBeTruthy();
@@ -123,7 +123,7 @@ describe("ImportedProjectWorkflowWorkspace", () => {
 
     expect(screen.getByRole("heading", { name: "Collision review" })).toBeTruthy();
     expect(screen.getByText("collisions not evaluated")).toBeTruthy();
-    expect(screen.getAllByText("A project-bound collision authority receipt is not represented by the current ProjectSession schema.")).toHaveLength(2);
+    expect(screen.getAllByText("Tasks have not been checked for overlapping files yet.")).toHaveLength(2);
     expect(container.textContent).not.toMatch(/0 collisions|collision-free|clear to build/i);
 
     await user.click(screen.getByRole("button", { name: "Review Collision evaluation" }));
@@ -135,18 +135,19 @@ describe("ImportedProjectWorkflowWorkspace", () => {
     const project = importedProject();
     const first = render(<ImportedProjectWorkflowWorkspace workspace="ledger" activeProject={project} onWorkspace={vi.fn()} />);
 
-    expect(screen.getByRole("heading", { name: "Project receipt ledger" })).toBeTruthy();
-    const search = screen.getByPlaceholderText("Search this project’s recorded receipts and questions…");
-    await user.type(search, "task ledger");
-    expect(screen.getByText("Task ledger authority")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Project record ledger" })).toBeTruthy();
+    const search = screen.getByPlaceholderText("Search this project’s saved records and questions…");
+    await user.type(search, "task drafts");
+    expect(screen.getByText("Saved task drafts")).toBeTruthy();
     expect(screen.queryByText("Folder registration")).toBeNull();
     first.unmount();
 
     render(<ImportedProjectWorkflowWorkspace workspace="index" activeProject={project} onWorkspace={vi.fn()} />);
-    const indexSearch = screen.getByPlaceholderText("Search this project’s recorded receipts and questions…");
+    // Index now searches the project's own records through the project search panel.
+    const indexSearch = await screen.findByPlaceholderText("Search tasks, areas, saved plans, proof and file names…", {}, { timeout: 5000 });
     await user.type(indexSearch, "tenancy");
-    expect(screen.getByText("Data, tenancy & auth")).toBeTruthy();
-    expect(screen.getByText("Is the app single-tenant or multi-tenant?")).toBeTruthy();
-    expect(screen.queryByText("App identity")).toBeNull();
+    const results = screen.getByRole("list", { name: "Search results" });
+    expect(results.textContent).toContain("Data, tenancy & auth");
+    expect(results.textContent).not.toContain("App identity");
   });
 });

@@ -1,0 +1,22 @@
+.plan-approval-step{margin:0 0 22px;border:1px solid #aeb5b2;border-radius:15px;background:rgba(255,255,255,.94);box-shadow:0 10px 24px rgba(42,47,44,.09);overflow:hidden;color:var(--ink,#27302b)}
+.plan-approval-step:focus{outline:2px solid var(--blue-focus,#3c6ee8);outline-offset:3px}
+.plan-approval-step>header{min-height:54px;display:flex;justify-content:space-between;align-items:center;gap:14px;padding:0 16px;border-bottom:1px solid #aeb5b2;background:#eef0ef}
+.plan-approval-step>header>span{display:flex;align-items:center;gap:10px;font-size:16px}.plan-approval-step>header svg{width:20px;height:20px}
+.plan-approval-step>header small{font-family:var(--mono);font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted,#5f6762)}
+.plan-approval-step.tone-done>header small{color:var(--green,#397a52)}.plan-approval-step.tone-attention>header small{color:#8a5f16}
+.plan-approval-step-body{display:grid;gap:12px;padding:16px}
+.plan-approval-step-body p{margin:0;font-size:15px;line-height:1.55}
+.plan-approval-step-body>small{color:var(--muted,#5f6762);font-size:13px;line-height:1.5}
+.plan-approval-step-state{display:flex;align-items:flex-start;gap:9px;padding:10px 12px;border-radius:8px}
+.plan-approval-step-state svg{flex:none;width:18px;height:18px;margin-top:3px}
+.plan-approval-step-state.is-done{background:var(--green-soft,#dcecdf);color:#24563a}
+.plan-approval-step-state.is-attention{background:var(--amber-soft,#fbefd7);color:#6e4b10}
+.plan-approval-step-error{padding:10px 12px;border:1px solid #c16c65;border-radius:8px;background:var(--red-soft,#f8dfdc);color:#922f2d}
+.plan-approval-step-tasks{display:grid;gap:6px;margin:0;padding:0;list-style:none}
+.plan-approval-step-tasks li{display:flex;gap:12px;align-items:baseline;padding:8px 12px;border:1px solid var(--line,#d0cdc3);border-radius:8px;background:var(--paper,#faf8f1);font-size:15px;min-width:0}
+.plan-approval-step-tasks li span{overflow-wrap:anywhere}.plan-approval-step-tasks code{font-family:var(--mono);font-size:13px;color:var(--muted,#5f6762)}
+.plan-approval-step-tasks li.more{color:var(--muted,#5f6762);font-size:14px}
+.plan-approval-step-missing summary{cursor:pointer;font-size:14px}.plan-approval-step-missing ul{margin:8px 0 0;padding-left:20px;font-size:14px;line-height:1.5}
+.plan-approval-step-actions{display:flex;flex-wrap:wrap;gap:10px}
+.plan-approval-step-actions button{display:inline-flex;align-items:center;gap:8px;min-height:42px}
+@media(max-width:600px){.plan-approval-step>header{flex-wrap:wrap;padding:10px 14px}.plan-approval-step-actions{display:grid}}

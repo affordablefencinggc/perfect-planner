@@ -84,7 +84,7 @@ export async function inspectTauriTechnicalDebtSurface(workspaceRoot, files) {
   const addedPermissions = {
     'main-native-drafts': ['allow-inspect-native-draft-proposal', 'allow-read-native-draft-snapshot', 'allow-submit-native-draft-proposal'],
     'main-agent-observation': ['allow-inspect-agent-sessions', 'allow-read-agent-exchange-notes', 'allow-stop-project-agent-broker', 'allow-prepare-agent-pairing', 'allow-prepare-agent-plan-pairing', 'allow-prepare-agent-proposal-pairing'],
-    'main-check-setup': ['allow-choose-native-check-setup', 'allow-prepare-native-checks', 'allow-inspect-native-checks', 'allow-review-native-checks', 'allow-recover-native-check-review', 'allow-execute-native-check', 'allow-recover-native-check-execution'],
+    'main-check-setup': ['allow-choose-native-check-setup', 'allow-prepare-native-checks', 'allow-inspect-native-checks', 'allow-review-native-checks', 'allow-recover-native-check-review', 'allow-execute-native-check', 'allow-recover-native-check-execution', 'allow-execute-native-task', 'allow-recover-native-task-execution'],
     'main-task-results': ['allow-inspect-native-task-result', 'allow-list-native-task-results', 'allow-read-native-task-result-page'],
   };
   for (const identifier of nativeCapabilities) {

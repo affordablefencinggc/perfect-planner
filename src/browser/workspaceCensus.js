@@ -1,8 +1,12 @@
 import { validateWorkspaceCensus, validateWorkspaceRegistration } from "../native/workspaceCensus.js";
+import { createImportedProjectId } from "../project/projectIds.js";
+import { findRememberedFolder, folderAccessState, loadRememberedFolder, rememberFolder, requestRememberedFolder } from "./folderAccess.js";
 
 const handles = new Map();
 const encoder = new TextEncoder();
-const ignoredDirectories = new Set([".git", ".next", ".turbo", "build", "coverage", "dist", "node_modules", "target", "target-codex"]);
+// Generated, dependency, cache and archive folders are skipped by default so a real repository scans quickly
+// and the map is not polluted. Each skip is listed in the census as a skipped folder.
+const ignoredDirectories = new Set([".git", ".next", ".turbo", ".cache", ".claude", ".ledger", ".local-preview-cache", ".perfect-planner", "_archive", "build", "coverage", "dist", "node_modules", "target", "target-codex"]);
 let browserSelectionSequence = 0;
 
 export const browserWorkspaceCensusDefaults = Object.freeze({
@@ -14,7 +18,8 @@ export const browserWorkspaceCensusDefaults = Object.freeze({
   maxEntries: 50_000,
   maxDepth: 64,
   maxPathLength: 4_096,
-  maxDurationMs: 30_000,
+  maxDurationMs: 120_000,
+  fileReadTimeoutMs: 15_000,
   progressThrottleMs: 150,
 });
 
@@ -30,6 +35,50 @@ class CensusInterruption extends Error {
 
 function unavailable(reason) {
   return Object.freeze({ available: false, authoritative: false, reason, schemaVersion: 1 });
+}
+
+class FileReadTimeout extends Error {}
+
+// A small .gitignore reader: plain names, folder names ("dist/"), anchored paths ("/public/generated/")
+// and simple "*.ext" patterns. Negations and complex globs are ignored (those files are scanned).
+async function readGitignore(handle, prefix, context) {
+  let text = "";
+  try {
+    const file = await withTimeout(handle.getFile(), context.limits.fileReadTimeoutMs);
+    if (file.size > 256_000) return [];
+    text = new TextDecoder().decode(await withTimeout(file.arrayBuffer(), context.limits.fileReadTimeoutMs));
+  } catch { return []; }
+  const rules = [];
+  for (const raw of text.split(/\r?\n/)) {
+    let line = raw.trim();
+    if (!line || line.startsWith("#") || line.startsWith("!")) continue;
+    const directoryOnly = line.endsWith("/");
+    line = line.replace(/\/+$/, "");
+    const anchored = line.startsWith("/") || line.includes("/");
+    line = line.replace(/^\/+/, "");
+    if (!line) continue;
+    if (/^\*\.[^*?[\]/]+$/.test(line)) { rules.push({ base: prefix, extension: line.slice(1).toLowerCase(), directoryOnly: false }); continue; }
+    if (/[*?[\]]/.test(line)) continue;
+    rules.push({ base: prefix, pattern: line, anchored, directoryOnly });
+  }
+  return rules;
+}
+
+function isGitignored(rules, path, name, isDirectory) {
+  for (const rule of rules) {
+    if (rule.base && path !== rule.base && !path.startsWith(`${rule.base}/`)) continue;
+    if (rule.directoryOnly && !isDirectory) continue;
+    const relative = rule.base ? path.slice(rule.base.length + 1) : path;
+    if (rule.extension) { if (!isDirectory && name.toLowerCase().endsWith(rule.extension)) return true; continue; }
+    if (rule.anchored ? relative === rule.pattern : name === rule.pattern) return true;
+  }
+  return false;
+}
+
+// One stalled file (locked, on a sleeping network drive, or virtualised) must never hang the whole scan.
+function withTimeout(promise, ms) {
+  let timer;
+  return Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(new FileReadTimeout("read-timeout")), ms); })]).finally(() => clearTimeout(timer));
 }
 
 async function sha256(value) {
@@ -53,6 +102,9 @@ async function selectedPathForHandle(handle) {
     if (!selectedPath.startsWith("browser://") || candidate?.handle) continue;
     if (await sameDirectoryHandle(candidate, handle)) return selectedPath;
   }
+  // Same folder chosen after a reload: reuse its path so it stays the same project.
+  const remembered = await findRememberedFolder(handle);
+  if (remembered) return remembered.selectedPath;
   browserSelectionSequence += 1;
   const token = (await sha256(
     `${handle.name}\0${Date.now()}\0${browserSelectionSequence}`,
@@ -203,27 +255,54 @@ async function walkDirectory(directory, prefix, context, depth = 0) {
   if (context.directoriesVisited > context.limits.maxDirectories)
     throw new CensusInterruption("maximum-directory-count-reached", prefix || ".");
   const entries = await sortedEntries(directory, prefix, context);
+  const gitignore = entries.find(([name, handle]) => name === ".gitignore" && handle?.kind === "file");
+  if (gitignore) context.ignoreRules.push(...await readGitignore(gitignore[1], prefix, context));
   for (const [name, handle] of entries) {
     throwIfInterrupted(context);
     const path = prefix ? `${prefix}/${name}` : name;
     if (path.length > context.limits.maxPathLength)
       throw new CensusInterruption("maximum-path-length-reached", path);
+    if (isGitignored(context.ignoreRules, path, name, handle?.kind === "directory")) {
+      context.skipped.push({ path, reason: "ignored-by-gitignore", size: null });
+      await checkpoint(context, path);
+      continue;
+    }
     if (handle?.kind === "directory") {
       if (ignoredDirectories.has(name.toLowerCase())) {
         context.skipped.push({ path, reason: "generated-or-dependency-directory-excluded", size: null });
         await checkpoint(context, path);
         continue;
       }
-      await walkDirectory(handle, path, context, depth + 1);
+      try {
+        await walkDirectory(handle, path, context, depth + 1);
+      } catch (error) {
+        // A sub-folder that cannot be listed is skipped and listed, like an unreadable file.
+        if (!(error instanceof CensusInterruption) || error.reason !== "workspace-directory-unreadable") throw error;
+        const inside = (candidate) => candidate === path || candidate.startsWith(`${path}/`);
+        context.skipped.push({ path, reason: "folder-unreadable", size: null });
+        context.directorySnapshots = context.directorySnapshots.filter((snapshot) => !inside(snapshot.path));
+        context.fileSnapshots = context.fileSnapshots.filter((snapshot) => !inside(snapshot.path));
+        context.files = context.files.filter((entry) => !inside(entry.path));
+        context.totalBytesHashed = context.files.reduce((sum, entry) => sum + entry.size, 0);
+        await checkpoint(context, path);
+      }
       continue;
     }
     if (handle?.kind !== "file") throw new CensusInterruption("workspace-entry-kind-unsupported", path);
 
+    // An unreadable, locked or stalled file is skipped and listed; only a lost folder permission stops the scan.
+    const skipUnreadable = async (error) => {
+      if (isPermissionError(error) && !(error instanceof FileReadTimeout)) throw classifyReadFailure(error, path, "workspace-file-unreadable");
+      context.skipped.push({ path, reason: error instanceof FileReadTimeout ? "file-read-timed-out" : "file-unreadable", size: null });
+      await checkpoint(context, path);
+    };
     let file;
     try {
-      file = await handle.getFile();
+      file = await withTimeout(handle.getFile(), context.limits.fileReadTimeoutMs);
     } catch (error) {
-      throw classifyReadFailure(error, path, "workspace-file-unreadable");
+      if (error instanceof CensusInterruption) throw error;
+      await skipUnreadable(error);
+      continue;
     }
     throwIfInterrupted(context);
     if (!Number.isSafeInteger(file?.size) || file.size < 0) throw new CensusInterruption("workspace-file-metadata-invalid", path);
@@ -232,20 +311,29 @@ async function walkDirectory(directory, prefix, context, depth = 0) {
       await checkpoint(context, path);
       continue;
     }
-    if (context.totalBytesHashed + file.size > context.limits.maxTotalBytes) throw new CensusInterruption("maximum-total-bytes-reached", path, file.size);
+    // Past the content budget, remaining files are listed as skipped rather than failing the whole scan.
+    if (context.totalBytesHashed + file.size > context.limits.maxTotalBytes) {
+      context.skipped.push({ path, reason: "scan-size-budget-reached", size: file.size });
+      await checkpoint(context, path);
+      continue;
+    }
 
     let bytes;
     try {
-      bytes = await file.arrayBuffer();
+      bytes = await withTimeout(file.arrayBuffer(), context.limits.fileReadTimeoutMs);
     } catch (error) {
-      throw classifyReadFailure(error, path, "workspace-file-unreadable");
+      if (error instanceof CensusInterruption) throw error;
+      await skipUnreadable(error);
+      continue;
     }
     throwIfInterrupted(context);
     let digest;
     try {
       digest = await sha256(bytes);
     } catch (error) {
-      throw classifyReadFailure(error, path, "workspace-file-hash-failed");
+      if (error instanceof CensusInterruption) throw error;
+      await skipUnreadable(error);
+      continue;
     }
     throwIfInterrupted(context);
     context.files.push({
@@ -370,7 +458,24 @@ export const browserWorkspaceAdapter = Object.freeze({
     const rootIdentity = await sha256(`${rootPath}:${handle.name}`);
     const registration = validateWorkspaceRegistration({ schemaVersion: 1, workspaceId, registryRevision: 1, canonicalRoot: rootPath, rootIdentity, access: "metadata-read-only", idempotent: false, capabilities: ["workspace-census:read"] });
     handles.set(`${workspaceId}:1`, { handle, registration });
+    await rememberFolder({ projectId: createImportedProjectId(registration.rootIdentity), selectedPath: rootPath, handle });
     return registration;
+  },
+  // Reload recovery: what is remembered for a project, without asking for access.
+  async rememberedFolder(projectId) {
+    await loadRememberedFolder(projectId);
+    return folderAccessState(projectId);
+  },
+  // Must be called from a click. Asks the browser for read access to the
+  // remembered folder, then makes it selectable again under its original path.
+  async reconnectRememberedFolder(projectId) {
+    const result = await requestRememberedFolder(projectId);
+    if (result.state !== "granted") {
+      const reasons = { missing: "This folder is not remembered in this browser. Choose it again.", "missing-folder": "The remembered folder could not be found. It may have been moved or deleted. Choose it again.", denied: "Folder access was not allowed. Nothing was read.", failed: "Folder access could not be requested. Choose the folder again." };
+      return unavailable(reasons[result.state] ?? reasons.failed);
+    }
+    handles.set(result.record.selectedPath, result.record.handle);
+    return Object.freeze({ available: true, authoritative: true, schemaVersion: 1, commandRevision: 1, capabilities: Object.freeze(["workspace-folder-picker:select"]), selectionState: "selected", selectedPath: result.record.selectedPath, reconnected: true });
   },
   async censusRegisteredWorkspace({
     workspaceId,
@@ -383,6 +488,7 @@ export const browserWorkspaceAdapter = Object.freeze({
     maxDepth = browserWorkspaceCensusDefaults.maxDepth,
     maxPathLength = browserWorkspaceCensusDefaults.maxPathLength,
     maxDurationMs = browserWorkspaceCensusDefaults.maxDurationMs,
+    fileReadTimeoutMs = browserWorkspaceCensusDefaults.fileReadTimeoutMs,
     batchSize = browserWorkspaceCensusDefaults.batchSize,
     progressThrottleMs = browserWorkspaceCensusDefaults.progressThrottleMs,
     signal,
@@ -409,11 +515,13 @@ export const browserWorkspaceAdapter = Object.freeze({
         maxDepth,
         maxPathLength,
         maxDurationMs,
+        fileReadTimeoutMs,
         progressThrottleMs,
       },
       files: [],
       fileSnapshots: [],
       skipped: [],
+      ignoreRules: [],
       directorySnapshots: [],
       directoriesVisited: 0,
       entriesVisited: 0,

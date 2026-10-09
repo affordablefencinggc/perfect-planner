@@ -34,7 +34,30 @@ import { inspectArchitecture } from "../runtime/architectureClient.js";
 import { useOptionalProject } from "../project/ProjectProvider.jsx";
 import "./StructureWorkspace.css";
 import { IndexingActivity } from './IndexingActivity.jsx';
+import { FolderReconnectNotice } from "./FolderReconnectNotice.jsx";
+import { describeFolderConnection } from "../project/folderReconnectModel.js";
+import { DiscoveryReviewPanel } from "./DiscoveryReviewPanel.jsx";
 import { folderPlanGuidance } from '../engine/folderPlanGuidance.js';
+
+// Plain-language text for scan stops. Unreadable files and folders no longer stop a scan (they are skipped and listed),
+// so what remains here are whole-folder problems the person can act on.
+const censusFailureMessages = Object.freeze({
+  "workspace-read-permission-lost": "The browser no longer has permission to read this folder. Choose the folder again to continue.",
+  "workspace-read-permission-check-failed": "The browser could not confirm folder access. Choose the folder again to continue.",
+  "workspace-directory-unreadable": "The top folder could not be listed. Check it still exists, then choose it again.",
+  "workspace-changed-during-census": "Files changed while the scan was running, so the result was not saved. Run the scan again.",
+  "maximum-file-count-reached": "This folder has more than 10,000 files. Choose the app folder itself rather than a parent folder.",
+  "maximum-entry-count-reached": "This folder has too many entries to scan. Choose the app folder itself rather than a parent folder.",
+  "maximum-directory-count-reached": "This folder has too many sub-folders to scan. Choose the app folder itself rather than a parent folder.",
+  "maximum-directory-depth-reached": "Folders are nested too deeply to scan. Choose the app folder itself.",
+  "maximum-path-length-reached": "A file path is too long to scan. Choose the app folder itself.",
+  "maximum-total-bytes-reached": "There is too much file content to scan in one go. Choose the app folder itself rather than a parent folder.",
+  "maximum-scan-duration-reached": "The scan took too long and was stopped. Choose the app folder itself rather than a parent folder.",
+});
+function censusFailureText(reason, path) {
+  const text = censusFailureMessages[reason] ?? (reason ? `The folder scan stopped (${reason}). Try again.` : "The folder scan stopped without a result. Try again.");
+  return path && path !== "." ? `${text} Last item: ${path}.` : text;
+}
 
 const cloneSeed = () => structuredClone(currentFolderContractInput);
 const waves = ["approval", "architecture", "build", "proof", "release"];
@@ -211,6 +234,18 @@ export function StructureWorkspace({
   const scanRunRef = useRef(0);
   const selectionRunRef = useRef(0);
   const [scanProgress, setScanProgress] = useState(null);
+  const [folderAccess, setFolderAccess] = useState({ projectId: null, access: null, busy: false, error: "" });
+  const canRemember = imported && activeProject.registration?.adapter === "browser" && typeof workspaceAdapter.rememberedFolder === "function";
+  useEffect(() => {
+    if (!canRemember) return undefined;
+    let current = true;
+    const projectId = activeProject.projectId;
+    setFolderAccess({ projectId, access: null, busy: false, error: "" });
+    Promise.resolve(workspaceAdapter.rememberedFolder(projectId)).then((access) => {
+      if (current) setFolderAccess((state) => state.projectId === projectId ? { ...state, access } : state);
+    }).catch(() => {});
+    return () => { current = false; };
+  }, [canRemember, activeProject?.projectId, workspaceAdapter]);
   const assessment = useMemo(() => assessFolderContract(draft), [draft]);
   const [draftFingerprint, setDraftFingerprint] = useState(null);
   useEffect(() => {
@@ -492,12 +527,15 @@ export function StructureWorkspace({
     onDiagnostic?.(
       "workspace",
       "info",
-      "Refused analysis cleared; no prior census or findings were retained.",
+      "Refused analysis cleared; no prior folder scan or findings were kept.",
     );
   };
-  const connectFolder = async () => {
+  const connectFolder = async (pathOverride) => {
+    const path = typeof pathOverride === "string" ? pathOverride : rootPath;
+    const runWorkspaceId = path.trim() ? createStableProjectId(projectRegistrationLabelFromRoot(path), path) : "pending_workspace";
+    const runLabel = projectLabelFromRoot(path);
     if (scanAbortRef.current && !scanAbortRef.current.signal.aborted) return;
-    if (!rootPath.trim()) {
+    if (!path.trim()) {
       const message = "Choose one app folder before approving analysis.";
       setIntake((current) => ({ ...current, state: "error", message }));
       onDiagnostic?.("workspace", "error", message);
@@ -519,8 +557,8 @@ export function StructureWorkspace({
     });
     try {
       const registration = await workspaceAdapter.registerWorkspaceReadOnly({
-        workspaceId,
-        rootPath: rootPath.trim(),
+        workspaceId: runWorkspaceId,
+        rootPath: path.trim(),
         explicitUserApproval: true,
       });
       if (!isCurrentRun()) return;
@@ -529,7 +567,7 @@ export function StructureWorkspace({
           registration?.reason === "native-runtime-unavailable"
             ? "Open the native desktop app to connect a local folder. Static preview remains safely read-only."
             : registration?.reason ||
-              "Folder registration failed without an authoritative receipt.";
+              "Folder registration failed without a saved check.";
         setIntake({
           state: "error",
           registration: null,
@@ -537,7 +575,7 @@ export function StructureWorkspace({
           gaps: null,
           message,
         });
-        onProjectUnavailable?.({ reason: message, workspaceId });
+        onProjectUnavailable?.({ reason: message, workspaceId: runWorkspaceId });
         onDiagnostic?.("workspace", "error", message);
         return;
       }
@@ -550,7 +588,7 @@ export function StructureWorkspace({
       });
       if (workspaceAdapter.previewRegisteredWorkspace) {
         setFolderPreview(null);
-        const preview = await workspaceAdapter.previewRegisteredWorkspace({workspaceId,registryRevision:registration.registryRevision});
+        const preview = await workspaceAdapter.previewRegisteredWorkspace({workspaceId:runWorkspaceId,registryRevision:registration.registryRevision});
         if (!isCurrentRun()) return;
         if (preview?.available && preview.authoritative === false && preview.contentVerified === false && buildWorkspaceStructureTree(preview).state !== "invalid") {
           setFolderPreview(preview);
@@ -560,7 +598,7 @@ export function StructureWorkspace({
         }
       }
       const census = await workspaceAdapter.censusRegisteredWorkspace({
-        workspaceId,
+        workspaceId: runWorkspaceId,
         registryRevision: registration.registryRevision,
         signal: controller.signal,
         onProgress: (progress) => {
@@ -572,8 +610,7 @@ export function StructureWorkspace({
         const message =
           census?.reason === "workspace-census-aborted"
             ? "Analysis cancelled. No partial result was accepted."
-            : census?.reason ||
-              "Folder census failed without an authoritative receipt.";
+            : censusFailureText(census?.reason, census?.path);
         setIntake({
           state: "error",
           registration,
@@ -586,7 +623,7 @@ export function StructureWorkspace({
           onProjectUnavailable?.({
             reason: message,
             registration,
-            workspaceId,
+            workspaceId: runWorkspaceId,
           });
         onDiagnostic?.(
           "workspace",
@@ -596,10 +633,10 @@ export function StructureWorkspace({
         return;
       }
       const validatedStructure = buildWorkspaceStructureTree(census, {
-        appName: projectLabel,
+        appName: runLabel,
       });
       const validatedDiscovery = buildWorkspaceDiscovery(census, {
-        appName: projectLabel,
+        appName: runLabel,
       });
       if (
         validatedStructure.state === "invalid" ||
@@ -618,7 +655,7 @@ export function StructureWorkspace({
           message,
         });
         setScanProgress(null);
-        onProjectUnavailable?.({ reason: message, registration, workspaceId });
+        onProjectUnavailable?.({ reason: message, registration, workspaceId: runWorkspaceId });
         onDiagnostic?.("workspace", "error", message);
         return;
       }
@@ -630,7 +667,7 @@ export function StructureWorkspace({
           adapter: workspaceAdapter.mode,
           census,
           discovery: validatedDiscovery,
-          name: projectLabel,
+          name: runLabel,
           persistence:
             workspaceAdapter.mode === "browser"
               ? "reselect-required"
@@ -642,7 +679,7 @@ export function StructureWorkspace({
         activeProject.registration?.rootIdentity === registration.rootIdentity && draft.planId === activeProject.projectId
       );
       const indexed = assessWorkspaceIntake({
-        selectedPath: rootPath.trim(),
+        selectedPath: path.trim(),
         registration,
         census,
         contractAssessment: sameRegisteredProject ? assessment : null,
@@ -664,7 +701,7 @@ export function StructureWorkspace({
       }
       const gaps = analyzeWorkspaceStructure(census, draft);
       const result = assessWorkspaceIntake({
-        selectedPath: rootPath.trim(),
+        selectedPath: path.trim(),
         registration,
         census,
         gaps,
@@ -680,7 +717,7 @@ export function StructureWorkspace({
       setScanProgress(null);
       publishProject(gaps);
       onToast?.(
-        `Folder census complete · ${gaps.gaps.length} planned gaps · ${gaps.unexpected.length} outside contract.`,
+        `Folder scan complete · ${gaps.gaps.length} planned gaps · ${gaps.unexpected.length} outside contract.`,
       );
     } catch (error) {
       if (!isCurrentRun()) return;
@@ -696,11 +733,36 @@ export function StructureWorkspace({
         gaps: null,
         message,
       }));
-      onProjectUnavailable?.({ reason: message, workspaceId });
+      onProjectUnavailable?.({ reason: message, workspaceId: runWorkspaceId });
       onDiagnostic?.("workspace", "error", message);
     } finally {
       if (scanRunRef.current === runId) scanAbortRef.current = null;
     }
+  };
+  const reconnectFolder = async () => {
+    if (!canRemember || mapLoading || typeof workspaceAdapter.reconnectRememberedFolder !== "function") return;
+    const projectId = activeProject.projectId;
+    setFolderAccess((state) => ({ ...state, busy: true, error: "" }));
+    let receipt;
+    try {
+      // First await is the browser's permission prompt, so it stays tied to the click.
+      receipt = await workspaceAdapter.reconnectRememberedFolder(projectId);
+    } catch {
+      receipt = { authoritative: false, reason: "Folder access could not be requested. Choose the folder again." };
+    }
+    if (currentPlanRef.current !== projectId) return;
+    if (!receipt?.authoritative || receipt.selectionState !== "selected" || !receipt.selectedPath) {
+      const message = receipt?.reason || "The folder could not be reconnected. Choose it again.";
+      setFolderAccess((state) => ({ ...state, busy: false, error: message }));
+      onDiagnostic?.("workspace", "warning", message);
+      return;
+    }
+    setFolderAccess((state) => ({ ...state, busy: false, error: "" }));
+    setRootPath(receipt.selectedPath);
+    await connectFolder(receipt.selectedPath);
+    Promise.resolve(workspaceAdapter.rememberedFolder(projectId)).then((access) => {
+      setFolderAccess((state) => state.projectId === projectId ? { ...state, access } : state);
+    }).catch(() => {});
   };
   const beginFolderSelection = () => {
     const runId = ++selectionRunRef.current;
@@ -763,7 +825,7 @@ export function StructureWorkspace({
       ...current,
       state: "idle",
       message:
-        "Folder received. Review the path, then approve the read-only census.",
+        "Folder received. Review the path, then approve the read-only folder scan.",
     }));
   };
   const chooseFolder = async (select = () => workspaceAdapter.selectWorkspaceFolder()) => {
@@ -777,7 +839,7 @@ export function StructureWorkspace({
           receipt?.reason === "native-runtime-unavailable"
             ? "Open the native desktop app to choose a folder. This browser does not provide secure folder access."
             : receipt?.reason ||
-              "Folder selection failed without an authoritative receipt.";
+              "Folder selection failed without a saved check.";
         setIntake((current) => ({ ...current, state: "error", message }));
         onDiagnostic?.("workspace", "error", message);
         return;
@@ -796,7 +858,7 @@ export function StructureWorkspace({
         ...current,
         state: "selected",
         message:
-          "Folder selected. Review the path, then approve the separate read-only census.",
+          "Folder selected. Review the path, then approve the separate read-only folder scan.",
       }));
     } catch (error) {
       if (selectionRunRef.current !== runId) return;
@@ -930,7 +992,7 @@ export function StructureWorkspace({
             <strong>{matchesSavedRevision ? `SAVED REVISION ${registry.revision}` : assessment.verdict}</strong>
             <em>
               {matchesSavedRevision ? "This draft matches the saved contract · no files created" : assessment.ready
-                ? registry.head ? "Unsaved draft · saved revision remains unchanged" : "Valid draft · authoritative freeze pending"
+                ? registry.head ? "Unsaved draft · saved revision remains unchanged" : "Valid draft · approval to lock pending"
                 : `${assessment.blockers.length} blockers`}
             </em>
           </span>
@@ -1034,6 +1096,18 @@ export function StructureWorkspace({
         </header>
         {openSections.intake && (
           <div id="folder-intake" className="folder-intake-grid">
+            {canRemember && (
+              <FolderReconnectNotice
+                status={describeFolderConnection({
+                  project: activeProject,
+                  access: folderAccess.projectId === activeProject.projectId ? folderAccess.access : null,
+                  scannedThisVisit: Boolean(intake.census) && intake.registration?.rootIdentity === activeProject.registration?.rootIdentity,
+                })}
+                busy={folderAccess.busy || mapLoading}
+                error={folderAccess.error}
+                onReconnect={reconnectFolder}
+              />
+            )}
             <ol className="intake-process" aria-label="App intake progress">
               {workspaceIntakeStages.map((stage, index) => (
                 <li
@@ -1134,7 +1208,7 @@ export function StructureWorkspace({
               <div
                 className="folder-scan-progress"
                 role="status"
-                aria-label="Read-only census progress"
+                aria-label="Read-only folder scan progress"
               >
                 <span>
                   <strong>{scanProgress.filesHashed} files hashed</strong>
@@ -1147,7 +1221,7 @@ export function StructureWorkspace({
                 <code title={scanProgress.currentPath ?? undefined}>
                   {scanProgress.currentPath ?? "Starting at repository root"}
                 </code>
-                <em>Partial results are never accepted as project truth.</em>
+                <em>Partial results are never accepted as project status.</em>
               </div>
             )}
             {intake.census &&
@@ -1232,8 +1306,8 @@ export function StructureWorkspace({
                         </code>
                       </p>
                       <em>
-                        Named approval + live collision authority + rollback
-                        receipt required
+                        Named approval + live collision check + rollback
+                        record required
                       </em>
                     </article>
                   ))}
@@ -1262,10 +1336,10 @@ export function StructureWorkspace({
               <small>
                 {folderPreview && !intake.census ? `Folder preview · ${folderPreview.fileCount} source-file paths · content not verified` : discoveryMap.state === "empty"
                   ? intake.census && structureTree.integrity?.accepted
-                    ? `No files observed in this census · ${intake.census.skipped?.length ?? 0} entries skipped · not proof the folder is empty`
+                    ? `No files observed in this folder scan · ${intake.census.skipped?.length ?? 0} entries skipped · not proof the folder is empty`
                     : "Empty until a folder is indexed · headings are questions, not answers"
                   : discoveryMap.state === "invalid"
-                    ? `Analysis refused · ${structureTree.integrity?.reason || discoveryMap.integrity?.reason || "invalid census"} · no facts accepted`
+                    ? `Analysis refused · ${structureTree.integrity?.reason || discoveryMap.integrity?.reason || "invalid folder scan"} · no facts accepted`
                     : `${discoveryMap.observedFiles} files observed · ${discoveryMap.counts.observed} facts · ${discoveryMap.counts.signals} signals need review`}
               </small>
             </span>
@@ -1300,10 +1374,10 @@ export function StructureWorkspace({
                 <p>
                   The indexed metadata did not pass the safe structure contract.
                   No files, folders, or inferred architecture were promoted to
-                  project truth.
+                  project status.
                 </p>
                 <small>
-                  Retry reads a fresh bounded census. Clearing removes this
+                  Retry reads a fresh bounded folder scan. Clearing removes this
                   rejected result before another folder is selected.
                 </small>
               </span>
@@ -1471,6 +1545,7 @@ export function StructureWorkspace({
             </div>
           ))}
       </section>
+      {imported && <DiscoveryReviewPanel project={activeProject} liveDiscovery={discoveryMap} liveCensusDigest={intake.census?.digest ?? null} onToast={onToast} />}
       <div className="structure-layout">
         <section
           className={`structure-tree-panel ${openSections.paths ? "expanded" : "collapsed"}`}

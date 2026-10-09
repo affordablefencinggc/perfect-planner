@@ -181,11 +181,34 @@ function mergeConflictingEnvelopes(left, right, now) {
   });
 }
 
+// Unreadable saved projects are copied aside, never deleted, so a person can recover them.
+export function backupUnreadable(storage, storageKey, now = () => Date.now()) {
+  let raw;
+  try { raw = storage?.getItem(storageKey); } catch { return null; }
+  if (raw == null) return null;
+  const prefix = `${storageKey}.unreadable-`;
+  try {
+    for (let i = 0; i < (storage.length ?? 0); i += 1) {
+      const existing = storage.key(i);
+      if (existing?.startsWith(prefix) && storage.getItem(existing) === raw) return existing;
+    }
+  } catch { /* Key listing is optional; fall through to a fresh copy. */ }
+  let stamp;
+  try { stamp = isoTimestamp(now()); } catch { stamp = new Date().toISOString(); }
+  let key = `${prefix}${stamp}`;
+  try {
+    for (let n = 2; storage.getItem(key) != null && storage.getItem(key) !== raw; n += 1) key = `${prefix}${stamp}-${n}`;
+    storage.setItem(key, raw);
+    return key;
+  } catch { return null; }
+}
+
 export function createProjectRegistry({ storage = null, storageKey = DEFAULT_PROJECT_REGISTRY_KEY, now = () => Date.now() } = {}) {
   if (typeof storageKey !== "string" || !storageKey.trim()) throw new ProjectRegistryError("Storage key is required.", "registry-config-invalid");
   const listeners = new Set();
   let registryHealth = storage ? health("ready", "durable", "storage-ready") : health("unavailable", "memory", "storage-unavailable");
   let envelope;
+  let unreadableBackupKey = null;
 
   const notify = () => listeners.forEach((listener) => listener());
   const refreshSnapshot = () => { snapshot = runtimeSnapshot(envelope, registryHealth); };
@@ -211,9 +234,7 @@ export function createProjectRegistry({ storage = null, storageKey = DEFAULT_PRO
     envelope = validateProjectRegistryEnvelope(emptyEnvelope(now()));
     const unsupportedVersion = error instanceof UnsupportedProjectRegistryVersionError || error instanceof UnsupportedProjectSchemaVersionError;
     registryHealth = health("stale", "memory", unsupportedVersion ? "schema-version-unsupported" : "storage-corrupt", error);
-    if (!unsupportedVersion) {
-      try { storage?.removeItem(storageKey); } catch { /* Memory recovery remains available. */ }
-    }
+    if (!unsupportedVersion) unreadableBackupKey = backupUnreadable(storage, storageKey, now);
   }
 
   let snapshot = runtimeSnapshot(envelope, registryHealth);
@@ -286,6 +307,7 @@ export function createProjectRegistry({ storage = null, storageKey = DEFAULT_PRO
 
   const api = {
     storageKey,
+    get unreadableBackupKey() { return unreadableBackupKey; },
     getSnapshot: () => snapshot,
     getHealth: () => registryHealth,
     subscribe(listener) {

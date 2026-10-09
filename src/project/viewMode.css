@@ -1,0 +1,56 @@
+/* Simple view hides exact technical detail only. Blockers, errors and next actions never carry .advanced-only. */
+[data-view-mode="simple"] .advanced-only {
+  display: none !important;
+}
+
+.view-mode-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid #87939c;
+  border-radius: 6px;
+  background: rgba(245, 248, 249, 0.72);
+  color: #2b3133;
+  flex: none;
+  order: 3;
+}
+
+.view-mode-toggle button {
+  min-height: 28px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  opacity: 0.78;
+}
+
+.view-mode-toggle button[aria-pressed="true"] {
+  background: #2f3537;
+  color: #f4f6f5;
+  opacity: 1;
+  font-weight: 600;
+}
+
+.view-mode-toggle button:focus-visible {
+  outline: 2px solid #6aa7ff;
+  outline-offset: 1px;
+}
+
+/* Keep row layouts tidy when the identifier column is hidden. */
+@media (min-width: 721px) {
+  [data-view-mode="simple"] .imported-workflow-requirement {
+    grid-template-columns: 34px minmax(0, 1fr) auto;
+  }
+}
+
+@media (max-width: 720px) {
+  [data-view-mode="simple"] .imported-workflow-requirement-copy {
+    grid-column: 2;
+  }
+}

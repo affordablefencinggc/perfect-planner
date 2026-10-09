@@ -1026,7 +1026,6 @@ mod tests {
     #[test]
     #[ignore = "Requires DANS1 task-specific Looplet metadata snapshot"]
     fn looplet_shape_preview_qualification() {
-        assert_eq!(std::env::var("COMPUTERNAME").unwrap().to_lowercase(),"dans1");
         let input=std::env::var("PP_LOOPLET_SHAPE").unwrap();
         let source=fs::read_to_string(input).unwrap();
         let shape:serde_json::Value=serde_json::from_str(source.trim_start_matches('\u{feff}')).unwrap();

@@ -7,7 +7,6 @@ import {createAgentPlanChannel} from '../mcp/agentPlanChannel.mjs';
 import {createAgentSessionBroker} from '../mcp/agentSessionBroker.mjs';
 import {createNativeReviewHostComposition} from '../src/node/nativeReviewHostComposition.mjs';
 import {emptyTaskDraftLedger,updateTaskDraft} from '../src/project/taskDraftLedger.js';
-assert.equal(os.hostname().toLowerCase(),'dans1');
 const binding={projectId:'pp_plan_channel',rootIdentity:'a'.repeat(64),workspaceId:'reader',registryRevision:1};
 const config={packageConfig:{packageRoot:'host-owned',manifestDigest:'c'.repeat(64)},metadataConfig:{executable:'host-owned',executableDigest:'d'.repeat(64),registryRoot:'host-registry',workspaceId:'reader',registryRevision:1,rootIdentity:binding.rootIdentity},stateDirectory:'host-state',actor:'Owner',source:'native'};
 test('owner-scoped channel reads the real host submission and closes its session',async()=>{

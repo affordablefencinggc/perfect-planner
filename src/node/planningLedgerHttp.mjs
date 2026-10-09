@@ -4,11 +4,12 @@ import {TASK_DRAFT_BYTES} from '../project/taskDraftLedger.js';
 import {validateTaskDraftBinding} from '../project/taskDraftLedger.js';
 import {createPlanApprovalStore} from './planApprovalStore.mjs';
 import {PLAN_REVIEW_BYTES} from '../project/planApprovalDraft.js';
+import {isSameOriginLoopbackRequest} from './loopbackRequestHttp.mjs';
 
 const prefix='/api/planning-ledger/';
 const exact=(value,keys)=>value&&typeof value==='object'&&!Array.isArray(value)&&Object.keys(value).length===keys.length&&keys.every(key=>Object.hasOwn(value,key));
 const reply=(res,status,value)=>{res.statusCode=status;res.setHeader('content-type','application/json; charset=utf-8');res.setHeader('cache-control','no-store');res.setHeader('x-content-type-options','nosniff');res.end(JSON.stringify(value));};
-const sameOrigin=req=>typeof req.headers.origin==='string'&&typeof req.headers.host==='string'&&[ `http://${req.headers.host}`,`https://${req.headers.host}` ].includes(req.headers.origin);
+const sameOrigin=isSameOriginLoopbackRequest;
 const sameToken=(value,token)=>{if(typeof value!=='string')return false;const supplied=Buffer.from(value),expected=Buffer.from(token);return supplied.length===expected.length&&timingSafeEqual(supplied,expected);};
 
 // Reject ambiguous duplicate members rather than silently choosing one task

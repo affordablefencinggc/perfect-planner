@@ -5,7 +5,6 @@ import {createHash} from 'node:crypto';
 import {planSharedTaskReconciliation as plan} from '../src/project/sharedTaskReconciliation.js';
 import {emptyTaskDraftLedger,updateTaskDraft} from '../src/project/taskDraftLedger.js';
 import {submissionWire} from '../src/project/taskDraftSubmission.js';
-assert.equal(hostname().toLowerCase(),'dans1');
 const binding={projectId:'pp_reconcile',rootIdentity:'a'.repeat(64),censusDigest:'b'.repeat(64)};
 const task={title:'Task',description:'Scope',owner:'Danie',acceptance:'Tests',recovery:'Retain originals',claims:[],dependsOn:[],archived:false};
 const hash=value=>createHash('sha256').update(value).digest('hex');

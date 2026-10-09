@@ -89,7 +89,7 @@ describe("foundation resilience shell truth boundaries", () => {
     renderShell(registryWith(alpha), `/?project=${alpha.projectId}&workspace=components`);
     const user = userEvent.setup();
     await user.click((await screen.findAllByRole("button", { name: /ACTIVE PROJECT.*Alpha App/i }))[0]);
-    const dialog = screen.getByRole("dialog", { name: "Identity and provenance" });
+    const dialog = screen.getByRole("dialog", { name: "Identity and source" });
     expect(dialog.textContent).toContain(alpha.projectId);
     expect(dialog.textContent).toContain("1".repeat(64));
     expect(dialog.textContent).toContain("native");
@@ -154,6 +154,6 @@ describe("foundation resilience shell truth boundaries", () => {
     expect(screen.getAllByText(new RegExp(state, "i")).length).toBeGreaterThan(0);
     const user = userEvent.setup();
     await user.click((await screen.findAllByRole("button", { name: /ACTIVE PROJECT.*Alpha App/i }))[0]);
-    expect(screen.getByRole("dialog", { name: "Identity and provenance" }).textContent).toContain(reason);
+    expect(screen.getByRole("dialog", { name: "Identity and source" }).textContent).toContain(reason);
   });
 });

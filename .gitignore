@@ -6,3 +6,11 @@ target-codex/
 .cache/
 .env
 .env.*
+public/generated/generations/
+
+# Codex-era ledger leftovers (archived outside the repo)
+.ledger/
+.claude/
+
+# End-to-end journey screenshots (npm run test:e2e)
+tests-e2e/screenshots/

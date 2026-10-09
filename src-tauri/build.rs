@@ -25,6 +25,8 @@ fn main() {
             "recover_native_check_review",
             "execute_native_check",
             "recover_native_check_execution",
+            "execute_native_task",
+            "recover_native_task_execution",
             "inspect_native_task_result",
             "list_native_task_results",
             "read_native_task_result_page",

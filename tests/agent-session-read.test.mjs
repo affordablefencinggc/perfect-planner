@@ -1,6 +1,5 @@
 import test from'node:test';import assert from'node:assert/strict';import os from'node:os';
 import{createAgentSessionBroker}from'../mcp/agentSessionBroker.mjs';
-assert.equal(os.hostname().toLowerCase(),'dans1');
 const binding={projectId:'pp_reader',workspaceId:'reader',rootIdentity:'a'.repeat(64),registryRevision:1};
 async function fixture(){let time=100000;let live=binding;const broker=createAgentSessionBroker({resolveBinding:async()=>live,now:()=>time});const pair=await broker.issuePairing(binding),session=await broker.connect(pair,binding);return{broker,credentials:{sessionId:session.sessionId,secret:session.secret,expectedSequence:1},clock:t=>time=t,rebind:b=>live=b};}
 test('authenticated host read advances sequence and refuses replay before reading',async()=>{const f=await fixture();let calls=0;const read=async b=>{calls++;assert.deepEqual(b,binding);return {title:'Saved proposal'};};const r=await f.broker.readWithSession(f.credentials,binding,read);assert.equal(r.data.title,'Saved proposal');assert.equal(r.observation.sequence,2);assert.equal(r.executionAuthorized,false);assert.equal(r.secret,undefined);await assert.rejects(f.broker.readWithSession(f.credentials,binding,read));assert.equal(calls,1);f.broker.dispose();});

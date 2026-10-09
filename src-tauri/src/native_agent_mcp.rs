@@ -124,7 +124,6 @@ pub fn run_agent_stdio()->i32{
 #[cfg(test)]mod tests{
     use super::*;
     #[test]fn proposal_tool_requires_initialization_and_reports_uncertainty_without_leaking_errors(){
-        assert_eq!(std::env::var("COMPUTERNAME").unwrap().to_lowercase(),"dans1");
         let request=|id|json!({"jsonrpc":"2.0","id":id,"method":"tools/call","params":{"name":"planner_propose_task","arguments":{"request":{"requestId":"original-1"}}}});
         let messages=[request(1),json!({"jsonrpc":"2.0","id":2,"method":"initialize","params":{"protocolVersion":PROTOCOL,"capabilities":{},"clientInfo":{"name":"test","version":"1"}}}),json!({"jsonrpc":"2.0","method":"notifications/initialized"}),request(3),request(4),request(5)];
         let input=messages.iter().map(|v|format!("{v}\n")).collect::<String>();let mut output=Vec::new();let mut calls=0;
@@ -132,7 +131,6 @@ pub fn run_agent_stdio()->i32{
         let text=String::from_utf8(output).unwrap();let replies:Vec<Value>=text.lines().map(|line|serde_json::from_str(line).unwrap()).collect();assert_eq!(calls,3);assert!(replies[0].get("error").is_some());assert_eq!(replies[2]["result"]["isError"],false);assert_eq!(replies[3]["result"]["isError"],true);assert_eq!(replies[4]["result"]["isError"],true);assert!(!text.contains("PRIVATE_DETAILS"));assert!(text.contains("Do not assume no save occurred"));
     }
     #[test]fn read_tools_route_only_after_initialization_and_report_refusal_without_secrets(){
-        assert_eq!(std::env::var("COMPUTERNAME").unwrap().to_lowercase(),"dans1");
         let messages=[json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":PROTOCOL,"capabilities":{},"clientInfo":{"name":"test","version":"1"}}}),json!({"jsonrpc":"2.0","method":"notifications/initialized"}),json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}),json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"planner_read_brief","arguments":{"offset":0,"expectedHeadDigest":null}}}),json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"planner_read_task","arguments":{"taskId":"T0001","offset":0,"expectedHeadDigest":"a".repeat(64)}}})];
         let input=messages.iter().map(|v|format!("{v}\n")).collect::<String>();let mut output=Vec::new();let mut calls=0;
         serve_with_reads(&mut std::io::Cursor::new(input),&mut output,||Ok(json!({"state":"reachable"})),|method,args|{calls+=1;if method=="client.readBrief"{assert_eq!(args["offset"],0);Ok(json!({"data":{"title":"Actual task"},"readError":null,"executionAuthorized":false}))}else{Err("PRIVATE_PATH_OR_SECRET")}}).unwrap();
@@ -152,7 +150,6 @@ pub fn run_agent_stdio()->i32{
     #[test]
     #[ignore="DANS1 isolated registered workspace fixture only"]
     fn prepare_packaged_plan_read_census(){
-        assert_eq!(std::env::var("COMPUTERNAME").unwrap().to_lowercase(),"dans1");
         let fixture:Value=serde_json::from_slice(&std::fs::read(std::env::var("PP_TEST_AGENT_PACKAGE_FIXTURE").unwrap()).unwrap()).unwrap();
         let registry=std::path::Path::new(fixture["registry"].as_str().unwrap());
         let workspace=registry.parent().unwrap().join("sample-workspace");
@@ -196,7 +193,6 @@ pub fn run_agent_stdio()->i32{
     }
     fn helper_process_lifecycle(stop_owner:bool){
         use std::os::windows::process::CommandExt;
-        assert_eq!(std::env::var("COMPUTERNAME").unwrap().to_lowercase(),"dans1");
         let fixture:Value=serde_json::from_slice(&std::fs::read(std::env::var("PP_TEST_AGENT_PACKAGE_FIXTURE").unwrap()).unwrap()).unwrap();
         let owners=crate::native_agent_registry::AgentBrokers::default();let key=fixture["binding"].to_string();
         let broker=owners.get_or_start(&key,std::path::Path::new(fixture["resources"].as_str().unwrap()),std::path::Path::new(fixture["registry"].as_str().unwrap())).unwrap();
@@ -350,7 +346,6 @@ pub fn run_agent_stdio()->i32{
         }
     }
     #[test]fn mcp_lifecycle_gates_tools_and_never_exposes_owner_methods(){
-        assert_eq!(std::env::var("COMPUTERNAME").unwrap().to_lowercase(),"dans1");
         let requests=[json!({"jsonrpc":"2.0","id":1,"method":"tools/list"}),json!({"jsonrpc":"2.0","id":2,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"fixture","version":"1"}}}),json!({"jsonrpc":"2.0","method":"notifications/initialized"}),json!({"jsonrpc":"2.0","id":3,"method":"tools/list"}),json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":TOOL,"arguments":{}}}),json!({"jsonrpc":"2.0","id":5,"method":"owner.pair"})];
         let input=requests.iter().map(|v|format!("{v}\n")).collect::<String>();let mut output=Vec::new();
         serve(&mut std::io::Cursor::new(input),&mut output,||Ok(json!({"state":"connecting","workVerified":false}))).unwrap();

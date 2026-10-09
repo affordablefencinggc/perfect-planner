@@ -115,7 +115,6 @@ impl AgentWorkerPool{
     fn admission_rejects_wrong_executable_and_pending_listener_stops(){
         use crate::native_agent_pipe::AgentPipeClient;
         use sha2::{Sha256,Digest};
-        assert_eq!(std::env::var("COMPUTERNAME").unwrap().to_lowercase(),"dans1");
         let fixture:Value=serde_json::from_slice(&std::fs::read(std::env::var("PP_TEST_AGENT_PACKAGE_FIXTURE").unwrap()).unwrap()).unwrap();
         let root=std::path::Path::new(fixture["resources"].as_str().unwrap());
         let broker=Arc::new(std::sync::Mutex::new(crate::native_agent_broker::AgentBroker::start(root,std::path::Path::new(fixture["registry"].as_str().unwrap())).unwrap()));
@@ -142,7 +141,6 @@ impl AgentWorkerPool{
         NativeAgentWorker{stop:None,requested:Arc::new(AtomicBool::new(false)),worker:Some(thread::spawn(||Err("AGENT_PIPE_IO_FAILED"))),outcome:None}
     }
     #[test]fn repeated_stop_preserves_failure_and_reaping_reclaims_capacity(){
-        assert_eq!(std::env::var("COMPUTERNAME").unwrap().to_lowercase(),"dans1");
         let mut pool=AgentWorkerPool::default();
         for _ in 0..40{
             let mut worker=failed();assert_eq!(worker.stop(),Err("AGENT_PIPE_IO_FAILED"));

@@ -8,7 +8,7 @@ const project=()=>({projectId:'pp_result',registration:{workspaceId:'fixture',re
 const runtime={__TAURI_INTERNALS__:{invoke(){}}};
 const value=()=>({schemaVersion:1,projectId:'pp_result',rootIdentity:'a'.repeat(64),grantId,runId:'bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb',taskId:'T0001',checkId:'unit',attemptId:'attempt1',attemptNumber:1,workerId:'worker1',state:'failure-observed',exitCode:7,failureReasons:['nonzero-exit'],artifactDigest:'c'.repeat(64),intentDigest:'d'.repeat(64),journalLinked:true,observationLinkDigest:'e'.repeat(64),cleanup:'unknown',authorityVerified:false,executionAuthorized:false,binding:{projectId:'pp_result',rootIdentity:'a'.repeat(64),censusDigest:'b'.repeat(64)},transportCleanupComplete:true});
 test('native result adapter forwards exact project identity and exposes no execution',async()=>{
- assert.equal(os.hostname().toLowerCase(),'dans1');const p=project();let calls=0;
+ const p=project();let calls=0;
  const host=createNativeTaskResultHost(p,{runtime,invoke:async(command,args)=>{calls++;assert.equal(command,'inspect_native_task_result');assert.deepEqual(args,{request:{identity:{schemaVersion:1,workspaceId:'fixture',registryRevision:1,rootIdentity:'a'.repeat(64),censusDigest:'b'.repeat(64)},grantId}});return value();}});
  const result=await host.read({grantId});assert.equal(calls,1);assert.equal(result.state,'failure-observed');assert.equal(result.cleanup,'unknown');assert.equal(Object.isFrozen(result.failureReasons),true);
 });

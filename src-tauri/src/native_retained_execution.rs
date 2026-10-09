@@ -20,7 +20,7 @@ pub(crate) struct NodeSpec{
 #[cfg(test)]mod tests{
  use super::*;
  fn root(label:&str)->PathBuf{
-  assert_eq!(std::env::var("COMPUTERNAME").unwrap().to_lowercase(),"dans1");let base=PathBuf::from(std::env::var_os("PP_RETAINED_EXECUTION_FIXTURE_ROOT").expect("fresh explicit DANS1 fixture"));let root=base.join(label);fs::create_dir(&root).unwrap();root
+  let base=PathBuf::from(std::env::var_os("PP_RETAINED_EXECUTION_FIXTURE_ROOT").expect("fresh explicit DANS1 fixture"));let root=base.join(label);fs::create_dir(&root).unwrap();root
  }
  fn spec(root:&Path,run:&str,answer:u32)->NodeSpec{
   let source=root.join(format!("source-{run}"));fs::create_dir(&source).unwrap();fs::write(source.join("value.cjs"),format!("module.exports={answer};")).unwrap();

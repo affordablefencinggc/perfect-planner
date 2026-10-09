@@ -7,7 +7,6 @@ import {mkdtemp} from 'node:fs/promises';
 import {createNativeReviewHostComposition} from '../src/node/nativeReviewHostComposition.mjs';
 import {createTaskLedgerAuthorityStore} from '../src/node/taskLedgerAuthorityStore.mjs';
 import {emptyTaskDraftLedger,updateTaskDraft} from '../src/project/taskDraftLedger.js';
-assert.equal(os.hostname().toLowerCase(),'dans1');
 async function fixture(){
   const root=await mkdtemp(path.join(os.tmpdir(),'pp-native-reads-'));
   let binding={projectId:'pp_native_reads',rootIdentity:'a'.repeat(64),censusDigest:'b'.repeat(64)};

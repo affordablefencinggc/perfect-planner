@@ -7,7 +7,7 @@ import {createTaskLedgerAuthorityStore} from '../src/node/taskLedgerAuthoritySto
 import {createAgentTaskIntentStore} from '../src/node/agentTaskIntentStore.mjs';
 const frame=(id,method,params)=>({version:1,id,method,params});
 async function fixture(options={}){
- assert.equal(os.hostname().toLowerCase(),'dans1');const root=await mkdtemp(path.join(os.tmpdir(),'pp-proposal-channel-'));
+ const root=await mkdtemp(path.join(os.tmpdir(),'pp-proposal-channel-'));
  const binding={projectId:'pp_proposal_channel',rootIdentity:'a'.repeat(64),workspaceId:'writer',registryRevision:1},draftBinding={projectId:binding.projectId,rootIdentity:binding.rootIdentity,censusDigest:'b'.repeat(64)};
  const proposalConfig={journalPath:path.join(root,'proposals.jsonl'),projectId:binding.projectId,rootIdentity:binding.rootIdentity};
  const host=createNativeReviewHostComposition({proposalConfig,confirmationPath:path.join(root,'confirmations.json'),registeredBinding:options.observe??(async()=>draftBinding),actor:'Owner',source:'test',presenterConfig:{executable:path.join(root,'absent.exe'),executableDigest:'c'.repeat(64),cwd:root}});

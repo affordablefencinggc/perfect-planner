@@ -13,7 +13,6 @@ import {emptyTaskDraftLedger,updateTaskDraft} from '../src/project/taskDraftLedg
 
 // Real disk-backed stores; synthetic retained observations, not native execution.
 async function fixture(){
- assert.equal(os.hostname().toLowerCase(),'dans1');
  const root=await mkdtemp(path.join(os.tmpdir(),'pp-coverage-'));
  const binding={projectId:'pp_coverage',rootIdentity:'a'.repeat(64),censusDigest:'b'.repeat(64)};
  let hook=async()=>{},calls=0;

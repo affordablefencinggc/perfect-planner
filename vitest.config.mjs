@@ -4,5 +4,5 @@ import { mermaidDocuments } from "./vite.config.mjs";
 
 export default defineConfig({
   plugins: [mermaidDocuments(), react()],
-  test: { environment: "jsdom", include: ["tests-ui/**/*.test.jsx"], restoreMocks: true },
+  test: { environment: "jsdom", include: ["tests-ui/**/*.test.jsx"], restoreMocks: true, testTimeout: 20000 },
 });

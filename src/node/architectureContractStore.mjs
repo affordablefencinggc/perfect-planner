@@ -4,6 +4,7 @@ import path from "node:path";
 import { verifyArchitectureContract } from "../engine/architectureContractVerification.js";
 import { withPlanLock } from "./planLock.mjs";
 import { freezeArchitectureContract } from "../engine/rulebookEngine.js";
+import { isSameOriginLoopbackRequest } from "./loopbackRequestHttp.mjs";
 
 async function verifyRulebookSemantics(contract) {
   const rebuilt = await freezeArchitectureContract(contract.input, { planId: contract.planId, actor: contract.actor, approvedAt: contract.approvedAt });
@@ -140,7 +141,7 @@ export async function verifyArchitectureContractArchive(archivePath, options = {
 }
 
 const httpJson = (res, status, value) => { res.statusCode = status; res.setHeader("content-type", "application/json; charset=utf-8"); res.setHeader("cache-control", "no-store"); res.setHeader("x-content-type-options", "nosniff"); res.end(JSON.stringify(value)); };
-const sameOrigin = (req) => Boolean(req.headers.origin && req.headers.host && (req.headers.origin === `http://${req.headers.host}` || req.headers.origin === `https://${req.headers.host}`));
+const sameOrigin = isSameOriginLoopbackRequest;
 const sameToken = (provided, expected) => { const left = Buffer.from(provided ?? ""); const right = Buffer.from(expected); return left.length === right.length && timingSafeEqual(left, right); };
 async function readHttpBody(req, limit = 1_100_000) { const chunks = []; let size = 0; for await (const chunk of req) { size += chunk.length; if (size > limit) throw new Error("Architecture request exceeds its byte limit."); chunks.push(chunk); } return JSON.parse(Buffer.concat(chunks).toString("utf8")); }
 

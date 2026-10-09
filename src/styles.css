@@ -29,6 +29,8 @@
   --green-soft: #dcecdf;
   --amber: #c38a2a;
   --amber-soft: #fbefd7;
+  /* Text-safe amber: 5.57:1 on paper and 4.88:1 on canvas (WCAG AA body text). */
+  --amber-text: #8a5a0c;
   --red: #bd4b45;
   --red-soft: #f8dfdc;
   --blue-focus: #3c6ee8;
@@ -4218,7 +4220,7 @@ code {
   white-space: nowrap;
 }
 .ledger-task-state {
-  color: var(--amber);
+  color: var(--amber-text);
 }
 .ledger-task.proven .ledger-task-state {
   color: var(--green);
@@ -4320,7 +4322,7 @@ code {
   color: var(--muted);
 }
 .ledger-task-files > small {
-  color: var(--amber);
+  color: var(--amber-text);
   font: 8px/1.45 var(--mono);
 }
 .ledger-task-detail > .soft-button {
@@ -5392,7 +5394,7 @@ code {
   background: var(--amber-soft);
 }
 .merge-station.current span {
-  color: var(--amber);
+  color: var(--amber-text);
 }
 
 .toast {
@@ -8999,4 +9001,106 @@ code {
     > * {
     min-width: 0;
   }
+}
+
+/* Top-level error boundary and safe start notice */
+.app-error-boundary {
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+  padding: 24px 16px;
+  overflow: auto;
+  background: var(--canvas);
+  color: var(--ink);
+}
+
+.app-error-card {
+  width: min(560px, 100%);
+  padding: 28px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--paper);
+  box-shadow: 0 1px 2px rgba(39, 48, 43, 0.08);
+}
+
+.app-error-card h1 {
+  margin: 0 0 10px;
+  font-size: 20px;
+  line-height: 1.3;
+}
+
+.app-error-card p {
+  margin: 0 0 12px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.app-error-details {
+  margin: 14px 0 18px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--paper-strong);
+}
+
+.app-error-details summary {
+  padding: 9px 12px;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.app-error-details pre {
+  margin: 0;
+  padding: 10px 12px 12px;
+  border-top: 1px solid var(--line);
+  font-family: var(--mono);
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.app-error-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.app-error-actions button,
+.app-safe-start-notice button {
+  padding: 8px 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--paper-strong);
+  color: var(--ink);
+  font: inherit;
+  cursor: pointer;
+}
+
+.app-error-actions .app-error-primary {
+  border-color: var(--ink);
+  background: var(--ink);
+  color: var(--paper);
+}
+
+.app-error-actions button:focus-visible,
+.app-safe-start-notice button:focus-visible {
+  outline: 2px solid var(--blue-focus);
+  outline-offset: 2px;
+}
+
+.app-safe-start-notice {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 1000;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  max-width: calc(100vw - 32px);
+  padding: 10px 14px;
+  border: 1px solid var(--amber);
+  border-radius: 10px;
+  background: var(--amber-soft);
+  color: var(--ink);
+  font-size: 13px;
 }

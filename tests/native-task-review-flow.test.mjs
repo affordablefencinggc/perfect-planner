@@ -31,7 +31,7 @@ async function fixture(){
 const answer=decision=>({decision,rationale:'Reviewed exact task and checks',nativeEvent:{isTrusted:true}});
 
 test('repository script evidence is required, policy-bound and captured in the exact native display',async()=>{
- assert.equal(os.hostname().toLowerCase(),'dans1');const f=await fixture(),root=path.dirname(f.confirmationPath);
+ const f=await fixture(),root=path.dirname(f.confirmationPath);
  const scripts={pretest:'node before-tests.cjs',test:'node custom-tests.cjs',posttest:'node after-tests.cjs',prebuild:'node check-boundaries.cjs',build:'npm run compile',compile:'node custom-build.cjs'};
  await fs.writeFile(path.join(root,'package.json'),JSON.stringify({name:'other-repository',scripts}));
  await fs.writeFile(path.join(root,'package-lock.json'),'{"lockfileVersion":3}');
@@ -171,7 +171,7 @@ test('real flow retries transient cancellation but does not repeat uncertain cre
  }
 });
 
-test('process exit during presentation retains both obligations and requires ordered recovery',async()=>{
+test('process exit during presentation retains both obligations and requires ordered recovery',{skip:process.platform!=='win32'&&'Windows-only (DPAPI / native Windows paths)'},async()=>{
  const f=await fixture(),custodyRoot=path.join(path.dirname(f.confirmationPath),'presentation-crash-custody');
  const script=`import {readFileSync} from 'node:fs';
  import {createNativeTaskReviewFlow} from ${JSON.stringify(new URL('../src/node/nativeTaskReviewFlow.mjs',import.meta.url).href)};
@@ -196,7 +196,7 @@ test('process exit during presentation retains both obligations and requires ord
  // durable ordering, not physical native-window closure or power-loss safety.
 });
 
-test('historical recovery cancels old request after proposal and check policy change without stale approval',async()=>{
+test('historical recovery cancels old request after proposal and check policy change without stale approval',{skip:process.platform!=='win32'&&'Windows-only (DPAPI / native Windows paths)'},async()=>{
  const f=await fixture(),secretCustody={root:path.join(path.dirname(f.confirmationPath),'history-custody'),dpapi:createWindowsDpapiRunner({compilationTempRoot:path.join(path.dirname(f.confirmationPath),'dpapi-compilation')})};
  const original=createTaskProposalReview(f);
  const requested=await original.request(f.expected,{requestedBy:f.actor,question:'Old exact review'},{secretCustody});
@@ -212,7 +212,7 @@ test('historical recovery cancels old request after proposal and check policy ch
  assert.equal((await f.store.inspect()).headDigest,second.proposal.recordHash);
 });
 
-test('pending opaque request is recoverable after requesting process exits without returning its watcher',async()=>{
+test('pending opaque request is recoverable after requesting process exits without returning its watcher',{skip:process.platform!=='win32'&&'Windows-only (DPAPI / native Windows paths)'},async()=>{
  const f=await fixture(),custodyRoot=path.join(path.dirname(f.confirmationPath),'crash-custody');
  const script=`import {readFileSync} from 'node:fs';
  import {createTaskProposalReview} from ${JSON.stringify(new URL('../src/node/taskProposalReview.mjs',import.meta.url).href)};
@@ -228,7 +228,7 @@ test('pending opaque request is recoverable after requesting process exits witho
  assert.equal(recovered.confirmation.status,'cancelled');assert.equal(recovered.executionAuthorized,false);
 });
 
-test('new host recovers opaque pending request without original watcher and never approves',async()=>{
+test('new host recovers opaque pending request without original watcher and never approves',{skip:process.platform!=='win32'&&'Windows-only (DPAPI / native Windows paths)'},async()=>{
  const f=await fixture(),secretCustody={root:path.join(path.dirname(f.confirmationPath),'private-custody'),dpapi:createWindowsDpapiRunner({compilationTempRoot:path.join(path.dirname(f.confirmationPath),'dpapi-compilation')})};
  const requested=await createTaskProposalReview(f).request(f.expected,{requestedBy:f.actor,question:'Exact interrupted review'},{secretCustody});
  const requestId=requested.confirmation.id;

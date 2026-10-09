@@ -115,7 +115,6 @@ impl AgentBrokers {
     #[test]
     #[ignore="Requires explicit DANS1 pinned broker fixture"]
     fn busy_stop_retained_handles_and_replacement_are_isolated(){
-        assert_eq!(std::env::var("COMPUTERNAME").unwrap().to_lowercase(),"dans1");
         let fixture:Value=serde_json::from_slice(&std::fs::read(std::env::var("PP_TEST_AGENT_PACKAGE_FIXTURE").unwrap()).unwrap()).unwrap();
         let resources=Path::new(fixture["resources"].as_str().unwrap());
         let registry=Path::new(fixture["registry"].as_str().unwrap());

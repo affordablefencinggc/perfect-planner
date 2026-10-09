@@ -23,7 +23,7 @@ async function fixture(){
 }
 const wire=(grantId,id='read',extra={})=>JSON.stringify({version:1,requestId:id,command:'inspect-task-result',payload:{grantId,...extra}})+'\n';
 test('native owner protocol returns linked project result without credentials, output or mutations',async()=>{
- assert.equal(os.hostname().toLowerCase(),'dans1');const f=await fixture(),host=createNativeReviewHostComposition(f.config);
+ const f=await fixture(),host=createNativeReviewHostComposition(f.config);
  const journal=path.join(f.root,`${f.binding.projectId}.execution-grants.jsonl`),before=await readFile(journal);
  const reply=await host.dispatchLine(wire(f.grantId));assert.equal(reply.includes('PRIVATE'),false);assert.equal(reply.includes('session1'),false);
  const r=JSON.parse(reply);assert.equal(r.ok,true);assert.equal(r.result.exitCode,7);assert.equal(r.result.state,'failure-observed');assert.equal(r.result.journalLinked,true);assert.equal(r.executionAuthorized,false);assert.equal(r.result.cleanup,'unknown');

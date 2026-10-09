@@ -86,7 +86,7 @@ test('withdrawal between first publication lookup and parent lock blocks final a
 test('linked and hardlinked withdrawal journals refuse all reads without changing target',async t=>{
  for(const kind of ['symbolic','hard']){
   const f=await fixture(t),target=path.join(f.root,`existing-${kind}.jsonl`),bytes='preserve target bytes\n';await writeFile(target,bytes);
-  if(kind==='symbolic')await symlink(target,f.journal,'file');else await link(target,f.journal);
+  if(kind==='symbolic'){try{await symlink(target,f.journal,'file');}catch(error){if(['EPERM','EACCES'].includes(error.code)){t.diagnostic('File symlink creation is unavailable for this account; symbolic case not exercised.');continue;}throw error;}}else await link(target,f.journal);
   await assert.rejects(f.store.resolveOriginal(resolution(f)),/PLAN_APPROVAL_UNSAFE_FILE/);await assert.rejects(f.store.publish(f.publishInput),/PLAN_APPROVAL_UNSAFE_FILE/);await assert.rejects(f.store.inspect(),/PLAN_APPROVAL_UNSAFE_FILE/);assert.equal(await readFile(target,'utf8'),bytes);
  }
 });

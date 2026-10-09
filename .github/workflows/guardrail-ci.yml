@@ -44,5 +44,6 @@ jobs:
           cache: npm
       - uses: dtolnay/rust-toolchain@stable
       - run: npm ci
+      - run: node scripts/prepare-native-ci-env.mjs
       - run: npm run test:native
       - run: npm run tauri:build -- --no-bundle

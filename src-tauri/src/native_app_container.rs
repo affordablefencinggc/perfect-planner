@@ -149,4 +149,4 @@ impl AppContainer{
   let error=io::Error::last_os_error();if error.raw_os_error()==Some(1008){return Ok(serde_json::json!({"noThreadToken":true}));}return Err(error);
  }let token=Token(token);diagnostic_token_handle(token.0)
 }}
-#[cfg(test)]mod tests{#[test]fn token_diagnostic_current_is_bounded(){assert_eq!(std::env::var("COMPUTERNAME").unwrap().to_lowercase(),"dans1");println!("{}",super::diagnostic_token(-1isize as super::Handle).unwrap());}}
+#[cfg(test)]mod tests{#[test]fn token_diagnostic_current_is_bounded(){println!("{}",super::diagnostic_token(-1isize as super::Handle).unwrap());}}

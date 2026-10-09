@@ -265,7 +265,6 @@ impl Drop for NativeAgentConnection{fn drop(&mut self){let _=self.stop();}}
     use super::*;
     fn write_fixture(observation:Value)->Value{json!({"observation":observation,"requestId":"original-1","writeState":"recorded-proposal","receipt":{"schemaVersion":1,"submissionPersisted":true,"idempotent":false,"submitted":{"hostRevision":1,"headDigest":"a".repeat(64),"ledgerDigest":"b".repeat(64)},"observedHead":{"hostRevision":1,"headDigest":"a".repeat(64)},"submittedMatchesObservedHead":true,"registrationCurrent":true,"registrationLeaseHeld":false,"approvalState":"unapproved-proposal","executionAuthorized":false},"requestMayHaveCommitted":true,"reconciliationRequired":false,"sessionCurrent":true,"executionAuthorized":false})}
     #[test]fn proposal_receipts_refuse_invented_success_and_preserve_unknown_outcomes(){
-        assert_eq!(std::env::var("COMPUTERNAME").unwrap().to_lowercase(),"dans1");
         let good=write_fixture(Value::Null);assert_eq!(proposal_outcome(&good,"original-1").unwrap()["writeState"],"recorded-proposal");
         for (key,value)in [("requestId",json!("other")),("writeState",json!("complete")),("requestMayHaveCommitted",json!(false)),("reconciliationRequired",json!(true)),("executionAuthorized",json!(true)),("secret",json!("PRIVATE"))]{let mut bad=good.clone();bad[key]=value;assert!(proposal_outcome(&bad,"original-1").is_err());}
         for (key,value)in [("executionAuthorized",json!(true)),("registrationLeaseHeld",json!(true)),("approvalState",json!("approved")),("submissionPersisted",json!(false)),("submittedMatchesObservedHead",json!(false)),("secret",json!("PRIVATE"))]{let mut bad=good.clone();bad["receipt"][key]=value;assert!(proposal_outcome(&bad,"original-1").is_err());}
@@ -275,7 +274,6 @@ impl Drop for NativeAgentConnection{fn drop(&mut self){let _=self.stop();}}
     }
     #[test]fn actual_helper_queue_handles_large_proposal_unknown_then_recorded_with_serial_sequence(){
         use crate::native_agent_pipe::AgentPipe;use sha2::{Digest,Sha256};
-        assert_eq!(std::env::var("COMPUTERNAME").unwrap().to_lowercase(),"dans1");
         let endpoint=crate::native_agent_pipe::random_endpoint().unwrap();let pipe=AgentPipe::create(&endpoint).unwrap();let exe=std::env::current_exe().unwrap();let pin=format!("{:x}",Sha256::digest(std::fs::read(&exe).unwrap()));
         let client=AgentPipeClient::connect_pinned(&endpoint,&exe,&pin).unwrap();pipe.accept(Duration::from_secs(3)).unwrap();
         let binding=json!({"projectId":"pp_write","workspaceId":"writer","registryRevision":1,"rootIdentity":"a".repeat(64)});let server_binding=binding.clone();
@@ -299,7 +297,6 @@ impl Drop for NativeAgentConnection{fn drop(&mut self){let _=self.stop();}}
     #[test]fn helper_queue_retains_sequence_after_read_refusal(){
         use crate::native_agent_pipe::AgentPipe;
         use sha2::{Digest,Sha256};
-        assert_eq!(std::env::var("COMPUTERNAME").unwrap().to_lowercase(),"dans1");
         let endpoint=crate::native_agent_pipe::random_endpoint().unwrap();let pipe=AgentPipe::create(&endpoint).unwrap();
         let exe=std::env::current_exe().unwrap();let pin=format!("{:x}",Sha256::digest(std::fs::read(&exe).unwrap()));
         let client=AgentPipeClient::connect_pinned(&endpoint,&exe,&pin).unwrap();pipe.accept(Duration::from_secs(3)).unwrap();
@@ -341,7 +338,6 @@ impl Drop for NativeAgentConnection{fn drop(&mut self){let _=self.stop();}}
     fn helper_heartbeats_without_tool_calls_and_detects_project_stop(){
         use crate::native_agent_pipe::{AgentPipe,PipePeer};
         use sha2::{Sha256,Digest};
-        assert_eq!(std::env::var("COMPUTERNAME").unwrap().to_lowercase(),"dans1");
         let fixture:Value=serde_json::from_slice(&std::fs::read(std::env::var("PP_TEST_AGENT_PACKAGE_FIXTURE").unwrap()).unwrap()).unwrap();
         let owners=crate::native_agent_registry::AgentBrokers::default();let key=fixture["binding"].to_string();
         let broker=owners.get_or_start(&key,std::path::Path::new(fixture["resources"].as_str().unwrap()),std::path::Path::new(fixture["registry"].as_str().unwrap())).unwrap();
@@ -362,7 +358,6 @@ impl Drop for NativeAgentConnection{fn drop(&mut self){let _=self.stop();}}
         assert_eq!(connection.snapshot().unwrap(),failed);
     }
     #[test]fn private_bootstrap_rejects_foreign_expired_and_authority_fields(){
-        assert_eq!(std::env::var("COMPUTERNAME").unwrap().to_lowercase(),"dans1");
         let binding=json!({"projectId":"test"});
         let good=json!({"schemaVersion":1,"binding":binding,"pairingId":"a".repeat(32),"secret":"b".repeat(64),"expiresAt":now().unwrap()+30000});
         assert!(bootstrap(&good,&binding).is_ok());
@@ -377,7 +372,6 @@ impl Drop for NativeAgentConnection{fn drop(&mut self){let _=self.stop();}}
         }
     }
     #[test]fn receipts_reject_foreign_replayed_or_authority_bearing_observations(){
-        assert_eq!(std::env::var("COMPUTERNAME").unwrap().to_lowercase(),"dans1");
         let binding=json!({"projectId":"test"});let id="a".repeat(32);let time=now().unwrap();
         let good=json!({"schemaVersion":1,"binding":binding,"sessionId":id,"sequence":2,"kind":"heartbeat","observedAt":time,"expiresAt":time+30000});
         let receipt=observation(&good,&binding,&id,2,"heartbeat",time).unwrap();assert!(receipt.get("secret").is_none());

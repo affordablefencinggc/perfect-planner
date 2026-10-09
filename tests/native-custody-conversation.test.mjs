@@ -6,7 +6,6 @@ import {mkdtemp,writeFile} from 'node:fs/promises';
 import {runBoundedTaskConversation,runBoundedRetainedTaskConversation} from '../src/node/guardedGitRunner.mjs';
 
 async function fixture(body){
- assert.equal(os.hostname().toLowerCase(),'dans1');
  const directory=await mkdtemp(path.join(os.tmpdir(),'pp-conversation-'));
  const file=path.join(directory,'child.mjs');await writeFile(file,body);
  return {directory,file};

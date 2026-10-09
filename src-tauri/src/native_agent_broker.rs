@@ -85,7 +85,6 @@ impl Drop for AgentBroker{fn drop(&mut self){self.stop();}}
     use super::*;
     #[test] #[ignore="Requires explicit DANS1 pinned broker fixture"] fn packaged_broker_pair_heartbeat_revoke(){
         let fixture=std::env::var("PP_TEST_AGENT_PACKAGE_FIXTURE").expect("explicit packaged fixture required");
-        assert_eq!(std::env::var("COMPUTERNAME").unwrap_or_default().to_lowercase(),"dans1");
         let fixture:Value=serde_json::from_slice(&std::fs::read(fixture).unwrap()).unwrap();
         let mut broker=AgentBroker::start(Path::new(fixture["resources"].as_str().unwrap()),Path::new(fixture["registry"].as_str().unwrap())).unwrap();
         let pair=broker.request("owner.pair",json!({"binding":fixture["binding"]})).unwrap();assert_eq!(pair["ok"],true);
@@ -100,7 +99,6 @@ impl Drop for AgentBroker{fn drop(&mut self){self.stop();}}
         broker.stop();assert!(broker.child.try_wait().unwrap().is_some());
     }
     #[test]fn private_node_process_round_trip_and_timeout(){
-        assert_eq!(std::env::var("COMPUTERNAME").unwrap_or_default().to_lowercase(),"dans1");
         let node=std::env::var("PP_TEST_AGENT_NODE").expect("explicit DANS1 Node fixture required");
         let root=std::env::temp_dir().join(format!("pp-native-agent-{}",std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
         std::fs::create_dir(&root).unwrap();let script=root.join("fixture.mjs");

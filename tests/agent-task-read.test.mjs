@@ -9,7 +9,6 @@ import {createAgentClientRouter} from '../mcp/agentClientRouter.mjs';
 import {createAgentSessionBroker} from '../mcp/agentSessionBroker.mjs';
 import {createNativeTaskDraftSubmission} from '../src/node/nativeTaskDraftSubmission.mjs';
 import {emptyTaskDraftLedger,updateTaskDraft} from '../src/project/taskDraftLedger.js';
-assert.equal(os.hostname().toLowerCase(),'dans1');
 
 test('full task chunks retain Unicode, obligations and claims at one exact journal head',async()=>{
   const binding={projectId:'pp_task_reads',rootIdentity:'a'.repeat(64),workspaceId:'reader',registryRevision:1};

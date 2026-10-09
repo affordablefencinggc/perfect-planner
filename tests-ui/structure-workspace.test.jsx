@@ -46,7 +46,7 @@ describe("Structure workspace intake and connection map", () => {
     render(<StructureWorkspace workspaceAdapter={workspaceAdapter} />);
     await user.click(screen.getByRole("button", { name: "Choose app folder" }));
     await user.click(screen.getByRole("button", { name: /Approve read-only analysis/ }));
-    expect(await screen.findByText("No files observed in this census · 1 entries skipped · not proof the folder is empty")).toBeTruthy();
+    expect(await screen.findByText("No files observed in this folder scan · 1 entries skipped · not proof the folder is empty")).toBeTruthy();
     expect(screen.getByRole("region", { name: "Empty app discovery canvas", exact: true }).textContent).toBe("");
     expect(screen.queryByText(/Empty until a folder is indexed/)).toBeNull();
   });

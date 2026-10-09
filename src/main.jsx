@@ -2,6 +2,8 @@ import React from "react";
 import { createRoot } from "react-dom/client";
 import { PerfectPlannerShell } from "./PerfectPlannerShell.jsx";
 import { ProjectProvider } from "./project/ProjectProvider.jsx";
+import { createMemoryStorage, DEFAULT_PROJECT_REGISTRY_KEY } from "./project/projectRegistry.js";
+import { AppErrorBoundary, isSafeStart, SafeStartNotice } from "./components/AppErrorBoundary.jsx";
 import "./styles.css";
 
 function LocalAgentation() {
@@ -23,11 +25,18 @@ function LocalAgentation() {
   return Toolbar ? <Toolbar /> : null;
 }
 
+// Safe start keeps saved projects untouched: an in-memory registry under a separate key ignores other tabs' storage events.
+const safeStart = isSafeStart();
+const registryProps = safeStart ? { storage: createMemoryStorage(), storageKey: `${DEFAULT_PROJECT_REGISTRY_KEY}.safe-start` } : {};
+
 createRoot(document.getElementById("root")).render(
   <React.StrictMode>
-    <ProjectProvider>
-      <PerfectPlannerShell />
-    </ProjectProvider>
+    <AppErrorBoundary safeStart={safeStart}>
+      {safeStart ? <SafeStartNotice /> : null}
+      <ProjectProvider {...registryProps}>
+        <PerfectPlannerShell />
+      </ProjectProvider>
+    </AppErrorBoundary>
     <LocalAgentation />
   </React.StrictMode>,
 );

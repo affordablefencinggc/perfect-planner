@@ -55,7 +55,7 @@ test('stale proposal and registration drift do not prepare a new contract',async
  const g=await fixture(),bad=createInstalledTaskCheckPreparation({...g.config,registeredBinding:async()=>({...g.ledger.binding,censusDigest:'f'.repeat(64)})});await assert.rejects(bad.prepareChecks(g.payload),/REGISTRATION_MISMATCH/);assert.equal((await g.contracts.inspect()).revision,0);
 });
 test('native review selection resolves exact saved custody without new authority records',async()=>{
- assert.equal(os.hostname().toLowerCase(),'dans1');const f=await fixture(),saved=await f.adapter.prepareChecks(f.payload);
+ const f=await fixture(),saved=await f.adapter.prepareChecks(f.payload);
  const before=await f.contracts.inspect(),resolved=await f.adapter.resolveReview({expected:f.payload.expected,contractHead:saved.contractHead});
  assert.equal(resolved.checkContract.contractDigest,saved.contractDigest);assert.deepEqual(resolved.contractCustody.expectedHead,saved.contractHead);
  assert.equal(resolved.checkProfileEvidence.profileId,'perfect-planner-checks-v1');

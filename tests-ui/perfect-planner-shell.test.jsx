@@ -59,26 +59,26 @@ describe("Perfect Planner shell interaction and accessibility", () => {
   test("navigates the staged journey, synchronizes deep links, and keeps Allocation blocked", async () => {
     window.history.replaceState({}, "", "/?workspace=plan");
     const user = userEvent.setup(); renderDemoShell();
-    expect(screen.getByRole("region", { name: "Plan workspace" })).toBeTruthy();
+    expect(await screen.findByRole("region", { name: "Plan workspace" })).toBeTruthy();
     expect(screen.getByRole("navigation", { name: "Coordinate pages" })).toBeTruthy();
     const pages = screen.getByRole("navigation", { name: "Coordinate pages" });
     expect(pages.closest(".workspace-stage")).toBeTruthy();
     expect(within(pages).getByRole("button", { name: "Plan", exact: true }).getAttribute("aria-current")).toBe("page");
     await user.click(screen.getByRole("button", { name: "Allocation" }));
-    expect(screen.getByRole("region", { name: "Allocation workspace" })).toBeTruthy();
+    expect(await screen.findByRole("region", { name: "Allocation workspace" })).toBeTruthy();
     expect(window.location.search).toContain("workspace=allocation");
     expect(screen.getByText(/Collision gate locked/)).toBeTruthy();
     expect(screen.getByRole("button", { name: /Create branches unavailable/ }).disabled).toBe(true);
     await user.click(screen.getByRole("button", { name: "Index" }));
-    expect(screen.getByRole("region", { name: "Project index" })).toBeTruthy();
+    expect(await screen.findByRole("region", { name: "Project index" })).toBeTruthy();
     expect(window.location.search).toContain("workspace=index");
     await user.click(screen.getByRole("button", { name: "Close project index" }));
-    expect(screen.getByRole("region", { name: "Project Home workspace" })).toBeTruthy();
+    expect(await screen.findByRole("region", { name: "Project Home workspace" })).toBeTruthy();
     await user.click(screen.getByRole("button", { name: /Drop your app/ }));
-    expect(screen.getByRole("region", { name: "Strict folder contract workspace" })).toBeTruthy();
+    expect(await screen.findByRole("region", { name: "Strict folder contract workspace" })).toBeTruthy();
     expect(window.location.search).toContain("workspace=structure");
     await user.click(screen.getByRole("button", { name: "Build" }));
-    expect(screen.getByRole("region", { name: "Build workspace" })).toBeTruthy();
+    expect(await screen.findByRole("region", { name: "Build workspace" })).toBeTruthy();
     expect(window.location.search).toContain("workspace=build");
   });
 
@@ -152,12 +152,12 @@ describe("Perfect Planner shell interaction and accessibility", () => {
     ];
     for (const [button, region, route] of destinations) {
       await user.click(screen.getByRole("button", { name: button }));
-      expect(screen.getByRole("region", { name: region })).toBeTruthy();
+      expect(await screen.findByRole("region", { name: region })).toBeTruthy();
       expect(window.location.search).toContain(`workspace=${route}`);
     }
     await user.click(screen.getByRole("button", { name: /2 demo agents/ }));
     expect(await screen.findByRole("region", { name: "Runtime and connections" })).toBeTruthy();
-    expect(screen.getByRole("region", { name: "Connect your agent" })).toBeTruthy();
+    expect(await screen.findByRole("region", { name: "Connect your agent" })).toBeTruthy();
     expect(window.location.search).toContain("workspace=ledger");
   });
 
@@ -170,7 +170,7 @@ describe("Perfect Planner shell interaction and accessibility", () => {
     expect(screen.getByRole("button", { name: /Diagnostics console/ })).toBeTruthy();
     expect(screen.getByRole("button", { name: /Invite to organization/ })).toBeTruthy();
     expect(screen.getByRole("button", { name: /Organization settings/ })).toBeTruthy();
-    expect(screen.getByRole("button", { name: /Export project receipt/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Export project record/ })).toBeTruthy();
     expect(screen.getByRole("button", { name: /People & roster/ }).className).toContain("responsive-topbar-action");
     expect(screen.getByRole("button", { name: /Delivery calendar/ }).className).toContain("responsive-topbar-action");
 

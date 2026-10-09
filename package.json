@@ -5,8 +5,11 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "start": "node scripts/serve-local.mjs --build",
+    "serve": "node scripts/serve-local.mjs",
     "dev:tauri": "vite --host 127.0.0.1 --port 4173 --strictPort",
     "truth:report": "node scripts/generate-truth-report.mjs",
+    "mcp": "node scripts/run-perfect-planner-mcp.mjs",
     "verify:mcp": "node scripts/verify-perfect-planner-mcp.mjs",
     "verify:native-mcp": "node scripts/verify-bundled-native-mcp.mjs",
     "verify:secrets": "node scripts/verify-secrets.mjs",
@@ -27,8 +30,12 @@
     "test:engine": "node --test tests/collision-engine.test.mjs",
     "test": "node --test tests/*.test.mjs",
     "test:ui": "vitest run",
+    "test:e2e": "node scripts/e2e-v1-journey.mjs",
     "test:all": "npm test && npm run test:ui",
-    "verify:release": "npm run verify:secrets && npm run build && npm run verify:performance && npm test && npm run test:ui && npm run verify:mcp && npm run test:sites && npm run test:native && npm run tauri:build -- --no-bundle && npm run verify:readiness"
+    "verify:web": "npm run verify:secrets && npm run build && npm run verify:performance && npm test && npm run test:ui && npm run test:sites",
+    "release:web": "npm run verify:secrets && node scripts/run-release-gates.mjs --profile web",
+    "release:approve": "node scripts/run-release-gates.mjs --approve",
+    "verify:release": "npm run verify:secrets && node scripts/run-release-gates.mjs --profile release"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",

@@ -1,5 +1,9 @@
 .imported-workflow-workspace {
   display: grid;
+  /* Rows follow their content: in the fixed-height stage, auto rows let overflow:hidden
+     panels (plan approval, collision, proof) shrink to nothing in a real browser. */
+  grid-auto-rows: max-content;
+  align-content: start;
   gap: 22px;
   max-width: 1680px;
   margin: 0 auto;

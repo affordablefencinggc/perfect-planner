@@ -12,11 +12,11 @@ const approvalBytes = 64_000;
 const failure = (reason) => { throw new Error(reason); };
 const cleanEnvironment = () => {
   const env = { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_NO_REPLACE_OBJECTS: "1" };
-  if (process.platform === "win32") {
-    env.SystemRoot = "C:\\Windows";
-    env.windir = "C:\\Windows";
-  }
-  for (const key of ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS"]) delete env[key];
+  const win = process.platform === "win32", drop = new Set(["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS"]);
+  if (win) drop.add("SYSTEMROOT").add("WINDIR");
+  // Windows environment names are case-insensitive: drop every spelling so no inherited duplicate (e.g. SYSTEMROOT) survives.
+  for (const key of Object.keys(env)) if (drop.has(win ? key.toUpperCase() : key)) delete env[key];
+  if (win) { env.SystemRoot = "C:\\Windows"; env.windir = "C:\\Windows"; }
   return env;
 };
 

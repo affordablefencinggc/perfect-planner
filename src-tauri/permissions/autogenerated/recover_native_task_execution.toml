@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-recover-native-task-execution"
+description = "Enables the recover_native_task_execution command without any pre-configured scope."
+commands.allow = ["recover_native_task_execution"]
+
+[[permission]]
+identifier = "deny-recover-native-task-execution"
+description = "Denies the recover_native_task_execution command without any pre-configured scope."
+commands.deny = ["recover_native_task_execution"]

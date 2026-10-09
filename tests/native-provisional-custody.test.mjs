@@ -7,7 +7,6 @@ import {createHash} from 'node:crypto';
 import {createInstalledTaskExecutionCustody} from '../src/node/installedTaskExecutionCustody.mjs';
 
 async function fixture(){
- assert.equal(os.hostname().toLowerCase(),'dans1');
  const root=await mkdtemp(path.join(os.tmpdir(),'pp-provisional-'));
  const binding={projectId:'pp_provisional',rootIdentity:'a'.repeat(64),censusDigest:'b'.repeat(64)};
  const config={stateDirectory:root,binding,observeBinding:async()=>binding};

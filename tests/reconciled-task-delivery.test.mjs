@@ -3,7 +3,6 @@ import {createTaskDraftDelivery} from '../src/project/taskDraftDelivery.js';
 import {planSharedTaskReconciliation} from '../src/project/sharedTaskReconciliation.js';
 import {emptyTaskDraftLedger,updateTaskDraft} from '../src/project/taskDraftLedger.js';
 import {submissionReceiptFromHost,submissionWire} from '../src/project/taskDraftSubmission.js';
-assert.equal(hostname().toLowerCase(),'dans1');
 const binding={projectId:'pp_reconciled_delivery',rootIdentity:'a'.repeat(64),censusDigest:'b'.repeat(64)};
 const hash=value=>createHash('sha256').update(value).digest('hex');
 async function fixture(){

@@ -69,7 +69,6 @@ impl Drop for DirectoryObservation{
  }
 }
 fn fixture(name:&str)->PathBuf{
- assert_eq!(std::env::var("COMPUTERNAME").unwrap().to_lowercase(),"dans1");
  let parent=PathBuf::from(std::env::var_os("PP_CUSTODY_PROBE_ROOT").expect("explicit disposable probe root"));
  let root=parent.join(name);fs::create_dir(&root).unwrap();root
 }

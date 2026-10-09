@@ -68,7 +68,7 @@ test('corrupt and partial withdrawal history is preserved and blocks all custody
 });
 
 test('existing symlink and hardlink targets remain unchanged',async t=>{
- for(const kind of ['symbolic','hard']){const f=await fixture(t);await mkdir(path.dirname(f.journal));const target=path.join(f.root,'existing-target'),bytes='preserve existing target\n';await writeFile(target,bytes);if(kind==='symbolic')await symlink(target,f.journal,'file');else await link(target,f.journal);await assert.rejects(f.custody.resolveOriginal(resolution(f.original)),/UNSAFE/);await assert.rejects(f.custody.submit(f.original),/UNSAFE/);await assert.rejects(f.custody.inspect({binding:f.binding}),/UNSAFE/);assert.equal(await readFile(target,'utf8'),bytes);}
+ for(const kind of ['symbolic','hard']){const f=await fixture(t);await mkdir(path.dirname(f.journal));const target=path.join(f.root,'existing-target'),bytes='preserve existing target\n';await writeFile(target,bytes);if(kind==='symbolic'){try{await symlink(target,f.journal,'file');}catch(error){if(['EPERM','EACCES'].includes(error.code)){t.diagnostic('File symlink creation is unavailable for this account; symbolic case not exercised.');continue;}throw error;}}else await link(target,f.journal);await assert.rejects(f.custody.resolveOriginal(resolution(f.original)),/UNSAFE/);await assert.rejects(f.custody.submit(f.original),/UNSAFE/);await assert.rejects(f.custody.inspect({binding:f.binding}),/UNSAFE/);assert.equal(await readFile(target,'utf8'),bytes);}
 });
 
 test('resolution captures input before asynchronous work',async t=>{

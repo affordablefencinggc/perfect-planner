@@ -7,11 +7,12 @@ import { gzipSync } from "node:zlib";
 
 export const PERFORMANCE_BUDGETS = Object.freeze({
   maxIndividualJavaScriptGzipBytes: 300 * 1024,
-  maxTotalJavaScriptGzipBytes: 400 * 1024,
+  // v1 (Oct 2026): totals raised for the seven on-demand imported-project panels; first-load limits unchanged.
+  maxTotalJavaScriptGzipBytes: 480 * 1024,
   maxIndividualStylesheetGzipBytes: 44 * 1024,
-  maxTotalStylesheetGzipBytes: 48 * 1024,
+  maxTotalStylesheetGzipBytes: 56 * 1024,
   maxClientBytes: 14 * 1024 * 1024,
-  maxClientFiles: 160,
+  maxClientFiles: 200, // raised from 160 when v1 feature panels moved to on-demand chunks
 });
 
 const SCAN_CEILINGS = Object.freeze({
