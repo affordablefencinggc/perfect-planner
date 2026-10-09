@@ -1,3 +1,4 @@
+import "./helpers/hermetic-env.mjs";
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { emptyTaskDraftLedger, updateTaskDraft, inspectTaskDraft, validateDraftTask, validateTaskDraftLedger, sameTaskDraftBinding, rebindTaskDraft, importTaskDraft, parseTaskDraftImport } from '../src/project/taskDraftLedger.js';
@@ -38,7 +39,7 @@ test('task IDs are canonical and unknown references or authority fields are reje
  assert.throws(()=>updateTaskDraft(emptyTaskDraftLedger(binding),task({approved:true})),/shape/);
 });
 test('file scopes reject traversal, drive paths, wildcard and duplicate paths',()=>{
- for(const path of ['../secret','/root','C:/root','src//app','src\\app','src/*'])assert.throws(()=>validateDraftTask(task({id:'T0001',claims:[{path,access:'write'}]})),/relative paths/);
+ for(const path of ['../secret','/root','C:/root','src//app','src\\app','src/{a,b}.js','src/[ab].js','src/a**','./src'])assert.throws(()=>validateDraftTask(task({id:'T0001',claims:[{path,access:'write'}]})),/relative paths/);
  assert.throws(()=>validateDraftTask(task({id:'T0001',claims:[{path:'src',access:'read'},{path:'SRC',access:'write'}]})),/once/);
 });
 test('missing details remain visible and malformed saved data is not accepted',()=>{
@@ -107,4 +108,30 @@ test('inventory review refuses other roots, projects, stale review, missing task
  assert.throws(()=>rebindTaskDraft(ledger,binding,review),/already uses/);
  assert.throws(()=>rebindTaskDraft(ledger,target,{...review,approved:true}),/shape/);
  assert.throws(()=>rebindTaskDraft({...ledger,revision:5000},target,{...review,expectedRevision:5000}),/revision/);
+});
+
+test('file scopes accept area globs: *, ? and whole-part **',()=>{
+ for(const path of ['src/core/**','tests/core-*.test.mjs','mcp/**','src/**/index.js','src/?.js','**']){
+  const checked=validateDraftTask(task({id:'T0001',claims:[{path,access:'write'}]}));
+  assert.ok(checked);
+  const saved=updateTaskDraft(emptyTaskDraftLedger(binding),task({claims:[{path,access:'write'}]}));
+  assert.equal(saved.tasks[0].claims[0].path,path);
+ }
+});
+test('refused file scope errors name the file scope field',()=>{
+ try{validateDraftTask(task({id:'T0001',claims:[{path:'../x',access:'write'}]}));assert.fail('expected refusal');}
+ catch(e){assert.equal(e.field,'claims');assert.match(e.message,/relative paths/);}
+ try{validateDraftTask(task({id:'T0001',title:'  '}));assert.fail('expected refusal');}
+ catch(e){assert.equal(e.field,'title');}
+ try{validateDraftTask(task({id:'T0001',dependsOn:['nope']}));assert.fail('expected refusal');}
+ catch(e){assert.equal(e.field,'dependsOn');}
+});
+test('glob claims overlap other tasks only when some path could match both',()=>{
+ const findingsFor=pairs=>{let ledger=emptyTaskDraftLedger(binding);for(const claims of pairs)ledger=updateTaskDraft(ledger,task({claims}));return inspectTaskDraft(ledger).findings.filter(f=>f.kind==='file-overlap').map(f=>f.taskIds);};
+ assert.deepEqual(findingsFor([[{path:'src/core/**',access:'write'}],[{path:'src/core/a.js',access:'write'}]]),[['T0001','T0002']]);
+ assert.deepEqual(findingsFor([[{path:'tests/core-*.test.mjs',access:'write'}],[{path:'tests/ui-*.test.mjs',access:'write'}]]),[]);
+ assert.deepEqual(findingsFor([[{path:'src/**',access:'write'}],[{path:'src/core/**',access:'read'}]]),[['T0001','T0002']]);
+ assert.deepEqual(findingsFor([[{path:'src/components',access:'write'}],[{path:'src/components/**',access:'write'}]]),[['T0001','T0002']]);
+ assert.deepEqual(findingsFor([[{path:'src/**',access:'read'}],[{path:'src/core/**',access:'read'}]]),[]);
+ assert.deepEqual(findingsFor([[{path:'mcp/**',access:'write'}],[{path:'src/**',access:'write'}],[{path:'MCP/server.mjs',access:'write'}]]),[['T0001','T0003']]);
 });

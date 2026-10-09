@@ -156,7 +156,14 @@ export class Ledger {
 
   get status(): LedgerStatus {
     const head = this.last()?.n;
-    const base = { writable: this.writable, entries: this.list.length, head, acknowledged: [...this.acknowledged], ...(this.repaired ? { repaired: this.repaired } : {}) };
+    const base = {
+      writable: this.writable,
+      entries: this.list.length,
+      head,
+      acknowledged: [...this.acknowledged],
+      ...(this.trust.owner ? { owner: this.trust.owner } : {}),
+      ...(this.repaired ? { repaired: this.repaired } : {}),
+    };
     if (this.chain.ok) return { ok: true, ...base };
     return { ok: false, ...base, brokenAt: this.chain.firstBad, problem: this.chain.problem, detail: this.chain.detail };
   }
@@ -296,6 +303,12 @@ export class Ledger {
    */
   retireKey(person: Actor, keyId: string, reason: string): LedgerEntry {
     if (person?.kind !== "person") throw new LedgerError("BAD_ACTOR", "only a person can retire a key");
+    // Other devices only honour a retirement signed by a key they can know from the ledger.
+    const signer = this.keys?.trustedKeys().find((k) => k.principal === principalOf(person) && !k.retired)?.keyId;
+    const known = signer !== undefined && (signer === this.ownerKey || recordedKeys(this.list).some((k) => k.keyId === signer));
+    if (!known) {
+      throw new LedgerError("RULE", `this device's key ${signer ?? "(none)"} is not in the ledger yet, so other devices would ignore the retirement; use rotateKey, or trust this key first`);
+    }
     return this.append({ actor: person, type: "key.retired", subject: keyId, summary: `Retired key ${keyId}`, reason, data: { keyId } });
   }
 
@@ -324,6 +337,16 @@ export class Ledger {
     // Only the key that vouched is retired; this person's keys on other devices keep working.
     const retired = this.retireKey(person, previous, `Key rotation: ${reason}`);
     return { trusted, retired };
+  }
+
+  /** The project owner key id this ledger was opened with (OpenOptions.ownerKey), if any. */
+  get pinnedOwnerKey(): string | undefined {
+    return this.ownerKey;
+  }
+
+  /** True when the ledger was opened with the project's owner key pinned. */
+  get ownerKeyPinned(): boolean {
+    return this.ownerKey !== undefined;
   }
 
   /** Who owns this ledger as this device sees it, or undefined when it cannot tell. */
@@ -544,10 +567,11 @@ export class Ledger {
     if (this.trust.retired.has(key.keyId)) throw new LedgerError("RULE", `key ${key.keyId} was already retired at ${this.trust.retired.get(key.keyId)!.n}`);
   }
 
-  /** The owner; before any person entry, the person writing becomes it. */
+  /** The owner, or, before any person entry, the person writing when their key is the pinned owner key. */
   private ownerFor(actor: Actor): string | undefined {
-    if (this.trust.owner) return this.trust.owner;
-    return this.list.some((e) => e.actor?.kind === "person") ? undefined : principalOf(actor);
+    if (this.trust.owner || !this.ownerKey || this.list.some((e) => e.actor?.kind === "person")) return this.trust.owner;
+    const own = this.trusted.get(this.ownerKey);
+    return own && own.principal === principalOf(actor) ? own.principal : undefined;
   }
 
   private reassess(): void {

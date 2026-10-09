@@ -1,3 +1,4 @@
+import "./helpers/hermetic-env.mjs";
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {acceptAgentSessionObservation as accept,agentSessionPresentation as present} from '../src/runtime/agentSessionProtocol.js';

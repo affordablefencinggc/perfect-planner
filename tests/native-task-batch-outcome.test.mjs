@@ -1,3 +1,4 @@
+import "./helpers/hermetic-env.mjs";
 import test from 'node:test';import assert from 'node:assert/strict';import {createHash} from 'node:crypto';
 import {readNativeTaskBatchOutcome} from '../src/native/taskBatchOutcome.js';
 function fixture(){

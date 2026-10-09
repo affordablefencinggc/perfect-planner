@@ -1,3 +1,4 @@
+import "./helpers/hermetic-env.mjs";
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {savedCatalogDraft,COMPONENT_DRAFT_COMPONENT_LIMIT} from '../src/engine/componentDraftModel.js';
