@@ -4344,11 +4344,9 @@ function readEvidenceView() {
 const EVIDENCE_ZOOM = { min: 70, max: 120, step: 10 };
 const EVIDENCE_CANVAS = { width: 1400, height: 980 };
 const pad2 = (value) => String(value).padStart(2, "0");
-// The sample journey covers September 2026: Days scrub 08:00–18:00 on 02 Sep,
-// Weeks scrub the week of 01 Sep, Months scrub the whole month.
-function calendarMoment(scale, position) {
-  if (scale === "Months") return { range: "Sep 2026", label: `${pad2(1 + Math.round((position * 29) / 100))} Sep 2026` };
-  if (scale === "Weeks") return { range: "Week of 01 Sep 2026", label: `${pad2(1 + Math.round((position * 6) / 100))} Sep 2026` };
+// The sample journey only has hour-level times for 02 Sep 2026 (Months/Weeks are
+// disabled), so the scrubber covers that working day, 08:00–18:00, never "28:00".
+function calendarMoment(_scale, position) {
   return { range: "02 Sep 2026", label: `02 Sep 2026 · ${pad2(8 + Math.round(position / 10))}:00 AEST` };
 }
 

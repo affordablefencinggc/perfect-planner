@@ -137,8 +137,8 @@ describe("Demo controls are honest about being sample data", () => {
     const slider = screen.getByRole("slider", { name: /Journey time/ });
     fireEvent.change(slider, { target: { value: "100" } });
     expect(slider.getAttribute("aria-valuetext")).toBe("02 Sep 2026 · 18:00 AEST");
-    await user.click(screen.getByRole("button", { name: "Weeks" }));
-    expect(slider.getAttribute("aria-valuetext")).toBe("07 Sep 2026");
+    fireEvent.change(slider, { target: { value: "0" } });
+    expect(slider.getAttribute("aria-valuetext")).toBe("02 Sep 2026 · 08:00 AEST");
     expect(container.textContent).not.toMatch(/2[4-9]:00/);
 
     await user.click(within(screen.getByRole("group", { name: "Evidence views" })).getByRole("button", { name: /Screenshot proof/ }));
