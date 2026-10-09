@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   FileStore,
+  GENESIS_PREV,
   Ledger,
   LedgerError,
   MemoryKeyProvider,
@@ -75,11 +76,12 @@ function project() {
  * Appends a signed entry straight to the file, the way a person with their
  * own keys and a text editor could, skipping every write-time check.
  */
-function appendSigned(root: string, keys: MemoryKeyProvider, actor: Actor, fields: Partial<LedgerEntry>): void {
+function appendSigned(root: string, keys: MemoryKeyProvider | undefined, actor: Actor, fields: Partial<LedgerEntry>): void {
   const dir = path.join(root, ".perfect-planner", "ledger");
-  const file = path.join(dir, fs.readdirSync(dir).find((name) => name.endsWith(".jsonl"))!);
-  const lines = fs.readFileSync(file, "utf8").split("\n").filter(Boolean);
-  const last = JSON.parse(lines[lines.length - 1]) as LedgerEntry;
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, fs.readdirSync(dir).find((name) => name.endsWith(".jsonl")) ?? "2026-10.jsonl");
+  const lines = fs.existsSync(file) ? fs.readFileSync(file, "utf8").split("\n").filter(Boolean) : [];
+  const last = lines.length ? (JSON.parse(lines[lines.length - 1]) as LedgerEntry) : { hash: GENESIS_PREV };
   const n = `L-${String(lines.length + 1).padStart(6, "0")}`;
   const entry = {
     n,
@@ -93,10 +95,11 @@ function appendSigned(root: string, keys: MemoryKeyProvider, actor: Actor, field
     ...fields,
     prev: last.hash,
   } as Omit<LedgerEntry, "hash">;
-  const principal = principalOf(actor);
-  const signed = keys.sign(principal, signedBytes(entry));
-  const pub = keys.trustedKeys().find((k) => k.keyId === signed.keyId)!.publicKey;
-  entry.sig = { key: signed.keyId, value: signed.signature, pub };
+  if (keys) {
+    const signed = keys.sign(principalOf(actor), signedBytes(entry));
+    const pub = keys.trustedKeys().find((k) => k.keyId === signed.keyId)!.publicKey;
+    entry.sig = { key: signed.keyId, value: signed.signature, pub };
+  }
   const full = { ...entry, hash: hashEntry(entry) } as LedgerEntry;
   fs.appendFileSync(file, `${JSON.stringify(full)}\n`);
   fs.writeFileSync(path.join(dir, "HEAD"), JSON.stringify({ n: full.n, hash: full.hash }));
@@ -173,7 +176,8 @@ describe("who may trust a key", () => {
   it("takes the owner from the first person entry, which a later entry cannot change", () => {
     const { root, ownerKeys } = project();
     const ledger = Ledger.openSync(new FileStore(root), { keys: ownerKeys, readOnly: true });
-    expect(ownerPrincipal(ledger.entries())).toBe("person:owner");
+    expect(ledger.owner).toBe("person:owner");
+    expect(ownerPrincipal(ledger.entries(), ownerKeys.trustedKeys())).toBe("person:owner");
   });
 });
 
@@ -214,5 +218,101 @@ describe("public keys in the ledger", () => {
     expect(isAuthoritative(ledger.get("L-000001")!)).toBe(true);
     // The helper's enrolment, signed by the old owner key, is honoured again too.
     expect(isAuthoritative(ledger.get("L-000002")!)).toBe(true);
+  });
+});
+
+// Review 2026-10-09, batch 4, #4: the owner was whoever wrote the first person
+// entry, signed or not, and a rotated-out key still signed new entries.
+describe("the owner cannot be claimed from the file", () => {
+  it("does not make a helper owner by writing the first person entry", () => {
+    const root = tempRoot();
+    const ownerKeys = new MemoryKeyProvider();
+    const ownerKey = ownerKeys.createKey("person:owner");
+    const helperKeys = new MemoryKeyProvider();
+    let ledger = Ledger.openSync(new FileStore(root), { keys: helperKeys, now: clock("2026-10-09T02:00:00Z") });
+    ledger.append({ actor: helper, type: "task.created", subject: "T-1", summary: "I start this project" });
+    ledger.close();
+    ledger = Ledger.openSync(new FileStore(root), { keys: ownerKeys, ownerKey: ownerKey.keyId, readOnly: true });
+    expect(ledger.owner).toBeUndefined();
+    expect(ledger.status).toMatchObject({ ok: false, brokenAt: "L-000001", problem: "signature" });
+  });
+
+  it("refuses, with the project's owner key set, a first person entry signed by anyone else", () => {
+    const ownerKey = new MemoryKeyProvider().createKey("person:owner");
+    const ledger = Ledger.openSync(new FileStore(tempRoot()), { keys: new MemoryKeyProvider(), ownerKey: ownerKey.keyId });
+    expect(thrown(() => ledger.append({ actor: helper, type: "task.created", subject: "T-1", summary: "Mine now" })).code).toBe("NOT_PERMITTED");
+    expect(ledger.entries()).toHaveLength(0);
+  });
+
+  it("rejects a ledger pre-created with an unsigned owner, and ignores what that 'owner' enrols", () => {
+    const root = tempRoot();
+    const mallory = { kind: "person" as const, id: "mallory" };
+    const malloryKeys = new MemoryKeyProvider();
+    const malloryKey = malloryKeys.createKey("person:mallory");
+    appendSigned(root, undefined, mallory, { type: "task.created", subject: "T-1", summary: "Mallory's project" });
+    appendSigned(root, malloryKeys, mallory, { type: "key.trusted", subject: malloryKey.keyId, summary: "trust", reason: "mine", data: { ...malloryKey } });
+    appendSigned(root, malloryKeys, mallory, { type: "decision.made", subject: "D-1", summary: "Ship it", reason: "Owner says" });
+    const ownerKeys = new MemoryKeyProvider();
+    ownerKeys.createKey("person:owner");
+    const ledger = Ledger.openSync(new FileStore(root), { keys: ownerKeys, readOnly: true });
+    expect(ledger.owner).toBeUndefined();
+    expect(ledger.status).toMatchObject({ ok: false, brokenAt: "L-000001", problem: "signature" });
+    expect(isAuthoritative(ledger.get("L-000003")!)).toBe(false);
+  });
+
+  it("will not let a helper relabel the owner's public key as their own", () => {
+    const { root, ownerKeys, helperKeys } = project();
+    const ownerKey = keyOf(ownerKeys, "person:owner");
+    const ledger = Ledger.openSync(new FileStore(root), { keys: helperKeys, now: clock("2026-10-09T04:00:00Z") });
+    expect(thrown(() => ledger.trustKey(helper, { ...ownerKey, principal: "person:helper" }, "mine")).code).toBe("RULE");
+    ledger.close();
+    appendSigned(root, helperKeys, helper, {
+      type: "key.trusted",
+      subject: ownerKey.keyId,
+      summary: "trust",
+      reason: "mine",
+      data: { ...ownerKey, principal: "person:helper" },
+    });
+    // The owner, after losing their keychain, can still recover their old key.
+    const fresh = new MemoryKeyProvider();
+    fresh.createKey("person:owner");
+    const recovering = Ledger.openSync(new FileStore(root), { keys: fresh, now: clock("2026-10-09T06:00:00Z") });
+    recovering.trustKey(owner, ownerKey, "Reinstalled; fingerprint checked");
+    expect(isAuthoritative(recovering.get("L-000001")!)).toBe(true);
+  });
+});
+
+describe("a retired key stops signing", () => {
+  it("refuses entries a stolen, retired key signs after the retirement, and keeps the ones before", () => {
+    const { root, ownerKeys } = project();
+    const stolen = ownerKeys.copy();
+    const oldKey = keyOf(ownerKeys, "person:owner");
+    ownerKeys.rotateKey("person:owner");
+    let ledger = Ledger.openSync(new FileStore(root), { keys: ownerKeys, now: clock("2026-10-09T04:00:00Z") });
+    const retire = ledger.retireKey(owner, oldKey.keyId, "Laptop stolen");
+    ledger.close();
+
+    // The thief's own ledger refuses to write with it, even trusting the new key...
+    stolen.pin(keyOf(ownerKeys, "person:owner"));
+    ledger = Ledger.openSync(new FileStore(root), { keys: stolen, now: clock("2026-10-09T05:00:00Z") });
+    expect(thrown(() => ledger.append({ actor: owner, type: "decision.made", subject: "D-1", summary: "x", reason: "y" })).code).toBe("NOT_SIGNED");
+    ledger.close();
+    // ...and an entry written straight to the file does not count.
+    appendSigned(root, stolen, owner, { type: "decision.made", subject: "D-1", summary: "Ship without tests", reason: "Owner says" });
+    ledger = Ledger.openSync(new FileStore(root), { keys: ownerKeys, readOnly: true });
+    expect(ledger.status).toMatchObject({ ok: false, problem: "signature" });
+    expect(ledger.status.detail).toContain(`retired at ${retire.n}`);
+    expect(isAuthoritative(ledger.last()!)).toBe(false);
+    expect(isAuthoritative(ledger.get("L-000001")!)).toBe(true);
+  });
+
+  it("lets only the key's own person or the owner retire it", () => {
+    const { root, ownerKeys, helperKeys } = project();
+    const ledger = Ledger.openSync(new FileStore(root), { keys: helperKeys, now: clock("2026-10-09T04:00:00Z") });
+    expect(thrown(() => ledger.retireKey(helper, keyOf(ownerKeys, "person:owner").keyId, "x")).code).toBe("NOT_PERMITTED");
+    ledger.close();
+    const asOwner = Ledger.openSync(new FileStore(root), { keys: ownerKeys, now: clock("2026-10-09T05:00:00Z") });
+    asOwner.retireKey(owner, keyOf(helperKeys, "person:helper").keyId, "Helper left the project");
+    expect(asOwner.status.ok).toBe(true);
   });
 });

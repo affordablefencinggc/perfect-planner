@@ -70,10 +70,10 @@ Entry types (spec §2.3), exported as `ENTRY_TYPES`:
 | Git | `worktree.created`, `commit.observed`, `collision.detected`, `collision.resolved`, `merge.done`, `worktree.removed` |
 | Proof | `test.defined`, `test.approved`, `test.passed`, `test.failed`, `review.verdict` |
 | Release | `release.cut`, `release.rollback` |
-| Housekeeping | `correction`, `budget.warning`, `chain.acknowledged`, `key.trusted` |
+| Housekeeping | `correction`, `budget.warning`, `chain.acknowledged`, `key.trusted`, `key.retired` |
 
 `chain.acknowledged` is how a person clears a fingerprint break (§2.5).
-`key.trusted` is how a person trusts a signing key (see "Signatures").
+`key.trusted` and `key.retired` are how a person trusts and retires signing keys (see "Signatures").
 
 ## Writing
 
@@ -120,7 +120,7 @@ Checked before every other rule, from `DEFAULT_PERMISSIONS` (or
 | Actor kind | May write |
 |---|---|
 | `person` | any type (`core/people` narrows this per role: owner, helper, viewer) |
-| `system` (the gate, the git watcher) | any type except `chain.acknowledged` and `key.trusted` |
+| `system` (the gate, the git watcher) | any type except `chain.acknowledged`, `key.trusted` and `key.retired` |
 | `agent` | `task.claimed`, `task.progress`, `task.blocked`, `task.proof`, `test.defined` (a proposal), and the relay: `question.asked`, `question.answered` |
 | `jev` | `review.verdict`, `question.asked` |
 
@@ -217,9 +217,24 @@ Trusted keys come from two places:
   the ledger also covers what it signed earlier.
 
 Who may trust a key for a principal: that same person (a new device, a
-rotation, recovery), or the owner. The owner is the person who wrote the
-ledger's first person entry (`ownerPrincipal`). Changing the owner would
-mean re-signing every entry after that one.
+rotation, recovery), or the owner. A key the ledger already shows signing
+for one person cannot be trusted as another's.
+
+**The owner** is the person whose signed entry is the ledger's first person
+entry (`ledger.owner`, `ownerPrincipal`). It counts only when this device
+can verify that entry with its own or pinned keys. The keys may also come
+from that same person's own enrolments, but never from the owner's.
+
+- An unsigned first entry, or one signed with an unknown key, makes no one
+  owner.
+- That entry is also a `signature` break.
+- Anyone with file access can still write a ledger's first line, so the app
+  should also pass the project's owner key id, which it keeps outside the
+  ledger: `Ledger.open(store, { keys, ownerKey })`.
+- With `ownerKey`, the first person entry must be signed by exactly that
+  key. Otherwise it is a break on open, and `NOT_PERMITTED` when writing.
+- Changing the owner later would mean re-signing every entry after the
+  first one.
 
 This is enforced in two places:
 
@@ -229,9 +244,17 @@ This is enforced in two places:
 So a helper cannot make a key in the owner's name and use it. Roles beyond
 owner (`core/people`) do not widen this.
 
-**Rotation.** `rotateKey(principal)` retires the active key and makes a new
-one. The retired public key stays trusted, so old entries still verify, but
-it never signs again.
+**Rotation and stolen keys.**
+
+1. `rotateKey(principal)` on the provider makes a new key. The old one never
+   signs on this device again.
+2. Then call `ledger.retireKey(person, oldKeyId, reason)`. It writes
+   `key.retired`, which must come from the same person or the owner.
+
+From that entry on, anything the old key signs is a `signature` problem,
+and the ledger refuses to write with it. Entries it signed before still
+count. The owner can retire a helper's key the same way, for example when
+they leave.
 
 **Lost keychain** (reinstall, new PC). Make a new key. The ledger then shows
 the old entries as signed by a key this device does not trust. The app shows
@@ -257,8 +280,10 @@ pins the keys it needs to read the others, after the fingerprint is checked.
   OS user, a sandbox, or a container. That is the gate's job.
 - Requiring Windows Hello, Touch ID or a polkit prompt per signature is the
   next step.
-- Revoking a stolen key is not built yet; rotate it, and acknowledge
-  anything it signed that the person did not.
+- A thief who uses a stolen key before it is retired: those entries count.
+  Retire it as soon as the loss is known.
+- If the thief retires the person's new key first, the owner has to re-enrol
+  them.
 - Anyone with write access to the files can append entries signed with
   keys nobody trusts. That stops writes until a person acknowledges the
   break. It is a nuisance, not a forgery: those entries never count.
