@@ -4,7 +4,7 @@
 // restart can redraw the mind map with the same root.
 import fs from "node:fs";
 import path from "node:path";
-import type { Actor, LedgerEntry } from "../../ledger/index";
+import { isAuthoritative, type Actor, type LedgerEntry } from "../../ledger/index";
 import { appendNumbered } from "../../numbering/index";
 import {
   AREAS,
@@ -108,7 +108,7 @@ function entryNumbers(entries: readonly LedgerEntry[]): Map<string, { asked?: st
 
 function approvals(entries: readonly LedgerEntry[]) {
   return entries
-    .filter((e) => e.type === "plan.approved")
+    .filter((e) => e.type === "plan.approved" && isAuthoritative(e, { personOnly: true }))
     .map((e) => ({ plan: e.subject, entry: e.n, at: e.at, by: e.actor.id, summary: e.summary }));
 }
 

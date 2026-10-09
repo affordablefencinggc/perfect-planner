@@ -23,7 +23,7 @@ export function PlanApprovalStep({ project, records, onWorkspace, store }) {
 
   const projectBlocked = ["stale", "unavailable"].includes(project.state);
   const oldScan = Boolean(ledger && !sameTaskDraftBinding(ledger.binding, binding));
-  const upToDate = status?.state === "recorded" && digest === status.record.planDigest;
+  const upToDate = status?.state === "recorded" && digest === status.record?.planDigest;
   const disabled = busy || loading || !ledger || !tasks.length || projectBlocked || oldScan || upToDate;
   const tone = status?.state === "recorded" ? "done" : status ? "attention" : "open";
 
@@ -45,9 +45,10 @@ export function PlanApprovalStep({ project, records, onWorkspace, store }) {
     </header>
     <div className="plan-approval-step-body">
       {!status && <p>No plan is approved yet. Approving saves a snapshot of the saved tasks below on this device, so later pages can tell if the tasks change.</p>}
-      {status?.state === "recorded" && <p className="plan-approval-step-state is-done"><CheckCircleIcon weight="fill" aria-hidden="true" />{plural(status.record.taskCount, "task")} approved {when(status.record.approvedAt)}{status.record.source === "planning-ledger" ? " through the planning ledger" : " on this device"}.{status.confirmed ? " Project confirmed ready." : ""}</p>}
+      {status?.core && <p className="plan-approval-step-state is-done"><CheckCircleIcon weight="fill" aria-hidden="true" />{status.detail} · {when(status.core.at)}.{status.confirmed ? " Project confirmed ready." : ""}</p>}
+      {status?.state === "recorded" && status.record && <p className="plan-approval-step-state is-done"><CheckCircleIcon weight="fill" aria-hidden="true" />{plural(status.record.taskCount, "task")} approved {when(status.record.approvedAt)}{status.record.source === "planning-ledger" ? " through the planning ledger" : " on this device"}.{status.confirmed ? " Project confirmed ready." : ""}</p>}
       {status && status.state !== "recorded" && <p className="plan-approval-step-state is-attention"><WarningIcon weight="fill" aria-hidden="true" />{status.state === "review" ? "Tasks changed since approval." : status.detail}{status.state === "review" ? " Review them and approve again." : ""}</p>}
-      {status?.state === "recorded" && digest && !upToDate && <p className="plan-approval-step-state is-attention"><WarningIcon weight="fill" aria-hidden="true" />The saved tasks no longer match the approved plan.</p>}
+      {status?.state === "recorded" && status.record && digest && !upToDate && <p className="plan-approval-step-state is-attention"><WarningIcon weight="fill" aria-hidden="true" />The saved tasks no longer match the approved plan.</p>}
 
       {loading && <p role="status">Reading saved tasks…</p>}
       {error && <p role="alert" className="plan-approval-step-error">Saved tasks could not be read: {error}</p>}

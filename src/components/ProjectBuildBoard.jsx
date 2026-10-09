@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { ArrowRightIcon, CheckCircleIcon, ClipboardTextIcon, HammerIcon, WarningIcon } from "@phosphor-icons/react";
 import { useOptionalProject } from "../project/ProjectProvider.jsx";
 import { readSection, writeSection } from "../project/projectWorkRecords.js";
+import { corePlanApproval } from "../project/planApproval.js";
 import { useTaskDraftLedger } from "../project/useTaskDraftLedger.js";
 import { agentBrief, BUILD_NOTE_LIMIT, BUILD_STATE_LABELS, BUILD_STATES, deriveBuildBoard, nextBuildRecord } from "../project/projectBuildModel.js";
 import "./ProjectBuildBoard.css";
@@ -73,6 +74,7 @@ export function ProjectBuildBoard({ project, records, onWorkspace, store = null 
   const drafts = useTaskDraftLedger(project, store);
   const [error, setError] = useState("");
   const sections = records?.sections ?? {};
+  const core = corePlanApproval(records);
   const board = useMemo(
     () => deriveBuildBoard({ project, ledger: drafts.stale ? null : drafts.ledger, sections, planStatus }),
     [project, drafts.ledger, drafts.stale, sections, planStatus],
@@ -101,7 +103,7 @@ export function ProjectBuildBoard({ project, records, onWorkspace, store = null 
     {drafts.stale && <p role="alert" className="build-board-error">The saved tasks belong to an earlier folder scan. Review them in the Ledger before building.</p>}
     {error && <p role="alert" className="build-board-error">{error}</p>}
     {approval.state !== "approved" && !drafts.busy && <div className="build-board-empty">
-      <p>{approval.state === "refreshing" ? "Checking the plan approval…" : approval.state === "pending" || approval.state === "unfinished" ? "A plan approval is still in progress in the Ledger." : approval.state === "stale" ? "The plan approval is out of date. Review it again in the Ledger." : approval.state === "unavailable" ? "The plan approval could not be checked right now." : "No approved plan yet. Approve the plan in the Ledger, then each approved task appears here."}</p>
+      <p>{core && approval.state !== "refreshing" ? `Plan ${core.plan} is approved (by ${core.by}). Its ${core.tasks.length ? `${core.tasks.length} roadmap tasks are` : "tasks are"} in the project ledger; task drafts from the Ledger appear here once they are approved on the Plan page.` : approval.state === "refreshing" ? "Checking the plan approval…" : approval.state === "pending" || approval.state === "unfinished" ? "A plan approval is still in progress in the Ledger." : approval.state === "stale" ? "The plan approval is out of date. Review it again in the Ledger." : approval.state === "unavailable" ? "The plan approval could not be checked right now." : "No approved plan yet. Approve the plan in the Ledger, then each approved task appears here."}</p>
       <button type="button" onClick={() => onWorkspace?.("ledger")}>Open Ledger<ArrowRightIcon aria-hidden="true" /></button>
     </div>}
     {approval.changed && <p className="build-board-note"><WarningIcon aria-hidden="true" />The Ledger changed after the plan was approved. Approve it again to bring new or edited tasks onto this board.</p>}
