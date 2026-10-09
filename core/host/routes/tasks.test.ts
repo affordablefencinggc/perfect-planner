@@ -107,6 +107,9 @@ describe("tasks routes", () => {
     // 4. The worker claims, builds and attaches its commit.
     expect(await call({ tool: "claim_task", args: { task: "T-1" }, agent })).toMatchObject({ status: "claimed" });
     write(d.worktree, "src/save.js", "export const save = (note) => note;\n");
+    // Files that can run code on the person's machine: the diff screen asks for their own confirmation.
+    write(d.worktree, "package.json", '{ "name": "notes", "scripts": { "postinstall": "node setup.js" } }\n');
+    write(d.worktree, ".github/workflows/ci.yml", "on: push\n");
     git(d.worktree, "add", "-A");
     git(d.worktree, "commit", "-q", "-m", "Save notes");
     const head = git(d.worktree, "rev-parse", "HEAD");
@@ -119,7 +122,8 @@ describe("tasks routes", () => {
     expect(checked.status, JSON.stringify(checked.body)).toBe(200);
     expect(checked.body.result).toMatchObject({ passed: true, commit: head });
     const diff = (await hostCall(ctx.base, "GET", `/tasks/T-1/diff${q}`)).body.result;
-    expect(diff.files).toEqual(["src/save.js", "tests/save.check.mjs"]);
+    expect(diff.files).toEqual([".github/workflows/ci.yml", "package.json", "src/save.js", "tests/save.check.mjs"]);
+    expect(diff.sensitive).toEqual([".github/workflows/ci.yml", "package.json"]);
     expect(diff.text).toContain("export const save");
     expect((await tasks()).tasks[0]).toMatchObject({ stage: "review-diff" });
     const early = await post("/tasks/T-1/merge", { commit: head });
@@ -128,7 +132,12 @@ describe("tasks routes", () => {
 
     // 6. The person approves the diff at the commit they read and merges; the gate reruns the test on the merge first.
     expect((await post("/tasks/T-1/approve-diff")).body.code).toBe("STALE");
-    expect((await post("/tasks/T-1/approve-diff", { commit: diff.commit })).status).toBe(200);
+    const unconfirmed = await post("/tasks/T-1/approve-diff", { commit: diff.commit });
+    expect(unconfirmed.status).toBe(409);
+    expect(unconfirmed.body.code).toBe("CONFIRM_SENSITIVE");
+    expect(unconfirmed.body.message).toContain("package.json");
+    expect((await post("/tasks/T-1/approve-diff", { commit: diff.commit, confirmSensitive: ["package.json"] })).body.code).toBe("CONFIRM_SENSITIVE");
+    expect((await post("/tasks/T-1/approve-diff", { commit: diff.commit, confirmSensitive: diff.sensitive })).status).toBe(200);
     expect((await tasks()).tasks[0]).toMatchObject({ stage: "ready-to-merge" });
     expect((await post("/tasks/T-1/merge", { commit: "0".repeat(40) })).body.code).toBe("STALE");
     const merged = await post("/tasks/T-1/merge", { commit: head });

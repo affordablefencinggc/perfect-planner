@@ -136,6 +136,30 @@ describe("TasksScreen", () => {
     expect(fetch.mock.calls.filter(([, i]) => i?.method === "POST").map(([u]) => String(u).split("?")[0].replace("/api/core", ""))).toEqual(["/tasks/T-1/check", "/tasks/T-1/approve-diff", "/tasks/T-1/merge"]);
   });
 
+  test("a diff that changes files able to run code needs its own confirmation before Approve", async () => {
+    const tree = { path: "/w", branch: "pp/T-1", base: "main", port: 5200 };
+    const tasks = [task({ status: "claimed", owner: "worker-1", stage: "review-diff", worktree: tree, check: { passed: true, commit: "abc123" } })];
+    const sensitive = [".github/workflows/ci.yml", "package.json"];
+    let approvedWith = null;
+    routeFetch({
+      "GET /tasks": async () => ok(view(tasks)),
+      "GET /tasks/T-1/diff": async () => ok({ task: "T-1", files: [...sensitive, "src/save.js"], sensitive, text: '+  "postinstall": "node setup.js"', commit: "abc123" }),
+      "POST /tasks/T-1/approve-diff": async (init) => { approvedWith = JSON.parse(init.body); return ok(view(tasks)); },
+    });
+    renderScreen();
+    fireEvent.click(within(await card("T-1 Save notes")).getByRole("button", { name: "Show diff" }));
+    const block = await screen.findByRole("alert", { name: "Files that can run code in T-1" });
+    expect(block.textContent).toMatch(/can run code on your computer/);
+    expect(within(block).getByText("package.json")).toBeTruthy();
+    expect(within(block).getByText(".github/workflows/ci.yml")).toBeTruthy();
+    const approve = within(await card("T-1 Save notes")).getByRole("button", { name: "Approve diff at abc123" });
+    expect(approve.disabled).toBe(true);
+    fireEvent.click(within(block).getByRole("checkbox", { name: /safe to run on my computer/ }));
+    expect(approve.disabled).toBe(false);
+    fireEvent.click(approve);
+    await waitFor(() => expect(approvedWith).toEqual({ commit: "abc123", confirmSensitive: sensitive }));
+  });
+
   test("a refused merge shows the gate's reason", async () => {
     routeFetch({
       "GET /tasks": async () => ok(view([task({ status: "claimed", stage: "ready-to-merge", worktree: { path: "/w", branch: "pp/T-1", base: "main", port: 5200 } })])),
