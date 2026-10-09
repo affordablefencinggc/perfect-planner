@@ -82,4 +82,7 @@ runs Perfect Planner, taking npm's entry script from beside that Node or from an
 core/exec, and refusing any copy inside the project, its repo or its worktrees (`protect` roots,
 compared as written and as real paths). Installs pass `--ignore-scripts` unless a person turned on
 `allowInstallScripts` (WorktreeManager and TestGate options), since a dependency's install script is
-arbitrary code.
+arbitrary code. The project's own `.npmrc` is agent-controlled, so every setting that names a program is
+fixed on npm's command line, which outranks all config files: `--git` is core/exec's git and
+`--script-shell` the system shell, user and global config come from empty files, and inherited
+`npm_config_*` variables are dropped. A failed install with scripts skipped names the switch.
