@@ -63,6 +63,9 @@ say so when you ask for confirmation.)
    reply **yes** to run it. Run it only after that reply, exactly as shown,
    from the project folder. If anything in the line differs from the shape
    above, never run it; say what is wrong instead.
+   On Windows, run it in PowerShell (the shell Gemini CLI and Codex CLI use),
+   never through `cmd /c` or a `.bat`: cmd.exe looks for `node` in the project
+   folder before anywhere else, so a `node.cmd` in the repo would run instead.
 4. After the line has run, the tools appear only in a new session. Tell the
    user: "Done. Restart your agent (Claude Code, Gemini CLI or Codex CLI) in
    this folder, then say: check in with Perfect Planner." Gemini CLI asks
