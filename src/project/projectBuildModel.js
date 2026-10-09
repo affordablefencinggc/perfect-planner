@@ -4,6 +4,7 @@
 import { canonicalArchitectureJson as canonical } from "../engine/architectureContractVerification.js";
 import { inspectTaskDraft } from "./taskDraftLedger.js";
 import { allocationByTask, approvedTaskIdsFrom, proofItems, recordedCollisions } from "./workRecordReaders.js";
+import { buildCollisionRecord, taskSnapshot } from "./taskCoordination.js";
 
 export const BUILD_STATES = Object.freeze(["not-started", "in-progress", "done", "blocked"]);
 export const BUILD_STATE_LABELS = Object.freeze({ "not-started": "Not started", "in-progress": "In progress", done: "Done", blocked: "Blocked" });
@@ -11,11 +12,22 @@ export const BUILD_NOTE_LIMIT = 500;
 
 const sameIds = (left, right) => left.length === right.length && [...left].sort().join("|") === [...right].sort().join("|");
 
-/** Which tasks are approved, and where that came from. Never guesses. */
-export function resolveApprovedTasks({ project, ledger, sections, planStatus }) {
+/**
+ * Which tasks are approved, and where that came from. Never guesses.
+ * `ledgerDigest` (digestPlanTasks of the current drafts) lets a recorded approval notice later edits.
+ */
+export function resolveApprovedTasks({ project, ledger, sections, planStatus, ledgerDigest = null }) {
   const recorded = approvedTaskIdsFrom(sections);
   if (recorded) {
-    return { state: "approved", source: "recorded", taskIds: recorded, changed: false, revision: sections.planAuthority.revision ?? null, sourceTasks: ledger?.tasks ?? [] };
+    const data = sections.planAuthority.data;
+    const approvedTitles = new Map((Array.isArray(data.tasks) ? data.tasks : []).filter((task) => task && typeof task === "object" && typeof task.title === "string").map((task) => [task.id, task.title]));
+    const activeIds = (ledger?.tasks ?? []).filter((task) => !task.archived).map((task) => task.id);
+    const changed = Boolean(data.tasksChangedAt)
+      || Boolean(ledgerDigest && typeof data.planDigest === "string" && ledgerDigest !== data.planDigest)
+      || Boolean(ledger && !sameIds(activeIds, recorded));
+    // The recorded approval keeps only ids and titles, so a card can only prove a title edit.
+    const sourceTasks = (ledger?.tasks ?? []).map((task) => approvedTitles.has(task.id) && approvedTitles.get(task.id) !== task.title ? { ...task, title: approvedTitles.get(task.id) } : task);
+    return { state: "approved", source: "recorded", taskIds: recorded, changed, revision: sections.planAuthority.revision ?? null, sourceTasks };
   }
   const matchesProject = planStatus && planStatus.projectId === project?.projectId;
   if (matchesProject && planStatus.state === "observed" && planStatus.checkedLedger) {
@@ -24,19 +36,34 @@ export function resolveApprovedTasks({ project, ledger, sections, planStatus }) 
     const changed = Boolean(ledger) && canonical(checked) !== canonical(ledger);
     return { state: "approved", source: "plan-approval", taskIds, changed, revision: planStatus.revision ?? null, sourceTasks: checked.tasks ?? [] };
   }
-  return { state: matchesProject ? planStatus.state ?? "missing" : "missing", source: null, taskIds: [], changed: false, revision: null, sourceTasks: [] };
+  // Nothing recorded on the Plan page: whatever the planning ledger says, there is no approval to be "out of date".
+  const observed = matchesProject ? planStatus.state ?? "missing" : "missing";
+  return { state: ["refreshing", "unavailable", "pending", "unfinished"].includes(observed) ? observed : "missing", observedState: observed, source: null, taskIds: [], changed: false, revision: null, sourceTasks: [] };
 }
 
 function overlapFindings(ledger) {
   try { return inspectTaskDraft(ledger).findings.filter((item) => item.kind === "file-overlap"); } catch { return []; }
 }
 
-export function deriveBuildBoard({ project, ledger, sections = {}, planStatus = null }) {
-  const approval = resolveApprovedTasks({ project, ledger, sections, planStatus });
+/**
+ * Recorded collisions, or a live re-check when the saved check no longer matches
+ * the tasks (decisions carry over only while their overlap is unchanged).
+ */
+function currentCollisions(ledger, sections) {
+  const saved = sections?.collisions?.data;
+  if (!ledger || !saved || typeof saved.taskSnapshot !== "string" || saved.taskSnapshot === taskSnapshot(ledger)) return { collisions: recordedCollisions(sections), live: false };
+  try {
+    const live = buildCollisionRecord({ ledger, censusDigest: saved.censusDigest ?? null, previous: saved });
+    return { collisions: recordedCollisions({ collisions: { data: live } }), live: true };
+  } catch { return { collisions: recordedCollisions(sections), live: false }; }
+}
+
+export function deriveBuildBoard({ project, ledger, sections = {}, planStatus = null, ledgerDigest = null }) {
+  const approval = resolveApprovedTasks({ project, ledger, sections, planStatus, ledgerDigest });
   const current = new Map((ledger?.tasks ?? []).map((task) => [task.id, task]));
   const approvedSource = new Map(approval.sourceTasks.map((task) => [task.id, task]));
   const allocation = allocationByTask(sections);
-  const collisions = recordedCollisions(sections);
+  const { collisions, live: collisionsLive } = currentCollisions(ledger, sections);
   const overlaps = collisions ? [] : overlapFindings(ledger);
   const proof = proofItems(sections);
   const statuses = sections.build?.data?.status ?? {};
@@ -52,8 +79,9 @@ export function deriveBuildBoard({ project, ledger, sections = {}, planStatus = 
     const task = current.get(id) ?? approvedSource.get(id) ?? null;
     if (!task) return null;
     const allocated = allocation.get(id) ?? null;
-    const owner = allocated?.owner ?? (task.owner || null);
-    const ownerSource = allocated?.owner ? "allocation" : task.owner ? "draft" : null;
+    // A saved Allocation row wins, even when it clears the owner.
+    const owner = allocated ? allocated.owner ?? null : task.owner || null;
+    const ownerSource = allocated ? (allocated.owner ? "allocation" : null) : task.owner ? "draft" : null;
     const blockers = [];
     const constraints = [];
     if (!owner) blockers.push({ kind: "owner", text: "No owner named yet. Assign one in Allocation." , workspace: "allocation" });
@@ -94,15 +122,23 @@ export function deriveBuildBoard({ project, ledger, sections = {}, planStatus = 
     cards,
     waitingDrafts: (ledger?.tasks ?? []).filter((task) => !task.archived && !approvedSet.has(task.id)).length,
     collisionsRecorded: Boolean(collisions),
+    collisionsLive,
     allocationRecorded: allocation.size > 0,
     counts: { total: cards.length, done: count("done"), inProgress: count("in-progress"), blocked: count("blocked"), notStarted: count("not-started") },
   };
 }
 
+/** Why a card cannot be marked Done yet, or null. */
+export function doneRefusal(blockers = []) {
+  if (!blockers.length) return null;
+  return `Can’t mark Done while ${blockers.length === 1 ? "1 thing is" : `${blockers.length} things are`} in the way: ${blockers.map((item) => item.text.replace(/\.$/, "")).join("; ")}.`;
+}
+
 /** Next `build` section data after the user sets one task's status. */
-export function nextBuildRecord(previous, { taskId, state, note = "", approvedTaskIds, approval = null, now = new Date().toISOString() }) {
+export function nextBuildRecord(previous, { taskId, state, note = "", approvedTaskIds, approval = null, blockers = [], now = new Date().toISOString() }) {
   if (!/^T\d{4,6}$/.test(String(taskId))) throw new Error("Task identity is invalid.");
   if (!BUILD_STATES.includes(state)) throw new Error("Choose a valid status.");
+  if (state === "done" && doneRefusal(blockers)) throw new Error(doneRefusal(blockers));
   if (!Array.isArray(approvedTaskIds) || !approvedTaskIds.includes(taskId)) throw new Error("Only approved tasks can be tracked here.");
   const cleanNote = String(note ?? "").replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, "").trim().slice(0, BUILD_NOTE_LIMIT);
   const status = { ...(previous?.status ?? {}), [taskId]: { state, updatedAt: now, note: cleanNote } };

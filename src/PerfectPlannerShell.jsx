@@ -3486,9 +3486,9 @@ function BuildWorkspace({ collisionGate, onWorkspace }) {
     {
       id: "02",
       label: "CLAIMED",
-      state: collisionGate.ready ? "done" : "blocked",
+      state: collisionGate.ready ? "queued" : "blocked",
       detail: collisionGate.ready
-        ? "Files and interfaces leased"
+        ? "Not claimed yet · nothing leased"
         : "Collision order is unresolved",
     },
     {
@@ -3595,7 +3595,7 @@ function BuildWorkspace({ collisionGate, onWorkspace }) {
             </div>
             <div>
               <dt>Files</dt>
-              <dd>Not issued until collision clearance</dd>
+              <dd>{collisionGate.ready ? "Issued when the package is claimed (sample only)" : "Not issued until collision clearance"}</dd>
             </div>
             <div>
               <dt>Interfaces</dt>
@@ -3615,28 +3615,40 @@ function BuildWorkspace({ collisionGate, onWorkspace }) {
             <li>Reviewer identity and decision are journaled</li>
           </ul>
         </section>
-        <section className="build-next-action">
-          <header>
-            <WarningIcon />
-            <strong>
-              {collisionGate.ready
-                ? "Collision order recorded"
-                : "Why work cannot start"}
-            </strong>
-          </header>
-          <p>
-            {collisionGate.ready
-              ? "Every collision has an authoritative order. Claiming is no longer blocked by collisions."
-              : "Two workers can reach the same planned surface. The planner must record who goes first, what the second worker waits for, and whether the second package must be replanned."}
-          </p>
-          <button
-            className="primary-button"
-            onClick={() => onWorkspace("collision")}
-          >
-            {collisionGate.ready ? "View ledgered orders" : "Resolve before claim"}{" "}
-            <ArrowRightIcon />
-          </button>
-        </section>
+        {collisionGate.ready ? (
+          <section className="build-next-action">
+            <header>
+              <CheckCircleIcon weight="fill" />
+              <strong>Ready to claim</strong>
+            </header>
+            <p>
+              Every collision in the sample has a recorded order. This demo
+              package has not been claimed, so no files, branch or worktree
+              are leased yet.
+            </p>
+            <button className="soft-button" onClick={() => onWorkspace("collision")}>
+              View recorded orders <ArrowRightIcon />
+            </button>
+          </section>
+        ) : (
+          <section className="build-next-action">
+            <header>
+              <WarningIcon />
+              <strong>Why work cannot start</strong>
+            </header>
+            <p>
+              Two workers can reach the same planned surface. The planner must
+              record who goes first, what the second worker waits for, and whether
+              the second package must be replanned.
+            </p>
+            <button
+              className="primary-button"
+              onClick={() => onWorkspace("collision")}
+            >
+              Resolve before claim <ArrowRightIcon />
+            </button>
+          </section>
+        )}
       </div>
     </section>
   );
@@ -3772,10 +3784,16 @@ function AllocationWorkspace({ onSelect, collisionGate, onOpenCollision }) {
               onClick={() =>
                 row.assignments.length &&
                 onSelect({
-                  id: row.assignments[0].id,
-                  title: row.assignments[0].label,
-                  status: row.assignments[0].status,
-                  estimate: "allocated",
+                  id: `WORKER-${row.name}`,
+                  source: "allocation",
+                  title: row.name,
+                  owner: row.name,
+                  status: row.assignments.some((item) => item.status === "blocked") ? "blocked" : "ready",
+                  estimate: `${row.assignments.length} assignment${row.assignments.length === 1 ? "" : "s"}`,
+                  items: [
+                    row.role,
+                    ...row.assignments.map((item) => `${item.id} · ${item.label} · wave ${item.wave}`),
+                  ],
                 })
               }
             >
@@ -3799,9 +3817,13 @@ function AllocationWorkspace({ onSelect, collisionGate, onOpenCollision }) {
                   style={{
                     gridColumn: `${assignment.start} / span ${assignment.span}`,
                   }}
+                  title={`${assignment.id} · ${assignment.label} · ${row.name} · ${assignment.status}`}
+                  aria-label={`${assignment.id} ${assignment.label}, ${row.name}, ${assignment.status}`}
                   onClick={() =>
                     onSelect({
                       ...assignment,
+                      source: "allocation",
+                      owner: row.name,
                       title: assignment.label,
                       estimate: `${assignment.span} days`,
                       items: [
@@ -5995,6 +6017,17 @@ function PerfectPlannerShellCore({
       setCollisionGate(initialCollisionGate);
     } else if (!selected) setSelected(phases[2].nodes[0]);
   }, [demoMode, activeProject?.projectId]);
+  // Demo: read the saved demo decisions once so the top bar, Allocation and Build
+  // agree with Collisions before that page is opened.
+  useEffect(() => {
+    if (!demoMode) return undefined;
+    let current = true;
+    import("./components/CollisionWorkspace.jsx")
+      .then((module) => module.readDemoCollisionGate())
+      .then((gate) => { if (current) setCollisionGate(gate); })
+      .catch(() => {});
+    return () => { current = false; };
+  }, [demoMode, activeProject?.projectId]);
 
   const resetWorkspaceScroll = () => {
     const main = document.querySelector(".app-main");
@@ -6135,7 +6168,7 @@ function PerfectPlannerShellCore({
   };
 
   const selectedForInspector = useMemo(() => {
-    if (!demoMode) return selected;
+    if (!demoMode || selected?.source === "allocation") return selected;
     const phaseNode = phases
       .flatMap((phase) => phase.nodes)
       .find((node) => node.id === selected?.id);
