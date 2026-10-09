@@ -22,11 +22,19 @@ export const currentDebtSnapshot = {
     { id: "DEBT-EDF05737C8B3366A", severity: "medium", surface: "ui", category: "maintainability", introducedAt: "2026-09-03T00:00:00.000Z", status: "open", owner: "UI owner", evidence: "src/PerfectPlannerShell.jsx:1" },
   ],
 };
-const decisionTitle = (key) => key
-  .replace(/:/g, " · ")
-  .replace(/-/g, " ")
-  .replace(/([a-z])([A-Z])/g, "$1 $2")
-  .replace(/^./, (value) => value.toUpperCase());
+// Shared sentence-case formatter for code keys shown to people:
+// "ai-autopilot" -> "AI autopilot", "rollbackPolicy" -> "Rollback policy".
+const ACRONYMS = { ai: "AI", ci: "CI", cd: "CD", id: "ID", api: "API", ui: "UI", ux: "UX", url: "URL", sso: "SSO", pii: "PII", llm: "LLM", os: "OS", sla: "SLA", slo: "SLO", http: "HTTP", json: "JSON", sql: "SQL", pwa: "PWA" };
+const NAMED_KEYS = { nonFunctional: "Quality limits", templateId: "Architecture template", templateVersion: "Template version", useCases: "Uses of your app" };
+export function sentenceCase(key) {
+  const raw = String(key ?? "").trim();
+  if (NAMED_KEYS[raw]) return NAMED_KEYS[raw];
+  const words = raw.replace(/([a-z0-9])([A-Z])/g, "$1 $2").replace(/[-_]+/g, " ").split(/\s+/).filter(Boolean)
+    .map((word) => ACRONYMS[word.toLowerCase()] ?? (/^[A-Z0-9]+$/.test(word) && word.length > 1 ? word : word.toLowerCase()));
+  return words.join(" ").replace(/^[a-z]/, (value) => value.toUpperCase());
+}
+// "ai-autopilot:rollbackPolicy" -> "AI autopilot · Rollback policy"
+export const decisionTitle = (key) => String(key ?? "").split(":").map(sentenceCase).join(" · ");
 
 export function buildBlueprintWorkspaceModel(input = {}) {
   const rulebook = evaluateArchitectureRulebook(input.rulebook ?? input.blueprint ?? currentRulebookInput);

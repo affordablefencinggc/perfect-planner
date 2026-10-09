@@ -3,7 +3,7 @@ import { ArrowRightIcon, CheckCircleIcon, SealCheckIcon, WarningIcon } from "@ph
 import { sameTaskDraftBinding } from "../project/taskDraftLedger.js";
 import { overlapReview, overlapReviewText } from "../project/taskCoordination.js";
 import { activePlanTasks, planApprovalStatus } from "../project/planApproval.js";
-import { usePlanApproval } from "../project/usePlanApproval.js";
+import { PLAN_BLOCKING_FINDINGS, planBlockingFindings, usePlanApproval } from "../project/usePlanApproval.js";
 import "./PlanApprovalStep.css";
 
 const SHOWN = 8;
@@ -22,14 +22,15 @@ export function PlanApprovalStep({ project, records, onWorkspace, store }) {
   // Overlaps are decided on the Collision page; they are not missing task details.
   const collisionData = records?.sections?.collisions?.data ?? null;
   const overlaps = useMemo(() => (ledger ? overlapReview(ledger, collisionData) : null), [ledger, collisionData]);
-  const missing = overlaps?.otherFindings ?? [];
+  const blocking = useMemo(() => planBlockingFindings(ledger), [ledger]);
+  const missing = (overlaps?.otherFindings ?? []).filter((item) => !PLAN_BLOCKING_FINDINGS.includes(item.kind));
   const overlapText = overlapReviewText(overlaps);
   if (!binding) return null;
 
   const projectBlocked = ["stale", "unavailable"].includes(project.state);
   const oldScan = Boolean(ledger && !sameTaskDraftBinding(ledger.binding, binding));
   const upToDate = status?.state === "recorded" && digest === status.record.planDigest;
-  const disabled = busy || loading || !ledger || !tasks.length || projectBlocked || oldScan || upToDate;
+  const disabled = busy || loading || !ledger || !tasks.length || projectBlocked || oldScan || upToDate || blocking.length > 0;
   const tone = status?.state === "recorded" ? "done" : status ? "attention" : "open";
 
   async function onApprove() {
@@ -64,6 +65,7 @@ export function PlanApprovalStep({ project, records, onWorkspace, store }) {
         {tasks.slice(0, SHOWN).map((task) => <li key={task.id}><code>{task.id}</code><span>{task.title || "Untitled task"}</span></li>)}
         {tasks.length > SHOWN && <li className="more">+{tasks.length - SHOWN} more in the Ledger</li>}
       </ol>}
+      {blocking.length > 0 && <div className="plan-approval-step-blocking" role="note" aria-label="Problems that block approval"><p className="plan-approval-step-state is-attention"><WarningIcon weight="fill" aria-hidden="true" />{blocking.length === 1 ? "1 dependency problem blocks approval" : `${blocking.length} dependency problems block approval`}: the tasks have no order they could run in.</p><ul>{blocking.slice(0, 6).map((item, index) => <li key={index}>{item.detail}</li>)}</ul></div>}
       {missing.length > 0 && <details className="plan-approval-step-missing"><summary>{plural(missing.length, "task detail")} still missing</summary><p>You can approve now, but these gaps stay visible until the tasks are completed in the Ledger.</p><ul>{missing.slice(0, 6).map((item, index) => <li key={index}>{item.detail}</li>)}</ul></details>}
       {overlapText.headline && <details className="plan-approval-step-missing" aria-label="Plan overlaps"><summary>{overlapText.headline}</summary><p>{overlaps.settled === overlaps.total ? "Every overlap between tasks has a decision on the Collision page." : "Tasks that change the same files need a decision on the Collision page. A split only counts once the two tasks’ file scopes no longer overlap."}</p><ul>{overlapText.lines.slice(0, 8).map((line) => <li key={line}>{line}</li>)}</ul>{overlaps.total > 8 && <p>+{overlaps.total - 8} more on the Collision page.</p>}{overlaps.splitPending > 0 && <button type="button" className="soft-button" onClick={() => onWorkspace?.("ledger")}>Edit file scopes in the Ledger <ArrowRightIcon aria-hidden="true" /></button>}{overlaps.open > 0 && <button type="button" className="soft-button" onClick={() => onWorkspace?.("collision")}>Decide overlaps on the Collision page <ArrowRightIcon aria-hidden="true" /></button>}</details>}
 

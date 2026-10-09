@@ -65,6 +65,21 @@ test("projects A and B retain isolated values, views, and active selection", () 
   assert.deepEqual(registry.getSnapshot().projectOrder, [appA.projectId, appB.projectId]);
 });
 
+// Trial define-05: every page change used to bump the "scan N" counter.
+test("view-only changes keep the project generation and persist the view", () => {
+  let clock = baseTime;
+  const storage = createMemoryStorage();
+  const registry = createProjectRegistry({ storage, now: () => ++clock });
+  const app = registry.upsert(session("a", "App A"));
+  for (const workspace of ["structure", "plan", "ledger", "components", "blueprint"]) registry.updateView(app.projectId, { workspace });
+  const after = registry.get(app.projectId);
+  assert.equal(after.generation, app.generation);
+  assert.equal(after.view.workspace, "blueprint");
+  const reloaded = createProjectRegistry({ storage, now: () => ++clock }).get(app.projectId);
+  assert.equal(reloaded.generation, app.generation);
+  assert.equal(reloaded.view.workspace, "blueprint");
+});
+
 test("stale registry instances rebase before writes and reconcile external conflicts", () => {
   let clock = baseTime;
   const shared = createMemoryStorage();
