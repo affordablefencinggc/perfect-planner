@@ -93,6 +93,20 @@ export async function protectRepository(ledger: Ledger, dir: string): Promise<Pr
   return { rules: "on", prePush: { state: "not-a-repo", reason: `${dir} is not the top of a git repository, so there is nothing to scan before a push.` } };
 }
 
+/** A whole drive or the home folder: never a project's repo, never a protected root (it would block ~/bin). */
+export function isHomeOrDrive(dir: string): boolean {
+  const real = (p: string) => {
+    try {
+      return fs.realpathSync.native(p);
+    } catch {
+      return path.resolve(p);
+    }
+  };
+  const same = (a: string, b: string) => (process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b);
+  const resolved = real(dir);
+  return same(path.dirname(resolved), resolved) || same(resolved, real(os.homedir()));
+}
+
 /**
  * The workers' git folder a person chose for this project (POST /tasks/repo writes repo.json), if any.
  * Never a whole drive or the home folder.
@@ -101,9 +115,7 @@ export function chosenRepository(root: string): string | null {
   try {
     const chosen = (JSON.parse(fs.readFileSync(path.join(root, PRIVATE_DIR, "repo.json"), "utf8")) as { root?: unknown }).root;
     if (typeof chosen !== "string" || !path.isAbsolute(chosen) || !fs.existsSync(chosen)) return null;
-    const real = fs.realpathSync.native(chosen);
-    if (path.dirname(real) === real || real === fs.realpathSync.native(os.homedir())) return null;
-    return chosen;
+    return isHomeOrDrive(chosen) ? null : chosen;
   } catch {
     return null;
   }
@@ -272,7 +284,7 @@ export function openCoreProject(baseRoot: string, key: string, override: string 
   const guarded = new Set<string>();
   const releases: (() => void)[] = [];
   const guard = (roots: readonly string[]) => {
-    const fresh = roots.filter((r) => typeof r === "string" && path.isAbsolute(r) && !guarded.has(r));
+    const fresh = roots.filter((r) => typeof r === "string" && path.isAbsolute(r) && !guarded.has(r) && !isHomeOrDrive(r));
     if (!fresh.length) return;
     fresh.forEach((r) => guarded.add(r));
     releases.push(protectRoots(fresh));

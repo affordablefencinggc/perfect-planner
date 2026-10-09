@@ -115,4 +115,14 @@ describe("git the host starts", () => {
     fs.writeFileSync(path.join(project, ".perfect-planner", "repo.json"), JSON.stringify({ root: os.homedir() }));
     expect(chosenRepoRoot(project)).toBeUndefined();
   });
+
+  it("never registers the home folder or a whole drive as a protected root", async () => {
+    const ctx = await startTestHost();
+    cleanups.push(() => ctx.stop());
+    const project = ctx.host.project("home");
+    project.protectRoots([os.homedir(), path.parse(os.homedir()).root]);
+    expect(registeredRoots()).not.toContain(os.homedir());
+    expect(registeredRoots()).not.toContain(path.parse(os.homedir()).root);
+    expect(registeredRoots()).toContain(project.root);
+  });
 });

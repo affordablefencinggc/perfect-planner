@@ -7,7 +7,7 @@ import { LedgerError } from "../ledger/index";
 import { startBridge, ToolError, type Bridge } from "../mcp/index";
 import { PeopleError } from "../people/index";
 import { asPersonRequest, hostKeys, type HostKeys } from "./keys";
-import { excludePrivateFolder, ledgerIntegrity, openCoreProject, pinOwnerAfterWrite, priorUseSignals, projectKey, projectRootFor, type CoreProject, type OwnerKeySource } from "./project";
+import { excludePrivateFolder, isHomeOrDrive, ledgerIntegrity, openCoreProject, pinOwnerAfterWrite, priorUseSignals, projectKey, projectRootFor, type CoreProject, type OwnerKeySource } from "./project";
 import { HttpError, Router } from "./router";
 import { PersonSessions } from "./session";
 import { registerRoutes } from "./routes/index";
@@ -119,7 +119,7 @@ export class CoreHost {
       // The project folder and the repo the person picked are protected before the first git run.
       const root = projectRootFor(this.options.root, key, this.options.projectRootOverride);
       const chosen = chosenRepoRoot(root);
-      const release = protectRoots([root, ...(chosen ? [chosen] : [])]);
+      const release = protectRoots([root, ...(chosen ? [chosen] : [])].filter((dir) => !isHomeOrDrive(dir)));
       try {
         // Read before the open adds its own exclude line and hook, so they never count as earlier use.
         this.priorUse.set(key, await priorUseSignals(chosen ?? root));
