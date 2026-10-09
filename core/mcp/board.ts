@@ -58,14 +58,15 @@ export function foldBoard(entries: readonly LedgerEntry[]): Map<string, TaskView
       case "task.progress":
         task.lastProgress = entry.summary;
         if (entry.data?.released === true) {
-          task.status = "open";
+          // A worker letting go of a finished task frees it but leaves it done.
+          if (task.status !== "done") task.status = "open";
           task.owner = null;
         } else if (entry.data?.resumeAll === true && task.status === "blocked") {
           task.status = task.owner ? "claimed" : "open";
         }
         break;
       case "task.blocked":
-        task.status = "blocked";
+        if (task.status !== "done") task.status = "blocked";
         if (entry.data?.released === true) task.owner = null;
         break;
       case "task.proof":

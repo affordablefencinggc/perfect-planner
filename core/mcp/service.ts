@@ -237,7 +237,8 @@ export class AgentService {
   }
 
   private release(agent: AgentRecord, { task, reason, blocked }: ToolInput<"release_task">) {
-    this.ownTask(agent, task, true);
+    const view = this.ownTask(agent, task, true);
+    if (view.status === "done" && blocked) throw new ToolError("CONFLICT", `${task} is already done, so it cannot be released as blocked.`);
     const entry = this.write({
       actor: this.actor(agent),
       type: blocked ? "task.blocked" : "task.progress",
@@ -247,7 +248,7 @@ export class AgentService {
       data: { released: true },
     });
     this.tokens.revokeTask(task);
-    return { entry: entry.n, status: blocked ? "blocked" : "open" };
+    return { entry: entry.n, status: view.status === "done" ? "done" : blocked ? "blocked" : "open" };
   }
 
   /**
