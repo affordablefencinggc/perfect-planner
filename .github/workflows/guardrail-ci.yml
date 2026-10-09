@@ -27,10 +27,28 @@ jobs:
       - run: npm run verify:secrets
       - run: npm run build
       - run: npm run verify:performance
-      - run: npm test
-      - run: npm run test:ui
+      - run: npm run test:report
+      - run: npm run test:ui:report
       - run: npm run verify:mcp -- --fixture
       - run: npm run test:sites
+
+  core-tests-cross-platform:
+    name: Core tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm run test:report
 
   windows-native:
     name: Windows native compile and tests

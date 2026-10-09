@@ -1,3 +1,5 @@
+// Real Git below: run hermetically regardless of the caller's Git config or GIT_* env.
+import "./helpers/hermetic-git.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { lstat, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -158,7 +160,7 @@ test("command time and output limits stop execution without returning unbounded 
   assert.equal(overflow.stdout.length, 0);
 });
 
-test("Windows timeout ignores poisoned SystemRoot and kills the descendant tree", { skip: process.platform !== "win32" }, async (t) => {
+test("Windows timeout ignores poisoned SystemRoot and kills the descendant tree", { skip: process.platform !== "win32" && "Windows-only (SystemRoot / taskkill process tree)" }, async (t) => {
   const f = await fixture(t);
   const marker = path.join(f.base, "descendant-survived.txt");
   const original = process.env.SystemRoot;

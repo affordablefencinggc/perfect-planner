@@ -4,7 +4,7 @@ import { readFile } from "node:fs/promises";
 import { buildWorkspaceDiscovery, buildWorkspaceStructureTree, workspaceDiscoveryLimits } from "../src/engine/workspaceDiscoveryEngine.js";
 import { validateWorkspaceCensus } from "../src/native/workspaceCensus.js";
 
-test("native 10,052-file receipt reaches discovery and structure without truncation", {skip: !process.env.PP_CENSUS_PROOF_OUTPUT}, async () => {
+test("native 10,052-file receipt reaches discovery and structure without truncation", {skip: !process.env.PP_CENSUS_PROOF_OUTPUT && "requires PP_CENSUS_PROOF_OUTPUT (native 10,052-file census receipt)"}, async () => {
   const receipt = JSON.parse(await readFile(process.env.PP_CENSUS_PROOF_OUTPUT, "utf8"));
   assert.equal(receipt.fileCount, 10_052);
   validateWorkspaceCensus(receipt);

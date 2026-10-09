@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import worker from "../worker/index.js";
+import { requiresBuild } from "./helpers/build-output.mjs";
 
 test("serves existing static assets without a fallback", async () => {
   const calls = [];
@@ -97,7 +98,7 @@ test("HTML route fallbacks are never cached", async () => {
   assert.equal(response.headers.get("cross-origin-opener-policy"), "same-origin");
 });
 
-test("emits the files required by Sites packaging", async () => {
+test("emits the files required by Sites packaging", { skip: requiresBuild }, async () => {
   await access(new URL("../dist/client/index.html", import.meta.url));
   await access(new URL("../dist/server/index.js", import.meta.url));
   await access(new URL("../dist/.openai/hosting.json", import.meta.url));
