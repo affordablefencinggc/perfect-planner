@@ -78,11 +78,12 @@ export function monthSpend(entries: readonly LedgerEntry[], month: string): Mont
   return { totalCents: ci + model, ciCents: ci, modelCents: model };
 }
 
-/** Latest budget decision, or undefined (no cap). */
+/** Latest budget decision by a person, or undefined (no cap). */
 export function currentBudget(entries: readonly LedgerEntry[]): BudgetConfig | undefined {
   for (let i = entries.length - 1; i >= 0; i--) {
     const entry = entries[i]!;
-    if (entry.type !== "decision.made" || (entry.data?.topic !== "budget" && entry.subject !== "budget")) continue;
+    // Only a person's decision counts: an agent may write decision.made, but never this one.
+    if (entry.type !== "decision.made" || entry.actor.kind !== "person" || entry.data?.topic !== "budget") continue;
     const b = entry.data?.budget as Partial<BudgetConfig> | undefined;
     if (!b || typeof b.monthlyCents !== "number" || !(b.monthlyCents > 0)) continue;
     const config: BudgetConfig = { monthlyCents: b.monthlyCents };

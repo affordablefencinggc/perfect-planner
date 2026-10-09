@@ -1,7 +1,7 @@
 import type { Actor, Ledger, LedgerEntry } from "../ledger/index";
 import { budgetStatus, formatCents } from "./budget";
 import { affectedTests } from "./ciPlan";
-import { DEFAULT_PRESET, PRESETS, needsDeepReview } from "./presets";
+import { DEFAULT_PRESET, PRESETS, currentPreset, needsDeepReview } from "./presets";
 import { triageRisk, type RiskRater, type Triage } from "./risk";
 import { scanChange } from "./secrets";
 import { checkSize, type SizeCapOptions } from "./sizeCap";
@@ -19,8 +19,12 @@ export interface DeepReviewOutcome {
 }
 
 export interface PipelineOptions {
-  preset?: PresetName;
-  /** Ledger entries, for the monthly budget. Omit to skip the budget check. */
+  /**
+   * Ledger entries: the review preset and the monthly budget are read from
+   * here, never from the caller, so whoever runs the gate cannot pick a
+   * cheaper preset. Without entries the default preset applies and the budget
+   * check is skipped.
+   */
   entries?: readonly LedgerEntry[];
   now?: Date;
   size?: SizeCapOptions;
@@ -59,7 +63,7 @@ function finish(preset: PresetName, checks: CheckResult[], verdict: PipelineVerd
 }
 
 export async function runCheapFirst(change: ChangeSet, options: PipelineOptions = {}): Promise<PipelineResult> {
-  const preset = options.preset ?? DEFAULT_PRESET;
+  const preset = options.entries ? currentPreset(options.entries) : DEFAULT_PRESET;
   const checks: CheckResult[] = [];
 
   // 1. Budget: a stopped month starts no new review spend.

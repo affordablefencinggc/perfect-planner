@@ -3,7 +3,7 @@ import { Ledger, MemoryStore } from "../ledger/index";
 import { appendNumbered, installNumberingRules } from "../numbering/index";
 import { setBudget, recordSpend } from "./budget";
 import { runCheapFirst, recordPipeline } from "./pipeline";
-import { DEFAULT_PRESET, PRESETS, currentPreset, needsDeepReview, setPreset } from "./presets";
+import { DEFAULT_PRESET, PRESETS, currentPreset, installSettingsRule, needsDeepReview, setPreset } from "./presets";
 import { areasOf, heuristicRisk, triageRisk } from "./risk";
 import type { ChangeSet } from "./types";
 
@@ -171,5 +171,34 @@ describe("cheap-first pipeline", () => {
     const entry = recordPipeline(ledger, system, "T-1", result);
     expect(entry.type).toBe("review.verdict");
     expect(entry.data).toMatchObject({ stage: "cheap-first", preset: "balanced", verdict: "ready", deep: false, risk: "low" });
+  });
+});
+
+describe("settings an agent cannot change", () => {
+  it("ignores a review-preset decision written straight to the ledger by an agent", () => {
+    const ledger = open();
+    setPreset(ledger, owner, "thorough", "we take payments now");
+    appendNumbered(ledger, { actor: agent, type: "decision.made", summary: "cheaper", reason: "save money", evidence: [], refs: [], data: { topic: "review-preset", preset: "cheap" } });
+    expect(currentPreset(ledger.entries())).toBe("thorough");
+  });
+
+  it("refuses the agent's write outright once the settings rule is installed", () => {
+    const ledger = open();
+    installSettingsRule(ledger);
+    expect(() =>
+      appendNumbered(ledger, { actor: agent, type: "decision.made", summary: "cheaper", reason: "save money", evidence: [], refs: [], data: { topic: "review-preset", preset: "cheap" } }),
+    ).toThrow(/Only a person/);
+    expect(() =>
+      appendNumbered(ledger, { actor: agent, type: "decision.made", summary: "more money", reason: "x", evidence: [], refs: [], data: { topic: "budget", budget: { monthlyCents: 999999 } } }),
+    ).toThrow(/Only a person/);
+    expect(() => setPreset(ledger, owner, "cheap", "solo prototype")).not.toThrow();
+  });
+
+  it("runs the gate on the ledger's preset, not on what a caller passes", async () => {
+    const ledger = open();
+    setPreset(ledger, owner, "thorough", "production app");
+    const result = await runCheapFirst(small, { entries: ledger.entries(), now: NOW, preset: "cheap" } as never);
+    expect(result.preset).toBe("thorough");
+    expect(result.deep).toBe(true);
   });
 });

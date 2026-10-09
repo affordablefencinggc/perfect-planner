@@ -23,7 +23,12 @@ setPreset(ledger, person, "thorough", reason) // decision.made D-n, data { topic
 needsDeepReview(preset, triage)               // { deep, why }
 ```
 
-Only a person can change the preset or the budget.
+Only a person can change the preset or the budget, enforced twice: the
+readers (`currentPreset`, `currentBudget`) ignore any such decision not
+written by a person, and `installSettingsRule(ledger)` refuses an agent's or
+Jev's `decision.made` on either topic outright. The gate reads the preset
+from the ledger (`runCheapFirst(change, { entries })`); callers cannot pass
+one in.
 
 ## Cheap checks first (`pipeline.ts`, `risk.ts`)
 

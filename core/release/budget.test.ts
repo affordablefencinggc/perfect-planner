@@ -289,3 +289,18 @@ describe("installBudgetRule", () => {
     expect(() => claim(ledger)).not.toThrow();
   });
 });
+
+describe("budget an agent cannot lift", () => {
+  it("ignores a budget decision written straight to the ledger by an agent", () => {
+    const { ledger } = setup();
+    setBudget(ledger, owner, { monthlyCents: 1000, reason: "monthly cap" });
+    appendNumbered(ledger, { actor: agent, type: "decision.made", summary: "raise", reason: "need more", evidence: [], refs: [], data: { topic: "budget", budget: { monthlyCents: 999999 } } });
+    expect(currentBudget(ledger.entries())?.monthlyCents).toBe(1000);
+  });
+
+  it("ignores a legacy subject-only budget entry from an agent", () => {
+    const ledger = Ledger.openSync(new MemoryStore(), { now: () => new Date("2026-10-09T00:00:00Z") });
+    ledger.append({ actor: agent, type: "decision.made", subject: "budget", summary: "raise", reason: "x", evidence: [], refs: [], data: { budget: { monthlyCents: 999999 } } });
+    expect(currentBudget(ledger.entries())).toBeUndefined();
+  });
+});
