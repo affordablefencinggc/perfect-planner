@@ -7,7 +7,11 @@ import { withPlanLock } from "./planLock.mjs";
 import {allocateCompilationTemp,removeEmptyCompilationTemp} from './nativeCompilationScratch.mjs';
 
 const HANDLE = /^dpapi:v1:([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})$/;
-const FIXED_DPAPI_SCRIPT = String.raw`$ErrorActionPreference='Stop'; Add-Type -AssemblyName System.Security; $request=[Console]::In.ReadToEnd()|ConvertFrom-Json; $bytes=[Convert]::FromBase64String([string]$request.value); if($request.action -eq 'protect'){$result=[Security.Cryptography.ProtectedData]::Protect($bytes,$null,[Security.Cryptography.DataProtectionScope]::CurrentUser)}elseif($request.action -eq 'unprotect'){$result=[Security.Cryptography.ProtectedData]::Unprotect($bytes,$null,[Security.Cryptography.DataProtectionScope]::CurrentUser)}else{throw 'Unsupported DPAPI action'}; @{value=[Convert]::ToBase64String($result)}|ConvertTo-Json -Compress`;
+// Module autoloading is off and only .NET is used: with the isolated environment below (no
+// PSModulePath), loading cmdlets such as ConvertFrom-Json or Add-Type makes Windows PowerShell
+// scan for modules for 20-45 s. The script also avoids double quotes, which Windows
+// command-line quoting would mangle; [char]34 stands in for them.
+const FIXED_DPAPI_SCRIPT = String.raw`$PSModuleAutoLoadingPreference='None'; $ErrorActionPreference='Stop'; [void][Reflection.Assembly]::Load('System.Security, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'); $q=[char]34; $request=[Console]::In.ReadToEnd(); if($request -cnotmatch ('^\{'+$q+'action'+$q+':'+$q+'(protect|unprotect)'+$q+','+$q+'value'+$q+':'+$q+'([A-Za-z0-9+/=]*)'+$q+'\}$')){throw 'Malformed DPAPI request'}; $bytes=[Convert]::FromBase64String($Matches[2]); if($Matches[1] -ceq 'protect'){$result=[Security.Cryptography.ProtectedData]::Protect($bytes,$null,[Security.Cryptography.DataProtectionScope]::CurrentUser)}else{$result=[Security.Cryptography.ProtectedData]::Unprotect($bytes,$null,[Security.Cryptography.DataProtectionScope]::CurrentUser)}; [Console]::Out.Write('{'+$q+'value'+$q+':'+$q+[Convert]::ToBase64String($result)+$q+'}')`;
 
 const POWERSHELL='C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe';
 async function executeFixedPowerShell({ file, args, stdin, maxOutputBytes,timeoutMs,signal,compilationTempRoot }) {
