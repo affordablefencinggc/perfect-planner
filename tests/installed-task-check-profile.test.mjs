@@ -1,3 +1,4 @@
+import "./helpers/hermetic-env.mjs";
 import test from 'node:test';
 import {spawnSync} from 'node:child_process';
 import assert from 'node:assert/strict';

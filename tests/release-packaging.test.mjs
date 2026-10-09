@@ -1,3 +1,4 @@
+import "./helpers/hermetic-env.mjs";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import {
