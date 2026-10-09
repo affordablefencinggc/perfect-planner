@@ -195,12 +195,14 @@ export function collisionStatus(data) {
   const resolutions = data?.resolutions ?? {};
   const state = (item) => resolutionState(item, resolutions[item.key]);
   const hardStops = collisions.filter((item) => item.severity === "hard-stop");
+  // One rule everywhere: any undecided pair (hard stop or "needs an order") blocks Build.
   return {
     checked: data?.checkedTaskIds?.length ?? 0,
     unchecked: (data?.uncheckedTaskIds?.length ?? 0) + (data?.invalid?.length ?? 0),
     total: collisions.length,
     hardStops: hardStops.length,
     openHardStops: hardStops.filter((item) => state(item) !== "decided").length,
+    open: collisions.filter((item) => state(item) !== "decided").length,
     decided: collisions.filter((item) => state(item) === "decided").length,
     splitPending: collisions.filter((item) => state(item) === "split-pending").length,
   };
@@ -311,10 +313,43 @@ export function suggestedWaves(ledger, collisionData = null) {
   return { waves, blocked: [...remaining].sort() };
 }
 
+const cleanOwner = (value) => String(value ?? "").trim().replace(/\s+/g, " ");
+const bareAgent = (owner) => /^agent\s*:\s*$/i.test(owner);
+
 export function normalizeAssignment(input) {
-  const owner = String(input?.owner ?? "").trim().replace(/\s+/g, " ").slice(0, OWNER_MAX);
+  const owner = cleanOwner(input?.owner).slice(0, OWNER_MAX);
   const wave = Number(input?.wave);
-  return { owner, wave: Number.isInteger(wave) && wave >= 1 && wave <= WAVE_MAX ? wave : null };
+  return { owner: bareAgent(owner) ? "" : owner, wave: Number.isInteger(wave) && wave >= 1 && wave <= WAVE_MAX ? wave : null };
+}
+
+/** Field errors for one row of the assignment form; an empty field is allowed (it stays "missing"). */
+export function assignmentErrors(input) {
+  const errors = {};
+  const owner = cleanOwner(input?.owner), wave = String(input?.wave ?? "").trim();
+  if (bareAgent(owner)) errors.owner = "Name the agent after “agent:”, or clear the field.";
+  else if (owner.length > OWNER_MAX) errors.owner = `Owner names can be at most ${OWNER_MAX} characters (this one is ${owner.length}).`;
+  if (wave && normalizeAssignment({ wave }).wave == null) errors.wave = `Wave must be a whole number from 1 to ${WAVE_MAX}.`;
+  return errors;
+}
+
+export const ownerKind = (owner) => /^agent\s*:\s*\S/i.test(owner ?? "") ? "agent" : owner && !bareAgent(owner) ? "person" : null;
+
+/**
+ * Waves that contradict a dependency or a recorded "do X first" decision:
+ * [{taskId, before, reason}] where `before` must be in an earlier wave than `taskId`.
+ */
+export function waveConflicts(ledger, collisionData, assignments) {
+  const tasks = activeTasks(ledger), ids = new Set(tasks.map((task) => task.id));
+  const wave = (id) => normalizeAssignment(assignments?.[id]).wave;
+  const out = [];
+  const check = (before, after, reason) => { const a = wave(before), b = wave(after); if (a != null && b != null && a >= b) out.push({ taskId: after, before, reason }); };
+  for (const task of tasks) for (const dep of task.dependsOn ?? []) if (ids.has(dep)) check(dep, task.id, `${task.id} depends on ${dep}`);
+  for (const item of collisionData?.collisions ?? []) {
+    const resolution = collisionData.resolutions?.[item.key];
+    if (!item.tasks?.every((id) => ids.has(id)) || resolutionState(item, resolution) !== "decided" || resolution.choice !== "order") continue;
+    check(resolution.first, item.tasks.find((id) => id !== resolution.first), `the overlap decision says ${resolution.first} goes first`);
+  }
+  return out;
 }
 
 /**
@@ -336,7 +371,6 @@ export function confirmedAssignments(form) {
   return Object.fromEntries(Object.entries(form ?? {}).map(([id, value]) => [id, { owner: value?.fromLedger ? "" : value?.owner ?? "", wave: value?.wave ?? "" }]));
 }
 
-export const ownerKind =(owner) => /^agent\s*:/i.test(owner ?? "") ? "agent" : owner ? "person" : null;
 
 export function buildAllocationRecord({ ledger, censusDigest, collisionData, assignments, now = new Date().toISOString() }) {
   const ids = activeTasks(ledger).map((task) => task.id);
@@ -355,7 +389,7 @@ export function buildAllocationRecord({ ledger, censusDigest, collisionData, ass
 export function allocationStatus(data) {
   const ids = Array.isArray(data?.taskIds) ? data.taskIds : [];
   const assignments = data?.assignments ?? {};
-  const owned = ids.filter((id) => assignments[id]?.owner);
+  const owned = ids.filter((id) => normalizeAssignment(assignments[id]).owner);
   const waves = new Set(ids.map((id) => assignments[id]?.wave).filter(Boolean));
   return { tasks: ids.length, owned: owned.length, missing: ids.length - owned.length, waves: waves.size, missingWave: ids.filter((id) => !assignments[id]?.wave).length };
 }

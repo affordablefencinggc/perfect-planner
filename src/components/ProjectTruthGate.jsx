@@ -7,7 +7,9 @@ const KNOWN_STATES = new Set(["empty", "demo", "imported", "generated", "authori
 const TECHNICAL_ROWS = new Set(["Project ID", "Generation", "Entity", "Digest", "Schema", "Revision", "Adapter"]);
 const ROW_LABEL_OVERRIDES = { Generation: "Scan", Digest: "Fingerprint", "Authority reason": "Approval reason" };
 const WINDOWS_PATH = /(?:[a-zA-Z]:[\\/]|\\\\)[^\n\r]*/g;
-const POSIX_PATH = /(^|[\s("'=])\/(?!\/)[^\n\r]*/g;
+// A POSIX path starts with "/" followed directly by a path character, so a
+// separator such as "To-do / Ledger" is not mistaken for a path.
+const POSIX_PATH = /(^|[\s("'=])\/(?=[^\s/])[^\n\r]*/g;
 
 function safeText(value) {
   if (value === null || value === undefined || value === "") return "Not available";
@@ -178,10 +180,10 @@ export function ProjectTruthGate({
         <span className="project-truth-trigger-copy">
           <small>ACTIVE PROJECT</small>
           <strong>{projectName}</strong>
-          <span className={hasProject ? "advanced-only" : undefined}>{hasProject ? projectId : stateLabel(state, hasProject)}{projectSession?.generation !== null && projectSession?.generation !== undefined ? ` · scan ${safeText(projectSession.generation)}` : ""}</span>
+          {hasProject && <span className="advanced-only">{projectId}{projectSession?.generation !== null && projectSession?.generation !== undefined ? ` · scan ${safeText(projectSession.generation)}` : ""}</span>}
         </span>
         {isDemo && <span className="project-truth-demo-badge">Demo</span>}
-        <span className={`project-truth-state-badge state-${state}`}>{stateLabel(state, hasProject)}</span>
+        {hasProject && <span className={`project-truth-state-badge state-${state}`}>{stateLabel(state, hasProject)}</span>}
       </button>
 
       {showWorkspaceState && NON_READY_STATES.has(state) && (

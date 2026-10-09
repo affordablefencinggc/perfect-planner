@@ -363,7 +363,7 @@ describe("project Home consumes the project-home model", () => {
     ));
     expect(
       screen.getByRole("region", { name: "Project blockers" }).textContent,
-    ).toContain("1 item prevent promotion");
+    ).toContain("1 item prevents promotion");
     expect(screen.queryByText("Project status ready")).toBeNull();
     const next = expectOnlyModelAction(
       container,
