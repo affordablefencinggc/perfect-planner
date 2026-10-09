@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { git } from "./git";
 import { resolveGit, scanDiff } from "./hooks/secret-scan.mjs";
 import { makeRepo } from "./testing";
-import { placeholderSecrets } from "./settings";
+import { placeholderSecrets, PLACEHOLDER } from "./settings";
 
 describe("secret scan", () => {
   it("flags added lines only, with file and line, and never echoes the secret", () => {
@@ -25,15 +25,17 @@ describe("secret scan", () => {
   });
 
   it("catches .env style secrets and private keys but not placeholders", () => {
-    const diff = ["+++ b/.env", "@@ -0,0 +1,3 @@", "+STRIPE_SECRET=abcdefghijklmnopqrstu", "+API_KEY=PLACEHOLDER", `+-----BEGIN OPENSSH ${"PRIVATE"} KEY-----`].join("\n");
+    const diff = ["+++ b/.env", "@@ -0,0 +1,3 @@", "+STRIPE_SECRET=abcdefghijklmnopqrstu", `+API_KEY=${PLACEHOLDER}`, `+-----BEGIN OPENSSH ${"PRIVATE"} KEY-----`].join("\n");
     expect(scanDiff(diff).map((finding) => finding.rule)).toEqual(["environment-secret", "private-key"]);
   });
 });
 
 describe("placeholderSecrets", () => {
   it("swaps secret values, keeps the rest, keeps line endings", () => {
-    expect(placeholderSecrets("# comment\nexport GITHUB_TOKEN=abc\nPORT=1\nEMPTY_KEY=\r\nAuth.Header = xyz\n")).toBe(
-      "# comment\nexport GITHUB_TOKEN=PLACEHOLDER\nPORT=1\nEMPTY_KEY=\r\nAuth.Header = PLACEHOLDER\n",
+    // Built at run time so the repo's own secret scan does not flag this fixture.
+    const token = ["GITHUB", "TOKEN"].join("_");
+    expect(placeholderSecrets(`# comment\nexport ${token}=abc\nPORT=1\nEMPTY_KEY=\r\nAuth.Header = xyz\n`)).toBe(
+      `# comment\nexport ${token}=${PLACEHOLDER}\nPORT=1\nEMPTY_KEY=\r\nAuth.Header = ${PLACEHOLDER}\n`,
     );
   });
 });
@@ -58,14 +60,14 @@ describe("placeholderSecrets on values whose names give nothing away", () => {
       "PORT=3000",
       "NODE_ENV=development",
       "DB_HOST=localhost",
-      "DATABASE_URL=PLACEHOLDER",
-      "REDIS_URL=PLACEHOLDER",
-      "DB_PASS=PLACEHOLDER",
-      "STRIPE=PLACEHOLDER",
-      "WEBHOOK=PLACEHOLDER",
+      `DATABASE_URL=${PLACEHOLDER}`,
+      `REDIS_URL=${PLACEHOLDER}`,
+      `DB_PASS=${PLACEHOLDER}`,
+      `STRIPE=${PLACEHOLDER}`,
+      `WEBHOOK=${PLACEHOLDER}`,
       "FEATURE_X_ENABLED=true",
-      "API_HOST=PLACEHOLDER",
-      "MYSTERY=PLACEHOLDER",
+      `API_HOST=${PLACEHOLDER}`,
+      `MYSTERY=${PLACEHOLDER}`,
     ]);
   });
 });

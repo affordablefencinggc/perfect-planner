@@ -38,8 +38,9 @@ approval stop work: `canStart`, `prove` and `mergeAndVerify` refuse until Jev re
 
 `requireJevTestReview` (a `TestGate` option and `gateRule({ requireJevTestReview })`,
 default `false`) makes work wait until Jev has approved the current test, not only
-until open gaps are cleared. It stays off so the loop runs before Jev's key is set up;
-the app should turn it on once Jev is configured.
+until open gaps are cleared. Decided policy (the owner's choice, 2026-10-09): Jev's
+test review is optional until a Jev key is configured and required after, so the app
+turns this on whenever Jev is set up.
 
 Redefining a test (a new `test.defined`) voids the baseline, Jev verdict and
 approval tied to the previous definition. A reopened attempt (`T-14.a2`)
