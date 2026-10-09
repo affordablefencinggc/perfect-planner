@@ -109,6 +109,8 @@ export interface LedgerStatus {
   problem?: ChainProblem;
   detail?: string;
   acknowledged: string[];
+  /** The owner's principal, only when the ledger was opened with the project's ownerKey and it checks out. */
+  owner?: string;
   /** Set when opening repaired a torn final line left by a crash mid-write. */
   repaired?: string;
 }

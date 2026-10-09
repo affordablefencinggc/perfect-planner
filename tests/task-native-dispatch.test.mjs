@@ -1,3 +1,4 @@
+import "./helpers/hermetic-env.mjs";
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdtemp,mkdir,readFile,writeFile,rename,cp,lstat,unlink} from 'node:fs/promises';
@@ -23,6 +24,8 @@ import {candidateSnapshot} from '../src/node/mergedStateRunner.mjs';
 import {emptyTaskDraftLedger,updateTaskDraft} from '../src/project/taskDraftLedger.js';
 import {createTrustedUserGestureProducer} from '../src/node/confirmationStore.mjs';
 const enabled=Boolean(process.env.PP_NATIVE_DISPATCH_FIXTURE), proof=[];
+const fixtureSkip=!enabled&&'requires PP_NATIVE_DISPATCH_FIXTURE (built native dispatch fixture)';
+const hostSkip=fixtureSkip||(!process.env.PP_NATIVE_TASK_HOST&&'requires PP_NATIVE_TASK_HOST (installed native task host)');
 async function fixture(mode, taskCount=1,checkCount=1){
   const executable=path.normalize(process.env.PP_NATIVE_DISPATCH_FIXTURE);
   const executableDigest=createHash('sha256').update(await readFile(executable)).digest('hex');
@@ -68,7 +71,7 @@ async function fixture(mode, taskCount=1,checkCount=1){
   const resultCustody=createTaskNativeResultCustody({grants,observations:observationStore});
   return {composition:{root,binding,proposalConfig,checkContract,confirmationPath:path.join(root,'confirmation.json')},review,grants,input,executeNative,nativeAdapter,nativeCustody:nativeAdapter?resultCustody:undefined,candidateRoot:candidate,observationStore,resultCustody,revoke:()=>releaseSession(sessionRegistryPath,credentials),recordObservation:resultCustody.record,launches:()=>launches,args:{expected,confirmationId:confirmation.id,enrollmentHead,input,consumptionReceipt:consumed.consumptionReceipt,request:{grantId:issued.grant.grantId,requestId:'intent',expectedRevision:2}}};
 }
-test('installed owner composes reviewed enrollment, grant, native run and owner result custody',{skip:!enabled||!process.env.PP_NATIVE_TASK_HOST},async()=>{
+test('installed owner composes reviewed enrollment, grant, native run and owner result custody',{skip:hostSkip},async()=>{
  const f=await fixture('pass'),c=f.composition,stateDirectory=path.join(c.root,'installed-state');await mkdir(stateDirectory);
  let observed={...c.binding};
  const custody=createInstalledTaskExecutionCustody({stateDirectory,binding:c.binding,observeBinding:async()=>observed});
@@ -98,7 +101,7 @@ test('installed owner composes reviewed enrollment, grant, native run and owner 
  assert.equal((await owner.shutdown()).cleanupComplete,true);assert.throws(()=>owner.createWorker('after close'),/CLOSED/);
 });
 
-test('actual native output with a mismatched retention binding preserves unresolved intent without relaunch',{skip:!enabled||!process.env.PP_NATIVE_TASK_HOST},async()=>{
+test('actual native output with a mismatched retention binding preserves unresolved intent without relaunch',{skip:hostSkip},async()=>{
  for(const key of ['candidateDigest','checkContractDigest']){
   const f=await fixture('pass');let captured;
   const dispatch=createTaskNativeDispatch({review:f.review,executeNative:f.executeNative,nativeCustody:{...f.nativeCustody,retainProvisional:async input=>{
@@ -124,7 +127,7 @@ test('actual native output with a mismatched retention binding preserves unresol
   assert.equal((await f.grants.inspect()).revision,3);assert.equal(f.launches(),1);
  }
 });
-test('durable installed execution request retains failed native result without retrying the run',{skip:!enabled||!process.env.PP_NATIVE_TASK_HOST},async()=>{
+test('durable installed execution request retains failed native result without retrying the run',{skip:hostSkip},async()=>{
  const f=await fixture('fail'),c=f.composition,stateDirectory=path.join(c.root,'request-state');await mkdir(stateDirectory);
  const custody=createInstalledTaskExecutionCustody({stateDirectory,binding:c.binding,observeBinding:async()=>c.binding});
  const ownerConfig={...c,registeredRoot:f.candidateRoot,actor:'request-owner-fixture',nativeConfig:{executable:path.normalize(process.env.PP_NATIVE_TASK_HOST),executableDigest:process.env.PP_NATIVE_TASK_HOST_SHA256,cwd:c.root,compilationTempRoot:path.join(stateDirectory,'compilation')}};
@@ -149,7 +152,7 @@ test('durable installed execution request retains failed native result without r
  const reopenedHost=composed(reopened);
  assert.deepEqual(await call(reopenedHost,'execute-check','transport-2'),first);assert.deepEqual(await call(reopenedHost,'recover-check-execution','transport-3'),first);assert.equal((await custody.grants.inspect()).revision,4);assert.equal((await reopenedHost.shutdown()).cleanupComplete,true);
 });
-test('production bridge requires retention and refuses expired grants or changed guarded candidates',{skip:!enabled||!process.env.PP_NATIVE_TASK_HOST},async()=>{
+test('production bridge requires retention and refuses expired grants or changed guarded candidates',{skip:hostSkip},async()=>{
  const f=await fixture('pass');
  const spec={timeoutMs:1000,intentDigest:'a'.repeat(64),registeredRoot:f.candidateRoot,candidateDigest:'f'.repeat(64)};
  await assert.rejects(f.nativeAdapter(spec,{expiresAt:new Date(Date.now()+60000).toISOString()}),/NATIVE_TASK_RETENTION_REQUIRED/);
@@ -159,7 +162,7 @@ test('production bridge requires retention and refuses expired grants or changed
  assert.equal((await f.grants.inspect()).revision,3);
  assert.equal(f.launches(),0);
 });
-test('real native check follows reviewed intent once despite concurrent replay',{skip:!enabled},async()=>{
+test('real native check follows reviewed intent once despite concurrent replay',{skip:fixtureSkip},async()=>{
   const f=await fixture('pass'),dispatch=createTaskNativeDispatch(f);
   await assert.rejects(dispatch.dispatch({...f.args,input:{...f.input,workerId:'foreign'}}),/NOT_ASSIGNED/);assert.equal(f.launches(),0);
   const replies=await Promise.all([dispatch.dispatch(f.args),dispatch.dispatch(f.args)]);
@@ -170,7 +173,7 @@ test('real native check follows reviewed intent once despite concurrent replay',
   assert.equal(completed.executionAuthorized,false);assert.equal((await f.grants.inspect()).revision,4);
   assert.deepEqual((await f.observationStore.inspect(completed.intentReceipt)).receipt,completed.observationReceipt);
 });
-test('lost custody reply after native execution recovers saved failure without a second launch',{skip:!enabled},async()=>{
+test('lost custody reply after native execution recovers saved failure without a second launch',{skip:fixtureSkip},async()=>{
  const f=await fixture('fail'),dispatch=createTaskNativeDispatch({...f,...(f.nativeCustody?{nativeCustody:{...f.nativeCustody,finalize:async input=>{await f.nativeCustody.finalize(input);throw Error('controlled lost custody reply');}}}:{recordObservation:async input=>{await f.recordObservation(input);throw Error('controlled lost custody reply');}})});
  await assert.rejects(dispatch.dispatch(f.args),/NATIVE_TASK_DISPATCH_UNRESOLVED/);assert.equal(f.launches(),1);
  const retry=await createTaskNativeDispatch(f).dispatch(f.args);assert.equal(retry.dispatchObserved,false);assert.equal(f.launches(),1);
@@ -181,7 +184,7 @@ test('lost custody reply after native execution recovers saved failure without a
  const reconciled=await f.resultCustody.reconcile(retry.intentReceipt);assert.equal(reconciled.observationLink.recordDigest,summary.observationLinkDigest);assert.equal((await f.grants.inspect()).revision,4);assert.equal(f.launches(),1);
  await assert.rejects(reader.readOwn({...query,workerId:'foreign'}),/UNAVAILABLE/);await f.revoke();await assert.rejects(reader.readOwn(query));assert.equal(f.launches(),1);
 });
-test('lost reply after actual failed native execution cannot cause a relaunch',{skip:!enabled},async()=>{
+test('lost reply after actual failed native execution cannot cause a relaunch',{skip:fixtureSkip},async()=>{
   const f=await fixture('fail');const dispatch=createTaskNativeDispatch({review:f.review,nativeCustody:f.nativeCustody,executeNative:async (spec,options)=>{const result=await f.executeNative(spec,options);assert.equal((f.nativeCustody?result.observation:result).exitCode,7);throw Error('controlled lost reply after native exit');}});
   await assert.rejects(dispatch.dispatch(f.args),/NATIVE_TASK_DISPATCH_UNRESOLVED/);assert.equal(f.launches(),1);
   const reopened=createTaskNativeDispatch(f),retry=await reopened.dispatch(f.args);assert.equal(retry.dispatchObserved,false);assert.equal(f.launches(),1);
@@ -189,7 +192,7 @@ test('lost reply after actual failed native execution cannot cause a relaunch',{
   assert.equal(recovered.intentReceipt.runId,retry.intentReceipt.runId);assert.equal(recovered.intentReceipt.state,'launch-unresolved');assert.equal(recovered.launchAllowed,false);
 });
 
-test('native candidate manifest is retained under guard and required for later result reads',{skip:!enabled||!process.env.PP_NATIVE_TASK_HOST},async()=>{
+test('native candidate manifest is retained under guard and required for later result reads',{skip:hostSkip},async()=>{
  const f=await fixture('pass');let retained;
  const dispatch=createTaskNativeDispatch({...f,nativeCustody:{...f.nativeCustody,retainCandidate:async input=>{
   await assert.rejects(writeFile(path.join(f.candidateRoot,'input.txt'),'forbidden during manifest retention'));
@@ -206,7 +209,7 @@ test('native candidate manifest is retained under guard and required for later r
  await assert.rejects(dispatch.dispatch(f.args),/TASK_GRANT_CONTEXT_MISMATCH/);assert.equal(f.launches(),1);assert.equal((await f.grants.inspect()).revision,4);
 });
 
-test('native candidate retention failure or lost reply leaves the first intent unresolved',{skip:!enabled||!process.env.PP_NATIVE_TASK_HOST},async()=>{
+test('native candidate retention failure or lost reply leaves the first intent unresolved',{skip:hostSkip},async()=>{
  for(const retainFirst of [false,true]){
   const f=await fixture('pass');let intent;
   const dispatch=createTaskNativeDispatch({...f,nativeCustody:{...f.nativeCustody,retainCandidate:async input=>{
@@ -218,7 +221,7 @@ test('native candidate retention failure or lost reply leaves the first intent u
  }
 });
 
-test('native guard remains held during retention and interrupted custody cannot be replayed',{skip:!enabled||!process.env.PP_NATIVE_TASK_HOST},async()=>{
+test('native guard remains held during retention and interrupted custody cannot be replayed',{skip:hostSkip},async()=>{
  for(const mode of ['transient-change','cancel-after-retention','lost-retention-reply']){
   const f=await fixture('pass'),abort=new AbortController();let original;
   const dispatch=createTaskNativeDispatch({...f,nativeCustody:{...f.nativeCustody,retainProvisional:async input=>{
@@ -238,7 +241,7 @@ test('native guard remains held during retention and interrupted custody cannot 
  }
 });
 
-test('installed owner derives complete required-check coverage from retained native executions',{skip:!enabled||!process.env.PP_NATIVE_TASK_HOST},async()=>{
+test('installed owner derives complete required-check coverage from retained native executions',{skip:hostSkip},async()=>{
  const f=await fixture('pass',1,3),c=f.composition,stateDirectory=path.join(c.root,'coverage-state');await mkdir(stateDirectory);
  const custody=createInstalledTaskExecutionCustody({stateDirectory,binding:c.binding,observeBinding:async()=>c.binding});
  const config={...c,registeredRoot:f.candidateRoot,actor:'coverage-owner',nativeConfig:{executable:path.normalize(process.env.PP_NATIVE_TASK_HOST),executableDigest:process.env.PP_NATIVE_TASK_HOST_SHA256,cwd:c.root,compilationTempRoot:path.join(stateDirectory,'compilation')}};
@@ -264,7 +267,7 @@ test('installed owner derives complete required-check coverage from retained nat
  await reopened.shutdown();
 });
 
-test('durable full-task request executes the approved set once under one shared worker',{skip:!enabled||!process.env.PP_NATIVE_TASK_HOST},async()=>{
+test('durable full-task request executes the approved set once under one shared worker',{skip:hostSkip},async()=>{
  const f=await fixture('pass',1,3),c=f.composition,stateDirectory=path.join(c.root,'full-task-state');await mkdir(stateDirectory);
  const custody=createInstalledTaskExecutionCustody({stateDirectory,binding:c.binding,observeBinding:async()=>c.binding});
  const ownerConfig={...c,registeredRoot:f.candidateRoot,actor:'full-task-owner',nativeConfig:{executable:path.normalize(process.env.PP_NATIVE_TASK_HOST),executableDigest:process.env.PP_NATIVE_TASK_HOST_SHA256,cwd:c.root,compilationTempRoot:path.join(stateDirectory,'compilation')}};
@@ -284,7 +287,7 @@ test('durable full-task request executes the approved set once under one shared 
  assert.deepEqual(await reopened.recoverTask(request),result);assert.deepEqual(await reopened.executeTask(request),result);assert.equal((await custody.grants.inspect()).revision,12);assert.equal((await reopened.shutdown()).cleanupComplete,true);
 });
 
-test('interrupted full-task request does not relaunch settled checks or start missing checks',{skip:!enabled||!process.env.PP_NATIVE_TASK_HOST},async()=>{
+test('interrupted full-task request does not relaunch settled checks or start missing checks',{skip:hostSkip},async()=>{
  const f=await fixture('pass',1,3),c=f.composition,stateDirectory=path.join(c.root,'interrupted-task-state');await mkdir(stateDirectory);
  const custody=createInstalledTaskExecutionCustody({stateDirectory,binding:c.binding,observeBinding:async()=>c.binding});
  const ownerConfig={...c,registeredRoot:f.candidateRoot,actor:'interrupted-task-owner',nativeConfig:{executable:path.normalize(process.env.PP_NATIVE_TASK_HOST),executableDigest:process.env.PP_NATIVE_TASK_HOST_SHA256,cwd:c.root,compilationTempRoot:path.join(stateDirectory,'compilation')}};
@@ -301,7 +304,7 @@ test('interrupted full-task request does not relaunch settled checks or start mi
  assert.equal((await custody.grants.inspect()).revision,4);await reopened.shutdown();await reopenedOwner.shutdown();
 });
 
-test('155 actual native checks preserve one failure and every result across owner restart', {skip:!enabled||!process.env.PP_NATIVE_TASK_HOST||process.env.PP_NATIVE_POPULATION!=='155',timeout:900000},async()=>{
+test('155 actual native checks preserve one failure and every result across owner restart', {skip:hostSkip||(process.env.PP_NATIVE_POPULATION!=='155'&&'requires PP_NATIVE_POPULATION=155 (long native population run)'),timeout:900000},async()=>{
   const file=process.env.PP_NATIVE_DISPATCH_RESULTS;
  let prior;try{prior=JSON.parse(await readFile(file,'utf8'));}catch(error){if(error.code!=='ENOENT')throw error;}
  const f=prior?prior.fixture:await fixture('pass',155),c=f.composition,stateDirectory=path.join(c.root,'population-state');
@@ -358,7 +361,7 @@ test('155 actual native checks preserve one failure and every result across owne
  evidence.batches.push({start,end,reopened:evidence.reopened});evidence.verdict=end===155?'PASS':'PARTIAL';await save();
 });
 
-test('owner proves exact released pre-grant enrollment without starting or discarding an original', {skip:!enabled||!process.env.PP_NATIVE_TASK_HOST},async()=>{
+test('owner proves exact released pre-grant enrollment without starting or discarding an original', {skip:hostSkip},async()=>{
  const f=await fixture('pass'),c=f.composition,stateDirectory=path.join(c.root,'not-started-state');await mkdir(stateDirectory);
  let observed={...c.binding};
  const custody=createInstalledTaskExecutionCustody({stateDirectory,binding:c.binding,observeBinding:async()=>observed});
@@ -381,7 +384,7 @@ test('owner proves exact released pre-grant enrollment without starting or disca
  assert.equal((await owner.shutdown()).cleanupComplete,true);
 });
 
-test('owner refuses not-started proof once any exact worker grant exists', {skip:!enabled||!process.env.PP_NATIVE_TASK_HOST},async()=>{
+test('owner refuses not-started proof once any exact worker grant exists', {skip:hostSkip},async()=>{
  const f=await fixture('pass'),c=f.composition,stateDirectory=path.join(c.root,'issued-no-proof');await mkdir(stateDirectory);
  const custody=createInstalledTaskExecutionCustody({stateDirectory,binding:c.binding,observeBinding:async()=>c.binding});
  const owner=custody.createExecution({...c,registeredRoot:f.candidateRoot,actor:'issued-owner',nativeConfig:{executable:path.normalize(process.env.PP_NATIVE_TASK_HOST),executableDigest:process.env.PP_NATIVE_TASK_HOST_SHA256,cwd:c.root,compilationTempRoot:path.join(stateDirectory,'compilation')}});
@@ -393,7 +396,7 @@ test('owner refuses not-started proof once any exact worker grant exists', {skip
  assert.equal((await custody.grants.inspect()).grants[0].grant.grantId,issued.grant.grantId);assert.equal(f.launches(),0);assert.equal((await owner.shutdown()).cleanupComplete,true);
 });
 
-test('large candidate native execution retains complete identity across owner reopen',{skip:!enabled||!process.env.PP_NATIVE_TASK_HOST||!process.env.PP_NATIVE_LARGE_CANDIDATE},async()=>{
+test('large candidate native execution retains complete identity across owner reopen',{skip:hostSkip||(!process.env.PP_NATIVE_LARGE_CANDIDATE&&'requires PP_NATIVE_LARGE_CANDIDATE (large native candidate)')},async()=>{
  const source=path.resolve(process.env.PP_NATIVE_LARGE_CANDIDATE);
  assert.equal(source,path.resolve('C:/Users/danie/Documents/perfect-planner-tests/boundaries-copy-20260927-51/boundary-viewer'));
  assert.equal((await lstat(source)).isSymbolicLink(),false);

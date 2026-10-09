@@ -1,3 +1,4 @@
+import "./helpers/hermetic-env.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { chmod, lstat, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -105,7 +106,7 @@ test("aggregate stdout plus stderr is bounded, including when each stream indivi
   assert.equal(result.cleanupComplete, true);
 });
 
-test("Windows containment ignores poisoned and conflicting SystemRoot spellings", { skip: process.platform !== "win32" }, async (t) => {
+test("Windows containment ignores poisoned and conflicting SystemRoot spellings", { skip: process.platform !== "win32" && "Windows-only (SystemRoot / Job Object containment)" }, async (t) => {
   const root = await fixture(t);
   const env = { ...process.env, SystemRoot: root, SYSTEMROOT: path.join(root, "other"), systemroot: root, WINDIR: root };
   const result = await runBoundedProcess(process.execPath, ["-e", "console.log(process.env.SystemRoot);console.log(process.env.WINDIR)"], { cwd: root, env });

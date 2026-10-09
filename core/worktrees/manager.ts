@@ -4,10 +4,12 @@ import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { surfacesOverlap } from "../../src/engine/collisionEngine.js";
+import { NO_CWD_SEARCH_ENV } from "../exec/index";
+import { ensureRequiredIgnores, privatePaths } from "./ignores";
 import { git, GitError, runGit } from "./git";
 import { isWithin, lines, realDir, samePath, toRepoPath } from "./platform";
 import { type Actor, type LedgerPort, WORKTREES_ACTOR } from "./ports";
-import { copyLocalSettings } from "./settings";
+import { copyLocalSettings, placeholderSecrets } from "./settings";
 import { branchFor, TASK_ID, type WorktreeInfo } from "./types";
 
 export type Installer = (worktreePath: string) => Promise<void>;
@@ -199,6 +201,9 @@ export class WorktreeManager {
       if (existsSync(info.path)) {
         const dirty = await git(info.path, ["status", "--porcelain=v1", "--untracked-files=all"]);
         if (dirty) throw new WorktreeError(`${taskId} has uncommitted changes; commit or move them before removing the worktree.`);
+        // git worktree remove also deletes ignored files, which can be real work (notes, data, edited settings).
+        const kept = await this.ignoredWork(info.path);
+        if (kept.length) throw new WorktreeError(`${taskId} has ignored files that would be deleted with the worktree; move them first: ${kept.slice(0, 10).join(", ")}`);
         await git(this.repoRoot, ["worktree", "remove", info.path]);
       } else {
         await git(this.repoRoot, ["worktree", "prune"]);
@@ -224,6 +229,23 @@ export class WorktreeManager {
         data: { removedBy: actor, branch: info.branch, branchDeleted },
       });
       return { taskId, branchDeleted, branchKeptReason };
+    });
+  }
+
+  /**
+   * Ignored files in a worktree that removal would destroy. Dependencies (node_modules) can be
+   * reinstalled, and settings copied in at launch that still match what the copy produced are
+   * placeholders; anything else counts as work.
+   */
+  private async ignoredWork(worktreePath: string): Promise<string[]> {
+    const ignored = lines(await git(worktreePath, ["status", "--porcelain=v1", "--ignored=matching", "--untracked-files=all"]))
+      .filter((line) => line.startsWith("!! "))
+      .map((line) => line.slice(3).replace(/^"(.*)"$/, "$1"));
+    return ignored.filter((file) => {
+      if (/(^|\/)node_modules(\/|$)/.test(file)) return false;
+      if (!/^\.env(?:\..+)?$/.test(file)) return true;
+      const source = path.join(this.repoRoot, file);
+      return !existsSync(source) || readFileSync(path.join(worktreePath, file), "utf8") !== placeholderSecrets(readFileSync(source, "utf8"));
     });
   }
 
@@ -275,16 +297,12 @@ export class WorktreeManager {
     }
   }
 
-  /** Keep task worktrees out of the main checkout's status without touching the tracked .gitignore. */
+  /** Keep task worktrees, the ledger and worker tokens out of the main checkout's status without touching the tracked .gitignore. */
   private async excludeWorktreeDir(): Promise<void> {
+    // The whole planner folder (ledger, worker tokens) is always excluded; a custom worktree folder too.
     const relative = toRepoPath(path.relative(this.repoRoot, this.worktreeRoot));
-    if (relative.startsWith("..")) return;
-    const exclude = path.join(await this.gitCommonDir(), "info", "exclude");
-    const current = existsSync(exclude) ? readFileSync(exclude, "utf8") : "";
-    const pattern = `/${relative}/`;
-    if (current.split(/\r?\n/).includes(pattern)) return;
-    mkdirSync(path.dirname(exclude), { recursive: true });
-    writeFileSync(exclude, `${current}${current && !current.endsWith("\n") ? "\n" : ""}${pattern}\n`);
+    const custom = relative.startsWith("..") || privatePaths([relative]).length ? [] : [`/${relative}/`];
+    await ensureRequiredIgnores(this.repoRoot, custom);
   }
 
   private async freePort(taken: WorktreeInfo[]): Promise<number> {
@@ -318,7 +336,8 @@ export class WorktreeManager {
     if (this.install === false) return;
     if (typeof this.install === "function") return this.install(worktreePath);
     if (!existsSync(path.join(worktreePath, "package-lock.json"))) return;
-    const env = { ...process.env, ...(this.npmCache ? { npm_config_cache: this.npmCache } : {}) };
+    // cmd.exe must not pick up an npm.cmd planted in the worktree.
+    const env = { ...process.env, ...(this.npmCache ? { npm_config_cache: this.npmCache } : {}), ...NO_CWD_SEARCH_ENV };
     await new Promise<void>((resolve, reject) => {
       // Fixed command string; a shell is needed to run npm.cmd on Windows.
       const child = spawn("npm ci --prefer-offline --no-audit --no-fund", { cwd: worktreePath, env, shell: true, windowsHide: true, stdio: "ignore" });

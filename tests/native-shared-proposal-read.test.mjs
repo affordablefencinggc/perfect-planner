@@ -1,3 +1,4 @@
+import "./helpers/hermetic-env.mjs";
 import test from 'node:test';import assert from 'node:assert/strict';import{mkdtemp,readFile}from'node:fs/promises';import path from'node:path';import os from'node:os';
 import{createNativeTaskDraftSubmission}from'../src/node/nativeTaskDraftSubmission.mjs';
 import{emptyTaskDraftLedger,updateTaskDraft}from'../src/project/taskDraftLedger.js';

@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import net from "node:net";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -138,6 +138,21 @@ describe("WorktreeManager", () => {
     expect((await runGit(repo.root, ["show-ref", "--verify", "refs/heads/pp/T-10"])).code).toBe(0);
   }, SLOW);
 
+  it("keeps ignored work: refuses removal while ignored files other than dependencies and untouched settings exist", async () => {
+    writeFiles(repo.root, { ".gitignore": "*.local.md\nnode_modules/\n.env\n", ".env": "PORT=3000\nAPI_KEY=abc\n" });
+    await commitAll(repo.root, "ignore local notes");
+    const info = await manager.create({ taskId: "T-18", actor: person });
+    writeFiles(info.path, { "node_modules/dep/index.js": "export {};\n", "ideas.local.md": "keep me\n" });
+    await expect(manager.remove("T-18")).rejects.toThrow(/ignored files[\s\S]*ideas\.local\.md/);
+    expect(existsSync(path.join(info.path, "ideas.local.md"))).toBe(true);
+    writeFiles(info.path, { ".env": "PORT=3000\nAPI_KEY=real-value-typed-in\n" });
+    rmSync(path.join(info.path, "ideas.local.md"));
+    await expect(manager.remove("T-18")).rejects.toThrow(/\.env/);
+    writeFiles(info.path, { ".env": "PORT=3000\nAPI_KEY=PLACEHOLDER\n" });
+    expect((await manager.remove("T-18")).taskId).toBe("T-18");
+    expect(existsSync(info.path)).toBe(false);
+  }, SLOW);
+
   it("reconciles the registry with git's own worktree list", async () => {
     const info = await manager.create({ taskId: "T-11", actor: person });
     await git(repo.root, ["worktree", "add", "-b", "pp/T-12", path.join(repo.root, ".perfect-planner", "worktrees", "T-12")]);
@@ -167,6 +182,6 @@ describe("WorktreeManager", () => {
     writeFileSync(exclude, "*.log");
     await manager.create({ taskId: "T-15", actor: person });
     await manager.create({ taskId: "T-16", actor: person });
-    expect(readFileSync(exclude, "utf8")).toBe("*.log\n/.perfect-planner/worktrees/\n");
+    expect(readFileSync(exclude, "utf8")).toBe("*.log\n/.perfect-planner/\n");
   }, SLOW);
 });

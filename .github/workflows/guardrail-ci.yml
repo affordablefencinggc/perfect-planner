@@ -16,7 +16,7 @@ jobs:
   web-and-contracts:
     name: Web, contracts, MCP, and Sites (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 25
+    timeout-minutes: ${{ matrix.os == 'windows-latest' && 45 || 25 }}
     strategy:
       fail-fast: false
       matrix:
@@ -51,12 +51,12 @@ jobs:
           TMPDIR: ${{ runner.temp }}
           TEMP: ${{ runner.temp }}
           TMP: ${{ runner.temp }}
-      - run: npm test
+      - run: npm run test:report
         env:
           TMPDIR: ${{ runner.temp }}
           TEMP: ${{ runner.temp }}
           TMP: ${{ runner.temp }}
-      - run: npm run test:ui
+      - run: npm run test:ui:report
         env:
           TMPDIR: ${{ runner.temp }}
           TEMP: ${{ runner.temp }}
