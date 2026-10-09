@@ -67,6 +67,8 @@ import { ImportedProjectWorkflowWorkspace } from "./components/ImportedProjectWo
 const ConnectAgentDrawer = lazy(() => import("./components/ConnectAgentDrawer.jsx").then((module) => ({ default: module.ConnectAgentDrawer })));
 import { ProjectTruthGate } from "./components/ProjectTruthGate.jsx";
 import { ViewModeToggle } from "./components/ViewModeToggle.jsx";
+import { CORE_WORKSPACES, CoreWorkspace, coreWorkspaceContext, coreWorkspaceLabels, isCoreWorkspace } from "./core-screens/coreWorkspaces.jsx";
+import { LedgerSearchBox } from "./core-screens/LedgerSearchBox.jsx";
 import { ViewModeContext, useViewModeState } from "./project/viewMode.js";
 import { DEMO_ONLY_REASON, DemoOnlyReason, DemoSampleBadge } from "./demo/DemoSampleNotice.jsx";
 const loadRuntimeTools = (name) => import("./components/RuntimeConnectionsPanel.jsx")
@@ -119,6 +121,7 @@ const workspaceOrder = [
   "evidence",
   "ledger",
   "index",
+  ...CORE_WORKSPACES,
 ];
 const GLOBAL_DIAGNOSTIC_PROJECT_ID = "pp_global_runtime";
 const EMPTY_RUNTIME_CAPABILITY_RECEIPTS = Object.freeze([]);
@@ -135,19 +138,20 @@ const workspaceLabels = {
   integrity: "Integrity",
   evidence: "Evidence",
   ledger: "To-do / Ledger",
+  ...coreWorkspaceLabels,
 };
 const stageNavigation = [
   {
     id: "define",
     label: "Define",
     number: "01",
-    workspaces: ["blueprint", "structure", "components"],
+    workspaces: ["blueprint", "structure", "components", "planning", "mvp"],
   },
   {
     id: "coordinate",
     label: "Coordinate",
     number: "02",
-    workspaces: ["plan", "collision", "allocation"],
+    workspaces: ["plan", "collision", "allocation", "decisions", "people"],
   },
   { id: "build", label: "Build", number: "03", workspaces: ["build"] },
   {
@@ -156,9 +160,10 @@ const stageNavigation = [
     number: "04",
     workspaces: ["integrity", "evidence"],
   },
-  { id: "release", label: "Release", number: "05", workspaces: ["ledger"] },
+  { id: "release", label: "Release", number: "05", workspaces: ["ledger", "lookup"] },
 ];
 const workspaceContext = {
+  ...coreWorkspaceContext,
   home: {
     stage: "home",
     purpose: "See the whole project without reading the whole project.",
@@ -624,6 +629,8 @@ function TopBar({
             <MagnifyingGlassIcon /> Index
           </button>
         </nav>
+
+        <LedgerSearchBox onWorkspace={onWorkspace} />
 
         <div className="top-metrics">
           <div className="topbar-menu-anchor">
@@ -6048,6 +6055,7 @@ function PerfectPlannerShellCore({
         {demoMode && <DemoSampleBadge />}
         <div className={`workspace-stage${stageForWorkspace(workspace)?.id === "coordinate" ? " workspace-stage-coordinate" : ""}`} key={workspace}>
           {stageForWorkspace(workspace)?.id === "coordinate" && <WorkspacePageNavigation stage={stageForWorkspace(workspace)} workspace={workspace} onWorkspace={navigateWorkspace} />}
+          {isCoreWorkspace(workspace) && <CoreWorkspace workspace={workspace} onWorkspace={navigateWorkspace} />}
           {workspace === "home" && (
             <ProjectHomeWorkspace
               collisionGate={collisionGate}

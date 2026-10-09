@@ -17,7 +17,8 @@
     "hooks:install": "node scripts/install-git-hooks.mjs",
     "verify:performance": "node scripts/verify-performance-budget.mjs",
     "verify:readiness": "node scripts/verify-release-readiness.mjs",
-    "build:client": "vite build && node scripts/generate-truth-report.mjs --release",
+    "build:client": "vite build && node scripts/build-core-host.mjs && node scripts/generate-truth-report.mjs --release",
+    "build:core-host": "node scripts/build-core-host.mjs",
     "build": "npm run build:client && node scripts/prepare-sites-build.mjs",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
@@ -56,6 +57,7 @@
     "@types/node": "^22.20.5",
     "agentation": "^3.0.2",
     "axe-core": "^4.13.0",
+    "esbuild": "^0.25.12",
     "jsdom": "^30.0.1",
     "typescript": "^5.9.3",
     "vitest": "^4.1.11"

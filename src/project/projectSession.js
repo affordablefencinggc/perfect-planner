@@ -18,7 +18,7 @@ import {
 export const PROJECT_SESSION_SCHEMA_VERSION = 1;
 export const projectSessionKinds = Object.freeze(["empty", "demo", "imported", "generated"]);
 export const projectAuthorityKinds = Object.freeze(["architecture", "folder", "component", "plan"]);
-export const projectWorkspaceNames = Object.freeze(["home", "blueprint", "structure", "components", "plan", "collision", "allocation", "build", "integrity", "evidence", "ledger", "index"]);
+export const projectWorkspaceNames = Object.freeze(["home", "blueprint", "structure", "components", "plan", "collision", "allocation", "build", "integrity", "evidence", "ledger", "index", "planning", "mvp", "decisions", "people", "lookup"]);
 
 const SHA256 = /^[a-f0-9]{64}$/;
 const WORKSPACE_ID = /^[a-z0-9][a-z0-9_-]{2,63}$/;

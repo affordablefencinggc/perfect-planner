@@ -26,6 +26,8 @@ import { currentComponentPlanInput } from "../src/engine/componentPlanSeed.js";
 import { publishComponentPlans } from "../src/node/componentPlanStore.mjs";
 import { bindComponentParents } from "../tests/fixtures/componentParents.mjs";
 import { clientBuildIsCurrent } from "./serve-local.mjs";
+import { buildCoreHost } from "./build-core-host.mjs";
+import { coreScreenSteps } from "./e2e-core-screens.mjs";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const SHOTS = path.join(projectRoot, "tests-e2e", "screenshots");
@@ -262,6 +264,7 @@ async function main() {
     log("dist/client is missing or older than its sources; building it first");
     await new Promise((resolve, reject) => spawn(process.execPath, [path.join(projectRoot, "node_modules", "vite", "bin", "vite.js"), "build"], { cwd: projectRoot, stdio: "inherit" })
       .on("error", reject).on("exit", (code) => code === 0 ? resolve() : reject(new Error(`vite build exited with ${code}`))));
+    await buildCoreHost();
   }
   await rm(SHOTS, { recursive: true, force: true }); await mkdir(SHOTS, { recursive: true });
 
@@ -458,6 +461,9 @@ async function journey(page, at, step) {
     await page.goto(at("home"));
     await page.expectText("Project status ready");
   });
+
+  // Core loop screens (Deep planning, MVP board, Decisions, People, ledger search, Connect agent).
+  for (const core of coreScreenSteps) await step(core.name, () => core.run(page, at, { re, waitFor }));
   await peek(page, at);
 }
 

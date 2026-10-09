@@ -1,0 +1,113 @@
+/* Core loop screens (Deep planning, MVP board, Decisions, People, ledger search).
+   Built on the frame tokens in src/styles/frame.css; per-screen styles live in
+   each screen's own CSS file and stay scoped under .core-screen-<id>. */
+.app-shell .core-screen {
+  display: grid;
+  gap: var(--space-5);
+  padding: var(--space-5) var(--frame-pad);
+  color: var(--ink);
+}
+.core-screen-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-3) var(--space-5);
+}
+.core-screen-head h2 {
+  margin: 0;
+  font-size: var(--text-2xl);
+  letter-spacing: -0.01em;
+}
+.core-screen-purpose {
+  margin: var(--space-1) 0 0;
+  color: var(--muted);
+  font-size: var(--text-md);
+  max-width: 72ch;
+}
+.core-screen-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.core-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+  padding: var(--space-4) var(--space-5);
+}
+.core-card h3 { margin: 0 0 var(--space-2); font-size: var(--text-lg); }
+.core-grid { display: grid; gap: var(--space-4); grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr)); }
+.core-button {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 34px;
+  padding: 0 var(--space-4);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  cursor: pointer;
+}
+.core-button:hover { background: var(--surface-muted); }
+.core-button:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.core-button:disabled { opacity: 0.55; cursor: not-allowed; }
+.core-button.primary { background: var(--ink); border-color: var(--ink); color: var(--paper-strong); }
+.core-button.primary:hover { background: #3a453f; }
+.core-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 2px var(--space-2);
+  border-radius: 999px;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+}
+.core-pill.good { background: var(--green-soft); color: var(--green); border-color: transparent; }
+.core-pill.warn { background: var(--amber-soft); color: var(--amber-text); border-color: transparent; }
+.core-pill.bad { background: var(--red-soft); color: var(--red); border-color: transparent; }
+.core-advanced { font-family: var(--mono); font-size: var(--text-xs); color: var(--muted); }
+.core-muted { color: var(--muted); }
+.core-loading { display: grid; gap: var(--space-3); max-width: 640px; }
+.core-skeleton {
+  display: block;
+  height: 18px;
+  border-radius: var(--radius-sm);
+  background: linear-gradient(90deg, var(--surface-muted), var(--line), var(--surface-muted));
+  background-size: 200% 100%;
+  animation: core-shimmer 1.2s ease-in-out infinite;
+}
+.core-skeleton.short { width: 55%; }
+@keyframes core-shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+@media (prefers-reduced-motion: reduce) { .core-skeleton { animation: none; } }
+.core-error {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5);
+  border-radius: var(--radius-lg);
+  background: var(--red-soft);
+  color: var(--ink);
+}
+.core-error > svg { color: var(--red); font-size: 22px; flex: none; }
+.core-error > div { flex: 1 1 260px; }
+.core-error p { margin: var(--space-1) 0 0; color: var(--muted); }
+.core-empty {
+  padding: var(--space-6) var(--space-5);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--surface-muted);
+  color: var(--muted);
+  text-align: center;
+}
+.core-empty strong { display: block; color: var(--ink); font-size: var(--text-lg); margin-bottom: var(--space-1); }
+.core-confidence { display: inline-flex; align-items: center; gap: var(--space-2); font-size: var(--text-xs); font-weight: 600; }
+.core-confidence-track { width: 72px; height: 6px; border-radius: 999px; background: var(--line); overflow: hidden; }
+.core-confidence-track > span { display: block; height: 100%; border-radius: inherit; }
+.core-confidence-high .core-confidence-track > span { background: var(--green); }
+.core-confidence-medium .core-confidence-track > span { background: var(--amber); }
+.core-confidence-low .core-confidence-track > span { background: var(--red); }
