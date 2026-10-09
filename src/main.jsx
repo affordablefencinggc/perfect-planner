@@ -6,6 +6,12 @@ import { createMemoryStorage, DEFAULT_PROJECT_REGISTRY_KEY } from "./project/pro
 import { AppErrorBoundary, isSafeStart, SafeStartNotice } from "./components/AppErrorBoundary.jsx";
 import "./styles.css";
 import "./styles/frame.css";
+import "./styles/polish/define.css";
+import "./styles/polish/plan.css";
+import "./styles/polish/collision-allocation.css";
+import "./styles/polish/build.css";
+import "./styles/polish/prove.css";
+import "./styles/polish/release-index.css";
 
 function LocalAgentation() {
   const [Toolbar, setToolbar] = React.useState(null);
