@@ -1,0 +1,104 @@
+import fs from "node:fs";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { hostCall, startTestHost } from "../testing";
+
+const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0, 0, 0]);
+
+let ctx: Awaited<ReturnType<typeof startTestHost>>;
+beforeEach(async () => {
+  ctx = await startTestHost();
+});
+afterEach(async () => {
+  await ctx.stop();
+});
+
+const call = (method: "GET" | "POST", route: string, body?: unknown) => hostCall(ctx.base, method, `${route}${route.includes("?") ? "&" : "?"}project=p1`, body);
+
+describe("people routes", () => {
+  it("starts empty with the local person defaulting to owner", async () => {
+    const res = await call("GET", "/people");
+    expect(res.status).toBe(200);
+    expect(res.body.result).toMatchObject({ view: { members: [], docs: [] }, photos: {}, me: "owner", firstRun: true });
+  });
+
+  it("first person added becomes the owner and the local person", async () => {
+    const res = await call("POST", "/people/members", { person: "dana", name: "Dana Lee", role: "owner" });
+    expect(res.status).toBe(200);
+    expect(res.body.result.entry).toMatch(/^L-/);
+    expect(res.body.result.me).toBe("dana");
+    expect(res.body.result.firstRun).toBe(false);
+    expect(res.body.result.view.owner.person).toBe("dana");
+  });
+
+  it("refuses a first person who is not the owner", async () => {
+    const res = await call("POST", "/people/members", { person: "eli", name: "Eli", role: "helper" });
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe("FIRST_IS_OWNER");
+  });
+
+  it("claim works once, then refuses", async () => {
+    expect((await call("POST", "/people/claim", { name: "Solo" })).body.result.me).toBe("owner");
+    const again = await call("POST", "/people/claim", { name: "Other", person: "other" });
+    expect(again.status).toBe(409);
+  });
+
+  it("adds, changes and removes a helper", async () => {
+    await call("POST", "/people/members", { person: "dana", name: "Dana", role: "owner" });
+    const add = await call("POST", "/people/members", { person: "eli", name: "Eli Kim", role: "helper", approves: ["test"] });
+    expect(add.status).toBe(200);
+    expect(add.body.result.view.members.map((m: { person: string }) => m.person)).toEqual(["dana", "eli"]);
+    expect(add.body.result.view.members[1].approves).toEqual(["test"]);
+    const change = await call("POST", "/people/members/eli/role", { role: "viewer" });
+    expect(change.status).toBe(200);
+    expect(change.body.result.view.members[1]).toMatchObject({ role: "viewer", approves: [] });
+    const dupe = await call("POST", "/people/members", { person: "eli", name: "Eli", role: "helper" });
+    expect(dupe.status).toBe(422);
+    const ownerOff = await call("POST", "/people/members/dana/remove", {});
+    expect(ownerOff.status).toBe(422);
+    const rm = await call("POST", "/people/members/eli/remove", {});
+    expect(rm.body.result.view.members).toHaveLength(1);
+  });
+
+  it("validates input", async () => {
+    expect((await call("POST", "/people/members", { person: "Not Ok", name: "X" })).status).toBe(400);
+    expect((await call("POST", "/people/members", { person: "x", name: "" })).status).toBe(400);
+    await call("POST", "/people/members", { person: "dana", name: "Dana", role: "owner" });
+    expect((await call("POST", "/people/members/eli/role", { role: "boss" })).status).toBe(400);
+    expect((await call("POST", "/people/docs", { title: "T", path: "../etc/passwd" })).status).toBe(400);
+    expect((await call("POST", "/people/docs", { title: "T", path: "javascript:alert(1)" })).status).toBe(400);
+  });
+
+  it("stores a photo under the project and returns it as a data URL", async () => {
+    await call("POST", "/people/members", { person: "dana", name: "Dana", role: "owner" });
+    const res = await call("POST", "/people/photo", { image: PNG.toString("base64") });
+    expect(res.status).toBe(200);
+    expect(res.body.result.photos.dana).toBe(`data:image/png;base64,${PNG.toString("base64")}`);
+    const file = res.body.result.view.members[0].photo.file as string;
+    expect(fs.existsSync(path.join(ctx.dir, "projects", "p1", ...file.split("/")))).toBe(true);
+    const again = await call("GET", "/people");
+    expect(again.body.result.photos.dana).toMatch(/^data:image\/png;base64,/);
+  });
+
+  it("refuses photos that are not images, too large, or before an owner exists", async () => {
+    expect((await call("POST", "/people/photo", { image: PNG.toString("base64") })).status).toBe(422);
+    await call("POST", "/people/members", { person: "dana", name: "Dana", role: "owner" });
+    const svg = await call("POST", "/people/photo", { image: Buffer.from("<svg></svg>").toString("base64") });
+    expect(svg.status).toBe(422);
+    expect(svg.body.code).toBe("PHOTO_TYPE");
+    expect((await call("POST", "/people/photo", { image: "%%%" })).status).toBe(400);
+    const big = await call("POST", "/people/photo", { image: Buffer.alloc(150 * 1024, 1).toString("base64") });
+    expect(big.status).toBe(422);
+    const large = Buffer.concat([PNG, Buffer.alloc(400 * 1024, 7)]);
+    expect((await call("POST", "/people/photo", { image: large.toString("base64") })).status).toBe(200);
+    const over = Buffer.concat([PNG, Buffer.alloc(513 * 1024, 7)]);
+    expect((await call("POST", "/people/photo", { image: over.toString("base64") })).status).toBe(413);
+  });
+
+  it("shares a document that shows in the view", async () => {
+    await call("POST", "/people/members", { person: "dana", name: "Dana", role: "owner" });
+    const res = await call("POST", "/people/docs", { title: "Core specs", path: "specs/CORE.md" });
+    expect(res.status).toBe(200);
+    expect(res.body.result.view.docs[0]).toMatchObject({ doc: "core-specs", title: "Core specs", version: "v1", kind: "document", sharedBy: "dana" });
+  });
+});

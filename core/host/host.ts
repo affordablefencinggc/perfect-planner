@@ -11,7 +11,7 @@ import { HttpError, Router } from "./router";
 import { registerRoutes } from "./routes/index";
 
 export const CORE_PREFIX = "/api/core";
-const MAX_BODY = 256 * 1024;
+const MAX_BODY = 768 * 1024; // fits a 512 KB photo as base64
 
 export interface CoreHostOptions {
   /** Folder for per-project ledgers when no override is set. */
