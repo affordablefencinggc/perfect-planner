@@ -1175,7 +1175,7 @@ function TopBar({
                         <strong>
                           {mcpAllowed
                             ? "Permission allowed · connection unverified"
-                            : "Paused"}
+                            : "Off · connection unverified"}
                         </strong>
                       </span>
                       <small>
