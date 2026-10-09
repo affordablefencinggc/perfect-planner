@@ -114,9 +114,19 @@ jobs:
           cp -r dist/client dist/core-host "$out/dist/"
           cp -r src "$out/src"
           cp scripts/serve-local.mjs "$out/scripts/"
-          # Only the core host's runtime packages; the client is prebuilt.
-          node -e 'const p=require("./package.json"),l=require("./package-lock.json").packages,d={};for(const n of ["@modelcontextprotocol/sdk","zod"])d[n]=l["node_modules/"+n].version;require("fs").writeFileSync(process.argv[1],JSON.stringify({name:"perfect-planner-preview",private:true,type:p.type,version:p.version,dependencies:d},null,2))' "$out/package.json"
-          (cd "$out" && npm install --omit=dev --ignore-scripts --no-audit --no-fund)
+          # Only the core host's runtime packages; the client is prebuilt. The lockfile is cut
+          # down to those packages and everything they reach, so every transitive version and
+          # integrity hash comes from the repo's lockfile and npm ci refuses any drift.
+          node -e '
+          const fs=require("fs"),p=require("./package.json"),lock=require("./package-lock.json"),L=lock.packages,keep=new Set(),deps={};
+          const resolve=(from,n)=>{for(let d=from;;d=d.slice(0,Math.max(0,d.lastIndexOf("/node_modules/")))){const k=(d?d+"/":"")+"node_modules/"+n;if(L[k])return k;if(!d)throw Error("unresolved "+n)}};
+          const walk=k=>{if(keep.has(k))return;keep.add(k);const e=L[k];for(const n of Object.keys({...e.dependencies,...e.optionalDependencies,...e.peerDependencies}))try{walk(resolve(k,n))}catch(x){if(!(e.optionalDependencies?.[n]||e.peerDependenciesMeta?.[n]?.optional))throw x}};
+          for(const n of ["@modelcontextprotocol/sdk","zod"]){deps[n]=L["node_modules/"+n].version;walk("node_modules/"+n)}
+          const pkg={name:"perfect-planner-preview",private:true,type:p.type,version:p.version,dependencies:deps},dir=process.argv[1];
+          fs.writeFileSync(dir+"/package.json",JSON.stringify(pkg,null,2));
+          fs.writeFileSync(dir+"/package-lock.json",JSON.stringify({...lock,name:pkg.name,version:pkg.version,packages:{"":{name:pkg.name,version:pkg.version,dependencies:deps},...Object.fromEntries([...keep].sort().map(k=>[k,L[k]]))}},null,2));
+          ' "$out"
+          (cd "$out" && npm ci --omit=dev --ignore-scripts --no-audit --no-fund)
           printf '%s\r\n' '@echo off' 'cd /d "%~dp0"' 'where node >nul 2>nul || (echo Perfect Planner needs Node.js 20 or newer: https://nodejs.org & pause & exit /b 1)' 'set PP_OPEN=1' 'node scripts\serve-local.mjs' 'pause' > "$out/Start Perfect Planner.cmd"
           printf '%s\n' '#!/bin/sh' 'cd "$(dirname "$0")"' 'PP_OPEN=1 exec node scripts/serve-local.mjs' > "$out/start-perfect-planner.sh"
           chmod +x "$out/start-perfect-planner.sh"
