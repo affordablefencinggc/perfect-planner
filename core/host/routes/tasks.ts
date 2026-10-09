@@ -18,7 +18,9 @@ import { WorktreeError, WorktreeManager, git, runGit, WORKTREES_ACTOR, type Work
 import type { CoreHost } from "../host";
 import type { CoreProject } from "../project";
 import { HttpError, type Router } from "../router";
-import { AGENT_SERVER_NAME, agentEntryPath } from "./agents";
+import { AGENT_SERVER_NAME, agentEntryPath, connectLine, quoteFor, writeTokenFile } from "./agents";
+
+export { quoteFor };
 import { localPerson, localPersonId } from "./people";
 import { protectRepository } from "../project";
 
@@ -219,8 +221,6 @@ async function worktreeFor(project: CoreProject, label: string): Promise<Worktre
 
 // Single quotes in both shells, so a path can never run $(...) or `...`: POSIX ends and reopens the
 // quote around a ', PowerShell doubles it.
-export const quoteFor = (windows: boolean) => (value: string) =>
-  windows ? `'${value.replaceAll("'", "''")}'` : `'${value.replaceAll("'", `'\\''`)}'`;
 
 export function workerBrief(task: { label: string; title: string; clauses: string[] }, worktree: WorktreeInfo, test: GateState["definition"], approved: boolean): string {
   const testStep = test
@@ -251,7 +251,8 @@ export function workerCommands(options: { worktree: string; bridgeUrl: string; t
   const { worktree, bridgeUrl, tokenFile, entry, briefFile } = options;
   const windows = (options.platform ?? process.platform) === "win32";
   const quote = quoteFor(windows);
-  const add = `claude mcp add ${AGENT_SERVER_NAME} --env PP_BRIDGE_URL=${bridgeUrl} --env ${quote(`PP_AGENT_TOKEN_FILE=${tokenFile}`)} -- node ${quote(entry)}`;
+  // Re-runnable: a new attempt in the same worktree replaces the older registration.
+  const add = connectLine(bridgeUrl, tokenFile, entry, windows ? "win32" : "linux");
   const setup = windows ? `cd ${quote(worktree)}; ${add}` : `cd ${quote(worktree)} && ${add}`;
   const start = windows ? `claude (Get-Content -Raw ${quote(briefFile)})` : `claude "$(cat ${quote(briefFile)})"`;
   const json = JSON.stringify({ mcpServers: { [AGENT_SERVER_NAME]: { command: "node", args: [entry], env: { PP_BRIDGE_URL: bridgeUrl, PP_AGENT_TOKEN_FILE: tokenFile } } } }, null, 2);
@@ -297,10 +298,7 @@ async function dispatch(project: CoreProject, host: CoreHost, id: string, body: 
   const briefFile = path.join(project.root, ".perfect-planner", "briefs", `${label}.md`);
   fs.mkdirSync(path.dirname(briefFile), { recursive: true });
   fs.writeFileSync(briefFile, `${brief}\n`);
-  const tokenFile = path.join(project.root, ".perfect-planner", "tokens", `${label}.token`);
-  fs.mkdirSync(path.dirname(tokenFile), { recursive: true, mode: 0o700 });
-  fs.rmSync(tokenFile, { force: true });
-  fs.writeFileSync(tokenFile, token, { mode: 0o600 });
+  const tokenFile = writeTokenFile(project, label, token);
   const entry = agentEntryPath();
   const commands = workerCommands({ worktree: tree.path, bridgeUrl: bridge.url, tokenFile, entry: entry.path, briefFile });
   return {

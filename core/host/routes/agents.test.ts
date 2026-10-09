@@ -20,27 +20,41 @@ afterEach(async () => stop());
 const connect = async (body: unknown = {}) => {
   const res = await hostCall(base, "POST", "/agents/connect?project=demo", body);
   expect(res.status).toBe(200);
-  return res.body.result as { connection: string; person: string; bridgeUrl: string; token: string; claudeCode: string; json: string; agentPath: string };
+  const result = res.body.result as { connection: string; person: string; bridgeUrl: string; tokenFile: string; claudeCode: string; json: string; agentPath: string };
+  return { ...result, token: fs.readFileSync(result.tokenFile, "utf8") };
 };
 
 describe("agents routes", () => {
-  it("returns a ready-to-paste command with the bridge URL and a connect token, and never lists the token", async () => {
+  it("hands out a line with no secret in it: the connect token waits in a file only this user can read", async () => {
     const log = vi.spyOn(console, "log");
+    const res = await hostCall(base, "POST", "/agents/connect?project=demo", {});
+    const raw = res.body.result;
+    expect(raw.token).toBeUndefined();
     const result = await connect();
     expect(result.person).toBe("owner");
     expect(result.bridgeUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
     expect(result.token).toMatch(/^pp_c_/);
-    expect(result.claudeCode).toBe(`claude mcp add perfect-planner-core --env PP_BRIDGE_URL=${result.bridgeUrl} --env PP_AGENT_TOKEN=${result.token} -- node "${result.agentPath}"`);
+    if (process.platform !== "win32") expect(fs.statSync(result.tokenFile).mode & 0o077).toBe(0);
+    const program = result.agentPath.replace(/agent\.mjs$/, "connect.mjs");
+    if (process.platform !== "win32") expect(result.claudeCode).toBe(`node '${program}' ${result.bridgeUrl} '${result.tokenFile}'`);
+    expect(result.claudeCode).not.toMatch(/pp_[cw]_/);
     expect(result.agentPath.endsWith(path.join("dist", "core-host", "agent.mjs"))).toBe(true);
     const json = JSON.parse(result.json);
-    expect(json.mcpServers["perfect-planner-core"]).toEqual({ command: "node", args: [result.agentPath], env: { PP_BRIDGE_URL: result.bridgeUrl, PP_AGENT_TOKEN: result.token } });
+    expect(json.mcpServers["perfect-planner-core"]).toEqual({ command: "node", args: [result.agentPath], env: { PP_BRIDGE_URL: result.bridgeUrl, PP_AGENT_TOKEN_FILE: result.tokenFile } });
 
     const list = await hostCall(base, "GET", "/agents?project=demo");
     expect(list.body.result.bridge.url).toBe(result.bridgeUrl);
     expect(list.body.result.agents).toEqual([]);
-    expect(list.body.result.connections).toEqual([expect.objectContaining({ id: result.connection, person: "owner", revoked: false })]);
+    if (process.platform !== "win32") expect(list.body.result.skillLine).toBe(`node '${program}' --skill-only`);
+    expect(list.body.result.connections).toEqual(expect.arrayContaining([expect.objectContaining({ id: result.connection, person: "owner", revoked: false })]));
     expect(JSON.stringify(list.body)).not.toContain(result.token);
     for (const call of log.mock.calls) expect(JSON.stringify(call)).not.toContain(result.token);
+  });
+
+  it("disconnecting deletes the connection's token file", async () => {
+    const { connection, tokenFile } = await connect();
+    expect((await hostCall(base, "POST", "/agents/revoke?project=demo", { connection })).status).toBe(200);
+    expect(fs.existsSync(tokenFile)).toBe(false);
   });
 
   it("full loop: connect, hello through the bridge over MCP, then GET agents shows the main chat", async () => {
@@ -106,8 +120,9 @@ describe("agent entry path", () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  it("quotes the path in the command", () => {
-    expect(setupFor("http://127.0.0.1:1", "pp_c_x", "C:\\a b\\agent.mjs").claudeCode).toContain('-- node "C:\\a b\\agent.mjs"');
+  it("quotes paths so the shell cannot run anything hidden in them", () => {
+    expect(setupFor("http://127.0.0.1:1", "/t/$(x)/c.token", "/a b/it's/agent.mjs", "linux").claudeCode).toBe("node '/a b/it'\\''s/connect.mjs' http://127.0.0.1:1 '/t/$(x)/c.token'");
+    expect(setupFor("http://127.0.0.1:1", "C:\\t\\c.token", "C:\\a b\\agent.mjs", "win32").claudeCode).toBe("node 'C:\\a b\\connect.mjs' http://127.0.0.1:1 'C:\\t\\c.token'");
   });
 });
 
@@ -115,8 +130,8 @@ describe("agent entry path", () => {
 const built = agentEntryPath(path.resolve("core/host/routes/agents.ts"));
 describe.skipIf(!built.built)("built stdio agent", () => {
   it("answers MCP initialize and tools/call hello over stdio", async () => {
-    const { bridgeUrl, token } = await connect();
-    const child = spawn(process.execPath, [built.path], { env: { ...process.env, PP_BRIDGE_URL: bridgeUrl, PP_AGENT_TOKEN: token }, stdio: ["pipe", "pipe", "pipe"] });
+    const { bridgeUrl, tokenFile } = await connect();
+    const child = spawn(process.execPath, [built.path], { env: { ...process.env, PP_BRIDGE_URL: bridgeUrl, PP_AGENT_TOKEN_FILE: tokenFile }, stdio: ["pipe", "pipe", "pipe"] });
     const replies = new Map<number, any>();
     let buffer = "";
     child.stdout.on("data", (chunk: Buffer) => {

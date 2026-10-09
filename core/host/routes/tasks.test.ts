@@ -74,7 +74,7 @@ describe("tasks routes", () => {
     expect(fs.existsSync(d.worktree)).toBe(true);
     expect(d.brief).toContain("T-1");
     expect(d.brief).toContain("propose_test");
-    expect(d.setup).toContain("PP_AGENT_TOKEN_FILE=");
+    expect(d.setup).toContain("connect.mjs");
     expect(`${d.setup}${d.start}${d.json}${d.brief}`).not.toContain(token);
     expect((await tasks()).tasks[0]).toMatchObject({ stage: "needs-test", worktree: { branch: "pp/T-1" }, dispatch: { model: "claude-sonnet" } });
     expect(JSON.stringify((await tasks()))).not.toContain(token);
@@ -230,7 +230,7 @@ describe("worker commands", () => {
     expect(quoteFor(false)("/tmp/$(touch pwned)/it's")).toBe("'/tmp/$(touch pwned)/it'\\''s'");
     expect(quoteFor(true)("C:\\$(calc)\\it's")).toBe("'C:\\$(calc)\\it''s'");
     const posix = workerCommands({ worktree: "/w/$(x)", bridgeUrl: "http://127.0.0.1:1", tokenFile: "/t/T-1.token", entry: "/a/agent.mjs", briefFile: "/b/`x`.md", platform: "linux" });
-    expect(posix.setup).toBe("cd '/w/$(x)' && claude mcp add perfect-planner-core --env PP_BRIDGE_URL=http://127.0.0.1:1 --env 'PP_AGENT_TOKEN_FILE=/t/T-1.token' -- node '/a/agent.mjs'");
+    expect(posix.setup).toBe("cd '/w/$(x)' && node '/a/connect.mjs' http://127.0.0.1:1 '/t/T-1.token'");
     expect(posix.start).toBe("claude \"$(cat '/b/`x`.md')\"");
     expect(workerCommands({ worktree: "C:\\w", bridgeUrl: "http://127.0.0.1:1", tokenFile: "C:\\t", entry: "C:\\a", briefFile: "C:\\b.md", platform: "win32" }).start).toBe("claude (Get-Content -Raw 'C:\\b.md')");
   });
