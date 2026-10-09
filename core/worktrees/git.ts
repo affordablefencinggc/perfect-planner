@@ -1,5 +1,5 @@
 import { execFileSync, spawn } from "node:child_process";
-import { chmodSync, lstatSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { gitExecutable, NO_CWD_SEARCH_ENV } from "../exec/index";
@@ -125,6 +125,16 @@ function hardeningFiles(program: string): Hardening {
     }
   }
   chmodSync(attributesFile, 0o444);
+  chmodSync(globalConfig, 0o444);
+  process.once("exit", () => {
+    try {
+      chmodSync(attributesFile, 0o644);
+      chmodSync(globalConfig, 0o644);
+      rmSync(root, { recursive: true, force: true });
+    } catch {
+      // Best effort: a temp folder left behind holds no secrets.
+    }
+  });
   hardening = { hooksPath, attributesFile, globalConfig };
   return hardening;
 }
@@ -181,14 +191,82 @@ function subcommand(args: readonly string[]): string | undefined {
 
 export class GitProgramRefusedError extends Error {}
 
+const PROGRAM_KEYS = "^(filter\\..+\\.(clean|smudge|process)|merge\\..+\\.driver)$";
+const MAX_INCLUDE_FILES = 64;
+
+/** Origin and value from a `git config --show-origin --get-regexp` line: `file:<origin>\t<key> <value>`. */
+function originAndValue(line: string): { origin: string; value: string } | undefined {
+  const tab = line.indexOf("\t");
+  if (!line.startsWith("file:") || tab < 0) return undefined;
+  let origin = line.slice("file:".length, tab);
+  // Git quotes an origin with unusual characters, C style.
+  if (origin.startsWith('"')) {
+    try {
+      origin = JSON.parse(origin) as string;
+    } catch {
+      return undefined;
+    }
+  }
+  const rest = line.slice(tab + 1);
+  const space = rest.indexOf(" ");
+  return space < 0 ? undefined : { origin, value: rest.slice(space + 1) };
+}
+
+/** Where git would read an include path given in `origin`: ~ is the home folder, relative is beside the file. */
+function includeTarget(origin: string, value: string, cwd: string): string {
+  if (value.startsWith("~/") || value.startsWith("~\\")) return path.join(os.homedir(), value.slice(2));
+  return path.resolve(path.dirname(path.resolve(cwd, origin)), value);
+}
+
 /**
  * Filter programs (filter.<name>.clean/smudge/process) and merge drivers (merge.<name>.driver) named in
  * the repo's config, read with the same hardened settings as every host git call. Reading config runs
  * nothing. Git would run these as the host on checkout, status, diff, add and merge.
+ *
+ * Conditional includes (includeIf onbranch:, gitdir:, hasconfig:) are read whatever their condition, so a
+ * setting that only turns on in a worker's branch or folder, or after a switch, is found before it applies.
  */
 export async function filterPrograms(cwd: string): Promise<string[]> {
-  const result = await spawnGit(cwd, ["config", "--includes", "--get-regexp", "^(filter\\..+\\.(clean|smudge|process)|merge\\..+\\.driver)$"], {});
-  return result.stdout.split(/\r?\n/).filter(Boolean).map((line) => line.split(" ")[0]!);
+  const found = new Set<string>();
+  const seen = new Set<string>();
+  const queue: string[][] = [[]];
+  while (queue.length) {
+    const source = queue.shift()!;
+    const programs = await spawnGit(cwd, ["config", ...source, "--includes", "--get-regexp", PROGRAM_KEYS], {});
+    for (const line of programs.stdout.split(/\r?\n/).filter(Boolean)) found.add(line.split(" ")[0]!);
+    const includes = await spawnGit(cwd, ["config", ...source, "--includes", "--show-origin", "--get-regexp", "^includeif\\..*\\.path$"], {});
+    for (const line of includes.stdout.split(/\r?\n/).filter(Boolean)) {
+      const parsed = originAndValue(line);
+      if (!parsed) continue;
+      const target = includeTarget(parsed.origin, parsed.value, cwd);
+      if (seen.has(target)) continue;
+      seen.add(target);
+      if (seen.size > MAX_INCLUDE_FILES) {
+        found.add(`includeIf (more than ${MAX_INCLUDE_FILES} conditional config files)`);
+        return [...found];
+      }
+      if (existsSync(target)) queue.push(["--file", target]);
+    }
+  }
+  return [...found];
+}
+
+function refuseFilters(programs: string[]): void {
+  if (!programs.length) return;
+  throw new GitProgramRefusedError(
+    `This repo's git settings run a program (${programs.join(", ")}) when files are checked out, compared or merged. Perfect Planner will not run it; a person must review and remove it (git config --unset) before continuing.`,
+  );
+}
+
+/** The new worktree's folder in `git worktree add [options] <path> [<commit-ish>]`. */
+function worktreeAddPath(args: readonly string[], at: number): string | undefined {
+  for (let index = at + 1; index < args.length; index += 1) {
+    const arg = args[index]!;
+    if (arg === "--") return args[index + 1];
+    if (arg === "-b" || arg === "-B" || arg === "--reason") index += 1;
+    else if (!arg.startsWith("-")) return arg;
+  }
+  return undefined;
 }
 
 /**
@@ -196,19 +274,32 @@ export async function filterPrograms(cwd: string): Promise<string[]> {
  * own hooks and every config setting that runs a program or changes what is shown switched off (see
  * fixedConfig and baseEnv). Diffs never use an external diff or textconv. A command that touches the
  * working tree or file content is refused (GitProgramRefusedError) while the repo config names a
- * filter program or merge driver; only an allow-list of commands skips that check. Use this for every host git call. Never throws for a non-zero exit; see `git()`.
+ * filter program or merge driver; only an allow-list of commands skips that check. `worktree add` makes the worktree without files, checks the config as seen from inside
+ * it (its branch and folder), and only then checks the files out. Use this for every host git call.
+ * Never throws for a non-zero exit; see `git()`.
  */
 export async function runGit(cwd: string, args: string[], options: GitOptions = {}): Promise<GitResult> {
   const command = subcommand(args);
-  if (mayRunPrograms(args, command)) {
-    const programs = await filterPrograms(cwd);
-    if (programs.length) {
-      throw new GitProgramRefusedError(
-        `This repo's git settings run a program (${programs.join(", ")}) when files are checked out, compared or merged. Perfect Planner will not run it; a person must review and remove it (git config --unset) before continuing.`,
-      );
-    }
+  const at = command ? args.indexOf(command) : -1;
+  const addsWorktree = command === "worktree" && args[at + 1] === "add";
+  if (mayRunPrograms(args, command)) refuseFilters(await filterPrograms(cwd));
+  if (!addsWorktree) return spawnGit(cwd, args, options);
+
+  const rest = args.slice(at + 2).filter((arg) => arg !== "--checkout");
+  const wantsFiles = !rest.includes("--no-checkout");
+  const target = worktreeAddPath(args, at + 1);
+  const added = await spawnGit(cwd, [...args.slice(0, at + 2), ...(wantsFiles ? ["--no-checkout"] : []), ...rest], options);
+  if (added.code !== 0 || !target) return added;
+  const folder = path.resolve(cwd, target);
+  const programs = await filterPrograms(folder);
+  if (programs.length) {
+    // Nothing was checked out, so the folder holds no work; take it away again.
+    await spawnGit(cwd, ["worktree", "remove", "--force", folder], {});
+    refuseFilters(programs);
   }
-  return spawnGit(cwd, args, options);
+  if (!wantsFiles || rest.includes("--orphan")) return added;
+  const filled = await spawnGit(folder, ["reset", "--hard", "-q"], options);
+  return filled.code === 0 ? added : { ...filled, stderr: `${added.stderr}${filled.stderr}` };
 }
 
 function spawnGit(cwd: string, args: string[], options: GitOptions): Promise<GitResult> {

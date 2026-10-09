@@ -3,7 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { Actor } from "../ledger/index";
 import { gitExecutable } from "../exec/index";
-import { git, GitHardeningError, GitProgramRefusedError, runGit } from "../worktrees/git";
+import { filterPrograms, git, GitHardeningError, GitProgramRefusedError, runGit } from "../worktrees/git";
 import { WorktreeManager } from "../worktrees/manager";
 import { commitAll, makeRepo, memoryLedger, writeFiles } from "../worktrees/testing";
 import { TestGate, sensitiveChanges, verifyMergeCommit } from "./index";
@@ -139,6 +139,55 @@ describe("only an allow-list of git commands skips the filter check", () => {
     expect((await runGit(ctx.root, ["rev-parse", "HEAD"])).code).toBe(0);
     expect(existsSync(ctx.marker)).toBe(false);
   }, SLOW);
+});
+
+describe("settings that only apply on some branches or folders (includeIf) are refused too", () => {
+  /** A config file that names a filter program, pulled in by the project config only under `condition`. */
+  function plantConditional(ctx: Awaited<ReturnType<typeof approvedRepo>>, condition: string, name: string) {
+    const program = plant(path.join(path.dirname(ctx.root), `${name}.sh`), ctx.marker);
+    const included = path.join(path.dirname(ctx.root), `${name}.gitconfig`).replace(/\\/g, "/");
+    writeFileSync(included, `[filter "evil"]\n\tsmudge = ${program}\n\tclean = ${program}\n`);
+    writeFiles(ctx.gitDir, { "info/attributes": "* filter=evil\n" });
+    return { included, key: `includeIf.${condition}.path` };
+  }
+
+  it("refuses dispatch when the worker's branch (onbranch) or folder (gitdir) would turn on a filter", async () => {
+    for (const condition of ["onbranch:pp/**", "gitdir:**/.perfect-planner/worktrees/**"]) {
+      const ctx = await approvedRepo();
+      const { included, key } = plantConditional(ctx, condition, "dispatch");
+      await git(ctx.root, ["config", key, included]);
+      await expect(ctx.manager.create({ taskId: "T-1", actor: OWNER })).rejects.toBeInstanceOf(GitProgramRefusedError);
+      expect(existsSync(ctx.marker), `${condition} ran: ${existsSync(ctx.marker) ? readFileSync(ctx.marker, "utf8") : ""}`).toBe(false);
+      expect((await runGit(ctx.root, ["worktree", "list", "--porcelain"])).stdout).not.toContain(".perfect-planner/worktrees");
+    }
+  }, SLOW * 2);
+
+  it("refuses the merge when the candidate's folder (gitdir) would turn on a filter", async () => {
+    const ctx = await approvedRepo();
+    const info = await ctx.manager.create({ taskId: "T-1", actor: OWNER });
+    writeFiles(info.path, { "feature.txt": "enabled\n" });
+    const tip = await commitAll(info.path, "enable feature");
+    expect((await ctx.gate.prove("T-1", info.path)).ok).toBe(true);
+    expect(ctx.gate.approveDiff("T-1", OWNER, tip).ok).toBe(true);
+    expect(ctx.gate.approveMerge("T-1", OWNER, tip).ok).toBe(true);
+    const { included, key } = plantConditional(ctx, "gitdir:**/pp-gate-*/**", "merge");
+    await git(ctx.root, ["config", key, included]);
+    const merged = await ctx.gate.mergeAndVerify("T-1", { repoRoot: ctx.root, branch: info.branch, integrationBranch: "main", actor: OWNER });
+    expect(merged).toMatchObject({ ok: false, reason: expect.stringContaining("filter.evil.smudge") });
+    expect(existsSync(ctx.marker), existsSync(ctx.marker) ? readFileSync(ctx.marker, "utf8") : "").toBe(false);
+    expect(await git(ctx.root, ["rev-parse", "main"])).not.toBe(tip);
+  }, SLOW);
+
+  it("finds a conditional include nested in an included file, whatever its condition", async () => {
+    const ctx = await approvedRepo();
+    const { included, key } = plantConditional(ctx, "onbranch:never-used/**", "nested");
+    const outer = path.join(path.dirname(ctx.root), "outer.gitconfig").replace(/\\/g, "/");
+    writeFileSync(outer, `[includeIf "${key.slice("includeIf.".length, -".path".length)}"]\n\tpath = ${included}\n`);
+    await git(ctx.root, ["config", "include.path", outer]);
+    expect(await filterPrograms(ctx.root)).toEqual(expect.arrayContaining(["filter.evil.smudge", "filter.evil.clean"]));
+    await expect(runGit(ctx.root, ["checkout", "-q", "-b", "other"])).rejects.toBeInstanceOf(GitProgramRefusedError);
+    expect(existsSync(ctx.marker)).toBe(false);
+  });
 });
 
 describe("the app's own git settings cannot be used to run a program", () => {
