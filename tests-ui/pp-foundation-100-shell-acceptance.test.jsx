@@ -79,7 +79,7 @@ describe("PP-FOUNDATION-100 shell acceptance", () => {
 
     await screen.findByRole("heading", { name: "Bring in a real app to begin" });
     const stage = container.querySelector(".workspace-stage");
-    expect(stage.textContent).toContain("No project selected · honest empty state");
+    expect(stage.textContent).toContain("Choose app folder");
     expect(stage.textContent).not.toContain("PP-014");
     expect(stage.textContent).not.toContain("PP-CLEANROOM");
     expect(stage.textContent).not.toContain("Resolve the collision-safe plan capsule");
@@ -91,7 +91,7 @@ describe("PP-FOUNDATION-100 shell acceptance", () => {
     const user = userEvent.setup();
     const { container } = renderShell(registryWith(), "/?workspace=home");
 
-    await user.click(await screen.findByRole("button", { name: "Explore the explicit Demo" }));
+    await user.click(await screen.findByRole("button", { name: "Try the demo" }));
     await screen.findByRole("heading", { name: "Local Collaboration Workspace" });
     expect(container.querySelector(".workspace-stage").textContent).toContain("PP-014");
     expect(container.querySelector('.project-truth-gate[data-project-kind="demo"]')).toBeTruthy();

@@ -51,7 +51,7 @@ describe("foundation resilience Structure intake bridge", () => {
     render(<StructureWorkspace workspaceAdapter={adapter} onProjectCaptured={onProjectCaptured} onProjectUnavailable={onProjectUnavailable} />);
 
     await user.click(screen.getByRole("button", { name: "Choose app folder" }));
-    await user.click(screen.getByRole("button", { name: /Approve read-only analysis/ }));
+    await user.click(await screen.findByRole("button", { name: "Approve read-only scan" }));
 
     await waitFor(() => expect(onProjectCaptured).toHaveBeenCalledTimes(1));
     const capture = onProjectCaptured.mock.calls[0][0];
@@ -83,7 +83,7 @@ describe("foundation resilience Structure intake bridge", () => {
     render(<StructureWorkspace workspaceAdapter={adapter} onProjectCaptured={onProjectCaptured} onProjectUnavailable={onProjectUnavailable} />);
 
     await user.click(screen.getByRole("button", { name: "Choose app folder" }));
-    await user.click(screen.getByRole("button", { name: /Approve read-only analysis/ }));
+    await user.click(await screen.findByRole("button", { name: "Approve read-only scan" }));
 
     await waitFor(() => expect(onProjectUnavailable).toHaveBeenCalledTimes(1));
     expect(onProjectUnavailable.mock.calls[0][0].reason).toMatch(/native desktop app/i);
@@ -113,7 +113,7 @@ describe("foundation resilience Structure intake bridge", () => {
     render(<StructureWorkspace workspaceAdapter={adapter} onProjectCaptured={onProjectCaptured} onProjectUnavailable={onProjectUnavailable} />);
 
     await user.click(screen.getByRole("button", { name: "Choose app folder" }));
-    await user.click(screen.getByRole("button", { name: /Approve read-only analysis/ }));
+    await user.click(await screen.findByRole("button", { name: "Approve read-only scan" }));
 
     await waitFor(() => expect(onProjectUnavailable).toHaveBeenCalledTimes(1));
     expect(onProjectUnavailable.mock.calls[0][0].registration.rootIdentity).toBe(rootIdentity);
