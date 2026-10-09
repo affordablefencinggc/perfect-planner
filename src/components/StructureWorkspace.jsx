@@ -36,6 +36,7 @@ import { useOptionalProject } from "../project/ProjectProvider.jsx";
 import "./StructureWorkspace.css";
 import { IndexingActivity } from './IndexingActivity.jsx';
 import { FolderReconnectNotice } from "./FolderReconnectNotice.jsx";
+import { rememberCensusPaths } from "../project/censusPaths.js";
 import { describeFolderConnection } from "../project/folderReconnectModel.js";
 import { DiscoveryReviewPanel } from "./DiscoveryReviewPanel.jsx";
 import { folderPlanGuidance } from '../engine/folderPlanGuidance.js';
@@ -662,6 +663,8 @@ export function StructureWorkspace({
         return;
       }
       const publishProject = (gaps = null) => {
+        // Lets the Ledger mark file scopes that name nothing in this scan.
+        rememberCensusPaths(census);
         onIntakeSummary?.(
           redactWorkspaceIntakeSummary({ registration, census, gaps }),
         );
