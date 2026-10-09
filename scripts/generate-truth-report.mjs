@@ -133,7 +133,9 @@ export async function publishVerifiedTruthGeneration(outputRoot, stagingDirector
 }
 
 export async function generateTruthReport(projectRoot = path.resolve(process.argv[2] ?? process.cwd()), options = {}) {
-const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "pp-truth-report-"));
+// Canonical path: macOS /var and Windows 8.3 temp paths are aliases that
+// runProof would otherwise treat as escaping the realpath-ed root.
+const temporaryRoot = await realpath(await mkdtemp(path.join(os.tmpdir(), "pp-truth-report-")));
 const journalPath = path.join(temporaryRoot, "journal.jsonl");
 const generatedAt = new Date().toISOString();
 try {
