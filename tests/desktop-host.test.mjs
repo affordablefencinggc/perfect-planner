@@ -6,7 +6,7 @@ import path from "node:path";
 import { PassThrough } from "node:stream";
 import test from "node:test";
 import { extractTarMember, hostTriple, RUNTIME, runtimeFor, sha256, verified } from "../scripts/build-desktop-host.mjs";
-import { DESKTOP_PORT, desktopHostConfig, pathWithAppNode, readyLine, startDesktopHost } from "../src/node/desktopHost.mjs";
+import { DESKTOP_PORT, desktopHostConfig, readyLine, startDesktopHost } from "../src/node/desktopHost.mjs";
 
 // The four installers the release workflow builds (release.yml matrix) must each get a pinned Node.
 const RELEASE_TARGETS = ["x86_64-pc-windows-msvc", "aarch64-apple-darwin", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu"];
@@ -101,14 +101,6 @@ test("the desktop service serves the app on loopback, reports ready once, and st
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
-});
-
-test("the app's Node goes last on PATH, so a person's own Node still wins and nobody needs one", () => {
-  const app = path.join(path.sep, "apps", "pp", "desktop-host", "node");
-  const own = path.join(path.sep, "usr", "local", "bin");
-  assert.deepEqual(pathWithAppNode({ PATH: own }, app), { key: "PATH", value: [own, path.dirname(app)].join(path.delimiter) });
-  assert.deepEqual(pathWithAppNode({ Path: "" }, app), { key: "Path", value: path.dirname(app) });
-  assert.equal(pathWithAppNode({ PATH: path.dirname(app) }, app).value, path.dirname(app));
 });
 
 test("the shell hands the service Tauri's app data folder on every platform, and the service keeps its data there", () => {

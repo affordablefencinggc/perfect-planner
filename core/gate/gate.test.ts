@@ -715,3 +715,16 @@ setInterval(() => {}, 1000);
     expect(alive()).toBe(false);
   }, SLOW);
 });
+
+describe("the desktop app's own Node for test commands", () => {
+  it("goes last on PATH, only when the app names an absolute Node, and only once", async () => {
+    const { withAppNode } = await import("./run");
+    const app = path.resolve("/apps/pp/desktop-host/node");
+    const own = path.resolve("/usr/local/bin");
+    expect(withAppNode({ PATH: own }, app).PATH).toBe([own, path.dirname(app)].join(path.delimiter));
+    expect(withAppNode({ Path: "" }, app)).toEqual({ Path: path.dirname(app) });
+    expect(withAppNode({ PATH: path.dirname(app) }, app).PATH).toBe(path.dirname(app));
+    expect(withAppNode({ PATH: own }, "node")).toEqual({ PATH: own });
+    expect(withAppNode({ PATH: own }, undefined)).toEqual({ PATH: own });
+  });
+});

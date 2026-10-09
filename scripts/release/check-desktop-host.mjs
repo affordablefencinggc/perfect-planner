@@ -8,7 +8,7 @@
 //   4. run the whole loop the way the person and a worker do (runLoop): open a project folder,
 //      plan and approve, start a worker (the bundled Node runs it, from the app's own MCP JSON),
 //      approve its failing test, let it build and attach proof, check, approve the diff, merge;
-//      test commands and the commit hook run with no Node on PATH but the app's own;
+//      the service runs with no Node on PATH, so test commands use the app's own (core/gate withAppNode);
 //   5. close its stdin, as the shell does when the app quits, and check that it stopped.
 //   node scripts/release/check-desktop-host.mjs [desktop-host folder]
 // Prints a JSON summary; exits non-zero on any failure. No secret is printed.

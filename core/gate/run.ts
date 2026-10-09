@@ -68,6 +68,19 @@ export function scrubbedEnv(source: NodeJS.ProcessEnv = process.env, extra: Reco
   return { ...env, ...extra };
 }
 
+/**
+ * PATH with the folder of the app's own Node (PP_NODE_BINARY, set by the desktop app) added last,
+ * so `node ...` test commands run for a person with no Node install while their own Node still wins.
+ */
+export function withAppNode(env: NodeJS.ProcessEnv, nodeBinary = process.env.PP_NODE_BINARY): NodeJS.ProcessEnv {
+  if (!nodeBinary || !path.isAbsolute(nodeBinary)) return env;
+  const key = Object.keys(env).find((k) => k.toUpperCase() === "PATH") ?? "PATH";
+  const dir = path.dirname(nodeBinary);
+  const parts = String(env[key] ?? "").split(path.delimiter).filter(Boolean);
+  if (parts.some((p) => path.resolve(p) === path.resolve(dir))) return env;
+  return { ...env, [key]: [...parts, dir].join(path.delimiter) };
+}
+
 /** A run proves the test fails only if the test itself ran and reported failure. */
 export function isConclusiveFailure(run: TestRunResult): boolean {
   if (run.passed || run.timedOut || run.exitCode === null) return false;
@@ -156,7 +169,7 @@ export function runTestCommand(command: string, cwd: string, options: TestRunOpt
         finish(null);
       }, 5000);
     }, timeoutMs);
-    const env = scrubbedEnv(process.env, options.env);
+    const env = withAppNode(scrubbedEnv(process.env, options.env));
     if (!commandExists(command, cwd, env)) {
       tail.push(Buffer.from(`[perfect-planner] command not found: ${command.trim().split(/\s+/)[0]}\n`));
       finish(null);

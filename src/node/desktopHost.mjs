@@ -40,25 +40,11 @@ export function readyLine(started) {
 const stderrLogger = { log: (...a) => console.error(...a), info: (...a) => console.error(...a), warn: (...a) => console.error(...a), error: (...a) => console.error(...a) };
 
 /**
- * PATH with the app's Node folder added LAST: a person without Node can still run `node` test
- * commands and the commit hook, while a Node of their own (the version their project wants) wins.
- */
-export function pathWithAppNode(env, nodeBinary) {
-  const key = Object.keys(env).find((k) => k.toUpperCase() === "PATH") ?? "PATH";
-  const dir = path.dirname(nodeBinary);
-  const parts = String(env[key] ?? "").split(path.delimiter).filter(Boolean);
-  if (!parts.some((p) => path.resolve(p) === path.resolve(dir))) parts.push(dir);
-  return { key, value: parts.join(path.delimiter) };
-}
-
-/**
  * Starts the service and reports it. Connect agent's lines and the worktrees' commit hook
  * run this same Node (PP_NODE_BINARY), so the person needs no Node install of their own.
  */
 export async function startDesktopHost({ env = process.env, here, input = process.stdin, output = process.stdout, logger = stderrLogger, onStop = () => process.exit(0) } = {}) {
   if (!env.PP_NODE_BINARY) env.PP_NODE_BINARY = process.execPath;
-  const withNode = pathWithAppNode(env, env.PP_NODE_BINARY);
-  env[withNode.key] = withNode.value;
   const started = await startLocalServer({ ...desktopHostConfig(env, here), logger });
   let stopping = false;
   const stop = () => {
