@@ -15,6 +15,7 @@ import { installPeopleRules } from "../people/index";
 import { installPlanningRules } from "../planning/index";
 import { installReleaseRules, protectProject, type CommandRunner, type ProtectionReport } from "../release/index";
 import { ensureRequiredIgnores, PRIVATE_DIR } from "../worktrees/index";
+import { gitExecutable, NO_CWD_SEARCH_ENV } from "../exec/index";
 
 export interface CoreProject {
   /** Safe key from the client ("default" when none was given). */
@@ -41,10 +42,19 @@ export function projectKey(raw: string | null | undefined): string {
   return KEY.test(key) ? key : "default";
 }
 
-/** Runs git (and only what protectProject asks for) without a shell. */
+/**
+ * Runs git (and only what protectProject asks for) without a shell. git is started by absolute path
+ * with the current folder left out of the program search, never a git found in the user's repo (core/exec).
+ */
 export const runCommand: CommandRunner = (command, args, options) =>
   new Promise((resolve) => {
-    execFile(command, [...args], { cwd: options?.cwd, encoding: "utf8", windowsHide: true, maxBuffer: 4 * 1024 * 1024 }, (error, stdout, stderr) => {
+    let program = command;
+    try {
+      if (command === "git") program = gitExecutable(options?.cwd ?? process.cwd());
+    } catch (error) {
+      return resolve({ code: 127, stdout: "", stderr: (error as Error).message });
+    }
+    execFile(program, [...args], { cwd: options?.cwd, encoding: "utf8", windowsHide: true, maxBuffer: 4 * 1024 * 1024, env: { ...process.env, ...NO_CWD_SEARCH_ENV } }, (error, stdout, stderr) => {
       const code = error ? (typeof (error as { code?: unknown }).code === "number" ? ((error as { code: number }).code) : 1) : 0;
       resolve({ code, stdout: String(stdout ?? ""), stderr: String(stderr ?? (error ? error.message : "")) });
     });

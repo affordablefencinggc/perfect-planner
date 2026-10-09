@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { gitExecutable, NO_CWD_SEARCH_ENV } from "../exec/index";
 
 export interface GitResult {
   code: number;
@@ -23,7 +24,14 @@ const baseEnv = (): NodeJS.ProcessEnv => {
 /** Run git without a shell. Never throws for a non-zero exit; see `git()` for that. */
 export function runGit(cwd: string, args: string[], options: GitOptions = {}): Promise<GitResult> {
   return new Promise((resolve, reject) => {
-    const child = spawn("git", ["-c", "core.quotepath=off", ...args], { cwd, env: { ...baseEnv(), ...options.env }, windowsHide: true, shell: false });
+    // git by absolute path, never one found in (or planted in) the repo it runs in (core/exec).
+    let executable: string;
+    try {
+      executable = gitExecutable(cwd);
+    } catch (error) {
+      return reject(error);
+    }
+    const child = spawn(executable, ["-c", "core.quotepath=off", ...args], { cwd, env: { ...baseEnv(), ...options.env, ...NO_CWD_SEARCH_ENV }, windowsHide: true, shell: false });
     const out: Buffer[] = [];
     const err: Buffer[] = [];
     const timer = setTimeout(() => child.kill(), options.timeoutMs ?? 60_000);
