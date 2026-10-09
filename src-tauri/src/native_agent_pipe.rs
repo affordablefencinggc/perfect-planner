@@ -347,9 +347,13 @@ impl AgentPipe {
         use std::io::Read;use std::os::windows::process::CommandExt;use sha2::{Sha256,Digest};
         host();let node=std::env::var("PP_TEST_AGENT_NODE").unwrap();let name=id();
         // Test-only Node server, not the production native endpoint or ACL.
-        let script=r#"const net=require('node:net');setTimeout(()=>process.exit(2),15000);net.createServer(s=>{s.on('error',()=>{});s.on('data',b=>s.write(b));}).listen(process.argv[1],()=>process.stdout.write('R'));"#;
+        // The peer lives until the test drops it (stdin closes, or TestChild kills it), not for a fixed
+        // wall-clock span: the hashes of the Node binary below are CPU-bound and, in an unoptimized
+        // test build under parallel load, outlasted the old 15 s self-exit, so the liveness check
+        // then saw AGENT_PEER_NOT_LIVE.
+        let script=r#"const net=require('node:net');process.stdin.on('end',()=>process.exit(2));process.stdin.resume();net.createServer(s=>{s.on('error',()=>{});s.on('data',b=>s.write(b));}).listen(process.argv[1],()=>process.stdout.write('R'));"#;
         let mut child=TestChild(std::process::Command::new(&node).args(["-e",script,&format!(r"\\.\pipe\PerfectPlanner.Agent.{name}")])
-            .stdin(std::process::Stdio::null()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null()).creation_flags(0x08000000).spawn().unwrap());
+            .stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null()).creation_flags(0x08000000).spawn().unwrap());
         let mut output=child.0.stdout.take().unwrap();let (tx,rx)=std::sync::mpsc::channel();
         let reader=std::thread::spawn(move||{let mut byte=[0];let result=output.read_exact(&mut byte);let _=tx.send(result.map(|_|byte));});
         let ready=rx.recv_timeout(Duration::from_secs(5));
@@ -516,14 +520,15 @@ socket.on('close',()=>{clearTimeout(timer);process.exit(stage===3?0:8);});});"#;
         host();let node=std::env::var("PP_TEST_AGENT_NODE").expect("Explicit remote Node fixture required");
         let name=id();let pipe=AgentPipe::create(&name).unwrap();
         // Public test endpoint name only; no credentials or source content in argv.
-        let script=r#"const net=require('node:net');const timer=setTimeout(()=>process.exit(2),15000);
+        // Lifetime is tied to the test (stdin), not a wall-clock self-exit; see the pinned-client test.
+        let script=r#"const net=require('node:net');process.stdin.on('end',()=>process.exit(2));process.stdin.resume();
 const socket=net.connect(process.argv[1]);let bytes=Buffer.alloc(0);
 socket.on('error',()=>process.exit(3));socket.on('connect',()=>socket.write(Buffer.from([0,0,0,2,123,125])));
 socket.on('data',chunk=>{bytes=Buffer.concat([bytes,chunk]);if(bytes.length>6)process.exit(4);
 if(bytes.length===6){if(!bytes.equals(Buffer.from([0,0,0,2,111,107])))process.exit(5);socket.end();}});
-socket.on('close',()=>{clearTimeout(timer);process.exit(bytes.length===6?0:6);});"#;
+socket.on('close',()=>process.exit(bytes.length===6?0:6));"#;
         let mut child=TestChild(std::process::Command::new(&node).args(["-e",script,&format!(r"\\.\pipe\PerfectPlanner.Agent.{name}")])
-            .stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).creation_flags(0x08000000).spawn().unwrap());
+            .stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).creation_flags(0x08000000).spawn().unwrap());
         let peer=PipePeer::from_child(&child.0).unwrap();
         pipe.accept(Duration::from_secs(3)).unwrap();pipe.verify_client(&peer).unwrap();
         let hash=format!("{:x}",Sha256::digest(std::fs::read(&node).unwrap()));
