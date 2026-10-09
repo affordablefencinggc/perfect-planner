@@ -51,17 +51,17 @@ Status rules (`classify`):
 Tests are paths under `tests/`, `tests-ui/`, `__tests__/` or `e2e/`, files
 named `*.test.*` / `*.spec.*`, and journey scripts named `e2e-*`. Every status
 carries evidence: one `{ file, line?, note }` per file present, file missing
-and marker, with repo-relative forward-slash paths on every OS.
+and marker, with repo-relative forward-slash paths on every OS. A declared file that resolves (through a symlink) outside the repository counts as missing and is never read, and a marker's evidence keeps only the comment text, never the code on that line.
 
 ## The board (`board.ts`)
 
 | Call | Rule |
 |---|---|
-| `recordProposal(ledger, proposal)` | starts a fresh board; clears any confirmation |
+| `recordProposal(ledger, proposal)` | starts a fresh board; clears any confirmation. Jev may not write decisions, so a Jev proposal is recorded by `MVP_STAGER` (a system actor) with `data.mvp.proposedBy` naming Jev |
 | `moveFeature(ledger, actor, id, stage, reason)` | moving to any stage but the MVP needs a **one-line reason** (non-empty, not "TBD", no newline, at most 200 characters), else `MvpError("REASON_REQUIRED")`; moving into the MVP needs none; any move un-confirms the board |
 | `renameStage(ledger, actor, stage, name)` | 1 to 40 characters, one line, unique |
 | `setJourney(ledger, actor, journey)` | replaces the done-when journey and pulls its features into the MVP |
-| `confirmMvp(ledger, actor)` | only a person can confirm (`NOT_A_PERSON`) |
+| `confirmMvp(ledger, actor)` | only a person can confirm (`NOT_A_PERSON`). Replay trusts only the entry's own author via the ledger's `isAuthoritative(entry, { personOnly: true })` (`confirmedByPerson`), never a payload field, so a confirm written by the system is ignored and the ledger refuses one from an agent; `installMvpRules(ledger)` also refuses one at write time |
 | `boardFromLedger(entries)` | replays the board |
 | `missingDependencies(board, features)` | MVP features whose dependencies sit in a later stage, for a warning |
 | `mvpDoneWhen(board, entries, features)` | `{ done, journeyPassed, blocking }`: done when confirmed, every MVP feature is Done, and the latest `test.passed`/`test.failed` for the journey's test command is a pass |
