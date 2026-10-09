@@ -15,6 +15,10 @@ describe("redaction (review samples, #7 at b359f6f)", () => {
     ["cookie session id", j("Cookie: ", "session=", "s3ss10nAbc123; theme=dark"), "s3ss10nAbc123"],
     ["Set-Cookie session id", j("Set-Cookie: ", "sid=", "8f2kQ93mzz; Path=/; HttpOnly"), "8f2kQ93mzz"],
     ["Stripe test key", j("sk", "_test_", "D".repeat(24)), "D".repeat(24)],
+    ["passphrase on an env line", j("DB_", "PASSWORD=", "correct-horse-battery-staple"), "correct-horse-battery-staple"],
+    ["passphrase in YAML", j("pass", "word: ", "purple-monkey-dishwasher"), "purple-monkey-dishwasher"],
+    ["dotted passphrase on an export line", j("export API_", "KEY=", "blue.whale.sings.loud"), "blue.whale.sings.loud"],
+    ["a random token starting with fake", j("fake", RANDOM), RANDOM],
     ["curl -u password", j("curl -u admin:", "pass", " https://x.test"), "admin:pass "],
     ["curl --user password", j("curl --user ", "admin:", "Hunter22", " https://x.test"), "Hunter22"],
   ])("hides %s", (_name, text, leak) => {
@@ -37,6 +41,11 @@ describe("the diff check finds what redaction finds (review samples)", () => {
     ["letters-only password in a config file", "config/app.yml", j("  pass", "word: ", "hunter")],
     ["letters-only env value", ".env.production", j("DB_", "PASSWORD=", "letmein")],
     ["curl -u password", "scripts/check.sh", j("curl -u admin:", "pass", " https://x.test")],
+    ["passphrase on an env line", "deploy/env.sh", j("DB_", "PASSWORD=", "correct-horse-battery-staple")],
+    ["passphrase in YAML", "config/app.yml", j("pass", "word: ", "purple-monkey-dishwasher")],
+    ["passphrase in source", "src/a.ts", j('const pass', 'word = "', "purple-monkey-dishwasher", '";')],
+    ["dotted passphrase on an export line", "deploy/env.sh", j("export API_", "KEY=", "blue.whale.sings.loud")],
+    ["a random token starting with fake", "src/a.ts", j('const k = "', "fake", RANDOM, '";')],
     ["URL-encoded cookie session", "docs/debug.md", j("Cookie: ", "session=", "eyJ1c2VyIjoxfQ%3D%3D.Zk9a2", "; theme=dark")],
   ];
   it.each(MUST_FIND)("finds %s", (_name, file, line) => {
