@@ -27,21 +27,26 @@ Only a person can change the preset or the budget, enforced twice: the
 readers (`currentPreset`, `currentBudget`) count only entries that pass
 `isAuthoritative(entry, { personOnly: true })` from `core/ledger`, and `installSettingsRule(ledger)` refuses a system `decision.made` on either topic
 outright (the ledger itself already refuses agents and Jev). The gate reads the preset
-from the ledger (`runCheapFirst(change, { entries })`); callers cannot pass
-one in.
+from the ledger (`runCheapFirst(change, { ledger, author })`); callers cannot
+pass one in.
 
 ## Cheap checks first (`pipeline.ts`, `risk.ts`)
 
-`runCheapFirst(change, options)` runs, cheapest first, and stops at the first
-check that does not pass, so a held change never spends money on the later
-ones:
+`runCheapFirst(change, { ledger, author, ... })` runs, cheapest first, and
+stops at the first check that does not pass, so a held change never spends
+money on the later ones. It fails closed: without the ledger (preset and
+budget) or the builder (`author`, for reviewer independence) it throws
+instead of running with defaults. It also installs the release rules on the
+ledger (`installReleaseRules`: budget stop plus person-only settings, once per
+ledger); the app should call `installReleaseRules(ledger)` when it opens the
+ledger too, so the rules hold before the first review.
 
 1. **budget**: a stopped month holds everything (free)
 2. **size-cap**: oversize changes are held with a split plan (free)
 3. **secret-scan**: added lines and file names (local)
 4. **local-tests**: only the tests for the changed files (`affectedTests`), via `options.runTests`
 5. **risk-triage**: path rules, then an optional small model that may raise but never lower the level; it sees paths and line counts only, never file contents
-6. **deep-review**: only when the preset says so; the reviewer (Jev, `core/jev`) is passed in as `options.deepReview`. A change that needs one with no reviewer configured is held, never waved through.
+6. **deep-review**: only when the preset says so; the reviewer (Jev, `core/jev`) is passed in as `options.deepReview` and must name itself (`outcome.reviewer`). A change that needs one with no reviewer configured is held, never waved through, and so is one reviewed by its own builder (same id, or an AI reviewer on the same model as the builder).
 
 Verdict is `ready`, `held` (size, budget, missing reviewer) or `blocked`
 (secret, failing tests, rejected review). Skipped checks are reported as
@@ -50,7 +55,9 @@ writes it as `review.verdict` with `data.stage = "cheap-first"`; the actor is
 the system gate (or Jev), since agents may not write verdicts.
 
 Sensitive areas (`areasOf`): auth, payments, migrations, secrets handling,
-CI and build config, and anything over the planned size.
+CI and build config, deleted or shrunk test files, and anything over the
+planned size. Every sensitive area except oversize gets the deep review under
+every preset, Cheap included.
 
 ## Four secret layers (`secrets.ts`, `layers.ts`, `pushProtection.ts`, `hooks/pre-push.mjs`)
 
@@ -65,17 +72,26 @@ CI and build config, and anything over the planned size.
 `on`, `off` or `unchecked`, and `ok` only when all four are checked and on.
 
 Findings never carry a secret: `preview` is masked (`ghp_…(40)`), and the
-GitHub token never appears in a result or error. A line can be allowed on
-purpose with a `pp-allow-secret` comment. References to a secret store
-(`secret://…`, `dpapi:…`, `keychain:…`) are not secrets.
+GitHub token never appears in a result or error. There is no inline
+"allow" marker. A finding a person has reviewed is allowed by its exact
+fingerprint (`file:rule:sha256(value)`) in `.perfect-planner/secret-allowlist.json`
+(`{ version: 1, allow: [{ fingerprint, reason, approvedBy }] }`), and the
+branch scan and the pre-push hook read that file from the base commit only,
+so a push can never allowlist its own secret. A value counts as a
+placeholder only when the whole value is one (`changeme`, `<token>`,
+`${API_KEY}`, …) or a reference to a secret store (`secret://…`, `dpapi:…`,
+`keychain:…`).
 
 The pre-push hook is a dependency-free `.mjs` (git cannot run TypeScript).
 Its rules mirror `secrets.ts`; `secrets.test.ts` fails if they drift.
-Install it with `prePushShim(absolutePathToHook)` written to the repo's
-`pre-push` hook (or into the hooks folder `core/worktrees` sets as
-`core.hooksPath`). Run on this repo today it flags one test fixture,
-`tests/provider-review-gateway.test.mjs` line 18 (a fake private key header),
-which only matters when a branch changes that file.
+Install it with `installPrePushHook(run, { cwd, hookScript })`, which writes
+the shim where git looks (`git rev-parse --git-path hooks`, so it follows the
+`core.hooksPath` that `core/worktrees` sets) and never overwrites a hook that
+is not ours; `prePushInstalled` feeds layer 3 of `secretPosture`. Run on every tracked file of this repo today it flags 28 lines, all test
+fixtures or non-secret values under secret-like names (for example a fake
+PEM header in `tests/provider-review-gateway.test.mjs`). They only matter
+when a branch changes one of those files, and then a person adds the
+printed fingerprint to the allowlist.
 
 ## No giant pushes (`sizeCap.ts`)
 

@@ -1,5 +1,10 @@
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { prePushShim, secretPosture } from "./layers";
+import { installPrePushHook, prePushInstalled, prePushShim, secretPosture } from "./layers";
+import type { CommandRunner } from "./types";
 import { withRequiredIgnores } from "./secrets";
 
 const goodIgnore = withRequiredIgnores("node_modules/\n");
@@ -46,5 +51,63 @@ describe("secret posture", () => {
     const shim = prePushShim("C:\\repos\\pp\\core\\release\\hooks\\pre-push.mjs");
     expect(shim.startsWith("#!/bin/sh\n")).toBe(true);
     expect(shim).toContain('exec node "C:/repos/pp/core/release/hooks/pre-push.mjs" "$@"');
+  });
+});
+
+describe("installing the pre-push scan", () => {
+  const git = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
+  const run: CommandRunner = async (command, args, options) => {
+    try {
+      return { code: 0, stdout: execFileSync(command, args as string[], { cwd: options?.cwd, encoding: "utf8" }), stderr: "" };
+    } catch (error) {
+      return { code: 1, stdout: "", stderr: String(error) };
+    }
+  };
+
+  it("writes the shim into the repo's hooks folder, and is idempotent", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "pp-prepush-"));
+    try {
+      git(dir, "init", "-q");
+      const first = await installPrePushHook(run, { cwd: dir, hookScript: "/opt/pp/pre-push.mjs" });
+      expect(first.installed).toBe(true);
+      const hookFile = join(dir, ".git", "hooks", "pre-push");
+      expect(readFileSync(hookFile, "utf8")).toBe(prePushShim("/opt/pp/pre-push.mjs"));
+      if (process.platform !== "win32") expect(statSync(hookFile).mode & 0o111).not.toBe(0);
+      const again = await installPrePushHook(run, { cwd: dir, hookScript: "/opt/pp/pre-push.mjs" });
+      expect(again).toMatchObject({ installed: true });
+      expect(await prePushInstalled(run, { cwd: dir })).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("never overwrites someone else's pre-push hook and says so", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "pp-prepush-"));
+    try {
+      git(dir, "init", "-q");
+      const hookFile = join(dir, ".git", "hooks", "pre-push");
+      writeFileSync(hookFile, "#!/bin/sh\necho mine\n");
+      const result = await installPrePushHook(run, { cwd: dir, hookScript: "/opt/pp/pre-push.mjs" });
+      expect(result.installed).toBe(false);
+      expect(result.reason).toMatch(/already has its own pre-push hook/);
+      expect(readFileSync(hookFile, "utf8")).toBe("#!/bin/sh\necho mine\n");
+      expect(await prePushInstalled(run, { cwd: dir })).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("follows core.hooksPath, where core/worktrees puts its hooks", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "pp-prepush-"));
+    try {
+      git(dir, "init", "-q");
+      mkdirSync(join(dir, "hooks-here"));
+      git(dir, "config", "core.hooksPath", "hooks-here");
+      const result = await installPrePushHook(run, { cwd: dir, hookScript: "/opt/pp/pre-push.mjs" });
+      expect(result.installed).toBe(true);
+      expect(existsSync(join(dir, "hooks-here", "pre-push"))).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

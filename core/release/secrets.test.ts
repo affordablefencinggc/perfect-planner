@@ -1,11 +1,12 @@
-import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { ALLOWLIST_PATH, fingerprintOf, parseAllowlist } from "./allowlist";
 import { checkPushProtection, enablePushProtection, type Fetcher } from "./pushProtection";
 import {
-  REQUIRED_IGNORES, SECRET_RULES, checkIgnoreList, isForbiddenFile, maskSecret, scanBranch, scanChange, scanText, withRequiredIgnores,
+  PLACEHOLDER, REQUIRED_IGNORES, SECRET_RULES, checkIgnoreList, isConfigLikeFile, isForbiddenFile, isPlaceholder, maskSecret, scanBranch, scanChange, scanText, withRequiredIgnores,
 } from "./secrets";
 import type { CommandRunner } from "./types";
 
@@ -24,14 +25,19 @@ const SAMPLES: Record<string, string> = {
   "google-api-key": "AIza" + A(35),
   "private-key": "-----BEGIN " + "RSA PRIVATE KEY-----",
   jwt: "eyJ" + A(10) + ".eyJ" + A(10) + "." + A(12),
+  "aws-secret-key": 'aws_secret_access_key = "' + "wJalrXUtnFEMI/K7MDENG" + "+bPxRfiCYZq8W7abcd1" + '"',
   "generic-assignment": 'api_key = "' + "Zk3jd8Qm2LpA9xRw" + '"',
+  "generic-assignment-unquoted": "password: " + "hunter2isnotsafe",
 };
+// Rules that only fire in config-like files are sampled under this name.
+const SAMPLE_FILE: Record<string, string> = { "generic-assignment-unquoted": "config.yml" };
 
 describe("secret rules", () => {
   it("every rule has a sample and hits exactly its own id", () => {
     expect(Object.keys(SAMPLES).sort()).toEqual(SECRET_RULES.map((r) => r.id).sort());
     for (const [id, sample] of Object.entries(SAMPLES)) {
-      const hits = scanText("a.ts", `const x = ${sample}`);
+      const file = SAMPLE_FILE[id] ?? "a.ts";
+      const hits = scanText(file, id === "generic-assignment-unquoted" ? sample : `const x = ${sample}`);
       expect(hits.map((h) => h.rule), id).toEqual([id]);
       expect(hits[0].line).toBe(1);
     }
@@ -53,29 +59,104 @@ describe("secret rules", () => {
     expect(hits.map((h) => h.rule)).toEqual(["github-token"]);
   });
 
-  it("does not flag placeholders", () => {
+  it("does not flag whole-value placeholders or short values", () => {
     const lines = [
-      kv("api_key", " = ", "PLACEHOLDER_VALUE_123"),
-      kv("password", ": ", "changeme12345"),
-      kv("secret", " = ", "xxxxxxxxxxxx1"),
+      kv("api_key", " = ", "PLACEHOLDER"),
+      kv("password", ": ", "changeme"),
+      kv("secret", " = ", "xxxxxxxxxxxx"),
       kv("token", " = ", "<your-token-here1>"),
       kv("apiKey", ": ", "${API_KEY_VALUE1}"),
+      kv("apiKey", ": ", "{{ api_key_value }}"),
       kv("api_key", " = ", "process.env.API_KEY1"),
       kv("client_secret", " = ", "your_client_secret1"),
-      kv("password", " = ", "example-password1"),
-      kv("api_key", " = ", "dummy-value-12345"),
-      kv("token", " = ", "test-token-12345"),
-      kv("password", " = ", "onlylettersnodigits"),
+      kv("password", " = ", "example"),
+      kv("api_key_value", " = ", "dummy"),
+      kv("token_value", " = ", "REDACTED"),
+      kv("secret_value", " = ", "********"),
+      kv("password", " = ", "undefined"),
       kv("api_key", " = ", "short1"),
+      kv("password", " = ", "abcdefg"),
+      kv("token", " = ", "abcdefghijk"),
     ];
     expect(scanText("a.ts", lines.join("\n"))).toEqual([]);
   });
 
-  it("honours pp-allow-secret and numbers lines from 1, handling CRLF", () => {
-    const text = ["ok", `a = "${SAMPLES["github-token"]}" // pp-allow-secret`, SAMPLES["aws-access-key"]].join("\r\n");
+  it("only a WHOLE-value placeholder counts", () => {
+    for (const v of ["placeholder", "ChangeMe", "xxx", "<anything>", "${X}", "{{x}}", "process.env.FOO_BAR", "your-key", "example", "dummy", "test", "redacted", "***", "none", "null", "undefined", "TODO",
+      "secret://p/k", "keychain:svc", "keyring:svc", "vault:kv/a", "dpapi:v1:abc", "op://vault/item", "credentials:store"]) {
+      expect(isPlaceholder(v), v).toBe(true);
+    }
+    for (const v of ["testAbCd1234efgh5678", "liveExampleKey9Zq8W7", "my-dummy-password", "xxxx1", "changeme12345", "correcthorsebatterystaple"]) {
+      expect(isPlaceholder(v), v).toBe(false);
+    }
+    expect(PLACEHOLDER.flags).toContain("i");
+  });
+
+  it("catches values that merely contain placeholder words, and no-digit values", () => {
+    for (const line of [
+      kv("token", "=", "testAbCd1234efgh5678"),
+      kv("api_key", "=", "liveExampleKey9Zq8W7"),
+      kv("password", "=", "correcthorsebatterystaple"),
+      kv("password", " = ", "example-password1"),
+      kv("token", " = ", "test-token-12345"),
+    ]) {
+      expect(scanText("a.ts", line).map((h) => h.rule), line).toEqual(["generic-assignment"]);
+    }
+  });
+
+  it("applies per-name minimum lengths (password/secret 8, key/token 12)", () => {
+    expect(scanText("a.ts", kv("password", "=", "abcdefgh"))).toHaveLength(1);
+    expect(scanText("a.ts", kv("passwd", "=", "abcdefg"))).toHaveLength(0);
+    expect(scanText("a.ts", kv("client_secret", "=", "abcdefgh"))).toHaveLength(1);
+    expect(scanText("a.ts", kv("api_key", "=", "abcdefghijkl"))).toHaveLength(1);
+    expect(scanText("a.ts", kv("auth_token", "=", "abcdefghijk"))).toHaveLength(0);
+  });
+
+  it("has no inline bypass marker: pp-allow-secret allows nothing", () => {
+    const marker = "pp-allow" + "-secret";
+    const pw = scanText("a.ts", kv("password", "=", "hunter2secretvalue1") + " // " + marker);
+    expect(pw.map((h) => h.rule)).toEqual(["generic-assignment"]);
+    const gh = scanText("a.ts", `a = "${SAMPLES["github-token"]}" // ${marker}`);
+    expect(gh.map((h) => h.rule)).toEqual(["github-token"]);
+    const text = ["ok", `a = "${SAMPLES["github-token"]}" // ${marker}`, SAMPLES["aws-access-key"]].join("\r\n");
     const hits = scanText("a.ts", text);
-    expect(hits).toHaveLength(1);
-    expect(hits[0]).toMatchObject({ line: 3, rule: "aws-access-key" });
+    expect(hits.map((h) => [h.line, h.rule])).toEqual([[2, "github-token"], [3, "aws-access-key"]]);
+  });
+
+  it("catches an unquoted aws secret access key, and reports a quoted one once", () => {
+    const awsValue = "wJalrXUtnFEMI/K7MDENG" + "/bPxRfiCYZq8W7abcd1";
+    expect(awsValue).toHaveLength(40);
+    for (const line of ["aws_secret_access_key = " + awsValue, "AWS_SECRET_ACCESS_KEY=" + awsValue, "aws_secret_access_key: " + awsValue, "aws_secret_access_key = '" + awsValue + "'"]) {
+      expect(scanText("notes.txt", line).map((h) => h.rule), line).toEqual(["aws-secret-key"]);
+    }
+    expect(scanText("a.ts", "aws_secret_access_key = " + "${AWS_SECRET}" )).toEqual([]);
+  });
+
+  it("catches unquoted name: value / NAME=value only in config-like files", () => {
+    const yml = "db:\n  " + "password: " + "hunter2isnotsafe" + "\n";
+    expect(scanText("deploy/app.yml", yml).map((h) => [h.rule, h.line])).toEqual([["generic-assignment-unquoted", 2]]);
+    expect(scanText(".env.production", "API_TOKEN=" + "abcdef123456789xyz").map((h) => h.rule)).toEqual(["generic-assignment-unquoted"]);
+    expect(scanText("x.ini", "secret = " + "abcdefgh1234").map((h) => h.rule)).toEqual(["generic-assignment-unquoted"]);
+    expect(scanText("x.yaml", "- password: " + "hunter2isnotsafe # note").map((h) => h.rule)).toEqual(["generic-assignment-unquoted"]);
+    expect(scanText("src/a.ts", yml)).toEqual([]);
+    expect(scanText("README.md", yml)).toEqual([]);
+    // not a whole line NAME: value
+    expect(scanText("app.yml", "echo password: " + "hunter2isnotsafe")).toEqual([]);
+    // placeholders and short values stay quiet
+    expect(scanText("app.yml", ["password: ${DB_PASSWORD}", "password: changeme", "password: short", "token: " + "{{ vault_token }}", "password: secret://p/k"].join("\n"))).toEqual([]);
+  });
+
+  it("recognises config-like file names", () => {
+    for (const f of [".env", ".env.local", "a/b.yml", "a.YAML", "x.ini", "x.cfg", "x.conf", "x.properties", "x.toml", ".npmrc", "Dockerfile", "docker/Dockerfile.dev", "docker-compose.yml", "docker-compose.override.yaml"]) {
+      expect(isConfigLikeFile(f), f).toBe(true);
+    }
+    for (const f of ["a.ts", "README.md", "package.json", "envfile.txt"]) expect(isConfigLikeFile(f), f).toBe(false);
+  });
+
+  it("catches PGP private key blocks", () => {
+    const pgp = "-----BEGIN " + "PGP PRIVATE KEY BLOCK-----";
+    expect(scanText("k.txt", pgp).map((h) => h.rule)).toEqual(["private-key"]);
+    expect(scanText("k.txt", "-----BEGIN " + "PGP PUBLIC KEY BLOCK-----")).toEqual([]);
   });
 
   it("flags npmrc auth tokens only in .npmrc", () => {
@@ -92,8 +173,8 @@ describe("masking", () => {
   });
 
   it("never leaks a full secret into findings", () => {
-    for (const sample of Object.values(SAMPLES)) {
-      const findings = scanText("f.ts", `x = ${sample}\n`);
+    for (const [id, sample] of Object.entries(SAMPLES)) {
+      const findings = scanText(SAMPLE_FILE[id] ?? "f.ts", SAMPLE_FILE[id] ? sample : `x = ${sample}\n`);
       expect(findings.length).toBeGreaterThan(0);
       for (const f of findings) {
         expect(JSON.stringify(f)).not.toContain(sample.slice(8));
@@ -131,6 +212,54 @@ describe("scanChange", () => {
       { path: "img.png", added: 0, removed: 0, binary: true, addedText: SAMPLES["github-token"] },
     ]);
     expect(findings.map((f) => `${f.file}:${f.rule}`).sort()).toEqual([".env:env-file", "src/a.ts:github-token"]);
+  });
+});
+
+describe("allowlist by fingerprint", () => {
+  const ghp = SAMPLES["github-token"];
+  const text = `a = "${ghp}"\n`;
+
+  it("findings carry a hash fingerprint that leaks nothing", () => {
+    const [f] = scanText("src/a.ts", text);
+    expect(f.fingerprint).toBe(fingerprintOf("src/a.ts", "github-token", ghp));
+    expect(JSON.stringify(f)).not.toContain(ghp.slice(8));
+    const [g] = scanText("src\\b.ts", kv("password", "=", "hunter2secretvalue1"));
+    expect(g.fingerprint).toBe(fingerprintOf("src/b.ts", "generic-assignment", "hunter2secretvalue1"));
+  });
+
+  it("skips only the exact fingerprint", () => {
+    const allow = new Set([fingerprintOf("src/a.ts", "github-token", ghp)]);
+    expect(scanText("src/a.ts", text, allow)).toEqual([]);
+    expect(scanText("src/other.ts", text, allow)).toHaveLength(1); // other file
+    expect(scanText("src/a.ts", text.replace("aaaa", "aaab"), allow)).toHaveLength(1); // other value
+    expect(scanText("src/a.ts", text + SAMPLES["aws-access-key"], allow).map((f) => f.rule)).toEqual(["aws-access-key"]); // other rule
+    expect(scanText("src/a.ts", text, new Set([fingerprintOf("src/a.ts", "jwt", ghp)]))).toHaveLength(1);
+  });
+
+  it("works for unquoted, npmrc and aws rules too", () => {
+    const tok = "npm_" + A(30);
+    const [n] = scanText(".npmrc", "//r/:_authToken=" + tok);
+    expect(n.fingerprint).toBe(fingerprintOf(".npmrc", "npmrc-auth-token", tok));
+    expect(scanText(".npmrc", "//r/:_authToken=" + tok, new Set([n.fingerprint!]))).toEqual([]);
+  });
+
+  it("scanChange honours the set and fingerprints forbidden files", () => {
+    const files = [{ path: "src/a.ts", added: 1, removed: 0, addedText: ghp }, { path: ".env", added: 1, removed: 0 }];
+    const all = scanChange(files);
+    expect(all.every((f) => typeof f.fingerprint === "string")).toBe(true);
+    const gh = all.find((f) => f.rule === "github-token")!;
+    expect(scanChange(files, new Set([gh.fingerprint!])).map((f) => f.rule)).toEqual(["env-file"]);
+  });
+
+  it("the allowlist file itself is never a forbidden file", () => {
+    expect(isForbiddenFile(ALLOWLIST_PATH)).toBeNull();
+    expect(scanChange([{ path: ALLOWLIST_PATH, added: 1, removed: 0, addedText: JSON.stringify({ version: 1, allow: [] }) }])).toEqual([]);
+  });
+
+  it("parseAllowlist is re-usable with scanText", () => {
+    const fp = fingerprintOf("src/a.ts", "github-token", ghp);
+    const set = parseAllowlist(JSON.stringify({ version: 1, allow: [{ fingerprint: fp, reason: "fixture", approvedBy: "p1" }] }));
+    expect(scanText("src/a.ts", text, set)).toEqual([]);
   });
 });
 
@@ -206,6 +335,49 @@ describe("scanBranch", () => {
   });
 });
 
+describe("scanBranch allowlist comes from the base commit only", () => {
+  const ghp = SAMPLES["github-token"];
+  const allowDoc = (fp: string) => JSON.stringify({ version: 1, allow: [{ fingerprint: fp, reason: "fixture", approvedBy: "p1" }] });
+  const fp = fingerprintOf("src/a.ts", "github-token", ghp);
+  const runner = (head: Record<string, string>, base: Record<string, string>, calls: string[][] = []): CommandRunner => async (_c, args) => {
+    calls.push([...args]);
+    if (args[0] === "diff") return { code: 0, stdout: Object.keys(head).join("\n") + "\n", stderr: "" };
+    const [rev, ...rest] = args[1].split(":");
+    const path = rest.join(":");
+    const tree = rev === "main" ? base : head;
+    return path in tree ? { code: 0, stdout: tree[path], stderr: "" } : { code: 128, stdout: "", stderr: "fatal: path does not exist\n" };
+  };
+  const src = `a = "${ghp}"\n`;
+
+  it("honours an allowlist that exists on base", async () => {
+    const calls: string[][] = [];
+    const res = await scanBranch(runner({ "src/a.ts": src }, { [ALLOWLIST_PATH]: allowDoc(fp) }, calls), { cwd: "/r", base: "main", head: "feat" });
+    expect(res).toMatchObject({ ok: true, findings: [], filesScanned: 1 });
+    expect(calls.some((c) => c[0] === "show" && c[1] === `main:${ALLOWLIST_PATH}`)).toBe(true);
+  });
+
+  it("ignores an allowlist the pushed head adds or edits", async () => {
+    const head = { "src/a.ts": src, [ALLOWLIST_PATH]: allowDoc(fp) };
+    const none = await scanBranch(runner(head, {}), { cwd: "/r", base: "main", head: "feat" });
+    expect(none.ok).toBe(false);
+    expect(none.findings.map((f) => f.rule)).toEqual(["github-token"]);
+    const other = await scanBranch(runner(head, { [ALLOWLIST_PATH]: allowDoc("x:y:" + "0".repeat(64)) }), { cwd: "/r", base: "main", head: "feat" });
+    expect(other.ok).toBe(false);
+  });
+
+  it("missing base allowlist means empty; allowlistText overrides without a git call", async () => {
+    const calls: string[][] = [];
+    const res = await scanBranch(runner({ "src/a.ts": src }, {}, calls), { cwd: "/r", base: "main", head: "feat", allowlistText: allowDoc(fp) });
+    expect(res.ok).toBe(true);
+    expect(calls.some((c) => c[1] === `main:${ALLOWLIST_PATH}`)).toBe(false);
+  });
+
+  it("malformed base allowlist is ignored, not thrown", async () => {
+    const res = await scanBranch(runner({ "src/a.ts": src }, { [ALLOWLIST_PATH]: "{nope" }), { cwd: "/r", base: "main", head: "feat" });
+    expect(res.ok).toBe(false);
+  });
+});
+
 describe("push protection", () => {
   const opts = { owner: "me", repo: "app", token: "tok_" + "SECRETVALUE123" };
   const reply = (status: number, body: unknown = {}) => ({ status, json: async () => body });
@@ -266,24 +438,61 @@ describe("hooks/pre-push.mjs stays in sync", () => {
 
   it("uses the same rule patterns as secrets.ts", () => {
     const rules = JSON.parse(node("--rules")) as Array<{ id: string; source: string; flags: string }>;
-    expect(rules).toEqual(SECRET_RULES.map((r) => ({ id: r.id, source: r.pattern.source, flags: r.pattern.flags })));
+    expect(rules).toEqual(
+      SECRET_RULES.map((r) => ({ id: r.id, source: r.pattern.source, flags: r.pattern.flags, valueGroup: r.valueGroup ?? null, nameGroup: r.nameGroup ?? null, configOnly: r.configOnly === true })),
+    );
+  });
+
+  it("uses the same placeholder regex", () => {
+    const p = JSON.parse(node("--placeholder")) as { source: string; flags: string };
+    expect(p).toEqual({ source: PLACEHOLDER.source, flags: PLACEHOLDER.flags });
+  });
+
+  it("makes the same config-like decisions", () => {
+    for (const f of [".env", ".env.local", "a/b.yml", "a.YAML", "x.ini", "x.toml", ".npmrc", "Dockerfile", "docker-compose.yml", "a.ts", "README.md", "envfile.txt"]) {
+      expect(JSON.parse(node("--check-config", f)), f).toBe(isConfigLikeFile(f));
+    }
   });
 
   it("finds the same rule ids as scanText on a sample file", () => {
     const dir = mkdtempSync(join(tmpdir(), "pp-hook-"));
     try {
       const file = join(dir, "sample.txt");
-      const lines = [...Object.values(SAMPLES), kv("password", " = ", "changeme12345"), `a = "${SAMPLES["github-token"]}" // pp-allow-secret`];
+      const lines = [...Object.values(SAMPLES).filter((x) => !x.startsWith("password: ")), kv("password", " = ", "changeme"), kv("password", " = ", "correcthorsebatterystaple"), kv("token", "=", "testAbCd1234efgh5678"), "-----BEGIN " + "PGP PRIVATE KEY BLOCK-----", `a = "${SAMPLES["github-token"]}" // ` + "pp-allow" + "-secret", kv("password", " = ", "abcdefg")];
       const text = lines.join("\r\n");
       writeFileSync(file, text);
-      const fromHook = JSON.parse(node("--scan-text", file)) as Array<{ rule: string; line: number; preview: string }>;
+      const fromHook = JSON.parse(node("--scan-text", file)) as Array<{ rule: string; line: number; preview: string; fingerprint: string }>;
       const expected = scanText(file, text);
-      expect(fromHook.map((f) => [f.rule, f.line, f.preview])).toEqual(expected.map((f) => [f.rule, f.line, f.preview]));
-      expect(new Set(fromHook.map((f) => f.rule))).toEqual(new Set(Object.keys(SAMPLES)));
+      expect(fromHook.map((f) => [f.rule, f.line, f.preview, f.fingerprint])).toEqual(expected.map((f) => [f.rule, f.line, f.preview, f.fingerprint]));
+      expect(new Set(fromHook.map((f) => f.rule))).toEqual(new Set(Object.keys(SAMPLES).filter((k) => k !== "generic-assignment-unquoted")));
+      // allowlist (second arg) removes only the listed fingerprint, same as scanText
+      const allowFile = join(dir, "allow.json");
+      writeFileSync(allowFile, JSON.stringify({ version: 1, allow: [{ fingerprint: expected[0].fingerprint, reason: "fixture", approvedBy: "p1" }] }));
+      const filtered = JSON.parse(node("--scan-text", file, allowFile)) as Array<{ fingerprint: string }>;
+      expect(filtered.map((f) => f.fingerprint)).toEqual(scanText(file, text, new Set([expected[0].fingerprint!])).map((f) => f.fingerprint));
+      expect(filtered).toHaveLength(expected.length - 1);
       expect(JSON.stringify(fromHook)).not.toContain(SAMPLES["github-token"]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it("scans config-only unquoted rules identically", () => {
+    const dir = mkdtempSync(join(tmpdir(), "pp-hook-"));
+    try {
+      const file = join(dir, "app.yml");
+      const text = "db:\n  " + "password: " + "hunter2isnotsafe" + "\n  token: ${T}\n";
+      writeFileSync(file, text);
+      const fromHook = JSON.parse(node("--scan-text", file)) as Array<{ rule: string; line: number; fingerprint: string }>;
+      expect(fromHook.map((f) => [f.rule, f.line])).toEqual([["generic-assignment-unquoted", 2]]);
+      expect(fromHook.map((f) => f.fingerprint)).toEqual(scanText(file, text).map((f) => f.fingerprint));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("treats the allowlist file as never forbidden", () => {
+    expect(JSON.parse(node("--check-name", ALLOWLIST_PATH))).toBeNull();
   });
 
   it("uses the same forbidden-name decisions", () => {
@@ -297,5 +506,69 @@ describe("secret-store references", () => {
   it("does not flag handles that point at a secret store", () => {
     const text = 'const a = { secretHandle: "secret://provider/review-a/key-1" };\nconst b = { tokenHandle: "dpapi:v1:00000000-0000-0000-0000-000000000000" };\n';
     expect(scanText("src/a.ts", text)).toEqual([]);
+  });
+});
+
+describe("pre-push hook reads the allowlist from the base commit only", () => {
+  const hook = join(__dirname, "hooks", "pre-push.mjs");
+  const secretText = 'a = "' + SAMPLES["github-token"] + '"\n';
+  const fp = fingerprintOf("src/a.ts", "github-token", SAMPLES["github-token"]);
+  const doc = JSON.stringify({ version: 1, allow: [{ fingerprint: fp, reason: "fixture", approvedBy: "p1" }] });
+
+  const git = (cwd: string, ...args: string[]) =>
+    execFileSync("git", ["-c", "user.email=t@example.test", "-c", "user.name=t", "-c", "commit.gpgsign=false", ...args], { cwd, encoding: "utf8" }).trim();
+  const write = (cwd: string, rel: string, text: string) => {
+    const full = join(cwd, rel);
+    mkdirSync(dirname(full), { recursive: true });
+    writeFileSync(full, text);
+  };
+  const push = (cwd: string, base: string, head: string) =>
+    spawnSync(process.execPath, [hook], { cwd, input: `refs/heads/x ${head} refs/heads/x ${base}\n`, encoding: "utf8" });
+
+  const repo = (baseFiles: Record<string, string>, headFiles: Record<string, string>) => {
+    const dir = mkdtempSync(join(tmpdir(), "pp-hook-git-"));
+    git(dir, "init", "-q");
+    write(dir, "README.md", "hi\n");
+    for (const [k, v] of Object.entries(baseFiles)) write(dir, k, v);
+    git(dir, "add", "-A");
+    git(dir, "commit", "-q", "-m", "base");
+    const base = git(dir, "rev-parse", "HEAD");
+    for (const [k, v] of Object.entries(headFiles)) write(dir, k, v);
+    git(dir, "add", "-A");
+    git(dir, "commit", "-q", "-m", "head");
+    return { dir, base, head: git(dir, "rev-parse", "HEAD") };
+  };
+
+  it("blocks a push that allowlists its own secret", () => {
+    const r = repo({}, { "src/a.ts": secretText, [ALLOWLIST_PATH]: doc });
+    try {
+      const res = push(r.dir, r.base, r.head);
+      expect(res.status).toBe(1);
+      expect(res.stderr).toContain("github-token");
+      expect(res.stderr).toContain(fp);
+      expect(res.stderr).not.toContain(SAMPLES["github-token"]);
+    } finally {
+      rmSync(r.dir, { recursive: true, force: true });
+    }
+  });
+
+  it("lets a push through when the BASE allowlist lists the fingerprint", () => {
+    const r = repo({ [ALLOWLIST_PATH]: doc }, { "src/a.ts": secretText });
+    try {
+      expect(push(r.dir, r.base, r.head).status).toBe(0);
+    } finally {
+      rmSync(r.dir, { recursive: true, force: true });
+    }
+  });
+
+  it("still blocks other secrets and the old inline marker", () => {
+    const r = repo({ [ALLOWLIST_PATH]: doc }, { "src/b.ts": secretText + "x = " + SAMPLES["aws-access-key"] + " // " + "pp-allow" + "-secret\n" });
+    try {
+      const res = push(r.dir, r.base, r.head);
+      expect(res.status).toBe(1);
+      expect(res.stderr).toContain("aws-access-key");
+    } finally {
+      rmSync(r.dir, { recursive: true, force: true });
+    }
   });
 });

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { Ledger, MemoryStore } from "../ledger/index";
 import { appendNumbered, installNumberingRules } from "../numbering/index";
 import { setBudget, recordSpend } from "./budget";
-import { runCheapFirst, recordPipeline } from "./pipeline";
+import { installReleaseRules, runCheapFirst, recordPipeline } from "./pipeline";
 import { DEFAULT_PRESET, PRESETS, currentPreset, installSettingsRule, needsDeepReview, setPreset } from "./presets";
 import { areasOf, heuristicRisk, triageRisk } from "./risk";
 import type { ChangeSet } from "./types";
@@ -107,20 +107,29 @@ describe("presets", () => {
   });
 });
 
+const builder = { kind: "agent" as const, id: "worker-2", model: "builder-model" };
+const reviewer = { kind: "jev" as const, id: "jev", model: "reviewer-model" };
+const approve = async () => ({ verdict: "approve" as const, notes: [], reviewer });
+
 describe("cheap-first pipeline", () => {
   it("passes a small safe change without a deep review", async () => {
-    const result = await runCheapFirst(small, {});
+    const result = await runCheapFirst(small, { ledger: open(), author: builder, now: NOW });
     expect(result.verdict).toBe("ready");
     expect(result.deep).toBe(false);
-    expect(result.checks.map((c) => c.check)).toEqual(["size-cap", "secret-scan", "risk-triage", "deep-review", "budget", "local-tests"]);
-    expect(result.checks.find((c) => c.check === "local-tests")?.status).toBe("skipped");
+    expect(result.checks.map((c) => c.check)).toEqual(["budget", "size-cap", "secret-scan", "risk-triage", "deep-review", "local-tests"]);
+    expect(result.checks.find((c) => c.check === "local-tests")).toMatchObject({ status: "skipped", summary: "Not run: no test runner configured" });
+  });
+
+  it("fails closed without a ledger instead of skipping the budget and preset", async () => {
+    await expect(runCheapFirst(small, {} as never)).rejects.toThrow(/needs the project ledger/);
+    await expect(runCheapFirst(small, { ledger: open() } as never)).rejects.toThrow(/needs the builder/);
   });
 
   it("holds an oversize change before spending anything else", async () => {
     let rated = false;
     const result = await runCheapFirst(
       { plannedLines: 50, files: [{ path: "src/a.ts", added: 400, removed: 0 }] },
-      { rater: async () => ((rated = true), { level: "low", reason: "" }) },
+      { ledger: open(), author: builder, now: NOW, rater: async () => ((rated = true), { level: "low", reason: "" }) },
     );
     expect(result.verdict).toBe("held");
     expect(result.summary).toMatch(/size-cap/);
@@ -130,7 +139,7 @@ describe("cheap-first pipeline", () => {
   it("blocks a change with a secret and never shows the secret", async () => {
     const token = "ghp_" + "A1b2C3d4".repeat(5).slice(0, 36);
     const change: ChangeSet = { plannedLines: 100, files: [{ path: "src/a.ts", added: 1, removed: 0, addedText: `const t = "${token}";\n` }] };
-    const result = await runCheapFirst(change, {});
+    const result = await runCheapFirst(change, { ledger: open(), author: builder, now: NOW });
     expect(result.verdict).toBe("blocked");
     expect(JSON.stringify(result)).not.toContain(token);
   });
@@ -138,6 +147,9 @@ describe("cheap-first pipeline", () => {
   it("runs only the tests for the changed files and blocks on failure", async () => {
     let ran: string[] = [];
     const result = await runCheapFirst(small, {
+      ledger: open(),
+      author: builder,
+      now: NOW,
       allTests: ["src/ui/Button.test.tsx", "src/other/Other.test.tsx"],
       runTests: async (tests) => ((ran = tests), { ok: false, summary: "1 failed" }),
     });
@@ -146,28 +158,68 @@ describe("cheap-first pipeline", () => {
   });
 
   it("holds a risky change when no deep reviewer is configured, approves with one", async () => {
-    const held = await runCheapFirst(authChange, {});
+    const held = await runCheapFirst(authChange, { ledger: open(), author: builder, now: NOW });
     expect(held.verdict).toBe("held");
     expect(held.deep).toBe(true);
-    const approved = await runCheapFirst(authChange, { deepReview: async () => ({ verdict: "approve", notes: [] }) });
+    const approved = await runCheapFirst(authChange, { ledger: open(), author: builder, now: NOW, deepReview: approve });
     expect(approved.verdict).toBe("ready");
-    const rejected = await runCheapFirst(authChange, { deepReview: async () => ({ verdict: "reject", notes: ["checks no expiry"] }) });
+    const rejected = await runCheapFirst(authChange, { ledger: open(), author: builder, now: NOW, deepReview: async () => ({ verdict: "reject", notes: ["checks no expiry"], reviewer }) });
     expect(rejected.verdict).toBe("blocked");
     expect(rejected.summary).toMatch(/checks no expiry/);
+  });
+
+  it("never lets the builder review its own change", async () => {
+    const self = await runCheapFirst(authChange, { ledger: open(), author: builder, now: NOW, deepReview: async () => ({ verdict: "approve", notes: [], reviewer: builder }) });
+    expect(self.verdict).toBe("held");
+    expect(self.summary).toMatch(/different reviewer/);
+    const sameModel = await runCheapFirst(authChange, {
+      ledger: open(),
+      author: builder,
+      now: NOW,
+      deepReview: async () => ({ verdict: "approve", notes: [], reviewer: { kind: "jev", id: "jev", model: "builder-model" } }),
+    });
+    expect(sameModel.verdict).toBe("held");
+    const anonymous = await runCheapFirst(authChange, { ledger: open(), author: builder, now: NOW, deepReview: async () => ({ verdict: "approve", notes: [] }) as never });
+    expect(anonymous.verdict).toBe("held");
+  });
+
+  it("sends a change that deletes tests to the deep review even under Cheap", async () => {
+    const ledger = open();
+    setPreset(ledger, owner, "cheap", "solo prototype");
+    const change: ChangeSet = { plannedLines: 100, files: [{ path: "src/ui/Button.test.tsx", added: 0, removed: 40, deleted: true }] };
+    const held = await runCheapFirst(change, { ledger, author: builder, now: NOW });
+    expect(held.preset).toBe("cheap");
+    expect(held.verdict).toBe("held");
+    expect(held.deep).toBe(true);
+    expect(needsDeepReview("cheap", heuristicRisk(change)).deep).toBe(true);
   });
 
   it("stops at the budget before anything else when the month is spent", async () => {
     const ledger = open();
     setBudget(ledger, owner, { monthlyCents: 1000, reason: "monthly cap" });
     recordSpend(ledger, agent, { cents: 1000, kind: "model", subject: "T-1", summary: "review spend" });
-    const result = await runCheapFirst(small, { entries: ledger.entries(), now: NOW });
+    const result = await runCheapFirst(small, { ledger, author: builder, now: NOW });
     expect(result.verdict).toBe("held");
     expect(result.checks[0]).toMatchObject({ check: "budget", status: "hold" });
   });
 
+  it("wires the budget stop and the person-only settings into the ledger it gates", async () => {
+    const ledger = open();
+    setBudget(ledger, owner, { monthlyCents: 1000, reason: "monthly cap" });
+    recordSpend(ledger, agent, { cents: 1000, kind: "model", subject: "T-1", summary: "review spend" });
+    await runCheapFirst(small, { ledger, author: builder, now: NOW });
+    expect(() => ledger.append({ actor: agent, type: "task.claimed", subject: "T-1", summary: "claim", evidence: [], refs: [] })).toThrow(/budget reached/);
+    expect(() =>
+      appendNumbered(ledger, { actor: system, type: "decision.made", summary: "raise", reason: "x", evidence: [], refs: [], data: { topic: "budget", budget: { monthlyCents: 999999 } } }),
+    ).toThrow(/Only a person/);
+    installReleaseRules(ledger); // idempotent: a second install adds no second rule
+    setBudget(ledger, owner, { monthlyCents: 5000, reason: "raised" });
+    expect(() => ledger.append({ actor: agent, type: "task.claimed", subject: "T-1", summary: "claim", evidence: [], refs: [] })).not.toThrow();
+  });
+
   it("records its outcome as a review.verdict entry", async () => {
     const ledger = open();
-    const result = await runCheapFirst(small, {});
+    const result = await runCheapFirst(small, { ledger, author: builder, now: NOW });
     const entry = recordPipeline(ledger, system, "T-1", result);
     expect(entry.type).toBe("review.verdict");
     expect(entry.data).toMatchObject({ stage: "cheap-first", preset: "balanced", verdict: "ready", deep: false, risk: "low" });
@@ -204,7 +256,7 @@ describe("settings an agent cannot change", () => {
   it("runs the gate on the ledger's preset, not on what a caller passes", async () => {
     const ledger = open();
     setPreset(ledger, owner, "thorough", "production app");
-    const result = await runCheapFirst(small, { entries: ledger.entries(), now: NOW, preset: "cheap" } as never);
+    const result = await runCheapFirst(small, { ledger, author: builder, now: NOW, preset: "cheap" } as never);
     expect(result.preset).toBe("thorough");
     expect(result.deep).toBe(true);
   });
