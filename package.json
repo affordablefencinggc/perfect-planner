@@ -37,7 +37,9 @@
     "verify:web": "npm run verify:secrets && npm run build && npm run verify:performance && npm test && npm run test:ui && npm run test:sites",
     "release:web": "npm run verify:secrets && node scripts/run-release-gates.mjs --profile web",
     "release:approve": "node scripts/run-release-gates.mjs --approve",
-    "verify:release": "npm run verify:secrets && node scripts/run-release-gates.mjs --profile release"
+    "verify:release": "npm run verify:secrets && node scripts/run-release-gates.mjs --profile release",
+    "test:core": "vitest run --config vitest.core.config.mjs",
+    "typecheck:core": "tsc -p tsconfig.core.json"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
@@ -53,9 +55,11 @@
     "@tauri-apps/cli": "^2.11.4",
     "@testing-library/react": "^16.3.3",
     "@testing-library/user-event": "^14.6.7",
+    "@types/node": "^22.20.5",
     "agentation": "^3.0.2",
     "axe-core": "^4.13.0",
     "jsdom": "^30.0.1",
+    "typescript": "^5.9.3",
     "vitest": "^4.1.11"
   }
 }
