@@ -119,6 +119,9 @@ async function assertStopped(pid) {
   const deadline = Date.now() + 2000;
   while (Date.now() < deadline) {
     try { process.kill(pid, 0); } catch (error) { if (error.code === "ESRCH") return; throw error; }
+    // A killed orphan stays signalable as a zombie until init reaps it; some container inits reap only
+    // every second or two, so a dead-but-unreaped descendant counts as stopped.
+    if (process.platform === "linux") { try { if ((await readFile(`/proc/${pid}/stat`, "utf8")).replace(/^.*\) /s, "")[0] === "Z") return; } catch {} }
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
   assert.fail("Descendant remained alive after bounded process settled");
