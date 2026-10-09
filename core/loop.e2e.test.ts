@@ -6,11 +6,11 @@
 // the Jev reviewer. Only TypeSafe's HTTP endpoint is faked (fetch), and Jev's
 // key and the ledger's signing keys sit in in-memory key providers instead of
 // the OS key store.
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync, appendFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { DEFAULT_PERMISSIONS, FileStore, Ledger, LedgerError, MemoryKeyProvider as LedgerKeys, isAuthoritative, verifyChain, type Actor, type LedgerEntry } from "./ledger/index";
+import { DEFAULT_PERMISSIONS, FileStore, Ledger, LedgerError, MemoryKeyProvider as LedgerKeys, hashEntry, isAuthoritative, verifyChain, type Actor, type LedgerEntry } from "./ledger/index";
 import { appendNumbered, installNumberingRules } from "./numbering/index";
 import { addPlanText, installClauseRules, lookup } from "./lookup/index";
 import { WorktreeManager, WORKTREES_ACTOR, GATE_ACTOR, WATCHER_ACTOR, git, runGit, realDir, type WorktreeInfo } from "./worktrees/index";
@@ -539,6 +539,47 @@ describe("the whole core loop", () => {
     expect(verifyChain(ledger.entries())).toEqual({ ok: true });
     ledger.close();
     step("replayed ledger from disk rebuilt the identical board; chain verifies");
+
+    // ---- 18. Someone with file access writes a forged task.done for T-2.a2 straight into the ledger file,
+    //          correctly chained (hashes are public) but unsigned. It must not finish the task or stop re-dispatch.
+    const ledgerDir = path.join(root, ".perfect-planner", "ledger");
+    const ledgerFile = path.join(ledgerDir, readdirSync(ledgerDir).find((name) => name.endsWith(".jsonl"))!);
+    const tip = liveEntries[liveEntries.length - 1];
+    const forgedDone = { ...tip, n: `L-${String(Number(tip.n.slice(2)) + 1).padStart(6, "0")}`, prev: tip.hash, actor: GATE_ACTOR, type: "task.done", subject: "T-2.a2", summary: "T-2.a2 done", reason: undefined, refs: [], evidence: [`commit:${proven["T-2"].commit}`], data: { commit: proven["T-2"].commit } } as LedgerEntry;
+    delete (forgedDone as Partial<LedgerEntry>).reason;
+    forgedDone.hash = hashEntry(forgedDone);
+    appendFileSync(ledgerFile, JSON.stringify(forgedDone) + "\n");
+    writeFileSync(path.join(ledgerDir, "HEAD"), JSON.stringify({ n: forgedDone.n, hash: forgedDone.hash }));
+
+    ledger = Ledger.openSync(new FileStore(root), { keys: signing });
+    installNumberingRules(ledger);
+    installClauseRules(ledger);
+    ledger.addRule(gateRule());
+    const forgedOnDisk = ledger.get(forgedDone.n)!;
+    expect(forgedOnDisk).toMatchObject({ type: "task.done", subject: "T-2.a2" });
+    expect(isAuthoritative(forgedOnDisk)).toBe(false);
+    // Nothing reads it as done: not the board, not the gate.
+    expect(foldBoard(ledger.entries()).get("T-2")).toMatchObject({ status: "claimed", owner: workerB.agent, attempt: 2 });
+    expect(deriveState(ledger.entries(), "T-2.a2").stage).toBe(liveGate[2].stage);
+    expect(liveGate[2].stage).not.toBe("done");
+    expect(deriveState(ledger.entries(), "T-2.a2").done).toBeUndefined();
+    // The ledger stops every write until a person has seen the break (PR #4), then work resumes.
+    expect(ledger.status).toMatchObject({ ok: false, brokenAt: forgedDone.n, problem: "signature" });
+    expectLedgerError(() => ledger.append({ actor: GATE_ACTOR, type: "task.reopened", subject: "T-2.a2", summary: "x", data: { attempt: "T-2.a3" } }), "CHAIN_BROKEN");
+    ledger.acknowledgeBreak(owner, "That task.done was not written by Perfect Planner");
+    expect(ledger.status).toMatchObject({ ok: true, acknowledged: [forgedDone.n] });
+    expect(isAuthoritative(ledger.get(forgedDone.n)!)).toBe(false);
+    // Re-dispatch: worker B (same token, so same agent after the restart) releases T-2; a new worker claims attempt 2.
+    const restarted = new AgentService({ ledger, tokens, relay: new Relay({ ledger }) });
+    const workerBAgain = { token: workerB.token, agent: ((await restarted.call({ token: workerB.token }, "hello", { name: "Worker B", model: "builder-b" })) as { agent: string }).agent };
+    expect(workerBAgain.agent).toBe(workerB.agent);
+    expect(await restarted.call(workerBAgain, "release_task", { task: "T-2", reason: "Handing attempt 2 over" })).toMatchObject({ status: "open" });
+    const workerDToken = tokens.issue({ role: "worker", person: "owner", task: "T-2", model: "builder-d" });
+    const workerD = { token: workerDToken, agent: ((await restarted.call({ token: workerDToken }, "hello", { name: "Worker D", model: "builder-d" })) as { agent: string }).agent };
+    expect(await restarted.call(workerD, "claim_task", { task: "T-2" })).toMatchObject({ task: "T-2.a2", status: "claimed" });
+    expect(restarted.board().get("T-2")).toMatchObject({ status: "claimed", owner: workerD.agent, attempt: 2 });
+    ledger.close();
+    step("forged task.done on disk: not done on board or gate; writes paused until the owner acknowledged; T-2.a2 re-dispatched to worker D");
 
     // Remaining worktrees hold unmerged work; leave them for the temp cleanup.
     expect((await worktrees.list()).map((info) => info.taskId)).toEqual(["T-2"]);
