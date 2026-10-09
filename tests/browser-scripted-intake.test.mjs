@@ -50,7 +50,7 @@ test("scripted intake is off unless explicitly enabled, and only the dev server 
 test("the release entry only installs scripted intake behind the build-time flag", async () => {
   const main = await readFile(new URL("../src/main.jsx", import.meta.url), "utf8");
   const boot = await readFile(new URL("../src/browser/scriptedIntakeBoot.js", import.meta.url), "utf8");
-  assert.match(main.split("\n")[0], /^import "\.\/browser\/scriptedIntakeBoot\.js";$/, "the boot module must run before the workspace adapter is chosen");
+  assert.match(main.split(/\r?\n/)[0], /^import "\.\/browser\/scriptedIntakeBoot\.js";$/, "the boot module must run before the workspace adapter is chosen");
   assert.match(boot, /if \(typeof __PP_SCRIPTED_INTAKE__ !== "undefined" && __PP_SCRIPTED_INTAKE__ === true\)/);
   assert.doesNotMatch(main, /installScriptedIntake|__ppTestIntake/);
 });
