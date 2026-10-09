@@ -35,11 +35,36 @@ import { defaultWorkspaceAdapter } from "../runtime/workspaceAdapter.js";
 import { inspectArchitecture } from "../runtime/architectureClient.js";
 import { useOptionalProject } from "../project/ProjectProvider.jsx";
 import "./StructureWorkspace.css";
-import { IndexingActivity } from './IndexingActivity.jsx';
 import { FolderReconnectNotice } from "./FolderReconnectNotice.jsx";
 import { describeFolderConnection } from "../project/folderReconnectModel.js";
 import { DiscoveryReviewPanel } from "./DiscoveryReviewPanel.jsx";
 import { folderPlanGuidance } from '../engine/folderPlanGuidance.js';
+
+// Home's button bumps this token; remembering the last one used stops a remount from reopening the picker.
+let consumedAutoStartToken = 0;
+const LAST_NATIVE_FOLDER_KEY = "perfect-planner:last-folder:v1";
+// Off by default: a chosen folder waits for "Approve read-only scan". Set to "1" to start scans on pick.
+export const SKIP_SCAN_APPROVAL_KEY = "perfect-planner:skip-scan-approval:v1";
+function readSkipScanApproval() {
+  try { return localStorage.getItem(SKIP_SCAN_APPROVAL_KEY) === "1"; } catch { return false; }
+}
+const readyMessage = (mode) =>
+  mode === "browser"
+    ? "Choose your app folder, then approve the read-only scan."
+    : "Choose your app folder, or type its full path, then approve the read-only scan.";
+
+// The desktop app remembers the last scanned path; the browser keeps folder handles in IndexedDB instead.
+function readLastNativeFolder() {
+  try {
+    const value = JSON.parse(localStorage.getItem(LAST_NATIVE_FOLDER_KEY) ?? "null");
+    return typeof value?.path === "string" && /^(?:[a-zA-Z]:[\\/]|\/)/.test(value.path) ? { path: value.path, name: String(value.name || value.path) } : null;
+  } catch { return null; }
+}
+
+function scanFraction(progress) {
+  if (!progress?.filesDiscovered) return null;
+  return Math.min(0.99, progress.filesHashed / progress.filesDiscovered);
+}
 
 // Plain-language text for scan stops. Unreadable files and folders no longer stop a scan (they are skipped and listed),
 // so what remains here are whole-folder problems the person can act on.
@@ -191,6 +216,8 @@ export function StructureWorkspace({
   onProjectCaptured,
   onProjectUnavailable,
   onDiagnostic,
+  autoStartIntakeToken = 0,
+  skipScanApproval,
   workspaceAdapter = defaultWorkspaceAdapter,
 }) {
   const projectContext = useOptionalProject();
@@ -221,18 +248,18 @@ export function StructureWorkspace({
   currentPlanRef.current = planId;
   const [rootPath, setRootPath] = useState("");
   const [folderPreview, setFolderPreview] = useState(null);
-  useEffect(() => { setFolderPreview(null); }, [rootPath, activeProject?.projectId]);
+  // Cleared when a new selection or scan starts (not on rootPath changes, which race a fast preview).
+  useEffect(() => { setFolderPreview(null); }, [activeProject?.projectId]);
   const [intake, setIntake] = useState({
     state: "idle",
     registration: null,
     census: null,
     gaps: null,
-    message:
-      workspaceAdapter.mode === "browser"
-        ? "Choose a folder securely. Nothing is read until you approve analysis."
-        : "Drop a folder or enter its full local path. Nothing is changed during analysis.",
+    message: readyMessage(workspaceAdapter.mode),
   });
+  const scanStartsOnPick = skipScanApproval ?? readSkipScanApproval();
   const tokenRef = useRef(null);
+  const discoveryPanelRef = useRef(null);
   const scanAbortRef = useRef(null);
   const scanRunRef = useRef(0);
   const selectionRunRef = useRef(0);
@@ -249,6 +276,21 @@ export function StructureWorkspace({
     }).catch(() => {});
     return () => { current = false; };
   }, [canRemember, activeProject?.projectId, workspaceAdapter]);
+  // One-click starts: the last folder used here, and the folder npm start was launched for.
+  const [lastFolder, setLastFolder] = useState(null);
+  const [launchFolder, setLaunchFolder] = useState(null);
+  const refreshLastFolder = () => {
+    if (workspaceAdapter.mode !== "browser") { setLastFolder(readLastNativeFolder()); return; }
+    if (typeof workspaceAdapter.lastFolder !== "function") return;
+    Promise.resolve(workspaceAdapter.lastFolder()).then((value) => setLastFolder(value ?? null)).catch(() => {});
+  };
+  useEffect(() => {
+    let current = true;
+    refreshLastFolder();
+    if (typeof workspaceAdapter.launchFolder === "function")
+      Promise.resolve(workspaceAdapter.launchFolder()).then((value) => { if (current) setLaunchFolder(value ?? null); }).catch(() => {});
+    return () => { current = false; };
+  }, [workspaceAdapter]);
   const assessment = useMemo(() => assessFolderContract(draft), [draft]);
   const headline = folderPlanHeadline(assessment, { imported });
   const [draftFingerprint, setDraftFingerprint] = useState(null);
@@ -523,10 +565,7 @@ export function StructureWorkspace({
       registration: null,
       census: null,
       gaps: null,
-      message:
-        workspaceAdapter.mode === "browser"
-          ? "Choose a folder securely. Nothing is read until you approve analysis."
-          : "Drop a folder or enter its full local path. Nothing is changed during analysis.",
+      message: readyMessage(workspaceAdapter.mode),
     });
     onDiagnostic?.(
       "workspace",
@@ -540,9 +579,9 @@ export function StructureWorkspace({
     const runLabel = projectLabelFromRoot(path);
     if (scanAbortRef.current && !scanAbortRef.current.signal.aborted) return;
     if (!path.trim()) {
-      const message = "Choose one app folder before approving analysis.";
+      const message = "Choose one app folder first.";
       setIntake((current) => ({ ...current, state: "error", message }));
-      onDiagnostic?.("workspace", "error", message);
+      onDiagnostic?.("workspace", "warning", message);
       return;
     }
     scanAbortRef.current?.abort();
@@ -552,12 +591,13 @@ export function StructureWorkspace({
     const isCurrentRun = () =>
       scanRunRef.current === runId && !controller.signal.aborted;
     setScanProgress(null);
+    setFolderPreview(null);
     setIntake({
       state: "registering",
       registration: null,
       census: null,
       gaps: null,
-      message: "Registering this folder read-only…",
+      message: "Opening the folder read only…",
     });
     try {
       const registration = await workspaceAdapter.registerWorkspaceReadOnly({
@@ -588,7 +628,7 @@ export function StructureWorkspace({
         registration,
         census: null,
         gaps: null,
-        message: "Registered. Reading bounded metadata and hashes…",
+        message: "Reading your app. Read only, nothing is run or moved…",
       });
       if (workspaceAdapter.previewRegisteredWorkspace) {
         setFolderPreview(null);
@@ -664,6 +704,11 @@ export function StructureWorkspace({
         return;
       }
       const publishProject = (gaps = null) => {
+        if (workspaceAdapter.mode !== "browser") {
+          try { localStorage.setItem(LAST_NATIVE_FOLDER_KEY, JSON.stringify({ path: path.trim(), name: runLabel })); } catch { /* remembering is optional */ }
+        }
+        refreshLastFolder();
+        globalThis.requestAnimationFrame?.(() => discoveryPanelRef.current?.scrollIntoView?.({ behavior: "smooth", block: "start" }));
         onIntakeSummary?.(
           redactWorkspaceIntakeSummary({ registration, census, gaps }),
         );
@@ -743,9 +788,8 @@ export function StructureWorkspace({
       if (scanRunRef.current === runId) scanAbortRef.current = null;
     }
   };
-  const reconnectFolder = async () => {
-    if (!canRemember || mapLoading || typeof workspaceAdapter.reconnectRememberedFolder !== "function") return;
-    const projectId = activeProject.projectId;
+  const reconnectFolder = async (projectId = activeProject?.projectId, { askFirst = false } = {}) => {
+    if (!projectId || mapLoading || typeof workspaceAdapter.reconnectRememberedFolder !== "function") return;
     setFolderAccess((state) => ({ ...state, busy: true, error: "" }));
     let receipt;
     try {
@@ -754,7 +798,7 @@ export function StructureWorkspace({
     } catch {
       receipt = { authoritative: false, reason: "Folder access could not be requested. Choose the folder again." };
     }
-    if (currentPlanRef.current !== projectId) return;
+    if (imported && currentPlanRef.current !== activeProject.projectId) return;
     if (!receipt?.authoritative || receipt.selectionState !== "selected" || !receipt.selectedPath) {
       const message = receipt?.reason || "The folder could not be reconnected. Choose it again.";
       setFolderAccess((state) => ({ ...state, busy: false, error: message }));
@@ -763,11 +807,35 @@ export function StructureWorkspace({
     }
     setFolderAccess((state) => ({ ...state, busy: false, error: "" }));
     setRootPath(receipt.selectedPath);
-    await connectFolder(receipt.selectedPath);
-    Promise.resolve(workspaceAdapter.rememberedFolder(projectId)).then((access) => {
-      setFolderAccess((state) => state.projectId === projectId ? { ...state, access } : state);
-    }).catch(() => {});
+    if (askFirst) awaitScanApproval(receipt.selectedPath);
+    else await connectFolder(receipt.selectedPath);
+    if (typeof workspaceAdapter.rememberedFolder === "function")
+      Promise.resolve(workspaceAdapter.rememberedFolder(projectId)).then((access) => {
+        setFolderAccess((state) => state.projectId === projectId ? { ...state, access } : state);
+      }).catch(() => {});
   };
+  const openLastFolder = () => {
+    if (!lastFolder || mapLoading) return;
+    if (workspaceAdapter.mode !== "browser") {
+      beginFolderSelection();
+      setRootPath(lastFolder.path);
+      awaitScanApproval(lastFolder.path);
+      return;
+    }
+    reconnectFolder(lastFolder.projectId, { askFirst: true });
+  };
+  // A chosen folder waits for "Approve read-only scan" unless scans are set to start on pick.
+  function awaitScanApproval(path) {
+    if (scanStartsOnPick) return connectFolder(path);
+    setIntake((current) => ({
+      ...current,
+      state: "selected",
+      message: `Ready to scan ${projectLabelFromRoot(path) || "this folder"}. The scan only reads files; nothing is run or moved.`,
+    }));
+    return undefined;
+  }
+  const openLaunchFolder = () =>
+    chooseFolder(() => workspaceAdapter.selectLaunchFolder());
   const beginFolderSelection = () => {
     const runId = ++selectionRunRef.current;
     scanRunRef.current += 1;
@@ -775,12 +843,13 @@ export function StructureWorkspace({
     scanAbortRef.current = null;
     setRootPath("");
     setScanProgress(null);
+    setFolderPreview(null);
     setIntake({
       state: "choosing",
       registration: null,
       census: null,
       gaps: null,
-      message: "Choose one app folder. Nothing is read until you approve analysis.",
+      message: "Choose one app folder. The scan starts as soon as you pick it.",
     });
     return runId;
   };
@@ -825,12 +894,7 @@ export function StructureWorkspace({
     }
     beginFolderSelection();
     setRootPath(path);
-    setIntake((current) => ({
-      ...current,
-      state: "idle",
-      message:
-        "Folder received. Review the path, then approve the read-only folder scan.",
-    }));
+    awaitScanApproval(path);
   };
   const chooseFolder = async (select = () => workspaceAdapter.selectWorkspaceFolder()) => {
     if (mapLoading) return;
@@ -839,13 +903,19 @@ export function StructureWorkspace({
       const receipt = await select();
       if (selectionRunRef.current !== runId) return;
       if (!receipt?.authoritative) {
+        if (receipt?.reason === "browser-folder-picker-needs-click") {
+          setIntake((current) => ({ ...current, state: "idle", message: "Click Choose app folder to pick your app." }));
+          return;
+        }
         const message =
           receipt?.reason === "native-runtime-unavailable"
             ? "Open the native desktop app to choose a folder. This browser does not provide secure folder access."
             : receipt?.reason ||
               "Folder selection failed without a saved check.";
         setIntake((current) => ({ ...current, state: "error", message }));
-        onDiagnostic?.("workspace", "error", message);
+        // Browser limits (no native picker, no drag-and-drop access) are expected, not failures.
+        const expected = receipt?.reason === "native-runtime-unavailable" || /cannot grant folder access|Drop exactly one/.test(message);
+        onDiagnostic?.("workspace", expected ? "warning" : "error", message);
         return;
       }
       if (receipt.selectionState === "cancelled") {
@@ -858,12 +928,7 @@ export function StructureWorkspace({
         return;
       }
       setRootPath(receipt.selectedPath);
-      setIntake((current) => ({
-        ...current,
-        state: "selected",
-        message:
-          "Folder selected. Review the path, then approve the separate read-only folder scan.",
-      }));
+      await awaitScanApproval(receipt.selectedPath);
     } catch (error) {
       if (selectionRunRef.current !== runId) return;
       const message =
@@ -874,6 +939,12 @@ export function StructureWorkspace({
       onDiagnostic?.("workspace", "error", message);
     }
   };
+  // Home's "Choose app folder" lands here and opens the picker straight away.
+  useEffect(() => {
+    if (autoStartIntakeToken <= consumedAutoStartToken) return;
+    consumedAutoStartToken = autoStartIntakeToken;
+    chooseFolder();
+  }, [autoStartIntakeToken]);
   const updateNode = (key, value) =>
     setDraft((current) => ({
       ...current,
@@ -1094,7 +1165,7 @@ export function StructureWorkspace({
             <FolderIcon />
             <span>
               <strong>Bring in an existing app</strong>
-              <small>Select → approve → index → map → review</small>
+              <small>Reads only. Nothing is run or moved.</small>
             </span>
           </button>
           <span className={`intake-state ${intake.state}`}>
@@ -1102,7 +1173,7 @@ export function StructureWorkspace({
           </span>
         </header>
         {openSections.intake && (
-          <div id="folder-intake" className="folder-intake-grid">
+          <div id="folder-intake" className="folder-intake-grid one-click-intake">
             {canRemember && (
               <FolderReconnectNotice
                 status={describeFolderConnection({
@@ -1112,123 +1183,142 @@ export function StructureWorkspace({
                 })}
                 busy={folderAccess.busy || mapLoading}
                 error={folderAccess.error}
-                onReconnect={reconnectFolder}
+                onReconnect={() => reconnectFolder()}
               />
             )}
-            <ol className="intake-process" aria-label="App intake progress">
-              {workspaceIntakeStages.map((stage, index) => (
-                <li
-                  key={stage.id}
-                  className={workspaceIntakeStageState(
-                    intake.state === "analysis-refused"
-                      ? "scanning"
-                      : intake.state,
-                    index,
-                  )}
-                >
-                  <code>{stage.id}</code>
-                  <span>{stage.name}</span>
-                </li>
-              ))}
-            </ol>
             <div
               className="folder-drop-zone"
               onDragOver={(event) => event.preventDefault()}
               onDrop={acceptDrop}
             >
               <FolderIcon weight="duotone" />
-              <strong>Drop the app folder here</strong>
-              <span>
-                or choose it securely{" "}
-                {workspaceAdapter.mode === "browser"
-                  ? "in this browser"
-                  : "in the desktop app"}
-              </span>
-              <button
-                type="button"
-                className="soft-button"
-                onClick={() => chooseFolder()}
-                disabled={mapLoading}
-              >
-                Choose app folder
-              </button>
-              <small>
-                Selection reads nothing. No code is executed or moved.
-              </small>
-            </div>
-            <div className="folder-connect-form">
-              <label>
-                <span>SELECTED LOCAL FOLDER</span>
-                <input
-                  value={rootPath}
-                  onChange={(event) => {
-                    beginFolderSelection();
-                    setRootPath(event.target.value);
-                    setIntake((current) => ({ ...current, state: "idle", message: "Review the folder path, then approve read-only analysis." }));
-                  }}
-                  readOnly={workspaceAdapter.mode === "browser"}
+              <strong>Drop your app folder here, or pick it</strong>
+              <span className="folder-quick-actions">
+                <button
+                  type="button"
+                  className="primary-button choose-folder-button"
+                  onClick={() => chooseFolder()}
                   disabled={mapLoading}
-                  placeholder={
-                    workspaceAdapter.mode === "browser"
-                      ? "Choose a folder above"
-                      : "C:\\projects\\my-app"
-                  }
-                />
-              </label>
-              <div>
-                <span className="folder-intake-message">{intake.message}</span>
-                <span className="folder-scan-actions">
+                >
+                  <FolderIcon /> Choose app folder
+                </button>
+                {rootPath && intake.state === "selected" && !mapLoading && (
                   <button
-                    className="primary-button"
-                    onClick={connectFolder}
-                    disabled={
-                      !rootPath ||
-                      [
-                        "choosing",
-                        "registering",
-                        "scanning",
-                        "analyzing",
-                      ].includes(intake.state)
-                    }
+                    type="button"
+                    className="primary-button approve-scan-button"
+                    onClick={() => connectFolder()}
                   >
-                    <ShieldCheckIcon />{" "}
-                    {intake.state === "registering"
-                      ? "Registering…"
-                      : intake.state === "scanning"
-                        ? "Indexing…"
-                        : "Approve read-only analysis"}
+                    <ShieldCheckIcon /> Approve read-only scan
                   </button>
-                  {mapLoading && (
-                    <button
-                      type="button"
-                      className="soft-button cancel-analysis-button"
-                      onClick={cancelAnalysis}
-                    >
-                      Cancel analysis
-                    </button>
-                  )}
-                </span>
-              </div>
+                )}
+                {lastFolder && !(canRemember && lastFolder.projectId === activeProject.projectId) && (
+                  <button
+                    type="button"
+                    className="soft-button"
+                    onClick={openLastFolder}
+                    disabled={mapLoading}
+                    title={lastFolder.path ?? lastFolder.name}
+                  >
+                    Use last folder · {lastFolder.name}
+                  </button>
+                )}
+                {launchFolder && workspaceAdapter.mode === "browser" && typeof workspaceAdapter.selectLaunchFolder === "function" && (
+                  <button
+                    type="button"
+                    className="soft-button"
+                    onClick={openLaunchFolder}
+                    disabled={mapLoading}
+                    title={launchFolder.path ?? launchFolder.name}
+                  >
+                    Use launch folder · {launchFolder.name}
+                  </button>
+                )}
+              </span>
+              <ol className="intake-process" aria-label="App intake progress">
+                {workspaceIntakeStages.map((stage, index) => (
+                  <li
+                    key={stage.id}
+                    className={workspaceIntakeStageState(
+                      intake.state === "analysis-refused"
+                        ? "scanning"
+                        : intake.state,
+                      index,
+                    )}
+                  >
+                    <span>{stage.name}</span>
+                  </li>
+                ))}
+              </ol>
             </div>
-            {mapLoading && <IndexingActivity stage={intake.state} />}
-            {scanProgress && mapLoading && (
+            {workspaceAdapter.mode !== "browser" && (
+              <form
+                className="folder-connect-form"
+                onSubmit={(event) => { event.preventDefault(); connectFolder(); }}
+              >
+                <label>
+                  <span>OR TYPE THE FOLDER PATH</span>
+                  <input
+                    value={rootPath}
+                    onChange={(event) => {
+                      beginFolderSelection();
+                      setRootPath(event.target.value);
+                      setIntake((current) => ({ ...current, state: "idle", message: "Press Scan folder to read it." }));
+                    }}
+                    disabled={mapLoading}
+                    placeholder={"C:\\projects\\my-app"}
+                  />
+                </label>
+                <button className="soft-button" type="submit" disabled={!rootPath.trim() || mapLoading}>
+                  Scan folder
+                </button>
+              </form>
+            )}
+            <div className="folder-intake-status">
+              <span className="folder-intake-message" role="status">{intake.message}</span>
+              <span className="folder-scan-actions">
+                {rootPath && !mapLoading && ["error", "analysis-refused"].includes(intake.state) && (
+                  <button type="button" className="soft-button" onClick={() => connectFolder()}>
+                    Scan again
+                  </button>
+                )}
+                {mapLoading && (
+                  <button
+                    type="button"
+                    className="soft-button cancel-analysis-button"
+                    onClick={cancelAnalysis}
+                  >
+                    Cancel scan
+                  </button>
+                )}
+              </span>
+            </div>
+            {mapLoading && (
               <div
                 className="folder-scan-progress"
                 role="status"
                 aria-label="Read-only folder scan progress"
               >
+                <progress
+                  max={1}
+                  value={scanFraction(scanProgress) ?? undefined}
+                  aria-label="Scan progress"
+                />
                 <span>
-                  <strong>{scanProgress.filesHashed} files hashed</strong>
-                  <small>
-                    {scanProgress.filesDiscovered} discovered ·{" "}
-                    {scanProgress.directoriesVisited} folders ·{" "}
-                    {(scanProgress.bytesHashed / 1_000_000).toFixed(1)} MB read
-                  </small>
+                  <strong>
+                    {scanProgress
+                      ? `${scanProgress.filesHashed} of ${scanProgress.filesDiscovered} files read`
+                      : intake.state === "registering" ? "Opening folder…" : "Reading folder…"}
+                  </strong>
+                  {scanProgress && (
+                    <small>
+                      {scanProgress.directoriesVisited} folders ·{" "}
+                      {(scanProgress.bytesHashed / 1_000_000).toFixed(1)} MB
+                    </small>
+                  )}
                 </span>
-                <code title={scanProgress.currentPath ?? undefined}>
-                  {scanProgress.currentPath ?? "Starting at repository root"}
-                </code>
-                <em>Partial results are never accepted as project status.</em>
+                {scanProgress?.currentPath && (
+                  <code title={scanProgress.currentPath}>{scanProgress.currentPath}</code>
+                )}
               </div>
             )}
             {intake.census &&
@@ -1325,6 +1415,7 @@ export function StructureWorkspace({
         )}
       </section>
       <section
+        ref={discoveryPanelRef}
         className={`dependency-map-panel discovery-panel ${openSections.dependencies ? "expanded" : "collapsed"}`}
         aria-label="Progressive app discovery map"
       >
