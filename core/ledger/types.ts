@@ -37,6 +37,7 @@ export const ENTRY_TYPES = [
   "budget.warning",
   "chain.acknowledged",
   "key.trusted",
+  "key.retired",
 ] as const;
 
 export type EntryType = (typeof ENTRY_TYPES)[number];
@@ -50,6 +51,7 @@ export const REASON_REQUIRED_TYPES: ReadonlySet<EntryType> = new Set<EntryType>(
   "chain.acknowledged",
   "task.reopened",
   "key.trusted",
+  "key.retired",
 ]);
 
 export const ACTOR_KINDS = ["person", "agent", "jev", "system"] as const;
@@ -107,6 +109,8 @@ export interface LedgerStatus {
   problem?: ChainProblem;
   detail?: string;
   acknowledged: string[];
+  /** The owner's principal, only when the ledger was opened with the project's ownerKey and it checks out. */
+  owner?: string;
   /** Set when opening repaired a torn final line left by a crash mid-write. */
   repaired?: string;
 }

@@ -19,6 +19,14 @@ export interface KeyProvider {
    * key here or the key store is unavailable; never returns an empty signature.
    */
   sign(principal: string, message: Buffer): { keyId: string; signature: string };
+  /**
+   * Rotation, used by ledger.rotateKey: make a new key that does not sign
+   * yet, so the old key can vouch for it in the ledger first; then make it
+   * the active key (the old one never signs again); or throw it away.
+   */
+  stageKey?(principal: string): TrustedKey;
+  activateKey?(principal: string, keyId: string): void;
+  discardStagedKey?(principal: string): void;
 }
 
 export interface KeyState {
@@ -77,8 +85,20 @@ export function isVerified(entry: LedgerEntry): boolean {
   return verified.has(entry);
 }
 
-/** Why an entry's signature does not hold, or undefined when it does. */
-export function signatureProblem(entry: LedgerEntry, trusted: ReadonlyMap<string, TrustedKey>): string | undefined {
+/** Where in the ledger each key was retired: entries it signs after that index do not count. */
+export type Retirements = ReadonlyMap<string, { index: number; n: string }>;
+
+/**
+ * Why an entry's signature does not hold, or undefined when it does. With
+ * `at` (the entry's index) and `retired`, a key retired earlier in the
+ * ledger no longer signs.
+ */
+export function signatureProblem(
+  entry: LedgerEntry,
+  trusted: ReadonlyMap<string, TrustedKey>,
+  retired?: Retirements,
+  at?: number,
+): string | undefined {
   if (!needsSignature(entry.actor)) return undefined;
   const sig = entry.sig;
   if (!sig || typeof sig.key !== "string" || typeof sig.value !== "string") {
@@ -92,6 +112,8 @@ export function signatureProblem(entry: LedgerEntry, trusted: ReadonlyMap<string
   if (!key) return `${entry.n} is signed by key ${sig.key}, which this device does not trust`;
   const principal = principalOf(entry.actor);
   if (key.principal !== principal) return `${entry.n} claims ${principal} but is signed by ${key.principal}'s key`;
+  const retirement = retired?.get(sig.key);
+  if (retirement && at !== undefined && at > retirement.index) return `${entry.n} is signed by key ${sig.key}, which was retired at ${retirement.n}`;
   try {
     const ok = cryptoVerify(null, signedBytes(entry), publicKeyObject(key.publicKey), Buffer.from(sig.value, "base64"));
     return ok ? undefined : `${entry.n}'s signature does not match its content`;
@@ -100,14 +122,9 @@ export function signatureProblem(entry: LedgerEntry, trusted: ReadonlyMap<string
   }
 }
 
-/**
- * The ledger's owner, the root of key trust: the principal of its first
- * person entry. Changing it would mean rewriting that entry and every
- * signed entry after it, since signatures cover n and prev.
- */
-export function ownerPrincipal(entries: readonly LedgerEntry[]): string | undefined {
-  const first = entries.find((entry) => entry.actor?.kind === "person" && typeof entry.actor.id === "string");
-  return first ? principalOf(first.actor) : undefined;
+/** The ledger's owner as this device sees it; see keyTrust. */
+export function ownerPrincipal(entries: readonly LedgerEntry[], anchors: readonly TrustedKey[] = [], ownerKey?: string): string | undefined {
+  return keyTrust(anchors, entries, { ownerKey }).owner;
 }
 
 /** Who may trust a key for `principal`: that same person, or the owner. */
@@ -115,30 +132,113 @@ export function mayTrustKeyFor(signer: string, principal: string, owner: string 
   return signer === principal || (owner !== undefined && signer === owner);
 }
 
+export interface KeyTrust {
+  trusted: Map<string, TrustedKey>;
+  /** The owner's principal, when this device can verify the ledger's first person entry. */
+  owner?: string;
+  /** Why there is no owner although the ledger has person entries. */
+  ownerProblem?: { n: string; detail: string };
+  retired: Retirements;
+}
+
 /**
- * Trusted keys for a ledger: the device's own and pinned keys (from the
- * provider) plus keys added by `key.trusted` entries signed by a trusted key
- * of the same person or of the owner. Repeats until nothing new is added,
- * so a key trusted late in the ledger also covers the entries it signed
- * earlier (keychain recovery).
+ * Which keys this device trusts for a ledger, who owns it, and which keys
+ * were retired where. Replayed in ledger order, a fixed number of times, so
+ * the answer never depends on how many entries the ledger has.
+ *
+ * - Anchors are the device's own and pinned keys (from the provider).
+ * - A `key.trusted` entry adds a key when, at that point in the ledger, it
+ *   was signed by a trusted, not-yet-retired key of the same person or of
+ *   the owner. It is ignored when the ledger already records that key as
+ *   another person's.
+ * - A `key.retired` entry, signed the same way, retires a key for good:
+ *   nothing it signs after that point counts, on any device that replays it.
+ * - Recovery: a key a person re-trusts with their own key counts from the
+ *   start of the ledger, so what it signed earlier counts again; its
+ *   retirements still apply.
+ * - The owner is the principal of the ledger's first person entry, only
+ *   when the app pins `ownerKey` and that entry was signed by exactly that
+ *   key, trusted without the owner's help. Without `ownerKey` there is no
+ *   owner: nobody can trust or retire another person's key.
  */
-export function trustedKeySet(anchors: readonly TrustedKey[], entries: readonly LedgerEntry[]): Map<string, TrustedKey> {
-  const trusted = new Map<string, TrustedKey>();
-  for (const key of anchors) if (validKey(key)) trusted.set(key.keyId, { ...key });
-  const owner = ownerPrincipal(entries);
-  for (let changed = true; changed; ) {
-    changed = false;
-    for (const entry of entries) {
-      if (entry.type !== "key.trusted" || entry.actor?.kind !== "person") continue;
-      const key = keyFromData(entry.data);
-      if (!key || trusted.has(key.keyId)) continue;
-      if (signatureProblem(entry, trusted) !== undefined) continue;
-      if (!mayTrustKeyFor(principalOf(entry.actor), key.principal, owner)) continue;
-      trusted.set(key.keyId, key);
-      changed = true;
-    }
+export function keyTrust(anchors: readonly TrustedKey[], entries: readonly LedgerEntry[], options: { ownerKey?: string } = {}): KeyTrust {
+  const bound = new Map<string, string>();
+  for (const entry of entries) {
+    const sig = entry.sig;
+    if (needsSignature(entry.actor) && sig && typeof sig.key === "string" && !bound.has(sig.key)) bound.set(sig.key, principalOf(entry.actor));
   }
-  return trusted;
+  const withoutOwner = settle(anchors, entries, bound, undefined);
+  const firstIndex = entries.findIndex((entry) => entry.actor?.kind === "person" && typeof entry.actor.id === "string");
+  let owner: string | undefined;
+  let ownerProblem: KeyTrust["ownerProblem"];
+  // Only the app can name the owner, by pinning the owner key it kept outside the ledger.
+  if (firstIndex >= 0 && options.ownerKey) {
+    const first = entries[firstIndex];
+    const problem = signatureProblem(first, withoutOwner.trusted, withoutOwner.retired, firstIndex);
+    if (problem) ownerProblem = { n: first.n, detail: `no owner: ${problem}` };
+    else if (first.sig?.key !== options.ownerKey) {
+      ownerProblem = { n: first.n, detail: `${first.n} was not signed by this project's owner key ${options.ownerKey}` };
+    } else owner = principalOf(first.actor);
+  }
+  const result = owner ? settle(anchors, entries, bound, owner) : withoutOwner;
+  return { trusted: result.trusted, owner, ownerProblem, retired: result.retired };
+}
+
+interface Replay {
+  trusted: Map<string, TrustedKey>;
+  retired: Map<string, { index: number; n: string }>;
+  /** Keys re-trusted by their own person, and the index of that entry. */
+  selfTrusted: Map<string, TrustedKey>;
+}
+
+/** Three ledger-order replays: plain, then with re-trusted keys counting from the start, then re-checked. */
+function settle(anchors: readonly TrustedKey[], entries: readonly LedgerEntry[], bound: ReadonlyMap<string, string>, owner: string | undefined): Replay {
+  const first = replay(anchors, [], entries, bound, owner);
+  const second = replay(anchors, [...first.selfTrusted.values()], entries, bound, owner);
+  // Keep only recoveries the second replay still accepts; never feed back again.
+  const kept = [...first.selfTrusted.values()].filter((key) => second.selfTrusted.has(key.keyId));
+  return replay(anchors, kept, entries, bound, owner);
+}
+
+function replay(
+  anchors: readonly TrustedKey[],
+  recovered: readonly TrustedKey[],
+  entries: readonly LedgerEntry[],
+  bound: ReadonlyMap<string, string>,
+  owner: string | undefined,
+): Replay {
+  const trusted = new Map<string, TrustedKey>();
+  for (const key of [...anchors, ...recovered]) if (validKey(key) && !trusted.has(key.keyId)) trusted.set(key.keyId, { ...key });
+  const retired = new Map<string, { index: number; n: string }>();
+  const selfTrusted = new Map<string, TrustedKey>();
+  entries.forEach((entry, index) => {
+    if (entry.actor?.kind !== "person") return;
+    if (entry.type === "key.trusted") {
+      const key = keyFromData(entry.data);
+      if (!key) return;
+      // A key the ledger already shows signing for someone else cannot be relabelled.
+      if ((bound.get(key.keyId) ?? key.principal) !== key.principal) return;
+      if (signatureProblem(entry, trusted, retired, index) !== undefined) return;
+      const signer = principalOf(entry.actor);
+      if (!mayTrustKeyFor(signer, key.principal, owner)) return;
+      if (!trusted.has(key.keyId)) trusted.set(key.keyId, key);
+      if (signer === key.principal) selfTrusted.set(key.keyId, key);
+    } else if (entry.type === "key.retired") {
+      const keyId = entry.data?.keyId;
+      if (typeof keyId !== "string" || retired.has(keyId)) return;
+      const key = trusted.get(keyId);
+      if (!key) return;
+      if (signatureProblem(entry, trusted, retired, index) !== undefined) return;
+      if (!mayTrustKeyFor(principalOf(entry.actor), key.principal, owner)) return;
+      retired.set(keyId, { index, n: entry.n });
+    }
+  });
+  return { trusted, retired, selfTrusted };
+}
+
+/** Trusted keys only; see keyTrust. */
+export function trustedKeySet(anchors: readonly TrustedKey[], entries: readonly LedgerEntry[]): Map<string, TrustedKey> {
+  return keyTrust(anchors, entries).trusted;
 }
 
 /**
@@ -225,6 +325,15 @@ export class MemoryKeyProvider implements KeyProvider {
     return [...[...this.keys.values()].map((k) => ({ ...k.key })), ...this.retired.map((k) => ({ ...k })), ...this.pinned.map((k) => ({ ...k }))];
   }
 
+  /** Another provider holding the same keys: a stolen copy, for tests. */
+  copy(): MemoryKeyProvider {
+    const twin = new MemoryKeyProvider({ unavailable: this.unavailable, autoCreate: this.autoCreate });
+    for (const [principal, entry] of this.keys) twin.keys.set(principal, { privateKey: entry.privateKey, key: { ...entry.key } });
+    twin.retired.push(...this.retired.map((k) => ({ ...k })));
+    twin.pinned.push(...this.pinned.map((k) => ({ ...k })));
+    return twin;
+  }
+
   /** Trusts someone else's public key on this device only, after its fingerprint was checked. */
   pin(key: TrustedKey): void {
     if (!validKey(key)) throw new RangeError("not a valid Ed25519 key");
@@ -236,6 +345,28 @@ export class MemoryKeyProvider implements KeyProvider {
     const key = { keyId: keyIdOf(pair.publicKey), principal, publicKey: pair.publicKey };
     this.keys.set(principal, { privateKey: pair.privateKey, key });
     return { ...key };
+  }
+
+  private readonly staged = new Map<string, { privateKey: string; key: TrustedKey }>();
+
+  stageKey(principal: string): TrustedKey {
+    const pair = newKeyPair();
+    const key = { keyId: keyIdOf(pair.publicKey), principal, publicKey: pair.publicKey };
+    this.staged.set(principal, { privateKey: pair.privateKey, key });
+    return { ...key };
+  }
+
+  activateKey(principal: string, keyId: string): void {
+    const next = this.staged.get(principal);
+    if (!next || next.key.keyId !== keyId) throw new Error(`no staged key ${keyId} for ${principal}`);
+    const old = this.keys.get(principal);
+    if (old) this.retired.push({ ...old.key, retired: true });
+    this.keys.set(principal, next);
+    this.staged.delete(principal);
+  }
+
+  discardStagedKey(principal: string): void {
+    this.staged.delete(principal);
   }
 
   /** Retires the principal's key (it still verifies) and makes a new one. */

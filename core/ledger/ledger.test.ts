@@ -131,6 +131,7 @@ describe("REASON_REQUIRED", () => {
         "release.rollback",
         "task.reopened",
         "key.trusted",
+        "key.retired",
       ].sort(),
     );
   });
@@ -149,15 +150,20 @@ describe("REASON_REQUIRED", () => {
     ledger.append(draft({ summary: "seed" }));
     for (const type of REASON_REQUIRED_TYPES) {
       if (type === "chain.acknowledged") continue;
-      expect(() => ledger.append(draft({ type, subject: nextSubject(ledger, type), reason: "Because the owner said so", corrects: "L-000001", ...keyPayload(type) }))).not.toThrow();
+      expect(() => ledger.append(draft({ type, subject: nextSubject(ledger, type), reason: "Because the owner said so", corrects: "L-000001", ...keyPayload(type, ledger) }))).not.toThrow();
     }
   });
 });
 
-/** key.trusted names a real key; other types need nothing extra. */
-function keyPayload(type: string): Partial<EntryDraft> {
+/** key.trusted names a real key and key.retired a key the ledger knows; other types need nothing extra. */
+function keyPayload(type: string, ledger: Ledger): Partial<EntryDraft> {
+  if (type === "key.retired") {
+    const key = ledger.entries().find((e) => e.sig)!.sig!.key;
+    return { subject: key, data: { keyId: key } };
+  }
   if (type !== "key.trusted") return {};
-  const key = new MemoryKeyProvider().createKey("person:helper");
+  // A second key of the writer's own: that needs no owner.
+  const key = new MemoryKeyProvider().createKey("person:owner");
   return { subject: key.keyId, data: { ...key } };
 }
 
@@ -172,7 +178,7 @@ describe("UNKNOWN_TYPE", () => {
     ledger.append(draft({ summary: "seed" }));
     for (const type of ENTRY_TYPES) {
       if (type === "task.done" || type === "chain.acknowledged") continue;
-      expect(() => ledger.append(draft({ type, subject: nextSubject(ledger, type), reason: "reason", corrects: "L-000001", data: { test: "npm test" }, ...keyPayload(type) }))).not.toThrow();
+      expect(() => ledger.append(draft({ type, subject: nextSubject(ledger, type), reason: "reason", corrects: "L-000001", data: { test: "npm test" }, ...keyPayload(type, ledger) }))).not.toThrow();
     }
   });
 });

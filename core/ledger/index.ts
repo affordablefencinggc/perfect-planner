@@ -6,6 +6,9 @@ export { authorKind, isAuthoritative } from "./author";
 export {
   MemoryKeyProvider,
   keyIdOf,
+  keyTrust,
+  type KeyTrust,
+  type Retirements,
   mayTrustKeyFor,
   needsSignature,
   ownerPrincipal,
