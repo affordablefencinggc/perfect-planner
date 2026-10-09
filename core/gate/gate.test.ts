@@ -351,7 +351,7 @@ describe("TestGate", () => {
     expect(gate.approve("T-1", OWNER, { cwd: repo.root }).ok).toBe(true);
     expect((await gate.confirmFailsFirst("T-1", repo.root)).ok).toBe(true);
     const worktree = path.join(path.dirname(repo.root), "wt-deps");
-    cleanups.push(() => rmSync(worktree, { recursive: true, force: true }));
+    cleanups.push(() => rmSync(worktree, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }));
     await git(repo.root, ["worktree", "add", "-q", "-b", "pp/T-1", worktree, "main"]);
     writeFiles(worktree, { "feature.txt": "enabled\n", "node_modules/pp-fake-dep/package.json": '{"name":"pp-fake-dep","type":"module","main":"index.js"}\n', "node_modules/pp-fake-dep/index.js": "export const ready = true;\n" });
     writeFileSync(path.join(worktree, ".gitignore"), "node_modules/\n");
@@ -374,7 +374,7 @@ describe("TestGate", () => {
     expect(gate.approve("T-1", OWNER, { cwd: repo.root }).ok).toBe(true);
     expect((await gate.confirmFailsFirst("T-1", repo.root)).ok).toBe(true);
     const worktree = path.join(path.dirname(repo.root), "wt-cheat");
-    cleanups.push(() => rmSync(worktree, { recursive: true, force: true }));
+    cleanups.push(() => rmSync(worktree, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }));
     await git(repo.root, ["worktree", "add", "-q", "-b", "pp/T-1", worktree, "main"]);
     // The worker leaves the feature off but rewrites its ignored copy of the dependency to always say yes.
     writeFiles(worktree, { ...dep("export const enabled = () => true;\n"), "notes.txt": "no real change\n" });
@@ -436,7 +436,7 @@ describe("TestGate", () => {
       expect(gate.approve("T-1", OWNER, { cwd: repo.root }).ok).toBe(true);
       expect((await gate.confirmFailsFirst("T-1", repo.root)).ok).toBe(true);
       const worktree = path.join(path.dirname(repo.root), `wt-${file.replace(/\W/g, "-")}`);
-      cleanups.push(() => rmSync(worktree, { recursive: true, force: true }));
+      cleanups.push(() => rmSync(worktree, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }));
       await git(repo.root, ["worktree", "add", "-q", "-b", "pp/T-1", worktree, "main"]);
       writeFiles(worktree, { [file]: content, "feature.txt": "enabled\n" });
       const tip = await commitAll(worktree, `touch ${file}`);

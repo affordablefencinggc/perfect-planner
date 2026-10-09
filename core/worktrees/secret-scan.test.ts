@@ -140,7 +140,7 @@ describe("secret scan hook starts the real git", () => {
     // A PATH folder that reaches the repo through a symlink (a junction on Windows) is the repo too.
     const link = path.join(path.dirname(repo.root), `${path.basename(repo.root)}-link`);
     symlinkSync(repo.root, link, isWindows ? "junction" : "dir");
-    cleanups.push(() => rmSync(link, { recursive: true, force: true }));
+    cleanups.push(() => rmSync(link, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }));
     expect(resolveGit({ PATH: link, GIT_EXEC_PATH: link }, repo.root)).toBeNull();
     expect(resolveGit({ PATH: repo.root }, link)).toBeNull();
   });

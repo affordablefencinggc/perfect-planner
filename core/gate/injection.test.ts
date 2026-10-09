@@ -216,7 +216,7 @@ describe("the app's own git settings cannot be used to run a program", () => {
     // The old layout: an empty no-hooks folder beside the app's attributes file. Plant every hook there.
     const attributes = await git(ctx.root, ["config", "--get", "core.attributesFile"]);
     for (const hook of HOOKS) plant(path.join(path.dirname(attributes), "no-hooks", hook), ctx.marker);
-    cleanups.push(() => rmSync(path.join(path.dirname(attributes), "no-hooks"), { recursive: true, force: true }));
+    cleanups.push(() => rmSync(path.join(path.dirname(attributes), "no-hooks"), { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }));
     const { merged } = await wholeLoop(ctx);
     expect(merged.ok).toBe(true);
     expect(existsSync(ctx.marker)).toBe(false);
