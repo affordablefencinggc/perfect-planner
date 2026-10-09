@@ -230,14 +230,22 @@ export function commandExists(command: string, cwd: string, env: NodeJS.ProcessE
   return resolveCommand(command, cwd, env).kind !== "missing";
 }
 
-/** Kill the child and everything it started. */
-export function killTree(child: ChildProcess): void {
+/**
+ * Kill the child and everything it started. Resolves once the kill has been carried out (on Windows,
+ * when taskkill exits), so a caller can wait before removing the folder the tree was running in.
+ */
+export function killTree(child: ChildProcess): Promise<void> {
   const pid = child.pid;
-  if (pid === undefined) return;
+  if (pid === undefined) return Promise.resolve();
   if (isWindows) {
-    const killer = spawn(path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "taskkill.exe"), ["/pid", String(pid), "/T", "/F"], { windowsHide: true, shell: false, stdio: "ignore" });
-    killer.on("error", () => child.kill());
-    return;
+    return new Promise((resolve) => {
+      const killer = spawn(path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "taskkill.exe"), ["/pid", String(pid), "/T", "/F"], { windowsHide: true, shell: false, stdio: "ignore" });
+      killer.on("error", () => {
+        child.kill();
+        resolve();
+      });
+      killer.on("exit", () => resolve());
+    });
   }
   try {
     // The child was spawned detached, so it leads its own process group.
@@ -245,6 +253,7 @@ export function killTree(child: ChildProcess): void {
   } catch {
     child.kill("SIGKILL");
   }
+  return Promise.resolve();
 }
 
 /**
@@ -259,18 +268,22 @@ export function runTestCommand(command: string, cwd: string, options: TestRunOpt
     let settled = false;
     let timedOut = false;
     let child: ChildProcess;
+    let killing: Promise<void> | undefined;
     const finish = (exitCode: number | null) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       clearTimeout(grace);
-      resolve({ passed: !timedOut && exitCode === 0, exitCode: timedOut ? null : exitCode, timedOut, durationMs: Date.now() - started, outputTail: tail.text() });
+      const report = () => resolve({ passed: !timedOut && exitCode === 0, exitCode: timedOut ? null : exitCode, timedOut, durationMs: Date.now() - started, outputTail: tail.text() });
+      // After a timeout, report only once the tree is gone, so the caller can remove its folder.
+      if (killing) void killing.then(report);
+      else report();
     };
     let grace: NodeJS.Timeout | undefined;
     const timer = setTimeout(() => {
       timedOut = true;
       tail.push(Buffer.from(`\n[perfect-planner] test timed out after ${timeoutMs} ms; process tree killed\n`));
-      killTree(child);
+      killing = killTree(child);
       // If something still holds the pipes open, stop waiting for them.
       grace = setTimeout(() => {
         child.stdout?.destroy();

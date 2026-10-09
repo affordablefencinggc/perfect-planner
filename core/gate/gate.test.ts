@@ -666,9 +666,9 @@ describe("TestGate", () => {
 });
 
 describe("runTestCommand", () => {
-  const scratch = () => {
+  const scratch = (maxRetries = 5) => {
     const dir = realDir(mkdtempSync(path.join(os.tmpdir(), "pp-gate-run-")));
-    cleanups.push(() => rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }));
+    cleanups.push(() => rmSync(dir, { recursive: true, force: true, maxRetries, retryDelay: 250 }));
     return dir;
   };
 
@@ -732,7 +732,8 @@ describe("runTestCommand", () => {
   });
 
   it("kills the whole process tree on timeout", async () => {
-    const dir = scratch();
+    // Windows can hold the folder open for a moment after a killed process exits.
+    const dir = scratch(20);
     const pidFile = path.join(dir, "grandchild.pid");
     writeFileSync(
       path.join(dir, "hang.mjs"),
