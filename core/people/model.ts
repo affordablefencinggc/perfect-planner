@@ -106,12 +106,25 @@ export interface Roster {
   docs: Map<string, DocState>;
   /** Agents of people who were removed; they may no longer write. */
   retiredAgents: Set<string>;
-  /** The first person who wrote to the ledger; only they can start the roster. */
-  starter?: string;
+  /**
+   * The project owner as the ledger knows it (`ledger.owner`, from the owner
+   * key the app pins). Without it there is no owner, so nobody can start the
+   * roster, enrol helpers or change roles.
+   */
+  pinnedOwner?: string;
+  /**
+   * Write-time only: the owner key is pinned but nobody has written yet, so
+   * the first person entry, which the ledger makes the owner key sign, may
+   * claim the project.
+   */
+  ownerPending?: boolean;
 }
 
-export function emptyRoster(): Roster {
-  return { members: new Map(), docs: new Map(), retiredAgents: new Set() };
+/** `owner` is `ledger.owner`, a principal such as "person:looplet-spare". */
+export function emptyRoster(owner?: string): Roster {
+  const roster: Roster = { members: new Map(), docs: new Map(), retiredAgents: new Set() };
+  if (owner?.startsWith("person:")) roster.pinnedOwner = owner.slice("person:".length);
+  return roster;
 }
 
 /**
@@ -125,7 +138,6 @@ export function applyEntry(roster: Roster, entry: LedgerEntry): void {
   const event = peopleEvent(entry);
   // Only an entry the ledger verified as written by a person can change people.
   const refused = event ? !isAuthoritative(entry, { personOnly: true }) || peopleOpRefusal(entry, roster) !== null : true;
-  if (roster.starter === undefined && entry.actor.kind === "person") roster.starter = entry.actor.id;
   if (!event || refused) return;
   const { members, docs, retiredAgents } = roster;
   if ("agents" in event && event.agents) for (const agent of event.agents) retiredAgents.delete(agent);
@@ -184,8 +196,9 @@ export function applyEntry(roster: Roster, entry: LedgerEntry): void {
   }
 }
 
-export function replayRoster(entries: readonly LedgerEntry[]): Roster {
-  const roster = emptyRoster();
+/** Replays the roster; `owner` is `ledger.owner`. Without it the roster stays empty. */
+export function replayRoster(entries: readonly LedgerEntry[], owner?: string): Roster {
+  const roster = emptyRoster(owner);
   for (const entry of entries) applyEntry(roster, entry);
   return roster;
 }
@@ -214,15 +227,16 @@ export function peopleOpRefusal(draft: Pick<EntryDraft, "actor" | "data">, roste
   const { actor } = draft;
   if (actor.kind !== "person") return "only a person can change who is on the project";
   const owner = ownerOf(roster);
-  const isOwner = owner?.person === actor.id;
+  const isOwner = owner !== undefined && owner.person === actor.id && owner.person === roster.pinnedOwner;
   const bootstrap = roster.members.size === 0;
 
   switch (event.op) {
     case "member.added":
       if (bootstrap) {
+        if (roster.pinnedOwner === undefined && !roster.ownerPending) return "this project has no pinned owner, so nobody can add people";
+        if (roster.pinnedOwner !== undefined && roster.pinnedOwner !== actor.id) return `${roster.pinnedOwner} owns this project, so only they can start its roster`;
         if (event.role !== "owner") return "the first member of a project is its owner";
         if (event.person !== actor.id) return "the owner adds themselves first";
-        if (roster.starter !== undefined && roster.starter !== actor.id) return `${roster.starter} started this project, so only they can claim it`;
         return null;
       }
       if (!isOwner) return "only the owner adds people";
@@ -263,7 +277,8 @@ export function peopleOpRefusal(draft: Pick<EntryDraft, "actor" | "data">, roste
     case "doc.shared":
     case "doc.removed":
       if (bootstrap) {
-        if (roster.starter !== undefined && roster.starter !== actor.id) return `${roster.starter} started this project, so only they share documents`;
+        if (roster.pinnedOwner === undefined && !roster.ownerPending) return "this project has no pinned owner, so nobody can share documents";
+        if (roster.pinnedOwner !== undefined && roster.pinnedOwner !== actor.id) return `${roster.pinnedOwner} owns this project, so only they share documents`;
       } else if (!isOwner) return "only the owner shares documents";
       if (event.op === "doc.removed" && !roster.docs.has(event.doc)) return `${event.doc} is not shared`;
       return null;

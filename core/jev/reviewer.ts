@@ -176,15 +176,19 @@ export class JevReviewer implements SettledAnswerer {
         : review === "diff" && called?.ok && result.verdict === "approve" && extra.commit && /^[0-9a-f]{40,64}$/i.test(extra.commit)
           ? ["scope:diff", "verdict:approve", `commit:${extra.commit.toLowerCase()}`]
           : undefined;
+    const jev: Actor | undefined = called?.ok ? { kind: "jev", id: "jev", model: called.model } : undefined;
+    // A verdict the gate counts is written by Perfect Planner itself (signed), naming Jev as the reviewer:
+    // the gate ignores unsigned verdicts, so an agent claiming to be Jev can never approve anything.
     return this.ledger.append({
-      actor: called?.ok ? { kind: "jev", id: "jev", model: called.model } : SYSTEM,
+      actor: gateEvidence ? SYSTEM : (jev ?? SYSTEM),
       type: "review.verdict",
       subject: task,
       summary: extra.summary,
       reason: result.reason,
       refs: extra.refs,
-      ...(gateEvidence ? { evidence: gateEvidence } : {}),
+      ...(gateEvidence ? { evidence: jev ? [...gateEvidence, `reviewer:jev:${jev.id}`] : gateEvidence } : {}),
       data: {
+        ...(gateEvidence && jev ? { reviewer: jev } : {}),
         review,
         verdict: result.verdict,
         policy: REVIEW_POLICY,

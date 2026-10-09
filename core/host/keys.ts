@@ -18,7 +18,7 @@ export function asPersonRequest<T>(fn: () => T): T {
   return personRequest.run(true, fn);
 }
 
-type EnsuringProvider = KeyProvider & { rotateKey(principal: string): TrustedKey } & ({ ensureKey(principal: string): TrustedKey } | { createKey(principal: string): TrustedKey });
+type EnsuringProvider = KeyProvider & ({ ensureKey(principal: string): TrustedKey } | { createKey(principal: string): TrustedKey });
 
 /** Wraps a provider so person keys are made only inside asPersonRequest. */
 export class HostKeys implements KeyProvider {
@@ -52,13 +52,50 @@ export class HostKeys implements KeyProvider {
   }
 
   /**
-   * A new key for this person; the old one never signs here again. Call only from the person's own
-   * request, then retire the old key in each ledger it signed (rotatePersonKey does both).
+   * The owner's key for a project being created: made by the app itself (not by any request) so its
+   * id can be pinned outside the ledger before anyone writes (core/host/owner.ts).
    */
-  rotate(principal: string): { oldKeyId: string | undefined; key: TrustedKey } {
-    if (personRequest.getStore() !== true) throw new Error("Only the person's own request can rotate their key.");
-    const oldKeyId = this.inner.trustedKeys().find((k) => k.principal === principal && !k.retired)?.keyId;
-    return { oldKeyId, key: this.inner.rotateKey(principal) };
+  ownerKeyFor(principal: string): string | undefined {
+    if (!this.inner.state().available) return undefined;
+    this.make(principal);
+    return this.active(principal)?.keyId;
+  }
+
+  /** Staging a person's next key (ledger.rotateKey) happens only inside that person's own request. */
+  stageKey(principal: string): TrustedKey {
+    this.personOnly(principal, "make a new key");
+    if (!this.inner.stageKey) throw new Error(`${this.inner.description} cannot stage keys, so keys cannot be rotated here.`);
+    return this.inner.stageKey(principal);
+  }
+
+  activateKey(principal: string, keyId: string): void {
+    this.personOnly(principal, "switch keys");
+    if (!this.inner.activateKey) throw new Error(`${this.inner.description} cannot stage keys, so keys cannot be rotated here.`);
+    this.inner.activateKey(principal, keyId);
+  }
+
+  discardStagedKey(principal: string): void {
+    this.inner.discardStagedKey?.(principal);
+  }
+
+  /** The app's own signature over bytes it keeps outside the ledger (the owner pin). */
+  signForApp(message: Buffer): { keyId: string; signature: string } | undefined {
+    if (!this.inner.state().available) return undefined;
+    this.make("system");
+    return this.inner.sign("system", message);
+  }
+
+  /** The app's system key with this id, if this device trusts it. */
+  systemKey(keyId: string): TrustedKey | undefined {
+    return this.inner.trustedKeys().find((k) => k.principal === "system" && k.keyId === keyId);
+  }
+
+  private active(principal: string): TrustedKey | undefined {
+    return this.inner.trustedKeys().find((k) => k.principal === principal && !k.retired);
+  }
+
+  private personOnly(principal: string, what: string): void {
+    if (principal.startsWith("person:") && personRequest.getStore() !== true) throw new Error(`Only the person's own request can ${what} for ${principal}.`);
   }
 
   sign(principal: string, message: Buffer): { keyId: string; signature: string } {

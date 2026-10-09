@@ -34,5 +34,4 @@
 .people-panel button:disabled { opacity: 0.5; cursor: not-allowed; }
 .people-panel button.people-danger { background: var(--red-soft, #f8dfdc); border-color: var(--red, #bd4b45); color: var(--red, #bd4b45); }
 .people-panel .people-error { margin: 0; color: var(--red, #bd4b45); font-size: 12px; }
-.people-panel .people-hint { margin: 0; color: var(--muted, #5f6762); font-size: 12px; }
 .people-panel button:focus-visible, .people-panel input:focus-visible, .people-panel select:focus-visible { outline: 2px solid var(--blue-focus, #3c6ee8); outline-offset: 2px; }

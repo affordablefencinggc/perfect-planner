@@ -48,6 +48,7 @@ export class CoreHost {
       project: project.key,
       ledger: project.ledger.status,
       keys: { description: this.keys.description, ...this.keys.state() },
+      owner: { state: project.owner.state, ...(project.owner.reason ? { reason: project.owner.reason } : {}) },
     }));
   }
 

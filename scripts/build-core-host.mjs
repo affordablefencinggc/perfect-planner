@@ -25,6 +25,8 @@ export async function buildCoreHost() {
   // The worktree manager copies its commit-time secret scan from ./hooks next to its own module.
   mkdirSync(path.join(CORE_HOST_OUT, "hooks"), { recursive: true });
   copyFileSync(path.join(projectRoot, "core/worktrees/hooks/secret-scan.mjs"), path.join(CORE_HOST_OUT, "hooks", "secret-scan.mjs"));
+  // Shipping safety (core/release/protect.ts) installs its whole-branch pre-push scan from the same place.
+  copyFileSync(path.join(projectRoot, "core/release/hooks/pre-push.mjs"), path.join(CORE_HOST_OUT, "hooks", "pre-push.mjs"));
   return CORE_HOST_OUT;
 }
 

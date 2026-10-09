@@ -20,6 +20,7 @@ import type { CoreProject } from "../project";
 import { HttpError, type Router } from "../router";
 import { AGENT_SERVER_NAME, agentEntryPath } from "./agents";
 import { localPerson, localPersonId } from "./people";
+import { protectRepository } from "../project";
 
 const REPO_FILE = "repo.json";
 const MANAGER = "tasks.worktrees";
@@ -169,7 +170,7 @@ function viewTask(project: CoreProject, task: TaskView, worktrees: WorktreeInfo[
     approval: gate.approval ? { entry: gate.approval.n, by: personSummary(gate.approval.actor) } : null,
     baseline: gate.baseline ? { passed: gate.baseline.passed, entry: gate.baseline.n } : null,
     check: gate.worktree ? { passed: gate.worktree.passed, commit: gate.worktree.commit, entry: gate.worktree.n } : null,
-    diffApproval: gate.diffApproval ? { commit: gate.diffApproval.commit, by: personSummary(gate.diffApproval.actor), entry: gate.diffApproval.n } : null,
+    diffApproval: gate.diffApproval ? { commit: gate.diffApproval.commit, by: personSummary(gate.diffApproval.reviewer), entry: gate.diffApproval.n } : null,
     merged: gate.merged ?? null,
     worktree: tree ? { path: tree.path, branch: tree.branch, base: tree.baseRef, port: tree.port } : null,
     dispatch: dispatch ? { issuedAt: dispatch.issuedAt, ...(dispatch.model ? { model: dispatch.model } : {}) } : null,
@@ -336,9 +337,11 @@ export function registerTaskRoutes(router: Router): void {
     if (current.ok && current.root !== top && (await listWorktrees(project, current)).length) {
       throw new HttpError(409, "WORKERS_ACTIVE", `Workers still have worktrees in ${current.root}. Merge or send back their tasks before choosing another folder.`);
     }
+    // Shipping safety follows the folder: release rules on, and the pre-push secret scan installed there.
+    const protection = await protectRepository(project.ledger, top);
     fs.mkdirSync(path.dirname(repoFile(project)), { recursive: true });
     fs.writeFileSync(repoFile(project), JSON.stringify({ root: top, at: new Date().toISOString() }, null, 2));
-    return overview(project);
+    return { protection, ...(await overview(project)) };
   });
 
   /** POST /tasks/:id/dispatch { model? }: worktree, worker token for this task, brief and command. */
@@ -451,6 +454,10 @@ export function registerTaskRoutes(router: Router): void {
     const tree = await worktreeFor(project, label);
     const approved = deriveState(project.entries(), label).diffApproval?.commit;
     if (!approved || !sameCommit(bodyOf(body).commit, approved)) throw stale("Merge the commit whose diff you approved; this screen is out of date.");
+    // The click is the person's merge approval: signed with their key, in their own window's request,
+    // for exactly this commit. The gate refuses to merge without it (never reachable from an agent).
+    const state = deriveState(project.entries(), label);
+    if (!state.mergeApproval || state.mergeApproval.commit !== approved) refuse(project.service.gate.approveMerge(label, localPerson(project), approved));
     const merged = await project.service.gate.mergeAndVerify(label, { repoRoot: root, branch: tree.branch, integrationBranch: tree.baseRef, actor: localPerson(project) });
     if (!merged.ok) throw new HttpError(409, "REFUSED", merged.reason);
     const dispatched = dispatches(project).get(label);
