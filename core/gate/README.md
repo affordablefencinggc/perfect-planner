@@ -56,8 +56,11 @@ folders, locale and similar), so API keys and tokens in the user's shell never
 reach agent-written tests; extra variables must be passed explicitly.
 
 Only a clean non-zero exit proves the test fails first. A timeout, a crash, or a
-command that could not start (exit 126/127, or 9009 on Windows) is recorded as
-an inconclusive baseline (`data.conclusive: false`) and approval stays refused.
+command that could not start is recorded as an inconclusive baseline (`data.conclusive: false`) and approval stays refused.
+Before running, the gate looks the program up on PATH (and PATHEXT on Windows) in
+the test's own environment, so a missing program is caught without relying on the
+shell's exit code or its localised error message; exit 126/127, 9009 and cmd's
+"is not recognized" are still treated as not run.
 
 ## Entries written
 

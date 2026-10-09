@@ -9,7 +9,7 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "nod
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { FileStore, Ledger, LedgerError, verifyChain, type Actor, type LedgerEntry } from "./ledger/index";
+import { DEFAULT_PERMISSIONS, FileStore, Ledger, LedgerError, verifyChain, type Actor, type LedgerEntry } from "./ledger/index";
 import { appendNumbered, installNumberingRules } from "./numbering/index";
 import { addPlanText, installClauseRules, lookup } from "./lookup/index";
 import { WorktreeManager, WORKTREES_ACTOR, GATE_ACTOR, WATCHER_ACTOR, git, runGit, realDir, type WorktreeInfo } from "./worktrees/index";
@@ -476,6 +476,15 @@ describe("the whole core loop", () => {
     expect([...kindOf.get("review.verdict")!]).toEqual(["jev"]);
     for (const type of ["test.passed", "test.failed", "commit.observed", "collision.detected", "collision.resolved", "worktree.created", "task.reopened"]) {
       expect([...kindOf.get(type)!], type).toEqual(["system"]);
+    }
+    // And nothing slipped past PR #4's table: every entry's actor kind may write its type, and only a person or the system finishes work.
+    const allowed = (e: LedgerEntry) => {
+      const table = DEFAULT_PERMISSIONS[e.actor.kind];
+      return table === "any" || table.includes(e.type);
+    };
+    expect(entries().filter((e) => !allowed(e)).map((e) => `${e.n} ${e.actor.kind} ${e.type}`)).toEqual([]);
+    for (const type of ["test.approved", "test.passed", "merge.done", "task.done", "task.reopened"]) {
+      for (const kind of kindOf.get(type) ?? []) expect(["person", "system"], type).toContain(kind);
     }
 
     // ---- 17. Replay: the ledger alone rebuilds the identical board, also from disk, and the chain verifies.

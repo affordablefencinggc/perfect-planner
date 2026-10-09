@@ -1,4 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import { statSync } from "node:fs";
+import path from "node:path";
 
 export interface TestRunOptions {
   /** Kill the whole process tree after this long. Default 10 minutes. */
@@ -9,7 +11,7 @@ export interface TestRunOptions {
 
 export interface TestRunResult {
   passed: boolean;
-  /** Null when the process was killed or never started. */
+  /** Null when the process was killed, never started, or its program was not found. */
   exitCode: number | null;
   timedOut: boolean;
   durationMs: number;
@@ -70,13 +72,41 @@ export function scrubbedEnv(source: NodeJS.ProcessEnv = process.env, extra: Reco
 export function isConclusiveFailure(run: TestRunResult): boolean {
   if (run.passed || run.timedOut || run.exitCode === null) return false;
   // Shell "cannot execute" / "command not found" (POSIX) and "not recognized" (cmd.exe) mean the test never ran.
-  // cmd.exe /d /s /c (how Node runs shell: true) exits 1, not 9009, for an unknown command, so read its message too.
-  if (isWindows) return run.exitCode !== 9009 && !(run.exitCode === 1 && CMD_NOT_FOUND.test(run.outputTail));
+  // cmd.exe under `cmd /d /s /c` can report exit 1 for a missing command, so the message is checked too.
+  if (isWindows) return run.exitCode !== 9009 && !/is not recognized as an internal or external command/i.test(run.outputTail);
   return run.exitCode !== 126 && run.exitCode !== 127;
 }
 
-/** cmd.exe's message when the command is not a program, a built-in or a batch file (English Windows). */
-const CMD_NOT_FOUND = /is not recognized as an internal or external command,\s*operable program or batch file\.\s*$/;
+const SHELL_BUILTINS = new Set(isWindows
+  ? ["assoc", "break", "call", "cd", "chdir", "cls", "color", "copy", "date", "del", "dir", "echo", "endlocal", "erase", "exit", "for", "ftype", "goto", "if", "md", "mkdir", "mklink", "move", "path", "popd", "prompt", "pushd", "rd", "rem", "ren", "rename", "rmdir", "set", "setlocal", "shift", "start", "time", "title", "type", "ver", "verify", "vol"]
+  : [".", ":", "[", "alias", "cd", "command", "eval", "exec", "exit", "export", "false", "set", "source", "test", "true", "type", "ulimit", "umask", "unset"]);
+
+function isFile(file: string): boolean {
+  try {
+    return statSync(file).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether the program a command starts with exists, looked up the way the shell will (PATH, and
+ * PATHEXT on Windows) in the environment the test gets. Shell syntax we can't judge counts as found,
+ * so this only ever rules out commands that plainly can't start. It doesn't depend on the shell's
+ * exit code or its (localised) error message.
+ */
+export function commandExists(command: string, cwd: string, env: NodeJS.ProcessEnv): boolean {
+  const match = /^\s*(?:"([^"]+)"|'([^']+)'|([^\s;&|<>()]+))/.exec(command);
+  const program = match?.[1] ?? match?.[2] ?? match?.[3];
+  if (!program || /[=$%`*?{}~!^]/.test(program) || SHELL_BUILTINS.has(program.toLowerCase())) return true;
+  const lookup = (name: string) => Object.entries(env).find(([key]) => key.toUpperCase() === name)?.[1] ?? "";
+  const extensions = isWindows ? ["", ...(lookup("PATHEXT") || ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean)] : [""];
+  const has = (base: string) => extensions.some((ext) => isFile(base + ext) || isFile(base + ext.toLowerCase()));
+  if (/[\\/]/.test(program)) return has(path.resolve(cwd, program));
+  // cmd.exe looks in the current folder before PATH.
+  const dirs = [...(isWindows ? [cwd] : []), ...lookup("PATH").split(path.delimiter).filter(Boolean)];
+  return dirs.some((dir) => has(path.join(dir, program)));
+}
 
 /** Kill the child and everything it started. */
 export function killTree(child: ChildProcess): void {
@@ -126,8 +156,14 @@ export function runTestCommand(command: string, cwd: string, options: TestRunOpt
         finish(null);
       }, 5000);
     }, timeoutMs);
+    const env = scrubbedEnv(process.env, options.env);
+    if (!commandExists(command, cwd, env)) {
+      tail.push(Buffer.from(`[perfect-planner] command not found: ${command.trim().split(/\s+/)[0]}\n`));
+      finish(null);
+      return;
+    }
     try {
-      child = spawn(command, { cwd, env: scrubbedEnv(process.env, options.env), shell: true, windowsHide: true, detached: !isWindows, stdio: ["ignore", "pipe", "pipe"] });
+      child = spawn(command, { cwd, env, shell: true, windowsHide: true, detached: !isWindows, stdio: ["ignore", "pipe", "pipe"] });
     } catch (error) {
       tail.push(Buffer.from(String(error)));
       finish(null);

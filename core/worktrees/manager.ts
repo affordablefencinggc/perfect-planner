@@ -146,10 +146,11 @@ export class WorktreeManager {
       await this.writeRegistry(registry);
       this.ledger.append({
         type: "worktree.created",
-        actor,
+        // Agents may not write git entries; the manager records the launch and names who asked.
+        actor: WORKTREES_ACTOR,
         subject: taskId,
         summary: `Worktree for ${taskId} on ${branch}, port ${port}`,
-        data: { branch, baseRef: base, baseSha, port, path: toRepoPath(path.relative(this.repoRoot, realPath)), claims: info.claims },
+        data: { launchedBy: actor, branch, baseRef: base, baseSha, port, path: toRepoPath(path.relative(this.repoRoot, realPath)), claims: info.claims },
         evidence: [`branch:${branch}`, `base:${base}`, `commit:${baseSha}`, `port:${port}`, `path:${toRepoPath(path.relative(this.repoRoot, realPath))}`, ...settings.map((name) => `settings:${name}`), ...info.claims.map((file) => `claim:${file}`)],
       });
       return info;
@@ -215,12 +216,12 @@ export class WorktreeManager {
       await this.writeRegistry(registry);
       this.ledger.append({
         type: "worktree.removed",
-        actor,
+        actor: WORKTREES_ACTOR,
         subject: taskId,
         summary: branchDeleted ? `Removed worktree and merged branch ${info.branch}` : `Removed worktree; kept unmerged branch ${info.branch}`,
         reason: branchKeptReason,
         evidence: [`branch:${info.branch}`, `port:${info.port}`],
-        data: { branch: info.branch, branchDeleted },
+        data: { removedBy: actor, branch: info.branch, branchDeleted },
       });
       return { taskId, branchDeleted, branchKeptReason };
     });
