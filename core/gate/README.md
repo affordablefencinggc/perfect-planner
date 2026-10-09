@@ -33,7 +33,7 @@ gate.approve(taskId, owner, { jevVerdict?: "approve" | string[], jev?: Actor })
 gate.canStart(taskId)                             // { ok, reason }
 await gate.prove(taskId, worktreePath)            // { ok, run, commit } | { ok: false, output }
 await gate.mergeAndVerify(taskId, { repoRoot, branch, integrationBranch, actor })
-gate.reject(taskId, reviewer, notes)              // { ok, newTaskId }
+gate.reject(taskId, reviewer, notes, { verdict? }) // { ok, newTaskId }; cites an existing verdict if given
 gate.assertCanFinish(taskId, headSha)             // throws GateError (mirror of the ledger's 2.4 check)
 gate.state(taskId)                                // GateState
 await runTestCommand(command, cwd, { timeoutMs }) // { passed, exitCode, timedOut, durationMs, outputTail }
@@ -68,7 +68,7 @@ an inconclusive baseline (`data.conclusive: false`) and approval stays refused.
 | `review.verdict` | Jev on the test (`scope:test`), or a diff rejection (`scope:diff`) | `{ scope, verdict, ... }` |
 | `test.approved` | `approve` | `{ test, definition }` |
 | `merge.done`, `task.done` | `mergeAndVerify` pass | `{ commit, ... }` |
-| `task.reopened` | `reject` | `{ attempt, notes }` |
+| `task.reopened` | `reject`, written by the gate (system) | `{ attempt, notes, verdict }` |
 
 Evidence mirrors the data as `kind:value` strings (`test:`, `definition:`,
 `phase:`, `commit:`, `exit:`, `duration-ms:`).
