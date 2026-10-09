@@ -25,6 +25,9 @@ beforeEach(async () => {
   repo = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "pp-tasks-repo-")));
   git(repo, "init", "-q", "-b", "main");
   git(repo, "config", "commit.gpgsign", "false");
+  // The gate's merge commit needs an identity; CI runners have no global one.
+  git(repo, "config", "user.name", "Owner");
+  git(repo, "config", "user.email", "owner@example.invalid");
   write(repo, "README.md", "# Notes app\n");
   write(repo, ".gitignore", ".perfect-planner/\n");
   git(repo, "add", "-A");
