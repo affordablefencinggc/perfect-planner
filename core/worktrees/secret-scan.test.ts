@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, copyFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
@@ -116,5 +116,11 @@ describe("secret scan hook starts the real git", () => {
     cleanups.push(repo.cleanup);
     plantGit(repo.root);
     expect(resolveGit({ PATH: [".", "", repo.root].join(path.delimiter), GIT_EXEC_PATH: repo.root }, repo.root)).toBeNull();
+    // A PATH folder that reaches the repo through a symlink (a junction on Windows) is the repo too.
+    const link = path.join(path.dirname(repo.root), `${path.basename(repo.root)}-link`);
+    symlinkSync(repo.root, link, isWindows ? "junction" : "dir");
+    cleanups.push(() => rmSync(link, { recursive: true, force: true }));
+    expect(resolveGit({ PATH: link, GIT_EXEC_PATH: link }, repo.root)).toBeNull();
+    expect(resolveGit({ PATH: repo.root }, link)).toBeNull();
   });
 });
