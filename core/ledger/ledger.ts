@@ -3,6 +3,8 @@ import type { LedgerStore } from "./store";
 import {
   keyFromData,
   markVerified,
+  mayTrustKeyFor,
+  ownerPrincipal,
   needsSignature,
   principalOf,
   signatureProblem,
@@ -331,7 +333,7 @@ export class Ledger {
   }
 
   /** Signs on behalf of a person or the system, or refuses: never stored unsigned. */
-  private signEntry(unsigned: Omit<LedgerEntry, "hash">): { key: string; value: string } {
+  private signEntry(unsigned: Omit<LedgerEntry, "hash">): { key: string; value: string; pub: string } {
     const principal = principalOf(unsigned.actor);
     if (!this.keys) {
       throw new LedgerError("NOT_SIGNED", `${unsigned.actor.kind} entries must be signed, and this ledger was opened without keys (${this.store.description})`);
@@ -344,12 +346,14 @@ export class Ledger {
     } catch (error) {
       throw new LedgerError("NOT_SIGNED", `cannot sign for ${principal}: ${(error as Error).message}`);
     }
-    const sig = { key: signed.keyId, value: signed.signature };
-    if (!this.trusted.has(sig.key)) {
+    if (!this.trusted.has(signed.keyId)) {
       // A key made since open (first use, or a rotation): pick up the device's keys again.
       this.anchors = readAnchors(this.keys);
       this.trusted = trustedKeySet(this.anchors, this.list);
     }
+    const pub = this.trusted.get(signed.keyId)?.publicKey;
+    if (!pub) throw new LedgerError("NOT_SIGNED", `${principal} signed with key ${signed.keyId}, which this device does not trust`);
+    const sig = { key: signed.keyId, value: signed.signature, pub };
     const problem = signatureProblem({ ...unsigned, sig, hash: "" } as LedgerEntry, this.trusted);
     if (problem) throw new LedgerError("NOT_SIGNED", `the signature for ${principal} did not check out: ${problem}`);
     return sig;
@@ -460,6 +464,11 @@ export class Ledger {
     const key = keyFromData(draft.data);
     if (!key) throw new LedgerError("RULE", "key.trusted needs data.keyId, data.principal (person:<id> or system) and an Ed25519 data.publicKey that match");
     if (draft.subject.trim() !== key.keyId) throw new LedgerError("RULE", `key.trusted must be about the key itself, ${key.keyId}`);
+    // The first person entry makes its writer the owner; trusting a key may be that entry.
+    const owner = ownerPrincipal(this.list) ?? principalOf(draft.actor);
+    if (!mayTrustKeyFor(principalOf(draft.actor), key.principal, owner)) {
+      throw new LedgerError("NOT_PERMITTED", `only ${key.principal.replace(/^person:/, "")} or the owner (${owner.replace(/^person:/, "")}) may trust a key for ${key.principal}`);
+    }
   }
 
   /** test.approved must approve a command that was defined for the same task. */

@@ -87,7 +87,7 @@ export interface LedgerEntry {
   corrects?: string;
   data?: Record<string, unknown>;
   /** Person and system entries only: Ed25519 signature over every field except hash and sig. */
-  sig?: { key: string; value: string };
+  sig?: { key: string; value: string; pub: string };
   prev: string;
   hash: string;
 }

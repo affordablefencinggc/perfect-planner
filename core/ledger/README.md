@@ -50,7 +50,7 @@ interface LedgerEntry {
   refs: string[];       // clauses implemented or changed: ["P-2 §3.1"]
   corrects?: string;    // "L-000229" when this entry corrects an earlier one
   data?: Record<string, unknown>;  // type-specific payload, see "Payloads"
-  sig?: { key: string; value: string };  // person and system entries: Ed25519 signature
+  sig?: { key: string; value: string; pub: string };  // person and system entries: Ed25519 signature, key id, public key
   prev: string;         // hash of the previous entry ("0"*64 for L-000001)
   hash: string;         // sha256 of canonical JSON of every field except hash
 }
@@ -201,12 +201,33 @@ signature is a `signature` break. Writes stop, as with any break. A person
 may acknowledge the break to resume work. The entry stays non-authoritative
 either way.
 
-Trusted keys are the provider's own keys plus keys added by `key.trusted`
-entries, written by a person, signed by an already-trusted person key,
-`data: { keyId, principal, publicKey }`, reason required. `ledger.trustKey(person, key, reason)`
-writes one. It is allowed while the only problem is signatures this device
-cannot check. A key trusted late in the ledger also covers what it signed
-earlier.
+Every signature records its public key (`sig.pub`, which must hash to
+`sig.key`), so the ledger keeps every key that ever signed it.
+`recordedKeys(entries)` lists them. Recording a key is not trusting it.
+
+Trusted keys come from two places:
+
+- **The device.** The provider's own keys, and keys pinned on this device
+  only (`pin` / `pinKey`) after the person checked the fingerprint. For
+  example, a helper's device pins the owner's key.
+- **The ledger.** Keys added by `key.trusted` entries,
+  `data: { keyId, principal, publicKey }`, reason required.
+  `ledger.trustKey(person, key, reason)` writes one. It is allowed while the
+  only problem is signatures this device cannot check. A key trusted late in
+  the ledger also covers what it signed earlier.
+
+Who may trust a key for a principal: that same person (a new device, a
+rotation, recovery), or the owner. The owner is the person who wrote the
+ledger's first person entry (`ownerPrincipal`). Changing the owner would
+mean re-signing every entry after that one.
+
+This is enforced in two places:
+
+- At write time, anything else is `NOT_PERMITTED`.
+- On open, a `key.trusted` signed by anyone else trusts nothing.
+
+So a helper cannot make a key in the owner's name and use it. Roles beyond
+owner (`core/people`) do not widen this.
 
 **Rotation.** `rotateKey(principal)` retires the active key and makes a new
 one. The retired public key stays trusted, so old entries still verify, but
@@ -214,13 +235,17 @@ it never signs again.
 
 **Lost keychain** (reinstall, new PC). Make a new key. The ledger then shows
 the old entries as signed by a key this device does not trust. The app shows
-the old key's fingerprint (`sig.key`, and the public key from any earlier
-`key.trusted` entry or another device). Once the person confirms it was
-theirs, `trustKey` restores it. Without that confirmation, the old entries
-stay unchecked: shown, but not authoritative.
+the old key's fingerprint from `recordedKeys`. Once the person confirms it
+was theirs, `trustKey` restores it, signed by their new key. Everything the
+old key signed counts again, including enrolments the owner made.
 
-**Another device or a helper.** Its key is trusted the same way, by a
-person who checked the fingerprint.
+Without that confirmation, the old entries stay unchecked: shown, but not
+authoritative. A helper who lost their key needs the owner to re-enrol
+them, or a second device of their own.
+
+**Another device or a helper.** A second device of the same person is
+trusted by that person. A helper is enrolled by the owner. Each device also
+pins the keys it needs to read the others, after the fingerprint is checked.
 
 **What this does not stop:**
 
@@ -234,6 +259,9 @@ person who checked the fingerprint.
   next step.
 - Revoking a stolen key is not built yet; rotate it, and acknowledge
   anything it signed that the person did not.
+- Anyone with write access to the files can append entries signed with
+  keys nobody trusts. That stops writes until a person acknowledges the
+  break. It is a nuisance, not a forgery: those entries never count.
 
 ## Reading
 

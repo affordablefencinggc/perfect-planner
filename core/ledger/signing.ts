@@ -38,8 +38,12 @@ export interface TrustedKey {
 }
 
 export interface EntrySignature {
+  /** keyIdOf(pub). */
   key: string;
+  /** Ed25519 signature, base64. */
   value: string;
+  /** The signing key's public half, SPKI DER base64, so the ledger records every key that signed it. */
+  pub: string;
 }
 
 /** Actor kinds whose entries must be signed. */
@@ -80,6 +84,9 @@ export function signatureProblem(entry: LedgerEntry, trusted: ReadonlyMap<string
   if (!sig || typeof sig.key !== "string" || typeof sig.value !== "string") {
     return `${entry.n} is a ${entry.actor.kind} entry with no signature`;
   }
+  if (typeof sig.pub !== "string" || keyIdOf(sig.pub) !== sig.key) {
+    return `${entry.n}'s signature records a public key that is not key ${sig.key}`;
+  }
   if (trusted.size === 0) return `${entry.n} is signed, but no trusted keys were given to check it (open the ledger with a key provider)`;
   const key = trusted.get(sig.key);
   if (!key) return `${entry.n} is signed by key ${sig.key}, which this device does not trust`;
@@ -94,14 +101,31 @@ export function signatureProblem(entry: LedgerEntry, trusted: ReadonlyMap<string
 }
 
 /**
- * Trusted keys for a ledger: the device's own (from the provider) plus keys
- * added by `key.trusted` entries that are themselves signed by a person's
- * trusted key. Repeats until nothing new is added, so a key trusted late in
- * the ledger also covers the entries it signed earlier (keychain recovery).
+ * The ledger's owner, the root of key trust: the principal of its first
+ * person entry. Changing it would mean rewriting that entry and every
+ * signed entry after it, since signatures cover n and prev.
+ */
+export function ownerPrincipal(entries: readonly LedgerEntry[]): string | undefined {
+  const first = entries.find((entry) => entry.actor?.kind === "person" && typeof entry.actor.id === "string");
+  return first ? principalOf(first.actor) : undefined;
+}
+
+/** Who may trust a key for `principal`: that same person, or the owner. */
+export function mayTrustKeyFor(signer: string, principal: string, owner: string | undefined): boolean {
+  return signer === principal || (owner !== undefined && signer === owner);
+}
+
+/**
+ * Trusted keys for a ledger: the device's own and pinned keys (from the
+ * provider) plus keys added by `key.trusted` entries signed by a trusted key
+ * of the same person or of the owner. Repeats until nothing new is added,
+ * so a key trusted late in the ledger also covers the entries it signed
+ * earlier (keychain recovery).
  */
 export function trustedKeySet(anchors: readonly TrustedKey[], entries: readonly LedgerEntry[]): Map<string, TrustedKey> {
   const trusted = new Map<string, TrustedKey>();
   for (const key of anchors) if (validKey(key)) trusted.set(key.keyId, { ...key });
+  const owner = ownerPrincipal(entries);
   for (let changed = true; changed; ) {
     changed = false;
     for (const entry of entries) {
@@ -109,11 +133,33 @@ export function trustedKeySet(anchors: readonly TrustedKey[], entries: readonly 
       const key = keyFromData(entry.data);
       if (!key || trusted.has(key.keyId)) continue;
       if (signatureProblem(entry, trusted) !== undefined) continue;
+      if (!mayTrustKeyFor(principalOf(entry.actor), key.principal, owner)) continue;
       trusted.set(key.keyId, key);
       changed = true;
     }
   }
   return trusted;
+}
+
+/**
+ * Every public key the ledger records, trusted or not: from signatures and
+ * from key.trusted entries. For showing fingerprints, and for recovery after
+ * a lost keychain; recording a key is not trusting it.
+ */
+export function recordedKeys(entries: readonly LedgerEntry[]): TrustedKey[] {
+  const found = new Map<string, TrustedKey>();
+  for (const entry of entries) {
+    const sig = entry.sig;
+    if (needsSignature(entry.actor) && sig && typeof sig.pub === "string" && keyIdOf(sig.pub) === sig.key && !found.has(sig.key)) {
+      const key = { keyId: sig.key, principal: principalOf(entry.actor), publicKey: sig.pub };
+      if (validKey(key)) found.set(key.keyId, key);
+    }
+    if (entry.type === "key.trusted") {
+      const key = keyFromData(entry.data);
+      if (key && !found.has(key.keyId)) found.set(key.keyId, { keyId: key.keyId, principal: key.principal, publicKey: key.publicKey });
+    }
+  }
+  return [...found.values()];
 }
 
 /** The key named by a key.trusted payload, when it is well formed. */
@@ -162,6 +208,7 @@ export class MemoryKeyProvider implements KeyProvider {
   readonly description = "test keys in memory";
   private readonly keys = new Map<string, { privateKey: string; key: TrustedKey }>();
   private readonly retired: TrustedKey[] = [];
+  private readonly pinned: TrustedKey[] = [];
   private readonly unavailable?: string;
   private readonly autoCreate: boolean;
 
@@ -175,7 +222,13 @@ export class MemoryKeyProvider implements KeyProvider {
   }
 
   trustedKeys(): TrustedKey[] {
-    return [...[...this.keys.values()].map((k) => ({ ...k.key })), ...this.retired.map((k) => ({ ...k }))];
+    return [...[...this.keys.values()].map((k) => ({ ...k.key })), ...this.retired.map((k) => ({ ...k })), ...this.pinned.map((k) => ({ ...k }))];
+  }
+
+  /** Trusts someone else's public key on this device only, after its fingerprint was checked. */
+  pin(key: TrustedKey): void {
+    if (!validKey(key)) throw new RangeError("not a valid Ed25519 key");
+    this.pinned.push({ keyId: key.keyId, principal: key.principal, publicKey: key.publicKey });
   }
 
   createKey(principal: string): TrustedKey {

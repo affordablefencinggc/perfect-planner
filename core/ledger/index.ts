@@ -6,7 +6,10 @@ export { authorKind, isAuthoritative } from "./author";
 export {
   MemoryKeyProvider,
   keyIdOf,
+  mayTrustKeyFor,
   needsSignature,
+  ownerPrincipal,
+  recordedKeys,
   newKeyPair,
   principalOf,
   signedBytes,
