@@ -275,7 +275,8 @@ jobs:
           path: evidence
       - name: Summarize
         run: |
-          node scripts/release/trial/summarize.mjs evidence "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" > evidence/SUMMARY.md; status=$?
+          status=0
+          node scripts/release/trial/summarize.mjs evidence "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" > evidence/SUMMARY.md || status=$?
           cat evidence/SUMMARY.md >> "$GITHUB_STEP_SUMMARY"
           cat evidence/SUMMARY.md
           echo "TRIAL_STATUS=$status" >> "$GITHUB_ENV"
