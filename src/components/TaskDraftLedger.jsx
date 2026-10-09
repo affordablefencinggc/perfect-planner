@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { inspectTaskDraft, sameTaskDraftBinding, taskDraftBinding, parseTaskDraftImport, importTaskDraft, TASK_DRAFT_IMPORT_BYTES } from '../project/taskDraftLedger.js';
+import { useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { inspectTaskDraft, sameTaskDraftBinding, taskDraftBinding, parseTaskDraftImport, importTaskDraft, updateTaskDraft, TASK_DRAFT_IMPORT_BYTES } from '../project/taskDraftLedger.js';
 import { createTaskDraftStore } from '../project/taskDraftStore.js';
 import { readTaskDraftLink } from '../project/taskDraftMap.js';
 import { TaskDraftDeliveryPanel } from './TaskDraftDeliveryPanel.jsx';
@@ -24,7 +24,7 @@ let sharedDraftStore;
 let warnedWindow;
 const blank=()=>({id:null,title:'',description:'',owner:'',acceptance:'',recovery:'',claims:'',dependsOn:'',archived:false});
 const serializeTask=task=>({...task,claims:task.claims.map(c=>`${c.access} ${c.path}`).join('\n'),dependsOn:task.dependsOn.join(', ')});
-const parseTask=form=>({...form,claims:form.claims.split('\n').filter(line=>line.trim()).map(line=>{const match=line.trim().match(/^(read|write)\s+(.+)$/);if(!match)throw new Error('Each file scope must start with read or write, followed by a relative path.');return {access:match[1],path:match[2]};}),dependsOn:form.dependsOn.split(/[\s,]+/).filter(Boolean)});
+const parseTask=form=>({...form,claims:form.claims.split('\n').filter(line=>line.trim()).map(line=>{const match=line.trim().match(/^(read|write)\s+(.+)$/);if(!match)throw Object.assign(new Error(`Each file scope line must start with read or write, followed by a relative path. "${line.trim()}" does not.`),{field:'claims'});return {access:match[1],path:match[2]};}),dependsOn:form.dependsOn.split(/[\s,]+/).filter(Boolean)});
 
 export function TaskDraftLedger({project,store:providedStore,recovery:providedRecovery}) {
   let binding;
@@ -51,6 +51,12 @@ function BoundTaskDraftLedger({binding,project,providedStore,providedRecovery}) 
   const alive=useRef(true), sequence=useRef(0);
   const [ledger,setLedger]=useState(null),[error,setError]=useState(''),[notice,setNotice]=useState(''),[busy,setBusy]=useState(false),[showArchived,setShowArchived]=useState(false),[history,setHistory]=useState(null),[historical,setHistorical]=useState(null);
   const [form,setForm]=useState(()=>forms.get(formKey)?.form??blank());
+  // A refused Save (nothing written) names the field to fix; it never locks the form.
+  const [fieldError,setFieldError]=useState(null);
+  const fieldErrorPrefix=useId();
+  const fieldErrorId=key=>`${fieldErrorPrefix}-${key}-error`;
+  const invalid=key=>fieldError?.field===key?{'aria-invalid':'true','aria-describedby':fieldErrorId(key)}:{};
+  const inlineError=key=>fieldError?.field===key&&<p id={fieldErrorId(key)} data-testid={`task-draft-${key}-error`} className="task-draft-error">{fieldError.message}</p>;
   const [dirty,setDirty]=useState(()=>forms.has(formKey));
   const editingRevision=useRef(forms.get(formKey)?.revision??null);
   const [linkedTask,setLinkedTask]=useState(null);
@@ -123,6 +129,7 @@ function BoundTaskDraftLedger({binding,project,providedStore,providedRecovery}) 
   function change(key,value){
     const next={...form,[key]:value};if(editingRevision.current==null)editingRevision.current=ledger?.revision??0;
     checkpoint(next,editingRevision.current);setForm(next);setDirty(true);setNotice('Unfinished edits — checkpointing for recovery. This is not a saved task.');
+    if(fieldError?.field===key){setFieldError(null);setError(current=>current===fieldError.message?'':current);}
   }
   async function discard(){if(intentBlocked||busy||committedPending||taskFormOperations.read(binding))return;if(!dirty&&!session.current){setForm(blank());editingRevision.current=null;setNotice('Editor selection closed. Saved tasks are unchanged.');return;}const original=forms.get(formKey),originalSession=session.current,op=taskFormOperations.begin(binding,{kind:'discard',formEntry:original,session:originalSession,recovery,store});setBusy(true);try{await noUnresolvedIntents();const saved=await flushRecovery();taskFormOperations.update(binding,op.token,{checkpoint:saved});if(forms.get(formKey)!==original)throw Error('Newer editor text exists. Review it before discarding.');taskFormOperations.update(binding,op.token,{dispatched:true});await originalSession?.resolve('discarded',saved);taskFormOperations.update(binding,op.token,{status:'settled',discarded:true});if(!alive.current)return;if(forms.get(formKey)!==original)throw Error('Newer editor text was kept. Review the completed disposition.');forms.delete(formKey);session.current=null;setForm(blank());setDirty(false);editingRevision.current=null;taskFormOperations.clear(binding,op.token);await inspectRecovery();setNotice('Unfinished editor disposition retained. Saved revisions are unchanged.');}catch(e){taskFormOperations.update(binding,op.token,{status:'settled',error:e.message});if(alive.current)setRecoveryError(e.message);}finally{if(alive.current)setBusy(false);}}
   async function finishDurableIntent(record,captured,token,normal=false){
@@ -139,6 +146,10 @@ function BoundTaskDraftLedger({binding,project,providedStore,providedRecovery}) 
     event.preventDefault();if(cannotEdit||taskFormOperations.read(binding))return;
     if(!dirty){setNotice('No editor changes to save. The saved Ledger is unchanged.');return;}
     if(editingRevision.current!==ledger.revision){setError('Another window saved a newer revision. Your unsaved form is kept; refresh before saving.');return;}
+    // Check the task before any Save request exists. A refusal here writes
+    // nothing, so the editor stays open with the typed text and an inline reason.
+    try{updateTaskDraft(ledger,parseTask(forms.get(formKey)?.form??form));setFieldError(null);}
+    catch(e){setError(e.message);setFieldError({field:e.field??null,message:e.message});setNotice('Nothing was saved. Fix the marked field and save again; your text was kept.');return;}
     const pendingForm=forms.get(formKey),op=taskFormOperations.begin(binding,{kind:'save',formEntry:pendingForm,session:session.current,recovery,store,baseLedger:structuredClone(ledger),requestId:crypto.randomUUID()});setBusy(true);setError('');
     try{
       await noUnresolvedIntents();if(!alive.current||forms.get(formKey)!==pendingForm)throw Error('Editor changed before preparation. Its text was kept.');
@@ -290,13 +301,13 @@ function BoundTaskDraftLedger({binding,project,providedStore,providedRecovery}) 
       <form onSubmit={save} aria-label="Task draft editor">
         <h3>{form.id?`Edit ${form.id}`:'Add a task'}</h3>
         <fieldset disabled={cannotEdit}>
-          <label>Task title<input maxLength={160} required value={form.title} onChange={e=>change('title',e.target.value)}/></label>
-          <label>Full description<textarea maxLength={8000} rows={3} value={form.description} onChange={e=>change('description',e.target.value)}/></label>
-          <label>Proposed owner<input maxLength={120} value={form.owner} onChange={e=>change('owner',e.target.value)}/></label>
-          <label>Acceptance criteria<textarea maxLength={8000} rows={3} value={form.acceptance} onChange={e=>change('acceptance',e.target.value)}/></label>
-          <label>Recovery plan<textarea maxLength={8000} rows={2} value={form.recovery} onChange={e=>change('recovery',e.target.value)}/></label>
-          <label>File scope <small>One per line: write src/app.js or read package.json</small><textarea maxLength={16000} rows={3} value={form.claims} onChange={e=>change('claims',e.target.value)}/></label>
-          <label>Depends on task IDs <small>For example: T0001, T0002</small><input maxLength={512} value={form.dependsOn} onChange={e=>change('dependsOn',e.target.value)}/></label>
+          <label>Task title<input maxLength={160} required {...invalid('title')} value={form.title} onChange={e=>change('title',e.target.value)}/></label>{inlineError('title')}
+          <label>Full description<textarea maxLength={8000} rows={3} {...invalid('description')} value={form.description} onChange={e=>change('description',e.target.value)}/></label>{inlineError('description')}
+          <label>Proposed owner<input maxLength={120} {...invalid('owner')} value={form.owner} onChange={e=>change('owner',e.target.value)}/></label>{inlineError('owner')}
+          <label>Acceptance criteria<textarea maxLength={8000} rows={3} {...invalid('acceptance')} value={form.acceptance} onChange={e=>change('acceptance',e.target.value)}/></label>{inlineError('acceptance')}
+          <label>Recovery plan<textarea maxLength={8000} rows={2} {...invalid('recovery')} value={form.recovery} onChange={e=>change('recovery',e.target.value)}/></label>{inlineError('recovery')}
+          <label>File scope <small>One per line: write src/app.js, write src/core/** or read package.json. * matches within one name, ** matches any folders.</small><textarea maxLength={16000} rows={3} {...invalid('claims')} value={form.claims} onChange={e=>change('claims',e.target.value)}/></label>{inlineError('claims')}
+          <label>Depends on task IDs <small>For example: T0001, T0002</small><input maxLength={512} {...invalid('dependsOn')} value={form.dependsOn} onChange={e=>change('dependsOn',e.target.value)}/></label>{inlineError('dependsOn')}
           {form.id&&<label className="task-draft-archived"><input type="checkbox" checked={form.archived} onChange={e=>change('archived',e.target.checked)}/> Archive task (keep history)</label>}
           <button type="submit" className="primary-button">{busy?'Saving…':'Save task draft'}</button>
         </fieldset>

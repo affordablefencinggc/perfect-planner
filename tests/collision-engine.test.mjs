@@ -41,11 +41,11 @@ test('unknown and repeated dependencies cannot silently become ready work', () =
 
 test('unsupported wildcard and unsafe file claims are refused before collision assessment', () => {
   const manifest = surface => ({schemaVersion:1,planId:'P',tasks:[{taskId:'A',claims:[{kind:'file',surface,access:'write'}]}]});
-  for (const surface of ['*','src/*.ts','src/**/index.ts','src/[ab].ts','src/{a,b}.ts','src/../shared.ts','src/./shared.ts','/src/a.ts','C:\\src\\a.ts','src//a.ts','src/?','src./shared.ts','src/dir /file.ts']) {
+  for (const surface of ['src/[ab].ts','src/{a,b}.ts','src/../shared.ts','src/./shared.ts','/src/a.ts','C:\\src\\a.ts','src//a.ts','src./shared.ts','src/dir /file.ts','src/a**.ts','src/**x/a.ts']) {
     assert.ok(validateManifest(manifest(surface)).length > 0,surface);
     assert.equal(deriveExecutionMap(manifest(surface)).valid,false,surface);
   }
-  for (const surface of ['src/a.ts','src/*','src/**','.\\SRC\\shared.ts','src/nested/']) assert.deepEqual(validateManifest(manifest(surface)),[],surface);
+  for (const surface of ['src/a.ts','src/*','src/**','.\\SRC\\shared.ts','src/nested/','*','src/*.ts','src/**/index.ts','src/?','tests/core-*.test.mjs']) assert.deepEqual(validateManifest(manifest(surface)),[],surface);
 });
 
 test('nested file and glob claims overlap symmetrically without sibling-prefix matches', () => {
@@ -101,4 +101,28 @@ test("creates and verifies a cryptographically chained append-only ledger", asyn
   const tampered = structuredClone(ledger);
   tampered[0].payload.collisions = 0;
   assert.deepEqual(await verifyLedger(tampered), { valid: false, brokenAt: 1 });
+});
+
+test('area glob claims overlap only when some path could match both', () => {
+  const claim = surface => ({ kind: 'file', surface, access: 'write' });
+  for (const [a,b,expected] of [
+    ['src/core/**','src/core/a.js',true], ['tests/core-*.test.mjs','tests/ui-*.test.mjs',false],
+    ['src/**','src/core/**',true], ['src/components','src/components/**',true],
+    ['tests/core-*.test.mjs','tests/core-ledger.test.mjs',true], ['src/*.ts','src/*.js',false],
+    ['src/**/index.ts','lib/index.ts',false], ['mcp/**','src/**',false],
+  ]) {
+    assert.equal(claimsConflict(claim(a),claim(b)),expected,`${a}/${b}`);
+    assert.equal(claimsConflict(claim(b),claim(a)),expected,`${b}/${a}`);
+  }
+});
+
+test('collisions keep the original letter case of claimed paths for display', () => {
+  const manifest = (planId, surface) => ({schemaVersion:1,planId,tasks:[{taskId:planId,claims:[{kind:'file',surface,access:'write'}]}]});
+  const result = assessCollisions([manifest('A','src/Components/Button.jsx'), manifest('B','src/Components/**')]);
+  assert.equal(result.collisions.length, 1);
+  const [collision] = result.collisions;
+  assert.equal(collision.left.displaySurface, 'src/Components/Button.jsx');
+  assert.equal(collision.right.displaySurface, 'src/Components/**');
+  assert.equal(collision.displaySurface, 'src/Components/**');
+  assert.equal(collision.surface, 'src/components/**');
 });
