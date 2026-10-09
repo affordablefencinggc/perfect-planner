@@ -144,7 +144,7 @@ describe.skipIf(!built.built)("built stdio agent", () => {
       const hello = await wait(2);
       expect(hello?.result?.structuredContent?.role).toBe("main");
       const list = (await hostCall(base, "GET", "/agents?project=demo")).body.result;
-      expect(list.agents).toEqual([expect.objectContaining({ name: "Stdio agent", model: "test-model", role: "main" })]);
+      expect(list.agents).toEqual([expect.objectContaining({ name: "Stdio agent", model: "unverified:test-model", role: "main" })]);
     } finally {
       child.kill();
     }
