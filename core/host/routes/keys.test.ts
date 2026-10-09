@@ -3,7 +3,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { appendNumbered } from "../../numbering/index";
-import { asPersonRequest } from "../keys";
+import { asPersonRequest, HostKeys } from "../keys";
+import { MemoryKeyProvider } from "../../ledger/index";
+import { openCoreProject } from "../project";
 import { ownerPinFile } from "../owner";
 import { hostCall, startTestHost } from "../testing";
 
@@ -14,6 +16,8 @@ beforeEach(async () => {
   ctx = await startTestHost();
 });
 afterEach(async () => ctx.stop());
+
+const pinFile = () => ownerPinFile(ctx.dir, "keys", path.join(ctx.dir, "projects", "keys"));
 
 const personWrite = (summary: string) =>
   asPersonRequest(() => appendNumbered(ctx.host.project("keys").ledger, { actor: { kind: "person", id: "owner" }, type: "task.created", summary, data: { title: summary } }));
@@ -29,7 +33,7 @@ describe("project owner pin", () => {
     const project = ctx.host.project("keys");
     expect(project.owner.state).toBe("created");
     expect(project.ledger.ownerKeyPinned).toBe(true);
-    const pin = JSON.parse(fs.readFileSync(ownerPinFile(ctx.dir, "keys"), "utf8"));
+    const pin = JSON.parse(fs.readFileSync(pinFile(), "utf8"));
     expect(pin).toMatchObject({ project: "keys", principal: "person:owner", ownerKey: project.owner.ownerKey, sig: { key: expect.stringMatching(/^k-/), value: expect.any(String) } });
     expect(personWrite("Save notes").sig?.key).toBe(project.owner.ownerKey);
     expect(project.ledger.owner).toBe("person:owner");
@@ -44,8 +48,8 @@ describe("project owner pin", () => {
   });
 
   it("a pin someone rewrote on disk is ignored: no owner, and status says so", async () => {
-    ctx.host.project("keys");
-    const file = ownerPinFile(ctx.dir, "keys");
+    personWrite("Save notes");
+    const file = pinFile();
     const pin = JSON.parse(fs.readFileSync(file, "utf8"));
     fs.writeFileSync(file, JSON.stringify({ ...pin, ownerKey: "k-0000000000000000" }));
     const again = await reopen();
@@ -57,11 +61,51 @@ describe("project owner pin", () => {
   });
 
   it("an unsigned pin written by hand is ignored too", async () => {
-    fs.mkdirSync(path.dirname(ownerPinFile(ctx.dir, "keys")), { recursive: true });
-    fs.writeFileSync(ownerPinFile(ctx.dir, "keys"), JSON.stringify({ project: "keys", ownerKey: "k-attacker", principal: "person:mallory", at: "2026-10-09T00:00:00Z" }));
-    const project = ctx.host.project("keys");
+    personWrite("Save notes");
+    fs.writeFileSync(pinFile(), JSON.stringify({ project: "keys", ownerKey: "k-attacker", principal: "person:mallory", at: "2026-10-09T00:00:00Z" }));
+    const project = await reopen();
     expect(project.owner.state).toBe("tampered");
     expect(project.ledger.owner).toBeUndefined();
+  });
+
+  it("on a project nobody has written to, a pin that cannot be used is replaced with a new owner", () => {
+    fs.mkdirSync(path.dirname(pinFile()), { recursive: true });
+    fs.writeFileSync(pinFile(), JSON.stringify({ project: "keys", ownerKey: "k-attacker", principal: "person:mallory", at: "2026-10-09T00:00:00Z" }));
+    const project = ctx.host.project("keys");
+    expect(project.owner).toMatchObject({ state: "created", principal: "person:owner", reason: expect.stringMatching(/new owner/) });
+    expect(project.owner.ownerKey).not.toBe("k-attacker");
+    expect(personWrite("Save notes").sig?.key).toBe(project.owner.ownerKey);
+  });
+
+  it("a leftover pin never locks out a new folder: each ledger folder has its own pin", async () => {
+    const first = ctx.host.project("keys");
+    personWrite("Save notes");
+    const other = path.join(ctx.dir, "elsewhere");
+    const moved = openCoreProject(ctx.dir, "keys", other, ctx.host.keys);
+    try {
+      expect(moved.owner.state).toBe("created");
+      expect(moved.owner.ownerKey).toBe(first.owner.ownerKey);
+      expect(asPersonRequest(() => appendNumbered(moved.ledger, { actor: { kind: "person", id: "owner" }, type: "task.created", summary: "New folder", data: { title: "New folder" } })).sig?.key).toBe(first.owner.ownerKey);
+    } finally {
+      moved.ledger.close();
+    }
+  });
+
+  it("after a restart that lost this device's keys: an unwritten project gets a new owner, a written one says why it cannot change", async () => {
+    const fresh = () => new HostKeys(new MemoryKeyProvider({ autoCreate: false }));
+    ctx.host.project("keys");
+    await ctx.host.close();
+    const empty = openCoreProject(ctx.dir, "keys", undefined, fresh());
+    expect(empty.owner).toMatchObject({ state: "created", reason: expect.stringMatching(/new owner/) });
+    empty.ledger.close();
+
+    const written = openCoreProject(ctx.dir, "written", undefined, ctx.host.keys);
+    asPersonRequest(() => appendNumbered(written.ledger, { actor: { kind: "person", id: "owner" }, type: "task.created", summary: "Save notes", data: { title: "Save notes" } }));
+    written.ledger.close();
+    const lost = openCoreProject(ctx.dir, "written", undefined, fresh());
+    expect(lost.owner).toMatchObject({ state: "tampered", reason: expect.stringMatching(/not this app's key on this device/) });
+    expect(lost.ledger.owner).toBeUndefined();
+    lost.ledger.close();
   });
 });
 

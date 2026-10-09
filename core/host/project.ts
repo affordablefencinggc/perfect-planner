@@ -96,12 +96,17 @@ export async function excludePrivateFolder(dir: string): Promise<string[]> {
  * no pin (from before pinning) opens with no owner rather than taking the owner from its own file.
  */
 function ownerPinFor(baseRoot: string, key: string, root: string, keys: HostKeys): OwnerPin {
-  const pin = readOwnerPin(baseRoot, key, keys);
-  if (pin.state !== "missing") return pin;
-  if (new FileStore(root).load().entries.some((e) => e.actor?.kind === "person")) {
-    return { state: "missing", reason: "This project was started before owners were pinned, so it has no owner on this device." };
+  const pin = readOwnerPin(baseRoot, key, root, keys);
+  if (pin.state === "pinned") return pin;
+  const written = new FileStore(root).load().entries.some((e) => e.actor?.kind === "person");
+  if (!written) {
+    // Nobody has written here as a person, so an earlier pin protects nothing: a pin whose key this
+    // device lost (a restart with throwaway keys, a new OS profile) or that fails its check is replaced.
+    const made = createOwnerPin(baseRoot, key, root, keys, `person:${DEFAULT_LOCAL_PERSON}`, new Date(), pin.state !== "missing");
+    return pin.state === "missing" || made.state !== "created" ? made : { ...made, reason: `Pinned a new owner: ${pin.reason ?? "the earlier pin could not be used"}` };
   }
-  return createOwnerPin(baseRoot, key, keys, `person:${DEFAULT_LOCAL_PERSON}`);
+  if (pin.state === "missing") return { state: "missing", reason: "This project was started before owners were pinned, so it has no owner on this device." };
+  return pin;
 }
 
 export function openCoreProject(baseRoot: string, key: string, override: string | undefined, keys: HostKeys): CoreProject {

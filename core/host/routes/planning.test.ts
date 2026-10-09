@@ -150,8 +150,20 @@ describe("planning routes", () => {
     expect(release.task).toMatch(/^T-\d+$/);
     expect(release.dependsOnTasks.every((d: string) => /^T-\d+$/.test(d))).toBe(true);
 
-    // A second approval adds P-2 without writing the roadmap twice.
-    const again = await hostCall(base, "POST", `/planning/approve${P}`, { fingerprint: current.fingerprint });
+    // The plan as shown is approved: no second approval of the same plan, and the screen says so.
+    const approvedView = (await hostCall(base, "GET", `/planning${P}`)).body.result;
+    expect(approvedView.approval).toMatchObject({ current: true, canApprove: false });
+    const same = await hostCall(base, "POST", `/planning/approve${P}`, { fingerprint: approvedView.fingerprint });
+    expect(same.status).toBe(409);
+    expect(same.body.code).toBe("ALREADY_APPROVED");
+
+    // A changed plan can be approved again: P-2, without writing the roadmap twice.
+    const open = approvedView.areas.flatMap((a: any) => a.questions).find((q: any) => q.status === "open");
+    expect(open, "an open question to answer").toBeTruthy();
+    expect((await hostCall(base, "POST", `/planning/answer${P}`, { q: open.q, text: "Decided: export to PDF only" })).status).toBe(200);
+    const changed = (await hostCall(base, "GET", `/planning${P}`)).body.result;
+    expect(changed.approval).toMatchObject({ current: false, canApprove: true, message: expect.stringMatching(/changed since it was approved/) });
+    const again = await hostCall(base, "POST", `/planning/approve${P}`, { fingerprint: changed.fingerprint });
     expect(again.body.result.plan).toBe("P-2");
     expect(again.body.result.tasks).toEqual({});
   });
