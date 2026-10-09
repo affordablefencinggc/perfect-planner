@@ -40,12 +40,25 @@ export function ConnectAgentDrawer({ open, onClose, onWorkspace, hasProject = tr
   useEffect(() => { if (!open) setCopied(null); }, [open]);
   if (!open) return null;
 
-  const copy = async (block) => setCopied({ id: block.id, ok: await copyText(block.text) });
+  // Select only this snippet's text, so Ctrl+C copies it rather than the whole page.
+  const selectSnippet = (blockId) => {
+    const pre = panelRef.current?.querySelector(`[data-snippet="${blockId}"]`);
+    const selection = typeof window !== "undefined" ? window.getSelection?.() : null;
+    if (!pre || !selection) return false;
+    try { pre.focus(); selection.removeAllRanges(); selection.selectAllChildren(pre); return selection.toString().length > 0; } catch { return false; }
+  };
+  const copy = async (block) => {
+    const ok = await copyText(block.text);
+    setCopied({ id: block.id, ok, selected: ok ? false : selectSnippet(block.id) });
+  };
+  const onSnippetKey = (event, blockId) => {
+    if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === "a") { event.preventDefault(); selectSnippet(blockId); }
+  };
   const onTabKey = (event, index) => {
-    const step = event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;
-    if (!step) return;
+    const target = event.key === "ArrowRight" ? index + 1 : event.key === "ArrowLeft" ? index - 1 : event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : null;
+    if (target === null) return;
     event.preventDefault();
-    const next = tabs[(index + step + tabs.length) % tabs.length];
+    const next = tabs[(target + tabs.length) % tabs.length];
     setTabId(next.id);
     panelRef.current?.querySelector(`#connect-agent-tab-${next.id}`)?.focus();
   };
@@ -89,8 +102,10 @@ export function ConnectAgentDrawer({ open, onClose, onWorkspace, hasProject = tr
                     {copied?.id === block.id && copied.ok ? <><CheckCircleIcon /> Copied</> : <><CopyIcon /> Copy</>}
                   </button>
                 </div>
-                <pre tabIndex={0} aria-label={`${block.title} setup text`}><code>{block.text}</code></pre>
-                {copied?.id === block.id && !copied.ok && <p role="alert" className="connect-agent-warn">Copy did not work here. Select the text above and copy it by hand.</p>}
+                <pre tabIndex={0} data-snippet={block.id} aria-label={`${block.title} setup text`} onKeyDown={(event) => onSnippetKey(event, block.id)}><code>{block.text}</code></pre>
+                {copied?.id === block.id && !copied.ok && <p role="alert" className="connect-agent-warn">{copied.selected
+                  ? "Copy did not work here. The text above is now selected: press Ctrl+C (Cmd+C on a Mac) to copy it."
+                  : "Copy did not work here. Click the text above, press Ctrl+A (Cmd+A on a Mac) to select it, then Ctrl+C (Cmd+C) to copy it."}</p>}
               </div>
             ))}
             <p className="connect-agent-note">{tab.note}</p>
@@ -119,6 +134,7 @@ export function ConnectAgentDrawer({ open, onClose, onWorkspace, hasProject = tr
           <section className="connect-agent-section" aria-label="Hand your plan to the agent">
             <h3>Hand your plan to the agent</h3>
             <p>Once your plan is approved, open Build and use <strong>Copy brief</strong> to paste the current task into your agent's chat.</p>
+            <p className="connect-agent-note">This setup only reads. To let an agent propose tasks or report exchanges for one app, use <strong>Runtime &amp; connections → Connect your agent</strong> in the desktop app instead.</p>
             {onWorkspace && (hasProject
               ? <button type="button" className="connect-agent-link" onClick={() => { onClose(); onWorkspace("build"); }}>Open Build <ArrowRightIcon /></button>
               : <button type="button" className="connect-agent-link" onClick={() => { onClose(); onWorkspace("structure"); }}>Choose an app folder <ArrowRightIcon /></button>)}

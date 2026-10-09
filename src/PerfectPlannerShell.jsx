@@ -3369,17 +3369,48 @@ function IndexWorkspace({ onOpen, onClose }) {
     "All",
     ...new Set(projectIndexEntries.map((entry) => entry.kind)),
   ];
+  const needle = query.trim().toLowerCase();
   const filtered = projectIndexEntries.filter((entry) => {
     const matchesKind = kind === "All" || entry.kind === kind;
     const haystack =
       `${entry.id} ${entry.term} ${entry.kind} ${entry.locator} ${entry.description}`.toLowerCase();
-    return matchesKind && haystack.includes(query.trim().toLowerCase());
+    return matchesKind && haystack.includes(needle);
   });
-  const grouped = filtered.reduce((groups, entry) => {
+  // An exact ID such as "B07" is pinned above the alphabetical register instead of
+  // landing under its term's letter, where it could rank last.
+  const exact = needle ? filtered.filter((entry) => entry.id.toLowerCase() === needle) : [];
+  const grouped = filtered.filter((entry) => !exact.includes(entry)).reduce((groups, entry) => {
     const letter = entry.term[0].toUpperCase();
     (groups[letter] ??= []).push(entry);
     return groups;
   }, {});
+
+  const renderEntry = (entry) => (
+    <button
+      type="button"
+      className="index-entry"
+      key={`${entry.kind}-${entry.id}`}
+      onClick={() => onOpen(entry)}
+    >
+      <span>
+        <code>{entry.id}</code>
+        {/* Sample kinds are labels, not verified results: green is reserved for verified success. */}
+        <StatusChip status="ready">{entry.kind}</StatusChip>
+      </span>
+      <span>
+        <strong>{entry.term}</strong>
+        <small>{entry.description}</small>
+        <em>{entry.locator}</em>
+      </span>
+      <span className="index-entry-proof">
+        <small>
+          <strong>{entry.completion}% complete</strong>
+          <em>by {entry.worker}</em>
+        </small>
+        <ArrowRightIcon />
+      </span>
+    </button>
+  );
 
   return (
     <section className="workspace index-workspace" aria-label="Project index">
@@ -3436,8 +3467,17 @@ function IndexWorkspace({ onOpen, onClose }) {
           <label className="index-search">
             <MagnifyingGlassIcon />
             <input
+              type="search"
+              aria-label="Search the project index"
               value={query}
               onChange={(event) => setQuery(event.target.value)}
+              onKeyDown={(event) => {
+                // Escape clears a search first; with nothing typed it closes the index.
+                if (event.key !== "Escape") return;
+                event.preventDefault();
+                if (query) setQuery("");
+                else onClose?.();
+              }}
               placeholder="Find an ID, term, worker, dependency, or source…"
             />
           </label>
@@ -3452,7 +3492,9 @@ function IndexWorkspace({ onOpen, onClose }) {
             {kinds.map((item) => (
               <button
                 key={item}
+                type="button"
                 className={kind === item ? "active" : ""}
+                aria-pressed={kind === item}
                 onClick={() => setKind(item)}
               >
                 {item}
@@ -3486,6 +3528,15 @@ function IndexWorkspace({ onOpen, onClose }) {
           ))}
         </aside>
         <div className="index-register">
+          {exact.length > 0 && (
+            <section className="index-letter-group" aria-label="Exact ID match">
+              <div className="index-letter">
+                <strong>ID</strong>
+                <span>Exact match</span>
+              </div>
+              <div className="index-entries">{exact.map(renderEntry)}</div>
+            </section>
+          )}
           {Object.entries(grouped).map(([letter, entries]) => (
             <section
               className="index-letter-group"
@@ -3497,34 +3548,7 @@ function IndexWorkspace({ onOpen, onClose }) {
                 <span>{entries.length} terms</span>
               </div>
               <div className="index-entries">
-                {entries.map((entry) => (
-                  <button
-                    className="index-entry"
-                    key={`${entry.kind}-${entry.id}`}
-                    onClick={() => onOpen(entry)}
-                  >
-                    <span>
-                      <code>{entry.id}</code>
-                      <StatusChip
-                        status={entry.kind === "Outcome" ? "verified" : "ready"}
-                      >
-                        {entry.kind}
-                      </StatusChip>
-                    </span>
-                    <span>
-                      <strong>{entry.term}</strong>
-                      <small>{entry.description}</small>
-                      <em>{entry.locator}</em>
-                    </span>
-                    <span className="index-entry-proof">
-                      <small>
-                        <strong>{entry.completion}% complete</strong>
-                        <em>by {entry.worker}</em>
-                      </small>
-                      <ArrowRightIcon />
-                    </span>
-                  </button>
-                ))}
+                {entries.map(renderEntry)}
               </div>
             </section>
           ))}
@@ -3555,9 +3579,9 @@ function BuildWorkspace({ collisionGate, onWorkspace }) {
     {
       id: "02",
       label: "CLAIMED",
-      state: collisionGate.ready ? "done" : "blocked",
+      state: collisionGate.ready ? "queued" : "blocked",
       detail: collisionGate.ready
-        ? "Files and interfaces leased"
+        ? "Not claimed yet · nothing leased"
         : "Collision order is unresolved",
     },
     {
@@ -3664,7 +3688,7 @@ function BuildWorkspace({ collisionGate, onWorkspace }) {
             </div>
             <div>
               <dt>Files</dt>
-              <dd>Not issued until collision clearance</dd>
+              <dd>{collisionGate.ready ? "Issued when the package is claimed (sample only)" : "Not issued until collision clearance"}</dd>
             </div>
             <div>
               <dt>Interfaces</dt>
@@ -3684,28 +3708,40 @@ function BuildWorkspace({ collisionGate, onWorkspace }) {
             <li>Reviewer identity and decision are journaled</li>
           </ul>
         </section>
-        <section className="build-next-action">
-          <header>
-            <WarningIcon />
-            <strong>
-              {collisionGate.ready
-                ? "Collision order recorded"
-                : "Why work cannot start"}
-            </strong>
-          </header>
-          <p>
-            {collisionGate.ready
-              ? "Every collision has an authoritative order. Claiming is no longer blocked by collisions."
-              : "Two workers can reach the same planned surface. The planner must record who goes first, what the second worker waits for, and whether the second package must be replanned."}
-          </p>
-          <button
-            className="primary-button"
-            onClick={() => onWorkspace("collision")}
-          >
-            {collisionGate.ready ? "View ledgered orders" : "Resolve before claim"}{" "}
-            <ArrowRightIcon />
-          </button>
-        </section>
+        {collisionGate.ready ? (
+          <section className="build-next-action">
+            <header>
+              <CheckCircleIcon weight="fill" />
+              <strong>Ready to claim</strong>
+            </header>
+            <p>
+              Every collision in the sample has a recorded order. This demo
+              package has not been claimed, so no files, branch or worktree
+              are leased yet.
+            </p>
+            <button className="soft-button" onClick={() => onWorkspace("collision")}>
+              View recorded orders <ArrowRightIcon />
+            </button>
+          </section>
+        ) : (
+          <section className="build-next-action">
+            <header>
+              <WarningIcon />
+              <strong>Why work cannot start</strong>
+            </header>
+            <p>
+              Two workers can reach the same planned surface. The planner must
+              record who goes first, what the second worker waits for, and whether
+              the second package must be replanned.
+            </p>
+            <button
+              className="primary-button"
+              onClick={() => onWorkspace("collision")}
+            >
+              Resolve before claim <ArrowRightIcon />
+            </button>
+          </section>
+        )}
       </div>
     </section>
   );
@@ -3841,10 +3877,16 @@ function AllocationWorkspace({ onSelect, collisionGate, onOpenCollision }) {
               onClick={() =>
                 row.assignments.length &&
                 onSelect({
-                  id: row.assignments[0].id,
-                  title: row.assignments[0].label,
-                  status: row.assignments[0].status,
-                  estimate: "allocated",
+                  id: `WORKER-${row.name}`,
+                  source: "allocation",
+                  title: row.name,
+                  owner: row.name,
+                  status: row.assignments.some((item) => item.status === "blocked") ? "blocked" : "ready",
+                  estimate: `${row.assignments.length} assignment${row.assignments.length === 1 ? "" : "s"}`,
+                  items: [
+                    row.role,
+                    ...row.assignments.map((item) => `${item.id} · ${item.label} · wave ${item.wave}`),
+                  ],
                 })
               }
             >
@@ -3868,9 +3910,13 @@ function AllocationWorkspace({ onSelect, collisionGate, onOpenCollision }) {
                   style={{
                     gridColumn: `${assignment.start} / span ${assignment.span}`,
                   }}
+                  title={`${assignment.id} · ${assignment.label} · ${row.name} · ${assignment.status}`}
+                  aria-label={`${assignment.id} ${assignment.label}, ${row.name}, ${assignment.status}`}
                   onClick={() =>
                     onSelect({
                       ...assignment,
+                      source: "allocation",
+                      owner: row.name,
                       title: assignment.label,
                       estimate: `${assignment.span} days`,
                       items: [
@@ -4249,7 +4295,7 @@ function IntegrityWorkspace({ collisionGate, onSelect }) {
               Dependencies decide waves. Overlapping write surfaces share one
               sequential lane; independent work may run beside it.
             </p>
-            <div className="wave-map">
+            <div className="wave-map" role="region" aria-label="Execution waves" tabIndex={0}>
               {execution.waves.map((wave) => (
                 <div className="wave-column" key={wave.wave}>
                   <strong>Wave {wave.wave}</strong>
@@ -4429,12 +4475,74 @@ const journeyOwnership = {
   },
 };
 
+// The chosen Evidence view survives page switches and reloads within this tab.
+const EVIDENCE_VIEW_KEY = "perfect-planner.evidence.view";
+function readEvidenceView() {
+  try { return globalThis.sessionStorage?.getItem(EVIDENCE_VIEW_KEY) === "proof" ? "proof" : "journey"; } catch { return "journey"; }
+}
+const EVIDENCE_ZOOM = { min: 70, max: 120, step: 10 };
+const EVIDENCE_CANVAS = { width: 1400, height: 980 };
+const pad2 = (value) => String(value).padStart(2, "0");
+// The sample journey only has hour-level times for 02 Sep 2026 (Months/Weeks are
+// disabled), so the scrubber covers that working day, 08:00–18:00, never "28:00".
+function calendarMoment(_scale, position) {
+  return { range: "02 Sep 2026", label: `02 Sep 2026 · ${pad2(8 + Math.round(position / 10))}:00 AEST` };
+}
+
 function EvidenceWorkspace({ selectedId, onSelect, zoom, onZoom }) {
-  const [evidenceView, setEvidenceView] = useState("journey");
+  const [evidenceView, setEvidenceViewState] = useState(readEvidenceView);
+  const setEvidenceView = (view) => {
+    setEvidenceViewState(view);
+    try { globalThis.sessionStorage?.setItem(EVIDENCE_VIEW_KEY, view); } catch { /* convenience only */ }
+  };
   const [expandedJourney, setExpandedJourney] = useState(null);
   const [calendarScale, setCalendarScale] = useState("Days");
   const [calendarPosition, setCalendarPosition] = useState(12);
+  const moment = calendarMoment(calendarScale, calendarPosition);
   const journeyViewportRef = useRef(null);
+  const canvasScrollerRef = useRef(null);
+  const panRef = useRef(null);
+  const [canvasView, setCanvasView] = useState({ left: 0, top: 0, width: 1, height: 1 });
+  const syncCanvasView = () => {
+    const scroller = canvasScrollerRef.current;
+    if (!scroller || !scroller.scrollWidth || !scroller.scrollHeight) return;
+    setCanvasView({
+      left: scroller.scrollLeft / scroller.scrollWidth,
+      top: scroller.scrollTop / scroller.scrollHeight,
+      width: Math.min(1, scroller.clientWidth / scroller.scrollWidth),
+      height: Math.min(1, scroller.clientHeight / scroller.scrollHeight),
+    });
+  };
+  useEffect(() => { if (evidenceView === "proof") syncCanvasView(); }, [evidenceView, zoom]);
+  const fitCanvas = () => {
+    const scroller = canvasScrollerRef.current;
+    const fit = scroller?.clientWidth
+      ? Math.floor(Math.min(scroller.clientWidth / EVIDENCE_CANVAS.width, scroller.clientHeight / EVIDENCE_CANVAS.height) * 20) * 5
+      : 90;
+    onZoom(Math.max(EVIDENCE_ZOOM.min, Math.min(EVIDENCE_ZOOM.max, fit)));
+  };
+  const jumpFromMinimap = (event) => {
+    const scroller = canvasScrollerRef.current;
+    if (!scroller) return;
+    const box = event.currentTarget.getBoundingClientRect();
+    const x = (event.clientX - box.left) / box.width;
+    const y = (event.clientY - box.top) / box.height;
+    scroller.scrollTo({ left: x * scroller.scrollWidth - scroller.clientWidth / 2, top: y * scroller.scrollHeight - scroller.clientHeight / 2 });
+  };
+  // Drag the empty canvas to pan; cards stay clickable.
+  const startPan = (event) => {
+    if (event.button !== 0 || event.target.closest("button")) return;
+    const scroller = canvasScrollerRef.current;
+    panRef.current = { x: event.clientX, y: event.clientY, left: scroller.scrollLeft, top: scroller.scrollTop };
+    scroller.setPointerCapture?.(event.pointerId);
+    scroller.classList.add("is-panning");
+  };
+  const movePan = (event) => {
+    const pan = panRef.current;
+    if (!pan) return;
+    canvasScrollerRef.current.scrollTo({ left: pan.left - (event.clientX - pan.x), top: pan.top - (event.clientY - pan.y) });
+  };
+  const endPan = () => { panRef.current = null; canvasScrollerRef.current?.classList.remove("is-panning"); };
   const selectedEvidence =
     evidenceNodes.find((node) => node.id === selectedId) ?? evidenceNodes[3];
   const averageCompletion = Math.round(
@@ -4491,6 +4599,36 @@ function EvidenceWorkspace({ selectedId, onSelect, zoom, onZoom }) {
           >
             <ListChecksIcon /> Document ledger · {documentLedger.length} sources
           </button>
+          {/* Page controls live in the toolbar, not over the spine, so they never cover step numbers or cards. */}
+          {evidenceView === "journey" && (
+            <nav
+              className="journey-spine-controls"
+              aria-label="Quick journey rotation"
+            >
+              <button
+                onClick={() =>
+                  journeyViewportRef.current?.scrollBy({
+                    top: -journeyViewportRef.current.clientHeight * 0.82,
+                    behavior: "smooth",
+                  })
+                }
+                aria-label="Previous journey page"
+              >
+                <CaretUpIcon />
+              </button>
+              <button
+                onClick={() =>
+                  journeyViewportRef.current?.scrollBy({
+                    top: journeyViewportRef.current.clientHeight * 0.82,
+                    behavior: "smooth",
+                  })
+                }
+                aria-label="Next journey page"
+              >
+                <CaretDownIcon />
+              </button>
+            </nav>
+          )}
           {evidenceView === "proof" && (
             <>
               <span>
@@ -4562,60 +4700,30 @@ function EvidenceWorkspace({ selectedId, onSelect, zoom, onZoom }) {
               ))}
             </div>
             <label>
-              <span>02 Sep 2026</span>
+              <span>{moment.range}</span>
               <input
                 type="range"
                 min="0"
                 max="100"
                 value={calendarPosition}
+                aria-label={`Journey time (${calendarScale.toLowerCase()})`}
+                aria-valuetext={moment.label}
                 onChange={(event) =>
                   setCalendarPosition(Number(event.target.value))
                 }
               />
               <small>
-                {String(8 + Math.round(calendarPosition / 5)).padStart(2, "0")}
-                :00 AEST · {calendarScale}
+                {moment.label} · {calendarScale}
               </small>
             </label>
           </aside>
-          <nav
-            className="journey-spine-controls"
-            aria-label="Quick journey rotation"
-          >
-            <button
-              onClick={() =>
-                journeyViewportRef.current?.scrollBy({
-                  top: -journeyViewportRef.current.clientHeight * 0.82,
-                  behavior: "smooth",
-                })
-              }
-              aria-label="Previous journey page"
-            >
-              <CaretUpIcon />
-            </button>
-            <button
-              onClick={() =>
-                journeyViewportRef.current?.scrollBy({
-                  top: journeyViewportRef.current.clientHeight * 0.82,
-                  behavior: "smooth",
-                })
-              }
-              aria-label="Next journey page"
-            >
-              <CaretDownIcon />
-            </button>
-          </nav>
           <div className="journey-map">
             <div className="journey-spine" aria-hidden="true" />
             <div
               className="journey-now-line"
               style={{ top: `${170 + calendarPosition * 12}px` }}
             >
-              <span>
-                02 SEP 2026 ·{" "}
-                {String(8 + Math.round(calendarPosition / 5)).padStart(2, "0")}
-                :00 AEST
-              </span>
+              <span>{moment.label.toUpperCase()}</span>
             </div>
             {journeySteps.map((step, index) => (
               <section
@@ -4740,6 +4848,22 @@ function EvidenceWorkspace({ selectedId, onSelect, zoom, onZoom }) {
       ) : (
         <div className="evidence-viewport">
           <div
+            className="evidence-scroller"
+            ref={canvasScrollerRef}
+            role="region"
+            aria-label="Screenshot proof canvas"
+            tabIndex={0}
+            onScroll={syncCanvasView}
+            onPointerDown={startPan}
+            onPointerMove={movePan}
+            onPointerUp={endPan}
+            onPointerCancel={endPan}
+          >
+          <div
+            className="evidence-canvas-size"
+            style={{ width: `${(EVIDENCE_CANVAS.width * zoom) / 100}px`, height: `${(EVIDENCE_CANVAS.height * zoom) / 100}px` }}
+          >
+          <div
             className="evidence-canvas"
             style={{ transform: `scale(${zoom / 100})` }}
           >
@@ -4795,31 +4919,45 @@ function EvidenceWorkspace({ selectedId, onSelect, zoom, onZoom }) {
               </button>
             ))}
           </div>
-          <div className="minimap" aria-label="Canvas minimap">
+          </div>
+          </div>
+          {/* Controls sit outside the scroller so they stay put and never scroll over the cards. */}
+          <div className="minimap" title="Click to move the view" onClick={jumpFromMinimap}>
             <img
               src="/assets/evidence/selected-spine-canvas.png"
-              alt="Whole evidence canvas minimap"
+              alt=""
               loading="lazy"
               decoding="async"
               width="640"
               height="360"
             />
-            <span className="minimap-window" />
+            <span
+              className="minimap-window"
+              aria-hidden="true"
+              style={{
+                left: `calc(7px + ${canvasView.left} * (100% - 14px))`,
+                top: `calc(7px + ${canvasView.top} * (100% - 14px))`,
+                width: `calc(${canvasView.width} * (100% - 14px))`,
+                height: `calc(${canvasView.height} * (100% - 14px))`,
+              }}
+            />
           </div>
-          <div className="zoom-controls">
-            <IconButton label="Fit canvas" onClick={() => onZoom(90)}>
+          <div className="zoom-controls" role="group" aria-label="Canvas zoom">
+            <IconButton label="Fit canvas" onClick={fitCanvas}>
               <CrosshairIcon />
             </IconButton>
             <IconButton
               label="Zoom out"
-              onClick={() => onZoom(Math.max(70, zoom - 10))}
+              disabled={zoom <= EVIDENCE_ZOOM.min}
+              onClick={() => onZoom(Math.max(EVIDENCE_ZOOM.min, zoom - EVIDENCE_ZOOM.step))}
             >
               <MinusIcon />
             </IconButton>
-            <span>{zoom}%</span>
+            <span aria-live="polite">{zoom}%</span>
             <IconButton
               label="Zoom in"
-              onClick={() => onZoom(Math.min(120, zoom + 10))}
+              disabled={zoom >= EVIDENCE_ZOOM.max}
+              onClick={() => onZoom(Math.min(EVIDENCE_ZOOM.max, zoom + EVIDENCE_ZOOM.step))}
             >
               <PlusIcon />
             </IconButton>
@@ -4836,10 +4974,10 @@ function LedgerWorkspace({ onSelect }) {
     (task) => task.status === "verified",
   ).length;
   const queuedCount = ledgerTasks.length - verifiedCount;
-  const documentCompletion = (document) =>
-    document.state === "built" ? 100 : document.state === "traced" ? 65 : 0;
-  const documentWorker = (document) =>
-    document.state === "built" ? "Codex" : "Danie + Codex";
+  // Sample register: show the recorded state only. No completion percentage or
+  // worker is recorded for these documents, so none is invented.
+  const DOCUMENT_STATE_LABELS = { built: "Built", traced: "Traced", queued: "Queued", blocked: "Blocked" };
+  const documentState = (document) => DOCUMENT_STATE_LABELS[document.state] ?? "Not recorded";
   return (
     <section
       className="workspace ledger-workspace"
@@ -4878,11 +5016,11 @@ function LedgerWorkspace({ onSelect }) {
             <strong>Source document register</strong>
             <span>{documentLedger.length} indexed</span>
           </div>
-          <div className="ledger-table ledger-doc-table">
+          <div className="ledger-table ledger-doc-table" role="region" aria-label="Source document register" tabIndex={0}>
             <div className="ledger-table-head">
               <span>ID</span>
               <span>Document</span>
-              <span>Complete</span>
+              <span>State</span>
               <span>Worker</span>
               <span>Trace</span>
             </div>
@@ -4890,10 +5028,8 @@ function LedgerWorkspace({ onSelect }) {
               <div className="ledger-table-row" key={document.id}>
                 <code>{document.id}</code>
                 <strong>{document.name}</strong>
-                <span className="ledger-percent">
-                  {documentCompletion(document)}%
-                </span>
-                <small>{documentWorker(document)}</small>
+                <span className="ledger-doc-state">{documentState(document)}</span>
+                <small>Not recorded</small>
                 <small>{document.progress}</small>
               </div>
             ))}
@@ -5624,24 +5760,23 @@ function OpsDock({
                   "CI",
                   "MERGE QUEUE",
                   "MERGED",
-                ].map((stage, index) => (
-                  <div
-                    className={`merge-station ${index < 3 ? "complete" : index === 3 ? "current" : ""}`}
-                    key={stage}
-                  >
-                    <span>
-                      {index < 3 ? (
-                        <CheckCircleIcon weight="fill" />
-                      ) : index === 3 ? (
-                        <ActivityIcon />
-                      ) : (
-                        <ClockIcon />
-                      )}
-                    </span>
-                    <strong>{stage}</strong>
-                    {index < 4 && <small>B07</small>}
-                  </div>
-                ))}
+                ].map((stage) => {
+                  // One fixture: each station shows the sample branches the Branches tab places there.
+                  // Nothing is shown as passed, because no stage has a receipt.
+                  const here = branchRows
+                    .filter((row) => row.stage === stage)
+                    .map((row) => (row.branch.match(/\/(b\d+)-/i)?.[1] ?? row.branch).toUpperCase());
+                  return (
+                    <div
+                      className={`merge-station${here.length ? " current" : ""}`}
+                      key={stage}
+                    >
+                      <span>{here.length ? <ActivityIcon /> : <ClockIcon />}</span>
+                      <strong>{stage}</strong>
+                      {here.length > 0 && <small>{here.join(", ")}</small>}
+                    </div>
+                  );
+                })}
                 <button className="primary-button" disabled title={`${DEMO_ONLY_REASON}: there is no repository to merge.`}>
                   <GitMergeIcon /> Run merge gate
                 </button>
@@ -5654,9 +5789,9 @@ function OpsDock({
                 <header><strong>Local → production</strong><span>Every transition requires its own evidence receipt.</span></header>
                 <div className="ops-pipeline-stages">
                   {deliveryStages.map((stage, index) => (
-                    <button type="button" key={stage.id} className={`ops-pipeline-stage state-${stage.state}`} onClick={() => onToast(`${stage.label}: ${stage.detail}`)}>
+                    <article key={stage.id} className={`ops-pipeline-stage state-${stage.state}`}>
                       <small>{String(index + 1).padStart(2, "0")}</small><strong>{stage.label}</strong><span>{stage.detail}</span><b>{stage.state}</b>
-                    </button>
+                    </article>
                   ))}
                 </div>
               </section>
@@ -5666,9 +5801,9 @@ function OpsDock({
                 <header><strong>Hooks, tools & catchers</strong><span>Security, integrity and CI remain independent verdicts.</span></header>
                 <div>
                   {guardSurfaces.map((guard) => (
-                    <button type="button" key={guard.id} className={`ops-guard-card state-${guard.state}`} onClick={() => onToast(`${guard.label}: ${guard.detail}`)}>
+                    <article key={guard.id} className={`ops-guard-card state-${guard.state}`}>
                       <span><ShieldCheckIcon /><strong>{guard.label}</strong><b>{guard.state}</b></span><small>{guard.tool}</small><p>{guard.detail}</p>
-                    </button>
+                    </article>
                   ))}
                 </div>
               </section>
@@ -5988,6 +6123,17 @@ function PerfectPlannerShellCore({
       setCollisionGate(initialCollisionGate);
     } else if (!selected) setSelected(phases[2].nodes[0]);
   }, [demoMode, activeProject?.projectId]);
+  // Demo: read the saved demo decisions once so the top bar, Allocation and Build
+  // agree with Collisions before that page is opened.
+  useEffect(() => {
+    if (!demoMode) return undefined;
+    let current = true;
+    import("./components/CollisionWorkspace.jsx")
+      .then((module) => module.readDemoCollisionGate())
+      .then((gate) => { if (current) setCollisionGate(gate); })
+      .catch(() => {});
+    return () => { current = false; };
+  }, [demoMode, activeProject?.projectId]);
 
   const resetWorkspaceScroll = () => {
     const main = document.querySelector(".app-main");
@@ -6128,7 +6274,7 @@ function PerfectPlannerShellCore({
   };
 
   const selectedForInspector = useMemo(() => {
-    if (!demoMode) return selected;
+    if (!demoMode || selected?.source === "allocation") return selected;
     const phaseNode = phases
       .flatMap((phase) => phase.nodes)
       .find((node) => node.id === selected?.id);

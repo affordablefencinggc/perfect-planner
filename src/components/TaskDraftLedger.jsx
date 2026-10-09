@@ -27,6 +27,9 @@ const pastes=new Map();
 let sharedRecovery;
 let sharedDraftStore;
 let warnedWindow;
+const plural=(count,word)=>`${count} ${word}${count===1?'':'s'}`;
+// Header count: active tasks only; archived tasks are named separately.
+const ledgerCountText=tasks=>{const archived=tasks.filter(task=>task.archived).length;return `${plural(tasks.length-archived,'task')}${archived?` · ${archived} archived`:''}`;};
 const blank=()=>({id:null,title:'',description:'',owner:'',acceptance:'',recovery:'',claims:'',dependsOn:'',archived:false});
 const serializeTask=task=>({...task,claims:task.claims.map(c=>`${c.access} ${c.path}`).join('\n'),dependsOn:task.dependsOn.join(', ')});
 const parseTask=form=>({...form,claims:form.claims.split('\n').filter(line=>line.trim()).map(line=>{const match=line.trim().match(/^(read|write)\s+(.+)$/);if(!match)throw Object.assign(new Error(`Each file scope line must start with read or write, followed by a relative path. "${line.trim()}" does not.`),{field:'claims'});return {access:match[1],path:match[2]};}),dependsOn:form.dependsOn.split(/[\s,]+/).filter(Boolean)});
@@ -62,6 +65,10 @@ function BoundTaskDraftLedger({binding,project,providedStore,providedRecovery,wo
   const fieldErrorId=key=>`${fieldErrorPrefix}-${key}-error`;
   const invalid=key=>fieldError?.field===key?{'aria-invalid':'true','aria-describedby':fieldErrorId(key)}:{};
   const inlineError=key=>fieldError?.field===key&&<p id={fieldErrorId(key)} data-testid={`task-draft-${key}-error`} className="task-draft-error">{fieldError.message}</p>;
+  // The page alert sits far above the form; move focus to the refused field (or
+  // the reason beside Save) so keyboard and screen-reader users land on it.
+  const editorRef=useRef(null);
+  useEffect(()=>{if(!fieldError)return;const root=editorRef.current;const target=root?.querySelector('[aria-invalid="true"]')??root?.querySelector('[data-testid="task-draft-form-error"]');target?.focus?.({preventScroll:false});target?.scrollIntoView?.({block:'center'});},[fieldError]);
   const [dirty,setDirty]=useState(()=>forms.has(formKey));
   const editingRevision=useRef(forms.get(formKey)?.revision??null);
   const [linkedTask,setLinkedTask]=useState(null);
@@ -93,7 +100,7 @@ function BoundTaskDraftLedger({binding,project,providedStore,providedRecovery,wo
 
   async function refresh(){
     const request=++sequence.current;setBusy(true);setError('');setReviewedTasks([]);setInventoryReviewed(false);setPendingImport(null);setImportReviewed(false);
-    try{const value=await store.read(binding);if(alive.current&&sequence.current===request){setLedger(value);setNotice('Latest saved draft loaded. Unsaved form text is unchanged.');}}
+    try{const value=await store.read(binding);if(alive.current&&sequence.current===request){setLedger(value);setNotice(forms.has(formKey)?'Latest saved draft loaded. Unsaved form text is unchanged.':'Latest saved draft loaded.');}}
     catch(e){if(alive.current&&sequence.current===request)setError(e.message);}
     finally{if(alive.current&&sequence.current===request)setBusy(false);}
   }
@@ -140,7 +147,7 @@ function BoundTaskDraftLedger({binding,project,providedStore,providedRecovery,wo
   function change(key,value){
     const next={...form,[key]:value};if(editingRevision.current==null)editingRevision.current=ledger?.revision??0;
     checkpoint(next,editingRevision.current);setForm(next);setDirty(true);setNotice('Unfinished edits — checkpointing for recovery. This is not a saved task.');
-    if(fieldError?.field===key){setFieldError(null);setError(current=>current===fieldError.message?'':current);}
+    if(fieldError&&(fieldError.field===key||fieldError.field==='form')){setFieldError(null);setError(current=>current===fieldError.message?'':current);}
   }
   async function discard(){if(intentBlocked||busy||committedPending||taskFormOperations.read(binding))return;if(!dirty&&!session.current){setForm(blank());editingRevision.current=null;setNotice('Editor selection closed. Saved tasks are unchanged.');return;}const original=forms.get(formKey),originalSession=session.current,op=taskFormOperations.begin(binding,{kind:'discard',formEntry:original,session:originalSession,recovery,store});setBusy(true);try{await noUnresolvedIntents();const saved=await flushRecovery();taskFormOperations.update(binding,op.token,{checkpoint:saved});if(forms.get(formKey)!==original)throw Error('Newer editor text exists. Review it before discarding.');taskFormOperations.update(binding,op.token,{dispatched:true});await originalSession?.resolve('discarded',saved);taskFormOperations.update(binding,op.token,{status:'settled',discarded:true});if(!alive.current)return;if(forms.get(formKey)!==original)throw Error('Newer editor text was kept. Review the completed disposition.');forms.delete(formKey);session.current=null;setForm(blank());setDirty(false);editingRevision.current=null;taskFormOperations.clear(binding,op.token);await inspectRecovery();setNotice('Unfinished editor disposition retained. Saved revisions are unchanged.');}catch(e){taskFormOperations.update(binding,op.token,{status:'settled',error:e.message});if(alive.current)setRecoveryError(e.message);}finally{if(alive.current)setBusy(false);}}
   async function finishDurableIntent(record,captured,token,normal=false){
@@ -160,7 +167,7 @@ function BoundTaskDraftLedger({binding,project,providedStore,providedRecovery,wo
     // Check the task before any Save request exists. A refusal here writes
     // nothing, so the editor stays open with the typed text and an inline reason.
     try{updateTaskDraft(ledger,parseTask(forms.get(formKey)?.form??form));setFieldError(null);}
-    catch(e){setError(e.message);setFieldError({field:e.field??null,message:e.message});setNotice('Nothing was saved. Fix the marked field and save again; your text was kept.');return;}
+    catch(e){setError(e.message);setFieldError({field:e.field??'form',message:e.message});setNotice('Nothing was saved. Fix the marked field and save again; your text was kept.');return;}
     const pendingForm=forms.get(formKey),op=taskFormOperations.begin(binding,{kind:'save',formEntry:pendingForm,session:session.current,recovery,store,baseLedger:structuredClone(ledger),requestId:crypto.randomUUID()});setBusy(true);setError('');
     try{
       await noUnresolvedIntents();if(!alive.current||forms.get(formKey)!==pendingForm)throw Error('Editor changed before preparation. Its text was kept.');
@@ -353,7 +360,7 @@ function BoundTaskDraftLedger({binding,project,providedStore,providedRecovery,wo
     }catch(e){if(alive.current)setRecoveryError(e.message);}finally{if(alive.current)setBusy(false);}
   }
   return <section className="task-draft-ledger" aria-label="Project task drafts">
-    <header><div><h2>Plan the work</h2><p>Local draft · {ledger?`${ledger.tasks.length} tasks · revision ${ledger.revision}`:'Opening saved tasks…'}</p></div><div className="task-draft-tools"><button type="button" onClick={refresh} disabled={busy}>Refresh draft</button><button type="button" onClick={()=>exportDraft()} disabled={!ledger}>Export draft</button><button type="button" onClick={showHistory} disabled={!ledger}>Revision history</button></div></header>
+    <header><div><h2>Plan the work</h2><p>Local draft · {ledger?`${ledgerCountText(ledger.tasks)} · revision ${ledger.revision}`:'Opening saved tasks…'}</p></div><div className="task-draft-tools"><button type="button" onClick={refresh} disabled={busy}>Refresh draft</button><button type="button" onClick={()=>exportDraft()} disabled={!ledger}>Export draft</button><button type="button" onClick={showHistory} disabled={!ledger}>Revision history</button></div></header>
     <p className="task-draft-boundary">Saved on this device for this project and folder census. Browser storage is not a backup or shared authority: export important drafts. Tasks, owners and file scopes are proposals—not approval, worker grants or completion. Do not enter credentials.</p>
     {error&&<p role="alert" className="task-draft-error">{error}</p>}
     {stale&&<p role="alert" className="task-draft-error">The folder census changed. Your previous draft remains readable and exportable. Review it against the new inventory before resuming draft editing.</p>}
@@ -391,10 +398,19 @@ function BoundTaskDraftLedger({binding,project,providedStore,providedRecovery,wo
           {ledger&&!ledger.tasks.length&&<p>No task drafts yet. Add the first task using the form.</p>}
         </div>
         {overlapText.headline&&<details className="task-draft-findings" aria-label="Ledger overlaps" open={overlaps.settled<overlaps.total}><summary>{overlapText.headline}</summary><p>{overlaps.settled===overlaps.total?'Every overlap has a decision saved on the Collision page.':'Undecided overlaps are decided on the Collision page. Where a split was chosen, the next step is here: edit one task\u2019s file scope so the two no longer overlap.'}</p><ul>{overlapText.lines.slice(0,100).map(line=><li key={line}>{line}</li>)}</ul></details>}
-        <details className="task-draft-findings" open={Boolean(findings?.findings.length)}><summary>{findings?.findings.length??0} planning review findings</summary><p>These are draft checks for task details and dependencies. Overlapping files are counted separately above.</p><ul>{findings?.findings.slice(0,100).map((finding,index)=><li key={index}>{finding.detail}</li>)}</ul>{findings?.findings.length>100&&<p>Showing the first 100 findings. Narrow the plan and resolve overlaps before approval.</p>}</details>
+        <details className="task-draft-findings" open={Boolean(findings?.findings.length)}><summary>{plural(findings?.findings.length??0,'planning review finding')}</summary><p>These are draft checks for task details and dependencies. Overlapping files are counted separately above.</p><ul>{findings?.findings.slice(0,100).map((finding,index)=><li key={index}>{finding.detail}</li>)}</ul>{findings?.findings.length>100&&<p>Showing the first 100 findings. Narrow the plan and resolve overlaps before approval.</p>}</details>
       </div>
-      <form onSubmit={save} aria-label="Task draft editor">
+      <form ref={editorRef} onSubmit={save} aria-label="Task draft editor">
         <h3>{form.id?`Edit ${form.id}`:'Add a task'}</h3>
+        {(()=>{
+          // After a reload the typed text lives only in a recovery checkpoint.
+          // Offer it here, next to the empty form, instead of under an editor ID.
+          if(dirty||busy||committedPending||intentBlocked||operation)return null;
+          const restorable=recoveryRows.filter(row=>row.status==='unfinished'&&row.editorId!==session.current?.editorId&&sameTaskDraftBinding(row.binding,binding));
+          if(!restorable.length)return null;
+          const latest=restorable.at(-1),title=latest.form.title.trim()||'Untitled task';
+          return <div className="task-draft-restore" aria-label="Unsaved text from an earlier visit"><p>Unsaved text from an earlier visit was kept{restorable.length>1?` (${restorable.length} unfinished editors; see Unfinished editor recovery above)`:''}. It is not a saved task.</p><button type="button" onClick={()=>{void restoreForm(latest);}}>Restore “{title}”</button></div>;
+        })()}
         <fieldset disabled={cannotEdit}>
           <label>Task title<input maxLength={160} required {...invalid('title')} value={form.title} onChange={e=>change('title',e.target.value)}/></label>{inlineError('title')}
           <label>Full description<textarea maxLength={8000} rows={3} {...invalid('description')} value={form.description} onChange={e=>change('description',e.target.value)}/></label>{inlineError('description')}
@@ -404,13 +420,14 @@ function BoundTaskDraftLedger({binding,project,providedStore,providedRecovery,wo
           <label>File scope <small>One per line: write src/app.js, write src/core/** or read package.json. * matches within one name, ** matches any folders.</small><textarea maxLength={16000} rows={3} {...invalid('claims')} value={form.claims} onChange={e=>change('claims',e.target.value)}/></label>{inlineError('claims')}
           <label>Depends on task IDs <small>For example: T0001, T0002</small><input maxLength={512} {...invalid('dependsOn')} value={form.dependsOn} onChange={e=>change('dependsOn',e.target.value)}/></label>{inlineError('dependsOn')}
           {form.id&&<label className="task-draft-archived"><input type="checkbox" checked={form.archived} onChange={e=>change('archived',e.target.checked)}/> Archive task (keep history)</label>}
+          {fieldError?.field==='form'&&<p id={fieldErrorId('form')} tabIndex={-1} data-testid="task-draft-form-error" className="task-draft-error">{fieldError.message}</p>}
           <button type="submit" className="primary-button">{busy?'Saving…':'Save task draft'}</button>
         </fieldset>
         <button type="button" onClick={discard} disabled={intentBlocked||busy||Boolean(operation)||(!dirty&&!form.id)}>Discard unsaved edits</button>
         {dirty&&ledger&&editingRevision.current!==ledger.revision&&<section aria-label="Review concurrent changes"><p>Another revision exists. Your form has not replaced it. Compare the latest saved task below with your form before reapplying.</p><pre tabIndex={0}>{JSON.stringify(ledger.tasks.find(task=>task.id===form.id)??{note:'New task; no existing task will be replaced.'},null,2)}</pre><button type="button" onClick={reapply} disabled={cannotEdit}>I reviewed the latest revision — reapply my form</button></section>}
       </form>
     </div>
-    {history&&<section aria-label="Draft revision history"><h3>Latest saved revisions (up to 50)</h3><div className="task-draft-tools">{history.map(item=><button type="button" key={item.revision} onClick={()=>viewRevision(item.revision)}>Revision {item.revision} · {item.taskCount} tasks</button>)}</div></section>}
+    {history&&<section aria-label="Draft revision history"><h3>Latest saved revisions (up to 50)</h3><div className="task-draft-tools">{history.map(item=><button type="button" key={item.revision} onClick={()=>viewRevision(item.revision)}>Revision {item.revision} · {item.taskCount} task{item.taskCount===1?"":"s"}</button>)}</div></section>}
     {historical&&<section aria-label="Historical draft"><h3>Read-only revision {historical.revision}</h3><button type="button" onClick={()=>exportDraft(historical)}>Export this revision</button><pre tabIndex={0}>{JSON.stringify(historical,null,2)}</pre></section>}
   </section>;
 }

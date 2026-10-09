@@ -376,7 +376,9 @@ export function createEmptyProjectState() {
 export function withProjectView(session, patch, { now = Date.now() } = {}) {
   const current = validateProjectSession(session);
   const next = validateView({ ...current.view, ...cloneJson(patch) }, current.projectId);
-  return validateProjectSession({ ...cloneJson(current), generation: current.generation + 1, updatedAt: monotonicTimestamp(now, current.updatedAt), view: next });
+  // Where the user is looking (page, selection) is not a new scan or state of
+  // the project, so the generation stays put; only updatedAt moves.
+  return validateProjectSession({ ...cloneJson(current), updatedAt: monotonicTimestamp(now, current.updatedAt), view: next });
 }
 
 export function withProjectState(session, state, { now = Date.now(), reason = "state-updated" } = {}) {

@@ -6,6 +6,8 @@ import userEvent from "@testing-library/user-event";
 import { ImportedProjectWorkflowWorkspace } from "../src/components/ImportedProjectWorkflowWorkspace.jsx";
 import { createProjectEntityId } from "../src/project/projectIds.js";
 import { createImportedProjectSession, createProjectSession, projectAuthorityKinds } from "../src/project/projectSession.js";
+import { writeSection } from "../src/project/projectWorkRecords.js";
+import { nextDiscoveryReviewData } from "../src/project/discoveryReviewModel.js";
 
 const AT = "2026-09-04T12:00:00.000Z";
 
@@ -113,6 +115,23 @@ describe("ImportedProjectWorkflowWorkspace", () => {
 
     await user.click(screen.getByRole("button", { name: "Open Structure" }));
     expect(onWorkspace).toHaveBeenCalledWith("structure");
+  });
+
+  // Trial define-07: answers saved in Structure's discovery review count on Plan.
+  test("Plan question header counts open areas and drops answered ones", () => {
+    localStorage.clear();
+    const project = importedProject();
+    const all = () => screen.getByRole("region", { name: "Unanswered project planning questions" }).querySelector("header small").textContent;
+    const first = render(<ImportedProjectWorkflowWorkspace workspace="plan" activeProject={project} onWorkspace={vi.fn()} />);
+    const before = all();
+    expect(before).toMatch(/^\d+ of 8 areas still open$/);
+    first.unmount();
+    let data = null;
+    for (const id of ["A02", "A03", "A04", "A05", "A06", "A07", "A08"]) data = nextDiscoveryReviewData(project, data, id, "not-applicable");
+    writeSection(project.projectId, "discoveryReview", data);
+    render(<ImportedProjectWorkflowWorkspace workspace="plan" activeProject={project} onWorkspace={vi.fn()} />);
+    expect(all()).toBe("All 8 areas answered or found");
+    localStorage.clear();
   });
 
   test("states that collisions are not evaluated even when prerequisite authorities exist", async () => {

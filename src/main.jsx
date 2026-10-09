@@ -4,6 +4,7 @@ import { PerfectPlannerShell } from "./PerfectPlannerShell.jsx";
 import { ProjectProvider } from "./project/ProjectProvider.jsx";
 import { createMemoryStorage, DEFAULT_PROJECT_REGISTRY_KEY } from "./project/projectRegistry.js";
 import { AppErrorBoundary, isSafeStart, SafeStartNotice } from "./components/AppErrorBoundary.jsx";
+import { RegistryHealthNotice } from "./components/RegistryHealthNotice.jsx";
 import "./styles.css";
 import "./styles/frame.css";
 import "./styles/polish/define.css";
@@ -42,6 +43,7 @@ createRoot(document.getElementById("root")).render(
     <AppErrorBoundary safeStart={safeStart}>
       {safeStart ? <SafeStartNotice /> : null}
       <ProjectProvider {...registryProps}>
+        <RegistryHealthNotice />
         <PerfectPlannerShell />
       </ProjectProvider>
     </AppErrorBoundary>

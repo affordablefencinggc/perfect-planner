@@ -59,7 +59,7 @@ test('add, edit, archive and inspect previous revision without implying approval
  fireEvent.click(screen.getByLabelText('Archive task (keep history)'));fireEvent.click(screen.getByRole('button',{name:'Save task draft'}));
  await waitFor(()=>expect(screen.queryByRole('button',{name:'Edit T0001'})).toBeNull());
  fireEvent.click(screen.getByLabelText('Show archived tasks'));await screen.findByRole('heading',{name:'Preserve all work'});
- fireEvent.click(screen.getByRole('button',{name:'Revision history'}));fireEvent.click(await screen.findByRole('button',{name:'Revision 1 · 1 tasks'}));
+ fireEvent.click(screen.getByRole('button',{name:'Revision history'}));fireEvent.click(await screen.findByRole('button',{name:'Revision 1 · 1 task'}));
  await screen.findByRole('heading',{name:'Read-only revision 1'});
  expect(screen.getByRole('region',{name:'Historical draft'}).querySelector('pre').tabIndex).toBe(0);
  expect((await store.read()).revision).toBe(2);
@@ -149,4 +149,60 @@ test('a file scope line without read or write is refused inline without locking 
  fireEvent.click(screen.getByRole('button',{name:'Save task draft'}));
  expect((await screen.findByTestId('task-draft-claims-error')).textContent).toMatch(/read or write/);
  expect(scope.closest('fieldset').disabled).toBe(false);expect(scope.value).toBe('src/app.js');expect(screen.getByLabelText('Task title').value).toBe('Bad line');
+});
+// Trial define-01: each of these refusals used to register an editor operation
+// before validation, locking the form until reload with the reason off-screen.
+for(const [name,setup,field,pattern] of [
+ ['spaces-only title',()=>fill('Task title','   '),'title',/Task title is missing/],
+ ['self-dependency',()=>{fill('Task title','Loop');fill(/^Depends on task IDs/,'T0001');},'dependsOn',/cannot depend on itself/],
+ ['unknown dependency',()=>{fill('Task title','Orphan');fill(/^Depends on task IDs/,'T0042');},'dependsOn',/outside this ledger/],
+]){
+ test(`a ${name} is refused inline, focused, and never locks the editor`,async()=>{
+  const p=project(`refused_${field.toLowerCase()}_${name.length}`),store=memoryStore(p);render(<TaskDraftLedger project={p} store={withMemoryTaskSaveIntents(store)}/>);
+  await screen.findByText('No task drafts yet. Add the first task using the form.');
+  setup();fireEvent.click(screen.getByRole('button',{name:'Save task draft'}));
+  const inline=await screen.findByTestId(`task-draft-${field}-error`);expect(inline.textContent).toMatch(pattern);
+  const input=document.querySelector(`[aria-describedby="${inline.id}"]`);
+  expect(input.getAttribute('aria-invalid')).toBe('true');await waitFor(()=>expect(document.activeElement).toBe(input));
+  expect(input.closest('fieldset').disabled).toBe(false);expect(screen.queryByRole('region',{name:'Retained editor operation'})).toBeNull();
+  expect(store.prepareSaveIntent).not.toHaveBeenCalled();expect((await store.read()).revision).toBe(0);
+  // The same editor recovers: fix the fields and save.
+  fill('Task title','Fixed task');fill(/^Depends on task IDs/,'');
+  fireEvent.click(screen.getByRole('button',{name:'Save task draft'}));
+  await screen.findByRole('button',{name:'Edit T0001'});expect((await store.read()).tasks[0].title).toBe('Fixed task');
+ });
+}
+// Trial define-21: header counted archived tasks and said "1 tasks".
+test('ledger header counts active tasks with correct plurals and names archived ones separately',async()=>{
+ const p=project('counts'),store=memoryStore(p);
+ await store.saveTask(null,0,{...importTask,title:'Only task'});
+ const view=render(<TaskDraftLedger project={p} store={withMemoryTaskSaveIntents(store)}/>);
+ await screen.findByText(/^Local draft · 1 task · revision 1$/);
+ view.unmount();
+ const ledger=await store.read();await store.saveTask(null,1,{...ledger.tasks[0],archived:true});await store.saveTask(null,2,{...importTask,title:'Second'});
+ render(<TaskDraftLedger project={p} store={withMemoryTaskSaveIntents(store)}/>);
+ await screen.findByText(/^Local draft · 1 task · 1 archived · revision 3$/);
+});
+// Trial define-08: after a reload the form is empty and its text lives only in
+// recovery; the notice must not claim unsaved text, and restoring is offered by name.
+test('after a reload the ledger offers the kept text by title instead of claiming the empty form is unchanged',async()=>{
+ const p=project('reload_offer'),store=memoryStore(p);
+ const {createMemoryTaskFormRecovery}=await import('./fixtures/memoryTaskFormRecovery.js');
+ const {appendTaskFormHistory}=await vi.importActual('../src/project/taskFormRecovery.js');
+ const recovery=createMemoryTaskFormRecovery(appendTaskFormHistory);
+ const first=render(<TaskDraftLedger project={p} store={store} recovery={recovery}/>);
+ await screen.findByText('No task drafts yet. Add the first task using the form.');
+ fill('Task title','Typed before reload');
+ await waitFor(async()=>expect((await recovery.list(taskDraftBinding(p))).records.length).toBe(1));
+ first.unmount();
+ vi.resetModules();
+ const {TaskDraftLedger:Reloaded}=await import('../src/components/TaskDraftLedger.jsx');
+ render(<Reloaded project={p} store={store} recovery={recovery}/>);
+ await screen.findByText('No task drafts yet. Add the first task using the form.');
+ expect(screen.getByLabelText('Task title').value).toBe('');
+ await waitFor(()=>expect(screen.getByRole('status',{name:'Draft editing status'}).textContent).toBe('Latest saved draft loaded.'));
+ const restore=await screen.findByRole('button',{name:'Restore “Typed before reload”'});
+ await waitFor(()=>expect(restore.disabled).toBe(false));fireEvent.click(restore);
+ await waitFor(()=>expect(screen.getByLabelText('Task title').value).toBe('Typed before reload'));
+ expect(screen.queryByRole('button',{name:'Restore “Typed before reload”'})).toBeNull();
 });
