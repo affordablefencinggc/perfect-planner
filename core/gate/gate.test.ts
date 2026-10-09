@@ -46,9 +46,11 @@ async function approved(taskId = "T-1") {
   return ctx;
 }
 
-/** Jev approves the diff at the branch tip, then the owner merges. */
+/** Jev approves the diff at the branch tip, the owner signs the merge approval, then merges. */
 async function reviewAndMerge(ctx: { root: string; gate: TestGate; branch: string }, taskId = "T-1", integrationBranch = "main") {
-  expect(ctx.gate.approveDiff(taskId, JEV, await head(ctx.root, ctx.branch)).ok).toBe(true);
+  const tip = await head(ctx.root, ctx.branch);
+  expect(ctx.gate.approveDiff(taskId, JEV, tip).ok).toBe(true);
+  expect(ctx.gate.approveMerge(taskId, OWNER, tip).ok).toBe(true);
   return ctx.gate.mergeAndVerify(taskId, { repoRoot: ctx.root, branch: ctx.branch, integrationBranch, actor: OWNER });
 }
 
@@ -82,6 +84,7 @@ describe("TestGate", () => {
 
     const before = await head(root, "main");
     expect(gate.approveDiff("T-1", JEV).ok).toBe(true);
+    expect(gate.approveMerge("T-1", OWNER).ok).toBe(true);
     const merged = await gate.mergeAndVerify("T-1", { repoRoot: root, branch, integrationBranch: "main", actor: OWNER });
     expect(merged.ok).toBe(true);
     if (!merged.ok) return;
@@ -103,11 +106,12 @@ describe("TestGate", () => {
       "commit.observed",
       "test.passed",
       "review.verdict",
+      "review.verdict",
       "test.passed",
       "merge.done",
       "task.done",
     ]);
-    const mergePass = ledger.entries()[8]!;
+    const mergePass = ledger.entries()[9]!;
     expect(mergePass.data).toMatchObject({ test: COMMAND, afterMerge: true, phase: "merge", commit: merged.mergeCommit });
     expect(mergePass.evidence).toContain(`commit:${merged.mergeCommit}`);
     const state = gate.state("T-1");
@@ -331,6 +335,7 @@ describe("TestGate", () => {
     expect(gate.approveDiff("T-1", JEV).ok).toBe(true);
     expect(await merge({ kind: "system", id: "anything" })).toMatchObject({ ok: false, reason: expect.stringContaining("A person approves the merge") });
     expect(types(ledger)).not.toContain("merge.done");
+    expect(gate.approveMerge("T-1", OWNER, work).ok).toBe(true);
     expect((await merge(OWNER)).ok).toBe(true);
   }, SLOW);
 
@@ -390,6 +395,7 @@ describe("TestGate", () => {
       const merge = () => ctx.gate.mergeAndVerify("T-1", { repoRoot: ctx.root, branch: ctx.branch, integrationBranch: "main", actor: OWNER });
       expect(await merge()).toMatchObject({ ok: false, reason: expect.stringContaining(file) });
       expect(ctx.gate.approveDiff("T-1", OWNER, tip).ok).toBe(true);
+      expect(ctx.gate.approveMerge("T-1", OWNER, tip).ok).toBe(true);
       expect((await merge()).ok).toBe(true);
     }
   }, SLOW);
@@ -406,6 +412,7 @@ describe("TestGate", () => {
     expect(await merge()).toMatchObject({ ok: false, reason: expect.stringContaining("not been approved") });
     expect(gate.approveDiff("T-1", JEV, tip).ok).toBe(true);
     expect(ledger.entries().at(-1)).toMatchObject({ type: "review.verdict", actor: { kind: "system", id: "gate" }, data: { reviewer: JEV } });
+    expect(gate.approveMerge("T-1", OWNER, tip).ok).toBe(true);
     expect((await merge()).ok).toBe(true);
   }, SLOW);
 
@@ -438,6 +445,35 @@ describe("TestGate", () => {
       expect(merged).toMatchObject({ ok: false, reason: expect.stringContaining(file) });
     }
   }, SLOW);
+
+  it("merges only on a person's own signed merge approval, never a name passed in", async () => {
+    const { root, gate, ledger, worktree, branch, addWorktree } = await approved();
+    await addWorktree();
+    writeFiles(worktree, { "feature.txt": "enabled\n" });
+    const tip = await commitAll(worktree, "enable feature");
+    expect((await gate.prove("T-1", worktree)).ok).toBe(true);
+    expect(gate.approveDiff("T-1", JEV, tip).ok).toBe(true);
+    const merge = () => gate.mergeAndVerify("T-1", { repoRoot: root, branch, integrationBranch: "main", actor: OWNER });
+    // Naming the owner is not their approval.
+    expect(await merge()).toMatchObject({ ok: false, reason: expect.stringContaining("merge has not been approved") });
+    // Nor is an unsigned entry that claims to be theirs, or an agent's.
+    ledger.append({ type: "task.progress", actor: WORKER, subject: "T-1", summary: "Merge approved", evidence: ["scope:merge", "verdict:approve", `commit:${tip}`] });
+    expect(gate.approveMerge("T-1", WORKER, tip)).toMatchObject({ ok: false, reason: expect.stringContaining("Only a person") });
+    expect(gate.approveMerge("T-1", JEV, tip).ok).toBe(false);
+    expect(await merge()).toMatchObject({ ok: false });
+    expect(gate.approveMerge("T-1", OWNER, tip).ok).toBe(true);
+    expect((await merge()).ok).toBe(true);
+    expect(ledger.entries().at(-1)).toMatchObject({ type: "task.done", data: { approvedBy: OWNER } });
+  }, SLOW);
+
+  it("an unsigned Jev verdict on the test cannot clear the gaps Jev found", async () => {
+    const { root, gate, ledger } = await setup();
+    gate.define("T-1", COMMAND, WORKER);
+    expect(gate.approve("T-1", OWNER, { cwd: root, jevVerdict: ["Misses the kill switch"], jev: JEV }).ok).toBe(false);
+    const definition = gate.state("T-1").definition!.n;
+    ledger.append({ type: "review.verdict", actor: JEV, subject: "T-1", summary: "No gaps", evidence: ["scope:test", "verdict:approve", `definition:${definition}`], data: { scope: "test", verdict: "approve", definition } });
+    expect(gate.approve("T-1", OWNER, { cwd: root })).toMatchObject({ ok: false, reason: expect.stringContaining("open gaps") });
+  });
 
   it("reject bumps the attempt and the new attempt keeps the approved test", async () => {
     const { gate, ledger } = await approved("T-14");

@@ -43,6 +43,8 @@ export interface GateState {
    * its signature: a person's own entry, or the gate's entry recording Jev's verdict.
    */
   diffApproval?: { n: string; commit: string; reviewer: Actor; byPerson: boolean };
+  /** Latest merge approval: only a person's own signed entry, naming the commit they approved. */
+  mergeApproval?: { n: string; commit: string; actor: Actor };
   merged?: { n: string; commit: string };
   done?: { n: string };
   reopenedAs?: string;
@@ -67,7 +69,10 @@ export interface MergeOptions {
   repoRoot: string;
   branch: string;
   integrationBranch: string;
-  /** The person who approved the merge, acting on the diff review. Written on merge.done and task.done. */
+  /**
+   * The person merging. They must have approved the merge at the branch tip with their own signed entry
+   * (approveMerge); naming them here is not approval. Written on merge.done and task.done.
+   */
   actor: Actor;
   /**
    * Prepare the throwaway merge candidate before the test runs there, e.g. install dependencies.
@@ -293,7 +298,17 @@ export function deriveState(entries: readonly LedgerEntry[], taskId: string): Ga
           state.diffApproval = approves && commit ? { n: entry.n, commit, reviewer, byPerson } : undefined;
           break;
         }
+        if (own && evidenceValue(entry, "scope") === "merge") {
+          // Only the person's own signed entry approves a merge; nobody can approve it on their behalf.
+          if (!isAuthoritative(entry, { personOnly: true })) break;
+          const commit = (dataString(entry, "commit") ?? evidenceValue(entry, "commit") ?? "").toLowerCase();
+          const approves = evidenceValue(entry, "verdict") === "approve";
+          state.mergeApproval = approves && commit ? { n: entry.n, commit, actor: entry.actor } : undefined;
+          break;
+        }
         if (evidenceValue(entry, "scope") !== "test" || !forCurrent) break;
+        // Jev's verdict on the test is recorded by the gate (signed); an unsigned one is information only.
+        if (!isAuthoritative(entry)) break;
         const verdict = evidenceValue(entry, "verdict") === "approve" ? "approve" : "gaps";
         const gaps = entry.evidence.filter((item) => item.startsWith("gap:")).map((item) => item.slice(4));
         state.jev = { n: entry.n, verdict, gaps };
@@ -618,23 +633,23 @@ export class TestGate {
         if (!gaps.length) throw new GateError('A Jev verdict is "approve" or a non-empty list of gaps.');
         verdict = this.ledger.append({
           type: "review.verdict",
-          actor: options.jev,
+          actor: GATE_ACTOR,
           subject: taskId,
           summary: `Jev found ${gaps.length} gap${gaps.length === 1 ? "" : "s"} in ${taskId}'s done-when test`,
           reason: oneLine(gaps.join("; "), 500),
-          evidence: ["scope:test", "verdict:gaps", `definition:${definition.n}`, ...gaps.map((gap) => `gap:${gap}`)],
-          data: { scope: "test", verdict: "gaps", test: definition.command, definition: definition.n, gaps },
+          evidence: ["scope:test", "verdict:gaps", `definition:${definition.n}`, `reviewer:jev:${options.jev.id}`, ...gaps.map((gap) => `gap:${gap}`)],
+          data: { scope: "test", verdict: "gaps", test: definition.command, definition: definition.n, gaps, reviewer: options.jev },
         });
         return { ok: false, reason: `Jev found gaps in the test: ${gaps.join("; ")}`, verdict };
       }
       if (jev !== "approve") throw new GateError('A Jev verdict is "approve" or a list of gaps.');
       verdict = this.ledger.append({
         type: "review.verdict",
-        actor: options.jev,
+        actor: GATE_ACTOR,
         subject: taskId,
         summary: `Jev found no gaps in ${taskId}'s done-when test`,
-        evidence: ["scope:test", "verdict:approve", `definition:${definition.n}`],
-        data: { scope: "test", verdict: "approve", test: definition.command, definition: definition.n },
+        evidence: ["scope:test", "verdict:approve", `definition:${definition.n}`, `reviewer:jev:${options.jev.id}`],
+        data: { scope: "test", verdict: "approve", test: definition.command, definition: definition.n, reviewer: options.jev },
       });
     } else if (state.jev?.verdict === "gaps") {
       return { ok: false, reason: `Jev's open gaps on this test must be resolved first: ${state.jev.gaps.join("; ")}` };
@@ -721,6 +736,30 @@ export class TestGate {
   }
 
   /**
+   * A person approves merging the task at a commit (default: the commit whose diff was approved). The
+   * entry is theirs and signed with their key; mergeAndVerify only merges a branch whose tip has one.
+   */
+  approveMerge(taskId: string, person: Actor, commit?: string): Ok<{ entry: LedgerEntry }> | Refusal {
+    const state = this.state(taskId);
+    if (state.done || state.reopenedAs) return { ok: false, reason: `${taskId} is ${state.stage}.` };
+    if (person.kind !== "person") return { ok: false, reason: `Only a person can approve a merge, not ${person.kind} ${person.id}.` };
+    const approved = (commit ?? state.diffApproval?.commit ?? state.worktree?.commit ?? "").trim().toLowerCase();
+    if (!/^[0-9a-f]{40,64}$/.test(approved)) return { ok: false, reason: "Name the full commit whose merge is approved." };
+    const entry = this.ledger.append({
+      type: "review.verdict",
+      actor: person,
+      subject: taskId,
+      summary: `Merge of ${taskId} at ${approved.slice(0, 12)} approved by ${person.id}`,
+      evidence: ["scope:merge", "verdict:approve", `commit:${approved}`],
+      data: { scope: "merge", verdict: "approve", commit: approved },
+    });
+    if (!isAuthoritative(entry, { personOnly: true })) {
+      return { ok: false, reason: `The ledger could not verify ${person.id}'s signature, so this does not approve the merge.` };
+    }
+    return { ok: true, entry };
+  }
+
+  /**
    * Merge the task branch into a throwaway candidate of the integration branch, rerun the test there,
    * and only on a pass move the integration branch forward and write task.done (spec 5.5).
    * The integration branch is never left on an untested commit.
@@ -755,6 +794,15 @@ export class TestGate {
       return refuse(`The diff changes ${sensitive.join(", ")}, which can change what the approved test checks; a person has to approve this diff.`);
     }
     if (actor.kind !== "person") return refuse(`A person approves the merge, not ${actor.kind} ${actor.id}.`);
+    // Naming a person is not their approval: the merge needs their own signed entry for this exact tip.
+    const mergeApproval = state.mergeApproval;
+    if (mergeApproval?.commit !== branchTip.toLowerCase()) {
+      return refuse(`The merge has not been approved by a person at ${branchTip.slice(0, 12)}; they approve it with their own signed entry.`);
+    }
+    if (mergeApproval.actor.id !== actor.id) {
+      return refuse(`The merge was approved by ${mergeApproval.actor.id}, not ${actor.id}.`);
+    }
+    const approver = mergeApproval.actor;
     const base = await runGit(repoRoot, ["rev-parse", "--verify", `refs/heads/${integrationBranch}^{commit}`]);
     if (base.code !== 0) return refuse(`Integration branch ${integrationBranch} does not exist.`);
     const oldIntegration = base.stdout.trim();
@@ -827,7 +875,7 @@ export class TestGate {
       entries.push(
         this.ledger.append({
           type: "merge.done",
-          actor,
+          actor: approver,
           subject: taskId,
           summary: `Merged ${branch} into ${integrationBranch} at ${mergeCommit.slice(0, 12)}`,
           evidence: [`commit:${mergeCommit}`, `from:${oldIntegration}`, `branch:${branch}`, `branch-tip:${branchTip}`, `integration:${integrationBranch}`],
@@ -842,8 +890,8 @@ export class TestGate {
           actor: GATE_ACTOR,
           subject: taskId,
           summary: `${taskId} is done: its approved test passes on ${integrationBranch} at ${mergeCommit.slice(0, 12)}`,
-          evidence: [`commit:${mergeCommit}`, `test:${definition.command}`, `definition:${definition.n}`, `proof:${passed.n}`, `pin:${approval.pin}`, `approved-by:${actor.kind}:${actor.id}`],
-          data: { commit: mergeCommit, test: definition.command, pin: approval.pin, approvedBy: actor },
+          evidence: [`commit:${mergeCommit}`, `test:${definition.command}`, `definition:${definition.n}`, `proof:${passed.n}`, `pin:${approval.pin}`, `approved-by:${approver.kind}:${approver.id}`, `merge-approval:${mergeApproval.n}`],
+          data: { commit: mergeCommit, test: definition.command, pin: approval.pin, approvedBy: approver, mergeApproval: mergeApproval.n },
         }),
       );
       return { ok: true, mergeCommit, entries, run };
