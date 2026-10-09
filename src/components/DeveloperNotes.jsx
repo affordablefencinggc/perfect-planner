@@ -12,9 +12,10 @@ export function DeveloperNotes({project,events=getRuntimeEventSession(),invoke})
   // discarded the open panel and any unsaved draft. Reads use the latest generation via a ref.
   return <Notes key={project.projectId} project={project} events={events} invoke={invoke}/>;
 }
+const STORAGE_LABELS={'storage-ready':'saved on this device','history-loading':'loading saved history','events-saving':'saving, not yet confirmed','legacy-recovery-needed':'older history needs review','storage-read-failed':'saved history could not be read','events-unsaved':'some notes are not saved yet'};
 function Notes({project,events,invoke}){
   const [open,setOpen]=useState(false),[snapshot,setSnapshot]=useState(()=>events.getSnapshot(project.projectId));
-  const [form,setForm]=useState({}),[notice,setNotice]=useState(''),[editing,setEditing]=useState(false);
+  const [form,setForm]=useState({}),[notice,setNotice]=useState({text:'',error:false}),[editing,setEditing]=useState(false);
   const trigger=useRef(null),heading=useRef(null);
   const [agent,setAgent]=useState({records:[],total:null,nextOffset:null,status:'Not checked'});
   const [loading,setLoading]=useState(false),[browsingHistory,setBrowsingHistory]=useState(false);
@@ -51,17 +52,19 @@ function Notes({project,events,invoke}){
   },[open,native,bindingKey]);
   useEffect(()=>events.subscribe(project.projectId,()=>setSnapshot(events.getSnapshot(project.projectId))),[events,project.projectId]);
   useEffect(()=>{if(open)heading.current?.focus();},[open]);
+  useEffect(()=>{if(!open)return undefined;const onKey=e=>{if(e.key!=='Escape'||e.defaultPrevented)return;e.preventDefault();close();};document.addEventListener('keydown',onKey);return()=>document.removeEventListener('keydown',onKey);},[open]);
   const notes=developerNotes(snapshot);
   function close(){setOpen(false);trigger.current?.focus();}
-  function submit(event){event.preventDefault();try{appendDeveloperNote(project,form,events);setForm({});setEditing(false);setNotice('Captured locally. Check the save status below. This is not verification.');}catch(error){setNotice(error.message);}}
+  function submit(event){event.preventDefault();try{appendDeveloperNote(project,form,events);setForm({});setEditing(false);setNotice({text:'Captured locally. Check the save status above. This is not verification.',error:false});}catch(error){setNotice({text:`Not saved: ${error.message}`,error:true});}}
   return <>
     <button ref={trigger} className="developer-notes-toggle" type="button" aria-expanded={open} aria-controls="developer-notes-panel" onClick={()=>open?close():setOpen(true)}>Developer notes {notes.length>0&&`(${notes.length})`}</button>
-    {open&&<aside id="developer-notes-panel" className="developer-notes-panel" aria-label="Developer notes" onKeyDown={e=>{if(e.key==='Escape')close();}}>
+    {open&&<aside id="developer-notes-panel" className="developer-notes-panel" aria-label="Developer notes">
       <header><h2 ref={heading} tabIndex={-1}>Developer notes</h2><button type="button" onClick={close} aria-label="Close developer notes">Close</button></header>
       <p>Exchange summaries, errors and next actions—separate from the plan. Notes do not approve work.</p>
       <p className="developer-notes-warning">{native?'The latest agent report refreshes while this panel is open; browsing older reports pauses refresh. The agent must call planner_report_exchange after each exchange. Unreported IDE conversations are not captured.':'Automatic IDE exchange capture is not connected in this web view. Add a reviewed summary after each exchange.'} Do not paste secrets or private reasoning.</p>
       {native&&<section aria-label="Agent exchange reports"><h3>Agent reports · {agent.total===null?'count not checked':`${agent.total} recorded`}</h3><p role="status">{loading?'Reading owner reports…':agent.status}</p>{browsingHistory&&<p>Automatic refresh is paused while browsing older reports. Refresh latest report to resume.</p>}<button type="button" disabled={loading} onClick={()=>readReports()}>Refresh latest report</button><ol>{agent.records.map(r=><li key={r.exchangeId}><details open><summary>{r.summary.turn} · recorded by Planner</summary><p className="developer-notes-meta">Authenticated session {r.sessionId.slice(0,8)} · agent-reported, not verified · {r.receivedAt}</p><dl>{Object.entries(noteFields).filter(([key])=>key!=='turn').map(([key,label])=><div key={key}><dt>{label}</dt><dd>{r.summary[key]||'Not supplied / unknown'}</dd></div>)}</dl><small>Exchange {r.exchangeId} · receipt {r.digest.slice(0,12)}</small></details></li>)}</ol>{agent.nextOffset!==null&&<button type="button" disabled={loading} onClick={()=>readReports(agent.nextOffset)}>Load older report</button>}<p>Reports are retained separately from local manual notes. Session identity authenticates the sender, not the accuracy of its explanation.</p></section>}
-      <p role="status">Storage: {snapshot.health.reason}. {notice}</p>
+      <p role="status">Storage: {STORAGE_LABELS[snapshot.health.reason]??'some history could not be loaded or saved'}.</p>
+      {notice.text&&<p role={notice.error?'alert':'status'} className={notice.error?'developer-notes-error':undefined}>{notice.text}</p>}
       <button type="button" onClick={()=>setEditing(!editing)} aria-expanded={editing}>Add exchange note</button>
       {editing&&<form onSubmit={submit}>{Object.entries(noteFields).map(([field,label])=><label key={field}>{label}<textarea aria-label={label} required={['turn','request','response'].includes(field)} maxLength={2000} rows={field==='turn'?1:2} value={form[field]??''} onChange={e=>setForm(previous=>({...previous,[field]:e.target.value}))}/></label>)}<button type="submit">Save reviewed summary</button></form>}
       {!notes.length&&<p>No exchange notes recorded. Missing notes do not mean no errors occurred.</p>}

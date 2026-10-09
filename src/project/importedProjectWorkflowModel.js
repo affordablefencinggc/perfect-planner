@@ -21,7 +21,7 @@ const SUPPORTED_WORKSPACES = new Set([
   "index",
 ]);
 
-const WORKSPACE_COPY = Object.freeze({
+export const WORKSPACE_COPY = Object.freeze({
   plan: {
     eyebrow: "DEFINE · PROJECT-SCOPED PLANNING",
     title: "Planning intake",

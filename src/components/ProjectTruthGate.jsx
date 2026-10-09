@@ -180,10 +180,10 @@ export function ProjectTruthGate({
         <span className="project-truth-trigger-copy">
           <small>ACTIVE PROJECT</small>
           <strong>{projectName}</strong>
-          <span className={hasProject ? "advanced-only" : undefined}>{hasProject ? projectId : stateLabel(state, hasProject)}{projectSession?.generation !== null && projectSession?.generation !== undefined ? ` · scan ${safeText(projectSession.generation)}` : ""}</span>
+          {hasProject && <span className="advanced-only">{projectId}{projectSession?.generation !== null && projectSession?.generation !== undefined ? ` · scan ${safeText(projectSession.generation)}` : ""}</span>}
         </span>
         {isDemo && <span className="project-truth-demo-badge">Demo</span>}
-        <span className={`project-truth-state-badge state-${state}`}>{stateLabel(state, hasProject)}</span>
+        {hasProject && <span className={`project-truth-state-badge state-${state}`}>{stateLabel(state, hasProject)}</span>}
       </button>
 
       {showWorkspaceState && NON_READY_STATES.has(state) && (

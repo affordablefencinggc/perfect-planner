@@ -86,6 +86,14 @@ function censusFailureText(reason, path) {
   return path && path !== "." ? `${text} Last item: ${path}.` : text;
 }
 
+// Browser picker exceptions are developer text; say what happened and what to do instead.
+function pickerFailureText(reason) {
+  const text = String(reason ?? "");
+  if (/user gesture|user activation/i.test(text)) return "The browser needs a fresh click to open the folder picker. Press Choose app folder again. Nothing was registered or read.";
+  if (/SecurityError|NotAllowedError|not allowed|denied/i.test(text)) return "The browser did not allow folder access. Check this site's permissions, then try again. Nothing was registered or read.";
+  if (!text || /Failed to execute|DOMException|Error\b|^[a-z0-9-]+$/.test(text)) return "The folder picker could not open. Try again, or use the desktop app. Nothing was registered or read.";
+  return text;
+}
 const cloneSeed = () => structuredClone(currentFolderContractInput);
 // Only the Demo starts from the sample folders. A real project, and the page
 // before any project is chosen, start from an empty plan.
@@ -916,12 +924,11 @@ export function StructureWorkspace({
         const message =
           receipt?.reason === "native-runtime-unavailable"
             ? "Open the native desktop app to choose a folder. This browser does not provide secure folder access."
-            : receipt?.reason ||
-              "Folder selection failed without a saved check.";
+            : pickerFailureText(receipt?.reason);
         setIntake((current) => ({ ...current, state: "error", message }));
         // Browser limits (no native picker, no drag-and-drop access) are expected, not failures.
         const expected = receipt?.reason === "native-runtime-unavailable" || /cannot grant folder access|Drop exactly one/.test(message);
-        onDiagnostic?.("workspace", expected ? "warning" : "error", message);
+        onDiagnostic?.("workspace", expected ? "warning" : "error", receipt?.reason || message);
         return;
       }
       if (receipt.selectionState === "cancelled") {
@@ -937,12 +944,9 @@ export function StructureWorkspace({
       await awaitScanApproval(receipt.selectedPath);
     } catch (error) {
       if (selectionRunRef.current !== runId) return;
-      const message =
-        error instanceof Error
-          ? error.message
-          : "Unexpected folder-picker failure.";
+      const message = pickerFailureText(error instanceof Error ? error.message : "");
       setIntake((current) => ({ ...current, state: "error", message }));
-      onDiagnostic?.("workspace", "error", message);
+      onDiagnostic?.("workspace", "error", error instanceof Error ? error.message : message);
     }
   };
   // Home's "Choose app folder" lands here and opens the picker straight away.
@@ -1297,7 +1301,7 @@ export function StructureWorkspace({
               </form>
             )}
             <div className="folder-intake-status">
-              <span className="folder-intake-message" role="status">{intake.message}</span>
+              <span className={`folder-intake-message${intake.state === "error" ? " is-error" : ""}`} role={intake.state === "error" ? "alert" : "status"}>{intake.message}</span>
               <span className="folder-scan-actions">
                 {rootPath && !mapLoading && ["error", "analysis-refused"].includes(intake.state) && (
                   <button type="button" className="soft-button" onClick={() => connectFolder()}>

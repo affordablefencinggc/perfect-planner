@@ -156,7 +156,7 @@ describe("Perfect Planner shell interaction and accessibility", () => {
       expect(await screen.findByRole("region", { name: region })).toBeTruthy();
       expect(window.location.search).toContain(`workspace=${route}`);
     }
-    await user.click(screen.getByRole("button", { name: /2 demo agents/ }));
+    await user.click(screen.getByRole("button", { name: /Agent connection · unavailable in Demo/ }));
     expect(await screen.findByRole("region", { name: "Runtime and connections" })).toBeTruthy();
     const connectCard = await screen.findByRole("region", { name: "Connect your agent" });
     expect(connectCard.textContent).not.toMatch(/Antigravity/);
@@ -178,10 +178,10 @@ describe("Perfect Planner shell interaction and accessibility", () => {
     expect(screen.getByRole("button", { name: /Delivery calendar/ }).className).toContain("responsive-topbar-action");
 
     await user.click(screen.getByRole("button", { name: /MCP access/ }));
-    expect(screen.getByText("Allow MCP context in this session")).toBeTruthy();
+    expect(screen.getByText("Allow MCP context on this device")).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "Back to more actions" }));
     await user.click(screen.getByRole("button", { name: /Invite to organization/ }));
-    expect(screen.getByRole("button", { name: /Create invitation draft/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Check address/ })).toBeTruthy();
   });
 
   test("owner profiles open above the avatar with keyboard and close with Escape", async () => {
@@ -450,7 +450,7 @@ describe("Perfect Planner shell interaction and accessibility", () => {
     await user.click(screen.getByRole("button", { name: "Open project folders" }));
     expect(screen.getByRole("dialog", { name: "Project folders" })).toBeTruthy();
     expect(screen.getAllByRole("button", { name: /Perfect Planner Demo/ }).at(-1).className).toContain("active");
-    await user.click(screen.getByRole("button", { name: /Add another project folder/ }));
+    await user.click(screen.getByRole("button", { name: /Add a project folder/ }));
     expect(screen.getByRole("region", { name: "Strict folder contract workspace" })).toBeTruthy();
   });
 
@@ -493,5 +493,98 @@ describe("Demo project index", () => {
     expect(screen.getByRole("region", { name: "Project index" })).toBeTruthy();
     fireEvent.keyDown(search, { key: "Escape" });
     expect(await screen.findByRole("region", { name: "Project Home workspace" })).toBeTruthy();
+  });
+});
+
+function renderEmptyShell(route = "home", extra = "") {
+  window.history.replaceState({}, "", `/?workspace=${route}${extra}`);
+  const registry = createProjectRegistry({ storage: createMemoryStorage() });
+  return render(<ProjectProvider registry={registry}><PerfectPlannerShell diagnosticSession={diagnosticSessionFixture()} /></ProjectProvider>);
+}
+
+describe("shell trial fixes", () => {
+  test("stage tabs mark the current page with aria-current", () => {
+    window.history.replaceState({}, "", "/?workspace=collision");
+    renderDemoShell();
+    const nav = screen.getByRole("navigation", { name: "Build stages" });
+    expect(within(nav).getByRole("button", { name: "Coordinate" }).getAttribute("aria-current")).toBe("page");
+    expect(within(nav).getByRole("button", { name: "Home" }).getAttribute("aria-current")).toBeNull();
+    expect(nav.querySelectorAll('[aria-current="page"]')).toHaveLength(1);
+  });
+
+  test("Index has its own context and Escape returns to the page it was opened from", async () => {
+    window.history.replaceState({}, "", "/?workspace=plan");
+    const user = userEvent.setup(); renderDemoShell();
+    await user.click(within(screen.getByRole("navigation", { name: "Build stages" })).getByRole("button", { name: /Index/ }));
+    const context = screen.getByRole("region", { name: "Current workspace context" });
+    expect(context.querySelector(".workspace-breadcrumb strong").textContent).toBe("Index");
+    expect(context.textContent).not.toContain("Project Home");
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(new URLSearchParams(window.location.search).get("workspace")).toBe("plan"));
+    expect(screen.getByRole("region", { name: "Current workspace context" }).querySelector(".workspace-breadcrumb strong").textContent).toBe("Plan");
+  });
+
+  test("header popovers close on an outside click and never stack with the project folder menu", async () => {
+    window.history.replaceState({}, "", "/?workspace=home");
+    const user = userEvent.setup(); renderDemoShell();
+    await user.click(screen.getByRole("button", { name: /3 developers/ }));
+    expect(screen.getByRole("dialog", { name: "Developer roster" })).toBeTruthy();
+    await user.click(document.querySelector(".app-main"));
+    expect(screen.queryByRole("dialog", { name: "Developer roster" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: /3 developers/ }));
+    await user.click(screen.getByRole("button", { name: "Open project folders" }));
+    expect(screen.getByRole("dialog", { name: "Project folders" })).toBeTruthy();
+    expect(screen.queryByRole("dialog", { name: "Developer roster" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: /3 developers/ }));
+    expect(screen.queryByRole("dialog", { name: "Project folders" })).toBeNull();
+  });
+
+  test("the agent connection pill toggles its panel and Escape returns focus to it", async () => {
+    window.history.replaceState({}, "", "/?workspace=home");
+    const user = userEvent.setup(); renderDemoShell();
+    const pill = screen.getByRole("button", { name: /Agent connection · unavailable in Demo/ });
+    await user.click(pill);
+    expect(screen.getByRole("dialog", { name: "More actions" })).toBeTruthy();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog", { name: "More actions" })).toBeNull();
+    await waitFor(() => expect(document.activeElement).toBe(pill));
+    await user.click(pill);
+    expect(screen.getByRole("dialog", { name: "More actions" })).toBeTruthy();
+    await user.click(pill);
+    expect(screen.queryByRole("dialog", { name: "More actions" })).toBeNull();
+  });
+
+  test("MCP context is opt-in and the choice survives a reload", async () => {
+    const user = userEvent.setup();
+    renderEmptyShell();
+    await user.click(screen.getByRole("button", { name: "More actions" }));
+    expect(screen.getByRole("button", { name: /MCP access/ }).textContent).toContain("Off");
+    await user.click(screen.getByRole("button", { name: /MCP access/ }));
+    const toggle = screen.getByRole("checkbox", { name: /Allow MCP context on this device/ });
+    expect(toggle.checked).toBe(false);
+    await user.click(toggle);
+    expect(window.localStorage.getItem("perfect-planner.mcp-context-allowed.v1")).toBe("true");
+    cleanup();
+    renderEmptyShell();
+    await user.click(screen.getByRole("button", { name: "More actions" }));
+    await user.click(screen.getByRole("button", { name: /MCP access/ }));
+    expect(screen.getByRole("checkbox", { name: /Allow MCP context on this device/ }).checked).toBe(true);
+  });
+
+  test("a link to a project this device does not know is reported, not dropped", async () => {
+    renderEmptyShell("home", "&project=pp_not-registered-here");
+    expect(await screen.findByText(/linked project isn't registered on this device/)).toBeTruthy();
+  });
+
+  test("invitations say plainly that nothing is saved or sent", async () => {
+    const user = userEvent.setup();
+    renderEmptyShell();
+    await user.click(screen.getByRole("button", { name: "More actions" }));
+    await user.click(screen.getByRole("button", { name: /Invite to organization/ }));
+    await user.type(screen.getByPlaceholderText("name@company.com"), "dev@example.com");
+    await user.click(screen.getByRole("button", { name: /Check address/ }));
+    const toast = await screen.findByText(/Invitation not sent/);
+    expect(toast.textContent).toContain("nothing was saved or sent");
+    expect(document.body.textContent).not.toMatch(/Invitation drafted/);
   });
 });
