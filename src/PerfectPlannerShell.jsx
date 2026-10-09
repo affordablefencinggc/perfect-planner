@@ -84,6 +84,8 @@ import {
 } from "./project/ProjectProvider.jsx";
 import { deriveProjectHomeModel } from "./project/projectHomeModel.js";
 import { useProjectWorkRecords } from "./project/useProjectWorkRecords.js";
+import { collisionStatus } from "./project/taskCoordination.js";
+import { WORKSPACE_COPY } from "./project/importedProjectWorkflowModel.js";
 import { usePlanTaskDriftWatch } from "./project/usePlanApproval.js";
 import { confirmProjectReady } from "./project/planApproval.js";
 import { createDemoProjectSession, isDemoProject } from "./demo/demoProject.js";
@@ -226,6 +228,12 @@ const workspaceContext = {
     purpose: "Close the source ledger and prepare the handover.",
     outcome: "A reproducible release bundle with honest limits.",
     unlock: "All required proof must be accepted.",
+  },
+  index: {
+    stage: "index",
+    purpose: "Find any plan item, screenshot, or source by name or ID.",
+    outcome: "Every indexed term opens the page that owns it.",
+    unlock: "Press Escape to go back to the page you came from.",
   },
 };
 function readInitialWorkspace() {
@@ -382,6 +390,37 @@ function stageForWorkspace(workspace) {
   );
 }
 
+const MCP_CONTEXT_KEY = "perfect-planner.mcp-context-allowed.v1";
+// MCP context is opt-in: only an explicit, saved "true" allows it.
+function readMcpContextAllowed() { try { return globalThis.localStorage?.getItem(MCP_CONTEXT_KEY) === "true"; } catch { return false; } }
+function writeMcpContextAllowed(allowed) { try { globalThis.localStorage?.setItem(MCP_CONTEXT_KEY, allowed ? "true" : "false"); } catch { /* the choice still applies until reload */ } }
+// The page Index's Escape returns to; the top bar records it as the workspace changes.
+let indexReturnWorkspace = "home";
+const plural = (count, word, many = `${word}s`) => `${count} ${count === 1 ? word : many}`;
+const truncateEcho = (value, max = 64) => (value.length > max ? `${value.slice(0, max - 1)}…` : value);
+// Demo forecast dates are relative to today so the sample never shows a delivery window in the past.
+function demoForecastDates(now = new Date()) {
+  const format = new Intl.DateTimeFormat("en-AU", { day: "2-digit", month: "short", year: "numeric" });
+  const day = (offset) => format.format(new Date(now.getFullYear(), now.getMonth(), now.getDate() + offset));
+  return [["START", day(0)], ["P50", day(12)], ["P80", day(18)]];
+}
+// A scroll area with nothing focusable inside becomes a tab stop so the keyboard can scroll it.
+const keyboardScrollable = (node) => { if (!node) return; if (node.querySelector('button, a[href], input, select, textarea, [tabindex]:not([tabindex="-1"])')) node.removeAttribute("tabindex"); else node.tabIndex = 0; };
+// Outside pointer or focus closes a popover; its trigger counts as inside so it can toggle.
+function usePopoverDismiss(open, onDismiss, ...refs) {
+  const dismissRef = useRef(onDismiss);
+  dismissRef.current = onDismiss;
+  useEffect(() => {
+    if (!open) return undefined;
+    const outside = (target) => target instanceof Node && !refs.some((ref) => ref.current?.contains(target));
+    const onPointerDown = (event) => { if (outside(event.target)) dismissRef.current(); };
+    const onFocusIn = (event) => { if (outside(event.target)) dismissRef.current(); };
+    document.addEventListener("pointerdown", onPointerDown, true);
+    document.addEventListener("focusin", onFocusIn);
+    return () => { document.removeEventListener("pointerdown", onPointerDown, true); document.removeEventListener("focusin", onFocusIn); };
+  }, [open]);
+}
+
 // The header wraps on narrow windows, so the workspace below follows its real height.
 function useHeaderHeightVariable(headerRef) {
   useLayoutEffect(() => {
@@ -423,13 +462,59 @@ function TopBar({
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteRole, setInviteRole] = useState("Developer");
   const [organizationName, setOrganizationName] = useState("");
-  const [mcpAllowed, setMcpAllowed] = useState(true);
+  const [mcpAllowed, setMcpAllowed] = useState(readMcpContextAllowed);
   const [agentDrawerOpen, setAgentDrawerOpen] = useState(false);
   const openAgentDrawer = () => { setOpenMenu(null); setAgentDrawerOpen(true); };
   const menuTriggerRef = useRef(null);
   const headerRef = useRef(null);
   useHeaderHeightVariable(headerRef);
   const menuPopoverRef = useRef(null);
+  const navRef = useRef(null);
+  usePopoverDismiss(Boolean(openMenu), () => setOpenMenu(null), menuPopoverRef, menuTriggerRef);
+  const savedRecords = useProjectWorkRecords(demoMode ? null : activeProject?.projectId);
+  const savedCollisions = savedRecords.sections?.collisions?.data ? collisionStatus(savedRecords.sections.collisions.data) : null;
+  const collisionLabel = demoMode ? `${collisionGate.unresolved} unresolved collisions`
+    : savedCollisions ? `Last saved check · ${savedCollisions.openHardStops ? plural(savedCollisions.openHardStops, "open hard stop") : plural(savedCollisions.total, "overlap")}`
+    : activeProject ? "Collision check not run" : "Collision check unavailable";
+  const forecastDates = demoForecastDates();
+  useEffect(() => { if (workspace !== "index") indexReturnWorkspace = workspace; }, [workspace]);
+  useEffect(() => () => { indexReturnWorkspace = "home"; }, []);
+  // A link naming a project this device has never registered is said out loud, not silently dropped.
+  const [linkedProjectId] = useState(() => new URLSearchParams(window.location.search).get("project"));
+  const linkChecked = useRef(false);
+  useEffect(() => {
+    if (linkChecked.current || !linkedProjectId || projectContext.selectionInitialized === false) return undefined;
+    const timer = setTimeout(() => {
+      linkChecked.current = true;
+      if (!projectContext.projects.some((project) => project.projectId === linkedProjectId)) onToast("The linked project isn't registered on this device. Add its app folder to open it here.", "warning");
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [linkedProjectId, projectContext.selectionInitialized]);
+  // Escape on Index goes back to the page it was opened from, unless a dialog or popover owns the key.
+  useEffect(() => {
+    if (workspace !== "index") return undefined;
+    const onKeyDown = (event) => {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      if (document.querySelector('.topbar-popover, .project-folder-menu, [aria-modal="true"]:not([aria-hidden="true"]), .project-truth-dialog-layer')) return;
+      event.preventDefault();
+      onWorkspace(indexReturnWorkspace);
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [workspace, onWorkspace]);
+  // Narrow windows scroll the stage tabs: keep the active one visible and fade whichever edge hides more.
+  useEffect(() => {
+    const nav = navRef.current;
+    if (!nav) return undefined;
+    const mark = () => { nav.dataset.moreLeft = String(nav.scrollLeft > 4); nav.dataset.moreRight = String(nav.scrollLeft + nav.clientWidth < nav.scrollWidth - 4); };
+    const active = nav.querySelector(".workspace-tab.active");
+    if (active && nav.scrollWidth > nav.clientWidth) nav.scrollLeft = Math.max(0, active.offsetLeft - (nav.clientWidth - active.offsetWidth) / 2);
+    mark();
+    nav.addEventListener("scroll", mark, { passive: true });
+    const observer = typeof ResizeObserver === "function" ? new ResizeObserver(mark) : null;
+    observer?.observe(nav);
+    return () => { nav.removeEventListener("scroll", mark); observer?.disconnect(); };
+  }, [workspace]);
   let runtimeCapabilityMatrix = null;
   if (activeProject) {
     try {
@@ -461,18 +546,26 @@ function TopBar({
         { name: "Jon", role: "Frontend lead", state: "reviewing" },
       ]
     : [];
-  const toggleMenu = (menu) => {
-    menuTriggerRef.current = document.activeElement;
+  const toggleMenu = (menu, event) => {
+    menuTriggerRef.current = event?.currentTarget ?? document.activeElement;
     setActionView("menu");
     setOpenMenu((current) => (current === menu ? null : menu));
   };
   useEffect(() => {
     if (!openMenu) return undefined;
-    const frame = globalThis.requestAnimationFrame?.(() => {
+    let observer = null;
+    const focusFirst = () => {
       const target = menuPopoverRef.current?.querySelector(
         'button:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
       );
       target?.focus();
+      return Boolean(target);
+    };
+    const frame = globalThis.requestAnimationFrame?.(() => {
+      // A lazily loaded view has nothing focusable yet: focus its first control once it arrives.
+      if (focusFirst() || typeof MutationObserver !== "function" || !menuPopoverRef.current) return;
+      observer = new MutationObserver(() => { if (focusFirst()) observer.disconnect(); });
+      observer.observe(menuPopoverRef.current, { childList: true, subtree: true });
     });
     const onKeyDown = (event) => {
       if (event.key !== "Escape") return;
@@ -483,22 +576,24 @@ function TopBar({
     document.addEventListener("keydown", onKeyDown);
     return () => {
       if (frame != null) globalThis.cancelAnimationFrame?.(frame);
+      observer?.disconnect();
       document.removeEventListener("keydown", onKeyDown);
     };
   }, [openMenu]);
   const setMcpAccess = (allowed) => {
     setMcpAllowed(allowed);
+    writeMcpContextAllowed(allowed);
     onDiagnostic(
       "mcp",
       "info",
       allowed
-        ? "MCP context enabled for this session."
-        : "MCP context paused for this session.",
+        ? "MCP context allowed on this device."
+        : "MCP context paused on this device.",
     );
     onToast(
       allowed
-        ? "MCP context allowed for this session."
-        : "MCP context paused for this session.",
+        ? "MCP context allowed on this device."
+        : "MCP context paused on this device.",
     );
   };
   const createInvitation = (event) => {
@@ -509,11 +604,8 @@ function TopBar({
       return;
     }
     onToast(
-      "Invitation drafted for " +
-        address +
-        " as " +
-        inviteRole +
-        ". Delivery connection is still required.",
+      `Invitation not sent: no mail provider is connected, so nothing was saved or sent for ${truncateEcho(address)} (${inviteRole}).`,
+      "warning",
     );
     setInviteEmail("");
     setActionView("menu");
@@ -587,13 +679,14 @@ function TopBar({
           showWorkspaceState={false}
         />
 
-        <nav className="workspace-nav" aria-label="Build stages">
+        <nav className="workspace-nav" aria-label="Build stages" ref={navRef}>
           <button
             className={
               workspace === "home"
                 ? "workspace-tab home-tab active"
                 : "workspace-tab home-tab"
             }
+            aria-current={workspace === "home" ? "page" : undefined}
             onClick={() => onWorkspace("home")}
           >
             Home
@@ -607,6 +700,7 @@ function TopBar({
                   ? "workspace-tab active"
                   : "workspace-tab"
               }
+              aria-current={activeStage?.id === stage.id ? "page" : undefined}
               onClick={() => onWorkspace(stage.workspaces[0])}
             >
               <small>{stage.number}</small>
@@ -619,6 +713,7 @@ function TopBar({
                 ? "workspace-tab index-tab active"
                 : "workspace-tab index-tab"
             }
+            aria-current={workspace === "index" ? "page" : undefined}
             onClick={() => onWorkspace("index")}
           >
             <MagnifyingGlassIcon /> Index
@@ -629,7 +724,7 @@ function TopBar({
           <div className="topbar-menu-anchor">
             <button
               className="top-metric-button"
-              onClick={() => toggleMenu("developers")}
+              onClick={(event) => toggleMenu("developers", event)}
               aria-expanded={openMenu === "developers"}
             >
               <UsersThreeIcon />{" "}
@@ -662,11 +757,11 @@ function TopBar({
                     </small>
                     <button
                       onClick={() => {
-                        onWorkspace("allocation");
+                        onWorkspace(activeProject ? "allocation" : "structure");
                         setOpenMenu(null);
                       }}
                     >
-                      Open allocation
+                      {activeProject ? "Open allocation" : "Choose an app folder"}
                     </button>
                   </div>
                 )}
@@ -706,21 +801,23 @@ function TopBar({
             className="top-metric-button"
             aria-haspopup="dialog"
             aria-expanded={openMenu === "actions" && actionView === "runtime"}
-            onClick={() => {
+            onClick={(event) => {
+              menuTriggerRef.current = event.currentTarget;
+              if (openMenu === "actions" && actionView === "runtime") { setOpenMenu(null); return; }
               setActionView("runtime");
               setOpenMenu("actions");
             }}
           >
-            <RobotIcon /> {demoMode ? "2 demo agents" : agentObservations.label}
+            <RobotIcon /> {demoMode ? "Agent connection · unavailable in Demo" : agentObservations.label}
           </button>
           <div className="topbar-menu-anchor">
             <button
               className="top-metric-button"
-              onClick={() => toggleMenu("calendar")}
+              onClick={(event) => toggleMenu("calendar", event)}
               aria-expanded={openMenu === "calendar"}
             >
               <CalendarDotsIcon />{" "}
-              {demoMode ? <>P80&nbsp; 18 days</> : "No forecast"}{" "}
+              {demoMode ? "P80 · 18 days" : "No forecast"}{" "}
               <CaretDownIcon />
             </button>
             {openMenu === "calendar" && (
@@ -739,20 +836,12 @@ function TopBar({
                   </span>
                 </header>
                 {demoMode ? (
-                  <>
-                    <div className="calendar-date">
-                      <small>START</small>
-                      <strong>02 Sep 2026</strong>
+                  forecastDates.map(([label, date]) => (
+                    <div className="calendar-date" key={label}>
+                      <small>{label}</small>
+                      <strong>{date}</strong>
                     </div>
-                    <div className="calendar-date">
-                      <small>P50</small>
-                      <strong>14 Sep 2026</strong>
-                    </div>
-                    <div className="calendar-date">
-                      <small>P80</small>
-                      <strong>20 Sep 2026</strong>
-                    </div>
-                  </>
+                  ))
                 ) : (
                   <p className="popover-note">
                     A folder scan does not create dates. Generate and approve
@@ -774,10 +863,7 @@ function TopBar({
             className={`top-metric-button ${demoMode ? (collisionGate.ready ? "metric-clear" : "metric-stop") : ""}`}
             onClick={() => onWorkspace("collision")}
           >
-            <ShieldCheckIcon />{" "}
-            {demoMode
-              ? `${collisionGate.unresolved} unresolved collisions`
-              : "Collision check unavailable"}
+            <ShieldCheckIcon /> {collisionLabel}
           </button>
           <button
             className="top-metric-button topbar-connect-agent"
@@ -787,14 +873,14 @@ function TopBar({
           >
             <PlugsConnectedIcon /> Connect agent
           </button>
-          {agentDrawerOpen && <Suspense fallback={null}><ConnectAgentDrawer open={agentDrawerOpen} onClose={() => setAgentDrawerOpen(false)} onWorkspace={onWorkspace} /></Suspense>}
+          {agentDrawerOpen && <Suspense fallback={null}><ConnectAgentDrawer open={agentDrawerOpen} onClose={() => setAgentDrawerOpen(false)} onWorkspace={onWorkspace} hasProject={Boolean(activeProject)} /></Suspense>}
           <div className="topbar-menu-anchor more-actions-anchor">
             <IconButton
               label="More actions"
               className="more-actions-button"
               aria-expanded={openMenu === "actions"}
               aria-haspopup="dialog"
-              onClick={() => toggleMenu("actions")}
+              onClick={(event) => toggleMenu("actions", event)}
             >
               <DotsThreeIcon weight="bold" />
             </IconButton>
@@ -853,7 +939,7 @@ function TopBar({
                         <RobotIcon />
                         <span>
                           <strong>Agent connection</strong>
-                          <small>{demoMode ? "2 demo agents" : agentObservations.label}</small>
+                          <small>{demoMode ? "Agent connection · unavailable in Demo" : agentObservations.label}</small>
                         </span>
                         <ArrowRightIcon />
                       </button>
@@ -867,11 +953,7 @@ function TopBar({
                         <ShieldCheckIcon />
                         <span>
                           <strong>Collision review</strong>
-                          <small>
-                            {demoMode
-                              ? `${collisionGate.unresolved} unresolved collisions`
-                              : "Collision check unavailable"}
-                          </small>
+                          <small>{collisionLabel}</small>
                         </span>
                         <ArrowRightIcon />
                       </button>
@@ -894,7 +976,7 @@ function TopBar({
                           <small>
                             {mcpAllowed
                               ? "Context allowed · runtime connection unverified"
-                              : "Paused for this session"}
+                              : "Off · opt in to share context"}
                           </small>
                         </span>
                         <ArrowRightIcon />
@@ -1033,11 +1115,7 @@ function TopBar({
                       </span>
                     </header>
                     {demoMode ? (
-                      <>
-                        <div className="calendar-date"><small>START</small><strong>02 Sep 2026</strong></div>
-                        <div className="calendar-date"><small>P50</small><strong>14 Sep 2026</strong></div>
-                        <div className="calendar-date"><small>P80</small><strong>20 Sep 2026</strong></div>
-                      </>
+                      forecastDates.map(([label, date]) => <div className="calendar-date" key={label}><small>{label}</small><strong>{date}</strong></div>)
                     ) : (
                       <p className="popover-note">
                         A folder scan does not create dates. Generate and approve a plan before forecasting.
@@ -1079,14 +1157,15 @@ function TopBar({
                         </strong>
                       </span>
                       <small>
-                        This switch records a session preference only. A
-                        timestamped runtime capability record is still required
-                        before Perfect Planner may claim any MCP connection.
+                        Off until you turn it on. This switch saves a preference
+                        on this device only. A timestamped runtime capability
+                        record is still required before Perfect Planner may
+                        claim any MCP connection.
                       </small>
                     </div>
                     <label className="organization-switch">
                       <span>
-                        <strong>Allow MCP context in this session</strong>
+                        <strong>Allow MCP context on this device</strong>
                         <small>
                           The Codex host remains the real permission boundary
                         </small>
@@ -1118,7 +1197,7 @@ function TopBar({
                       </button>
                       <span>
                         <strong>Invite to organization</strong>
-                        <small>Create a delivery-ready invitation draft</small>
+                        <small>No mail provider connected · nothing is sent or saved</small>
                       </span>
                     </header>
                     <label className="popover-field">
@@ -1144,11 +1223,11 @@ function TopBar({
                       </select>
                     </label>
                     <p className="popover-note">
-                      No mail provider is connected yet. This creates an honest
-                      invitation draft without claiming it was sent.
+                      No mail provider is connected yet. Nothing you enter here
+                      is saved or sent; the address is only checked.
                     </p>
                     <button className="popover-primary" type="submit">
-                      Create invitation draft <ArrowRightIcon />
+                      Check address (nothing is sent) <ArrowRightIcon />
                     </button>
                   </form>
                 )}
@@ -1183,7 +1262,7 @@ function TopBar({
                         <small>people</small>
                       </span>
                       <span>
-                        <b>{demoMode ? 2 : "—"}</b>
+                        <b>—</b>
                         <small>agents</small>
                       </span>
                       <span>
@@ -1214,7 +1293,7 @@ function TopBar({
         </div>
       </div>
       <WorkspaceContextBar
-        workspace={workspace === "index" ? "home" : workspace}
+        workspace={workspace}
         onWorkspace={onWorkspace}
         onToast={onToast}
         projectContext={projectContext}
@@ -1329,9 +1408,9 @@ function RepositoryDrawer({
                   <strong>{repo.name}</strong>
                   <small>{repo.path}</small>
                 </div>
-                <span className="count-badge">{repo.count}</span>
+                <span className="count-badge">{plans.filter((plan) => plan.repoKey === repo.key).length}</span>
               </div>
-              {plans.slice(0, repo.key === "P" ? 2 : 1).map((plan) => (
+              {plans.filter((plan) => plan.repoKey === repo.key).map((plan) => (
                 <button
                   className="plan-row demo-sample-row"
                   key={`${repo.key}-${plan.id}`}
@@ -1396,7 +1475,7 @@ function RepositoryDrawer({
             onWorkspace(demoMode ? "blueprint" : "structure");
           }}
         >
-          <PlusIcon /> {demoMode ? "New demo plan" : "Add project"}
+          <PlusIcon /> {demoMode ? "Open Demo blueprint" : "Add project"}
         </button>
         <button
           className="soft-button"
@@ -1430,7 +1509,7 @@ export function InspectorDrawer({ open, onClose, selected, side = "right", demoM
   if (!demoMode) return (
     <aside ref={dialogRef} className={`side-drawer drawer-${side} inspector-drawer ${open ? "open" : ""}`} aria-hidden={!open} aria-modal={open ? "true" : undefined} inert={!open} role="dialog" aria-label="Project evidence inspector">
       <div className="drawer-header"><div><span className="eyebrow">Project evidence</span><h2>{selected.id} · {selected.title}</h2></div><IconButton label="Close inspector" onClick={onClose}>{side === "left" ? <CaretLeftIcon /> : <CaretRightIcon />}</IconButton></div>
-      <div className="drawer-scroll inspector-body">
+      <div className="drawer-scroll inspector-body" ref={(node) => keyboardScrollable(node)} role="region" aria-label="Inspector details">
         <p>Recorded context only. Discovery findings and review questions are not assigned work, execution proof, or architecture approval.</p>
         {selected.estimate && <p>{selected.estimate}</p>}
         <section className="inspector-section"><h3>Findings and review questions</h3>
@@ -1471,7 +1550,7 @@ export function InspectorDrawer({ open, onClose, selected, side = "right", demoM
           {side === "left" ? <CaretLeftIcon /> : <CaretRightIcon />}
         </IconButton>
       </div>
-      <div className="drawer-scroll inspector-body">
+      <div className="drawer-scroll inspector-body" ref={(node) => keyboardScrollable(node)} role="region" aria-label="Inspector details">
         <div className="inspector-summary">
           <StatusChip status={selected.status} />
           <span>{selected.estimate ?? "No estimate in the sample"}</span>
@@ -1973,6 +2052,7 @@ function PlanWorkspace({
   const [briefCopied, setBriefCopied] = useState(false);
   const [nodeFilter, setNodeFilter] = useState("all");
   const briefRef = useRef(null);
+  const briefButtonRef = useRef(null);
   const canvasRef = useRef(null);
   const activeNode = phases
     .flatMap((phase) => phase.nodes.map((node) => ({ ...node, phase })))
@@ -1983,15 +2063,24 @@ function PlanWorkspace({
   const nextAction = collisionGate.ready
     ? "Finish B07, attach screenshot and scoped code difference, then release B08."
     : "Open Collisions, approve every deterministic order, commit the assessment, then return to B07.";
-  const handoffText = `PP-014 · Local Collaboration Workspace\nGoal: produce a collision-safe, evidence-backed build path.\nCurrent: ${activeNode?.phase.id ?? "P3"} ${activeNode?.phase.title ?? "Build Waves"} · ${activeNode?.id ?? "B07"} ${activeNode?.title ?? "Collision-safe plan capsule"}.\nOwner: ${activeNode?.owner ?? "Build Agent A"}.\nClaimed surfaces: src/plans/* and src/sync/plan.ts.\nCollision state: ${collisionSummary}.\nNext: ${nextAction}\nHard rule: no task is complete without matching screenshot and code-difference proof.`;
+  const handoffText = `DEMO SAMPLE (not a real project) · PP-014 · Local Collaboration Workspace\nGoal: produce a collision-safe, evidence-backed build path.\nCurrent: ${activeNode?.phase.id ?? "P3"} ${activeNode?.phase.title ?? "Build Waves"} · ${activeNode?.id ?? "B07"} ${activeNode?.title ?? "Collision-safe plan capsule"}.\nOwner: ${activeNode?.owner ?? "Build Agent A"}.\nClaimed surfaces: src/plans/* and src/sync/plan.ts.\nCollision state: ${collisionSummary}.\nNext: ${nextAction}\nHard rule: no task is complete without matching screenshot and code-difference proof.`;
   useEffect(() => {
     if (!briefOpen) return undefined;
     const closeOnOutsideClick = (event) => {
       if (!briefRef.current?.contains(event.target)) setBriefOpen(false);
     };
+    const closeOnEscape = (event) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      setBriefOpen(false);
+      briefButtonRef.current?.focus();
+    };
     document.addEventListener("pointerdown", closeOnOutsideClick);
-    return () =>
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
       document.removeEventListener("pointerdown", closeOnOutsideClick);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
   }, [briefOpen]);
   const movePlanPage = (direction) => {
     const scroller = canvasRef.current?.closest(".workspace-stage-coordinate") ?? canvasRef.current?.closest(".plan-workspace");
@@ -2048,6 +2137,7 @@ function PlanWorkspace({
         <div className="plan-toolbar-actions">
           <div className="quick-brief-control" ref={briefRef}>
             <button
+              ref={briefButtonRef}
               className="quick-brief-button"
               onClick={() => {
                 setBriefOpen((value) => !value);
@@ -2129,11 +2219,11 @@ function PlanWorkspace({
                   <span>Ledger: 27 sources · 17 commitments · 4 NO-GO</span>
                   <button
                     onClick={async () => {
-                      await navigator.clipboard?.writeText(handoffText);
-                      setBriefCopied(true);
+                      if (!navigator.clipboard?.writeText) { setBriefCopied("unavailable"); return; }
+                      try { await navigator.clipboard.writeText(handoffText); setBriefCopied("copied"); } catch { setBriefCopied("failed"); }
                     }}
                   >
-                    {briefCopied ? "Copied" : "Copy handoff"}
+                    {{ copied: "Copied", failed: "Copy failed", unavailable: "Copy unavailable" }[briefCopied] ?? "Copy handoff"}
                   </button>
                 </footer>
               </section>
@@ -2475,9 +2565,9 @@ function WorkspaceContextBar({
   const displayedContext = demoMode
     ? context
     : activeProject
-      ? {
+      ? WORKSPACE_COPY[workspace] && activeProject.census && !["stale", "unavailable"].includes(activeProject.state) ? WORKSPACE_COPY[workspace] : {
           purpose: `Inspect ${activeProject.name} using only project-scoped evidence.`,
-          outcome: `Every result remains bound to ${activeProject.projectId}.`,
+          outcome: <>Every result remains bound to {activeProject.name}<span className="advanced-only"> ({activeProject.projectId})</span>.</>,
           unlock: activeProject.census
             ? `Generate and approve ${workspaceLabels[workspace] ?? "workspace"} evidence.`
             : "Run or recover the read-only folder census.",
@@ -2494,6 +2584,8 @@ function WorkspaceContextBar({
   const projectMenuRef = useRef(null);
   const projects = projectContext.projects;
   const activeProjectId = projectContext.activeProjectId;
+  const realProjectCount = projects.filter((project) => project.kind !== "demo").length;
+  usePopoverDismiss(projectMenuOpen, () => setProjectMenuOpen(false), projectMenuRef, projectMenuButtonRef);
   const selectProject = (project) => {
     onProjectSelect(project.projectId);
     setProjectMenuOpen(false);
@@ -2583,7 +2675,7 @@ function WorkspaceContextBar({
                   onWorkspace("structure");
                 }}
               >
-                <PlusIcon /> Add another project folder
+                <PlusIcon /> {realProjectCount ? "Add another project folder" : "Add a project folder"}
               </button>
               {!projects.some((project) => project.kind === "demo") && (
                 <button
@@ -2605,8 +2697,8 @@ function WorkspaceContextBar({
             <button
               type="button"
               className="empty active"
-              onClick={() => onWorkspace("structure")}
-              title="Import a local app folder"
+              disabled
+              title="No project is open. Use the folder button to add one."
             >
               <FolderIcon />
               <span>No project selected</span>
@@ -2823,19 +2915,19 @@ function ProjectHomeWorkspace({
             <article data-fact-state={summary.registration.state}>
               <small>REGISTRATION</small>
               <strong>{unavailableValue(summary.registration.rootLabel, summary.registration.state)}</strong>
-              <p className={summary.registration.state === "unavailable" ? undefined : "advanced-only"}>{unavailableValue(summary.registration.access, summary.registration.state)} · {unavailableValue(summary.registration.adapter, summary.registration.state)}</p>
+              {hasProject && <p className={summary.registration.state === "unavailable" ? undefined : "advanced-only"}>{unavailableValue(summary.registration.access, summary.registration.state)} · {unavailableValue(summary.registration.adapter, summary.registration.state)}</p>}
               <StatusChip status={summary.registration.state === "available" ? "verified" : summary.registration.state === "unavailable" ? "risk" : "active"}>{summary.registration.state}</StatusChip>
             </article>
             <article data-fact-state={summary.census.state}>
               <small>FOLDER SCAN</small>
               <strong>{unavailableValue(summary.census.fileCount, summary.census.state, " files")}</strong>
-              <p>{unavailableValue(summary.census.skippedCount, summary.census.state, " skipped")}<span className="advanced-only"> · fingerprint {digestValue(summary.census.digest, summary.census.state)}</span></p>
+              {hasProject && <p>{unavailableValue(summary.census.skippedCount, summary.census.state, " skipped")}<span className="advanced-only"> · fingerprint {digestValue(summary.census.digest, summary.census.state)}</span></p>}
               <StatusChip status={summary.census.state === "available" ? "verified" : summary.census.state === "unavailable" || summary.census.state === "blocked" ? "risk" : "active"}>{summary.census.state}</StatusChip>
             </article>
             <article data-fact-state={summary.discovery.state}>
               <small>DISCOVERY</small>
               <strong>{unavailableValue(summary.discovery.observed, summary.discovery.state, " observed")}</strong>
-              <p>{unavailableValue(summary.discovery.signals, summary.discovery.state, " review signals")} · {unavailableValue(summary.discovery.unanswered, summary.discovery.state, " unanswered")}</p>
+              {hasProject && <p>{unavailableValue(summary.discovery.signals, summary.discovery.state, " review signals")} · {unavailableValue(summary.discovery.unanswered, summary.discovery.state, " unanswered")}</p>}
               <StatusChip status={summary.discovery.state === "available" ? "verified" : summary.discovery.state === "unavailable" || summary.discovery.state === "stale" ? "risk" : "active"}>{summary.discovery.state}</StatusChip>
             </article>
             <article className="project-home-authorities">
@@ -2843,7 +2935,7 @@ function ProjectHomeWorkspace({
               <ul>
                 {Object.entries(summary.authorities).map(([kind, authority]) => (
                   <li key={kind} data-fact-state={authority.state}>
-                    <span>{kind === "plan" ? "Saved Plan record" : kind}</span>
+                    <span>{kind === "plan" ? "Saved plan record" : kind}</span>
                     <strong>{authority.state}</strong>
                     <em className="advanced-only">{authority.revision == null ? "revision unavailable" : `${authority.state === "unavailable" || authority.state === "stale" ? "last known · " : ""}revision ${authority.revision}`}</em>
                   </li>
@@ -2899,7 +2991,7 @@ function ProjectHomeWorkspace({
             <header>
               <span>
                 <small>BLOCKING ITEMS</small>
-                <strong>{blockers.length ? `${blockers.length} item${blockers.length === 1 ? "" : "s"} prevent promotion` : "No blockers for this revision"}</strong>
+                <strong>{blockers.length ? `${plural(blockers.length, "item")} ${blockers.length === 1 ? "prevents" : "prevent"} promotion` : "No blockers for this revision"}</strong>
               </span>
             </header>
             {blockers.length ? (
@@ -3073,7 +3165,7 @@ function ProjectHomeWorkspace({
         <section className="home-activity-card">
           <header>
             <span className="eyebrow">Live responsibility</span>
-            <strong>{activeWorkers.length} worker active</strong>
+            <strong>{plural(activeWorkers.length, "worker")} active</strong>
           </header>
           <div className="home-worker-row">
             <span className="worker-avatar worker-agent">
@@ -3133,7 +3225,7 @@ function ProjectHomeWorkspace({
   );
 }
 
-function ProjectWorkspaceGate({ workspace, activeProject, onWorkspace }) {
+function ProjectWorkspaceGate({ workspace, activeProject, onWorkspace, onOpenDemo }) {
   const label = workspaceLabels[workspace] ?? "Workspace";
   const hasProject = Boolean(activeProject);
   const projectState = !hasProject
@@ -3177,9 +3269,10 @@ function ProjectWorkspaceGate({ workspace, activeProject, onWorkspace }) {
         workspaceLabel={label}
         workspaceState={projectState}
         reason={reason}
-        actionLabel={hasProject ? "Return to Structure" : "Choose app folder"}
+        actionLabel={hasProject ? "Return to Structure" : "Go to folder setup"}
         onAction={() => onWorkspace("structure")}
       />
+      {!hasProject && onOpenDemo && <button type="button" className="soft-button project-gate-demo" onClick={onOpenDemo}>Explore the Demo instead</button>}
       <div className="project-unavailable-explanation">
         <span className="eyebrow">TRUTHFUL WORKSPACE BOUNDARY</span>
         <h1>{label} is not ready</h1>
@@ -4925,8 +5018,10 @@ function OpsDock({
     clipboardRequest.current += 1;
     setCopyTray((current) => ({ projectId, ids: current.projectId === projectId ? current.ids : [], draft }));
   };
+  // The console never grows over the header: leave the header plus the 42px bar and a small gap.
   const panelBounds = () => {
-    const max = Math.max(0, window.innerHeight - 82);
+    const header = Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--app-header-height")) || 0;
+    const max = Math.max(0, window.innerHeight - Math.max(82, header + 49));
     return { min: Math.min(window.innerWidth <= 700 ? 420 : 260, max), max };
   };
   const clampPanelHeight = (height) => {
@@ -4958,6 +5053,14 @@ function OpsDock({
       setCopyFallback(null);
       dragCleanup.current?.();
       if (wasOpen.current) handleRef.current?.focus();
+    } else if (!wasOpen.current) {
+      setPanelHeight((height) => clampPanelHeight(height));
+      // Opened from elsewhere (e.g. More actions): focus the active view instead of losing focus to the page.
+      const frame = globalThis.requestAnimationFrame?.(() => {
+        if (!handleRef.current?.contains(document.activeElement)) document.querySelector("#operations-panel .ops-tabs .active")?.focus();
+      });
+      wasOpen.current = open;
+      return () => { if (frame != null) globalThis.cancelAnimationFrame?.(frame); };
     }
     wasOpen.current = open;
   }, [open]);
@@ -4998,7 +5101,10 @@ function OpsDock({
   const errorCount = scopedDiagnostics.filter(
     (entry) => entry.level === "error" || entry.level === "critical",
   ).length;
-  const operationalBlockerCount = collisionGate?.authorityAvailable === false ? 1 : 0;
+  const savedCollisionData = useProjectWorkRecords(demoMode ? null : activeProject?.projectId).sections?.collisions?.data;
+  const savedCollisions = savedCollisionData ? collisionStatus(savedCollisionData) : null;
+  const operationalBlockerCount = !demoMode && savedCollisions ? savedCollisions.openHardStops : collisionGate?.authorityAvailable === false ? 1 : 0;
+  const collisionChip = demoMode ? "collision check not connected · Demo counts are samples" : savedCollisions ? `last saved check · ${plural(savedCollisions.openHardStops, "open hard stop")}` : activeProject ? "collision check not run" : "collision check not connected";
   const historyUnavailable = diagnosticHealth?.state !== "ready";
   const historyNotice = diagnosticHealth?.reason === "history-loading"
     ? "Loading saved history. New events are retained in this session while storage opens."
@@ -5145,11 +5251,11 @@ function OpsDock({
       <button ref={handleRef} className="ops-handle" onClick={(event) => { if (event.detail < 2) onToggle(); }} onDoubleClick={(event) => event.preventDefault()} title="Click or double-click to expand or collapse Operations." aria-expanded={open} aria-controls="operations-panel">
         {open ? <CaretDownIcon /> : <CaretUpIcon />}
         <span>Operations</span>
-        <span className="ops-status-explained" title={operationalBlockerCount ? `Blocked: ${collisionGate?.authorityReason ?? "The collision check is not connected."} Work cannot be cleared until it runs.` : undefined}>
-          <StatusChip status={errorCount ? "blocked" : "verified"}>
+        <span className="ops-status-explained" title={operationalBlockerCount ? (savedCollisions && !demoMode ? "Open hard stops in the last saved collision check. Resolve them in Collisions." : `Blocked: ${collisionGate?.authorityReason ?? "The collision check is not connected."} Work cannot be cleared until it runs.${demoMode ? " The Demo's collision counts are sample data." : ""}`) : undefined}>
+          <StatusChip status={errorCount ? "blocked" : "queued"}>
             {errorCount ? `${errorCount} diagnostic ${errorCount === 1 ? "error" : "errors"}` : "No diagnostic errors"}
           </StatusChip>
-          {operationalBlockerCount > 0 && <StatusChip status="risk">collision check not connected</StatusChip>}
+          {operationalBlockerCount > 0 && <StatusChip status="risk">{collisionChip}</StatusChip>}
           <StatusChip status="queued">task outcomes unverified</StatusChip>
         </span>
         <span className="ops-mini-status">
@@ -5164,7 +5270,7 @@ function OpsDock({
         )}
       </button>
       {open && (
-        <div id="operations-panel" className={`ops-panel${panelDragging ? " resizing" : ""}`} style={{ height: panelHeight, "--ops-panel-height": `${panelHeight}px` }}>
+        <div id="operations-panel" className={`ops-panel${panelDragging ? " resizing" : ""}`} style={{ height: panelHeight, "--ops-panel-height": `${panelHeight}px` }} onKeyDown={(event) => { if (event.key === "Escape" && !event.defaultPrevented) { event.preventDefault(); onToggle(); } }}>
           <div className="ops-panel-dragbar" onPointerDown={startPanelDrag} onDoubleClick={onToggle} title="Drag vertically to resize. Double-click to collapse.">
             <div className="ops-panel-resize-handle" role="separator" tabIndex={0} aria-label="Resize Operations console" aria-orientation="horizontal" aria-controls="operations-panel" aria-valuemin={panelBounds().min} aria-valuemax={panelBounds().max} aria-valuenow={panelHeight} aria-valuetext={`${Math.round(panelHeight)} pixels high. Up and Down resize; Enter collapses.`} onKeyDown={resizePanelWithKeyboard}>
               <strong>Operations console</strong>
@@ -5174,39 +5280,39 @@ function OpsDock({
           </div>
           <nav className="ops-tabs" aria-label="Operations views">
             <button
-              className={activeTab === "logs" ? "active" : ""}
+              className={activeTab === "logs" ? "active" : ""} aria-current={activeTab === "logs" ? "true" : undefined}
               onClick={() => onTab("logs")}
             >
               <TerminalWindowIcon /> Logs
             </button>
             <button
-              className={activeTab === "errors" ? "active" : ""}
+              className={activeTab === "errors" ? "active" : ""} aria-current={activeTab === "errors" ? "true" : undefined}
               onClick={() => onTab("errors")}
             >
               <WarningIcon /> Errors
             </button>
             <button
-              className={activeTab === "mcp" ? "active" : ""}
+              className={activeTab === "mcp" ? "active" : ""} aria-current={activeTab === "mcp" ? "true" : undefined}
               onClick={() => onTab("mcp")}
             >
               <RobotIcon /> MCP events
             </button>
             <button
-              className={activeTab === "branches" ? "active" : ""}
+              className={activeTab === "branches" ? "active" : ""} aria-current={activeTab === "branches" ? "true" : undefined}
               onClick={() => onTab("branches")}
             >
               <GitBranchIcon /> Branches & worktrees
             </button>
             <button
-              className={activeTab === "merge" ? "active" : ""}
+              className={activeTab === "merge" ? "active" : ""} aria-current={activeTab === "merge" ? "true" : undefined}
               onClick={() => onTab("merge")}
             >
               <GitMergeIcon /> Merge queue
             </button>
-            <button className={activeTab === "delivery" ? "active" : ""} onClick={() => onTab("delivery")}>
+            <button className={activeTab === "delivery" ? "active" : ""} aria-current={activeTab === "delivery" ? "true" : undefined} onClick={() => onTab("delivery")}>
               <ArrowRightIcon /> Delivery pipeline
             </button>
-            <button className={activeTab === "guards" ? "active" : ""} onClick={() => onTab("guards")}>
+            <button className={activeTab === "guards" ? "active" : ""} aria-current={activeTab === "guards" ? "true" : undefined} onClick={() => onTab("guards")}>
               <ShieldCheckIcon /> Hooks & catchers
             </button>
           </nav>
@@ -6072,6 +6178,7 @@ function PerfectPlannerShellCore({
                 workspace="blueprint"
                 activeProject={activeProject}
                 onWorkspace={navigateWorkspace}
+                onOpenDemo={openDemoProject}
               />
             ))}
           {workspace === "structure" && (
@@ -6123,6 +6230,7 @@ function PerfectPlannerShellCore({
                 workspace="plan"
                 activeProject={activeProject}
                 onWorkspace={navigateWorkspace}
+                onOpenDemo={openDemoProject}
               />
             ))}
           {workspace === "collision" &&
@@ -6147,6 +6255,7 @@ function PerfectPlannerShellCore({
                 workspace="collision"
                 activeProject={activeProject}
                 onWorkspace={navigateWorkspace}
+                onOpenDemo={openDemoProject}
               />
             ))}
           {workspace === "allocation" &&
@@ -6176,6 +6285,7 @@ function PerfectPlannerShellCore({
                 workspace="allocation"
                 activeProject={activeProject}
                 onWorkspace={navigateWorkspace}
+                onOpenDemo={openDemoProject}
               />
             ))}
           {workspace === "build" &&
@@ -6200,6 +6310,7 @@ function PerfectPlannerShellCore({
                 workspace="build"
                 activeProject={activeProject}
                 onWorkspace={navigateWorkspace}
+                onOpenDemo={openDemoProject}
               />
             ))}
           {workspace === "integrity" &&
@@ -6228,6 +6339,7 @@ function PerfectPlannerShellCore({
                 workspace="integrity"
                 activeProject={activeProject}
                 onWorkspace={navigateWorkspace}
+                onOpenDemo={openDemoProject}
               />
             ))}
           {workspace === "evidence" &&
@@ -6259,6 +6371,7 @@ function PerfectPlannerShellCore({
                 workspace="evidence"
                 activeProject={activeProject}
                 onWorkspace={navigateWorkspace}
+                onOpenDemo={openDemoProject}
               />
             ))}
           {workspace === "ledger" &&
@@ -6286,6 +6399,7 @@ function PerfectPlannerShellCore({
                 workspace="ledger"
                 activeProject={activeProject}
                 onWorkspace={navigateWorkspace}
+                onOpenDemo={openDemoProject}
               />
             ))}
           {workspace === "index" && (
@@ -6293,7 +6407,7 @@ function PerfectPlannerShellCore({
               {demoMode ? (
                 <IndexWorkspace
                   onOpen={openIndexedItem}
-                  onClose={() => navigateWorkspace("home")}
+                  onClose={() => navigateWorkspace(indexReturnWorkspace)}
                 />
               ) : projectWorkflowReady ? (
                 <ImportedProjectWorkflowWorkspace
@@ -6311,6 +6425,7 @@ function PerfectPlannerShellCore({
                   workspace="index"
                   activeProject={activeProject}
                   onWorkspace={navigateWorkspace}
+                  onOpenDemo={openDemoProject}
                 />
               )}
             </div>

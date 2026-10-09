@@ -7,13 +7,16 @@ import "./ConnectAgentDrawer.css";
 const FOCUSABLE = 'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 const buildSetup = () => ({ serverPath: import.meta.env?.VITE_PP_MCP_SERVER_PATH, registryRoot: import.meta.env?.VITE_PP_MCP_REGISTRY_ROOT });
 
-export function ConnectAgentDrawer({ open, onClose, onWorkspace, setup: setupOverride }) {
+export function ConnectAgentDrawer({ open, onClose, onWorkspace, hasProject = true, setup: setupOverride }) {
   const setup = useMemo(() => resolveAgentSetup(setupOverride ?? buildSetup()), [setupOverride]);
   const tabs = useMemo(() => buildAgentSnippets(setup), [setup]);
   const [tabId, setTabId] = useState(tabs[0].id);
   const [copied, setCopied] = useState(null);
   const panelRef = useRef(null);
   const returnRef = useRef(null);
+  // Latest onClose without re-running the focus effect: an inline onClose changes every parent render.
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
   const tab = tabs.find((item) => item.id === tabId) ?? tabs[0];
 
   useEffect(() => {
@@ -21,7 +24,7 @@ export function ConnectAgentDrawer({ open, onClose, onWorkspace, setup: setupOve
     returnRef.current = document.activeElement;
     panelRef.current?.querySelector(FOCUSABLE)?.focus();
     const onKeyDown = (event) => {
-      if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); onClose(); return; }
+      if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); onCloseRef.current(); return; }
       if (event.key !== "Tab" || !panelRef.current) return;
       const items = [...panelRef.current.querySelectorAll(FOCUSABLE)];
       if (!items.length) return;
@@ -32,7 +35,7 @@ export function ConnectAgentDrawer({ open, onClose, onWorkspace, setup: setupOve
     };
     document.addEventListener("keydown", onKeyDown, true);
     return () => { document.removeEventListener("keydown", onKeyDown, true); returnRef.current?.focus?.(); };
-  }, [open, onClose]);
+  }, [open]);
 
   useEffect(() => { if (!open) setCopied(null); }, [open]);
   if (!open) return null;
@@ -116,7 +119,9 @@ export function ConnectAgentDrawer({ open, onClose, onWorkspace, setup: setupOve
           <section className="connect-agent-section" aria-label="Hand your plan to the agent">
             <h3>Hand your plan to the agent</h3>
             <p>Once your plan is approved, open Build and use <strong>Copy brief</strong> to paste the current task into your agent's chat.</p>
-            {onWorkspace && <button type="button" className="connect-agent-link" onClick={() => { onClose(); onWorkspace("build"); }}>Open Build <ArrowRightIcon /></button>}
+            {onWorkspace && (hasProject
+              ? <button type="button" className="connect-agent-link" onClick={() => { onClose(); onWorkspace("build"); }}>Open Build <ArrowRightIcon /></button>
+              : <button type="button" className="connect-agent-link" onClick={() => { onClose(); onWorkspace("structure"); }}>Choose an app folder <ArrowRightIcon /></button>)}
           </section>
         </div>
       </aside>

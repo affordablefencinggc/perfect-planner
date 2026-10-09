@@ -60,6 +60,14 @@ function censusFailureText(reason, path) {
   return path && path !== "." ? `${text} Last item: ${path}.` : text;
 }
 
+// Browser picker exceptions are developer text; say what happened and what to do instead.
+function pickerFailureText(reason) {
+  const text = String(reason ?? "");
+  if (/user gesture|user activation/i.test(text)) return "The browser needs a fresh click to open the folder picker. Press Choose app folder again. Nothing was registered or read.";
+  if (/SecurityError|NotAllowedError|not allowed|denied/i.test(text)) return "The browser did not allow folder access. Check this site's permissions, then try again. Nothing was registered or read.";
+  if (!text || /Failed to execute|DOMException|Error\b|^[a-z0-9-]+$/.test(text)) return "The folder picker could not open. Try again, or use the desktop app. Nothing was registered or read.";
+  return text;
+}
 const cloneSeed = () => structuredClone(currentFolderContractInput);
 const waves = ["approval", "architecture", "build", "proof", "release"];
 const policies = ["owner-only", "collision-review", "immutable-after-approval"];
@@ -840,10 +848,9 @@ export function StructureWorkspace({
         const message =
           receipt?.reason === "native-runtime-unavailable"
             ? "Open the native desktop app to choose a folder. This browser does not provide secure folder access."
-            : receipt?.reason ||
-              "Folder selection failed without a saved check.";
+            : pickerFailureText(receipt?.reason);
         setIntake((current) => ({ ...current, state: "error", message }));
-        onDiagnostic?.("workspace", "error", message);
+        onDiagnostic?.("workspace", "error", receipt?.reason || message);
         return;
       }
       if (receipt.selectionState === "cancelled") {
@@ -864,12 +871,9 @@ export function StructureWorkspace({
       }));
     } catch (error) {
       if (selectionRunRef.current !== runId) return;
-      const message =
-        error instanceof Error
-          ? error.message
-          : "Unexpected folder-picker failure.";
+      const message = pickerFailureText(error instanceof Error ? error.message : "");
       setIntake((current) => ({ ...current, state: "error", message }));
-      onDiagnostic?.("workspace", "error", message);
+      onDiagnostic?.("workspace", "error", error instanceof Error ? error.message : message);
     }
   };
   const updateNode = (key, value) =>
@@ -1171,7 +1175,7 @@ export function StructureWorkspace({
                 />
               </label>
               <div>
-                <span className="folder-intake-message">{intake.message}</span>
+                <span className={`folder-intake-message${intake.state === "error" ? " is-error" : ""}`} role={intake.state === "error" ? "alert" : undefined}>{intake.message}</span>
                 <span className="folder-scan-actions">
                   <button
                     className="primary-button"
