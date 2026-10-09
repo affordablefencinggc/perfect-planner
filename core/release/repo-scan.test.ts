@@ -41,5 +41,7 @@ describe("this repository passes its own push scan", () => {
     // A pending entry that no longer flags must be removed from the list.
     const stillFlagged = new Set(findings.map((f) => f.file));
     expect(Object.keys(PENDING).filter((file) => !stillFlagged.has(file))).toEqual([]);
-  });
+    // Reads every tracked file (lockfile and generated bundles included): about 17s alone, far
+    // more beside the rest of the suite, so it gets its own generous limit.
+  }, 300_000);
 });
