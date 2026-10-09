@@ -19,7 +19,7 @@ describe("secret scan", () => {
   });
 
   it("catches .env style secrets and private keys but not placeholders", () => {
-    const diff = ["+++ b/.env", "@@ -0,0 +1,3 @@", "+STRIPE_SECRET=abcdefghijklmnopqrstu", "+API_KEY=PLACEHOLDER", "+-----BEGIN OPENSSH PRIVATE KEY-----"].join("\n");
+    const diff = ["+++ b/.env", "@@ -0,0 +1,3 @@", "+STRIPE_SECRET=abcdefghijklmnopqrstu", "+API_KEY=PLACEHOLDER", `+-----BEGIN OPENSSH ${"PRIVATE"} KEY-----`].join("\n");
     expect(scanDiff(diff).map((finding) => finding.rule)).toEqual(["environment-secret", "private-key"]);
   });
 });

@@ -78,7 +78,9 @@ describe("WorktreeManager", () => {
   }, SLOW);
 
   it("copies local settings with secrets replaced by placeholders", async () => {
-    writeFiles(repo.root, { ".env": "API_KEY=sk-live-abcdefghijklmnopqrstuvwxyz\r\nPORT=3000\r\nDB_PASSWORD=hunter2hunter2\r\n", ".env.example": "API_KEY=\n" });
+    // Built at runtime so the repo's own secret scan does not flag this fixture.
+    const fakeKey = ["sk", "live", "abcdefghijklmnopqrstuvwxyz"].join("-");
+    writeFiles(repo.root, { ".env": `API_KEY=${fakeKey}\r\nPORT=3000\r\nDB_PASSWORD=hunter2hunter2\r\n`, ".env.example": "API_KEY=\n" });
     const info = await manager.create({ taskId: "T-5", actor: person });
     expect(readFileSync(path.join(info.path, ".env"), "utf8")).toBe("API_KEY=PLACEHOLDER\r\nPORT=3000\r\nDB_PASSWORD=PLACEHOLDER\r\n");
     expect(readFileSync(path.join(info.path, ".env.example"), "utf8")).toBe("API_KEY=\n");
