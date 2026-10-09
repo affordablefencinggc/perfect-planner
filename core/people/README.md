@@ -58,6 +58,19 @@ ledger later gains `member.*` types, only `actions.ts` and `peopleEvent` in
 Person and document ids are lowercase slugs (`looplet-spare`), safe as file
 names on every OS.
 
+## Opening a project
+
+```ts
+const ledger = await openPeopleLedger(new FileStore(projectRoot));
+```
+
+Use this instead of `Ledger.open` for a project ledger. It re-checks every
+stored entry against the people rules as they stood when it was written
+(`auditPeople`), refuses a writable open with `PeopleError`
+`STORED_VIOLATION` when one breaks them (an entry appended by a process that
+skipped the rules), and installs the rules before returning. A read-only open
+still succeeds, so the app can list `auditPeople(ledger.entries())`.
+
 ## Rules (`installPeopleRules`)
 
 The write helpers install these rules on the ledger the first time they are
