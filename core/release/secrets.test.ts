@@ -571,4 +571,8 @@ describe("pre-push hook reads the allowlist from the base commit only", () => {
       rmSync(r.dir, { recursive: true, force: true });
     }
   });
+
+  it("keeps agent token files out of git", () => {
+    expect(REQUIRED_IGNORES).toContain(".perfect-planner/tokens/");
+  });
 });

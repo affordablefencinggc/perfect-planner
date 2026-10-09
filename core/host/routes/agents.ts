@@ -15,6 +15,7 @@ import { fileURLToPath } from "node:url";
 import type { AgentRecord, AgentService } from "../../mcp/index";
 import type { CoreProject } from "../project";
 import { HttpError, type Router } from "../router";
+import { writeOwnerOnlyFile } from "../tokenFile";
 import { localPersonId } from "./people";
 
 export const AGENT_SERVER_NAME = "perfect-planner-core";
@@ -130,12 +131,10 @@ export function setupFor(bridgeUrl: string, tokenFile: string, entry: string, pl
   return { claudeCode, json };
 }
 
-/** The token waits in a file only this OS user can read; the agent program reads it at start. */
+/** The token waits in a file only this OS user can read (0600, or an owner-only ACL on Windows); the agent program reads it at start. */
 export function writeTokenFile(project: CoreProject, name: string, token: string): string {
   const file = path.join(project.root, ".perfect-planner", "tokens", `${name}.token`);
-  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-  fs.rmSync(file, { force: true });
-  fs.writeFileSync(file, token, { mode: 0o600 });
+  writeOwnerOnlyFile(file, token);
   return file;
 }
 

@@ -13,6 +13,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { findExecutable, isNetworkPath, launchFor } from "./tokenFile";
 
 const SERVER = "perfect-planner-core";
 const SKILL = "perfect-planner-connect";
@@ -42,10 +43,11 @@ export function connectArgsProblem(argv: string[], platform: NodeJS.Platform = p
   const [bridgeUrl, tokenFile] = argv as [string, string];
   if (!/^http:\/\/127\.0\.0\.1:\d{1,5}$/.test(bridgeUrl)) return "The bridge address must be the app's loopback address, http://127.0.0.1:<port>.";
   if (/pp_[cw]_/.test(tokenFile)) return "That looks like a key. Never paste keys; copy the line from Connect agent, which names the token file instead.";
+  if (isNetworkPath(tokenFile, platform)) return "The token file must be on this computer, not a network share.";
   const absolute = platform === "win32" ? path.win32.isAbsolute(tokenFile) : path.posix.isAbsolute(tokenFile);
   if (!absolute || !tokenFile.endsWith(".token")) return "The second part must be the full path of the .token file the app wrote.";
   if (platform === "win32") {
-    // claude is claude.cmd on Windows, so it runs through cmd.exe, which expands % and splits on ".
+    // An unusual claude.cmd still runs through cmd.exe, which expands % and splits on ".
     for (const bad of ["%", '"']) if (argv.some((arg) => arg.includes(bad))) return `The path contains ${bad}, which Windows would rewrite. Move Perfect Planner's data to a folder without it.`;
   }
   return null;
@@ -58,10 +60,21 @@ export function installSkill(plan: Pick<ConnectPlan, "skillFrom" | "skillTo">, h
   fs.writeFileSync(plan.skillTo, text);
 }
 
+/**
+ * Runs Claude Code from the project folder (claude mcp add -s local registers that folder) without a
+ * shell, by the absolute path found on PATH, so a claude or claude.cmd planted in the repo never runs.
+ */
 function claude(args: string[]) {
-  const windows = process.platform === "win32";
-  const quoted = windows ? args.map((arg) => (/[\s&|<>^()]/.test(arg) ? `"${arg}"` : arg)) : args;
-  return spawnSync("claude", quoted, { encoding: "utf8", shell: windows });
+  const program = findExecutable("claude", process.env, process.cwd());
+  if (!program) return { error: Object.assign(new Error("claude not found"), { code: "ENOENT" }), status: null, stdout: "", stderr: "" };
+  const launch = launchFor(program, args, "@anthropic-ai/claude-code/cli.js");
+  return spawnSync(launch.command, launch.args, {
+    encoding: "utf8",
+    windowsHide: true,
+    ...(launch.verbatim ? { windowsVerbatimArguments: true } : {}),
+    // Windows: never resolve a bare program name (node, git) from the current folder either.
+    env: { ...process.env, NoDefaultCurrentDirectoryInExePath: "1" },
+  });
 }
 
 function main(argv: string[]): number {

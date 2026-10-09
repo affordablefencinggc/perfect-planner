@@ -6,10 +6,15 @@
 import fs from "node:fs";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { bridgeCall, createAgentMcpServer } from "../mcp/index";
+import { isNetworkPath } from "./tokenFile";
 
 const url = process.env.PP_BRIDGE_URL ?? "";
 const tokenFile = process.env.PP_AGENT_TOKEN_FILE ?? "";
 let token = process.env.PP_AGENT_TOKEN ?? "";
+if (!token && tokenFile && isNetworkPath(tokenFile)) {
+  process.stderr.write("Perfect Planner: the token file must be on this computer, not a network share.\n");
+  process.exit(2);
+}
 if (!token && tokenFile) {
   try {
     token = fs.readFileSync(tokenFile, "utf8").trim();
