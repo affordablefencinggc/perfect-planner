@@ -1,3 +1,4 @@
+import "./helpers/hermetic-env.mjs";
 import test from 'node:test';import assert from 'node:assert/strict';import os from 'node:os';import {createHash} from 'node:crypto';
 import {readSharedLedgerSnapshot} from '../src/native/sharedLedgerSnapshot.js';import {createNativeTaskDraftHost} from '../src/native/taskDraftHost.js';import {emptyTaskDraftLedger,updateTaskDraft} from '../src/project/taskDraftLedger.js';import {submissionWire} from '../src/project/taskDraftSubmission.js';
 const binding={projectId:'pp_snapshot',rootIdentity:'a'.repeat(64),censusDigest:'b'.repeat(64)};const hash=v=>createHash('sha256').update(v).digest('hex');

@@ -1,3 +1,4 @@
+import "./helpers/hermetic-env.mjs";
 import test from'node:test';import assert from'node:assert/strict';import os from'node:os';
 import{createAgentSessionBroker}from'../mcp/agentSessionBroker.mjs';
 const binding={projectId:'pp_reader',workspaceId:'reader',rootIdentity:'a'.repeat(64),registryRevision:1};
