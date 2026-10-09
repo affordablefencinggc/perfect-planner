@@ -1,5 +1,4 @@
-import type { LedgerEntry } from "../ledger/index";
-import type { EntryDraft } from "../ledger/index";
+import { isAuthoritative, type EntryDraft, type LedgerEntry } from "../ledger/index";
 import { isSlug } from "./errors";
 import { isPhotoFile } from "./photos";
 import {
@@ -124,7 +123,8 @@ export function emptyRoster(): Roster {
  */
 export function applyEntry(roster: Roster, entry: LedgerEntry): void {
   const event = peopleEvent(entry);
-  const refused = event ? peopleOpRefusal(entry, roster) !== null : true;
+  // Only an entry the ledger verified as written by a person can change people.
+  const refused = event ? !isAuthoritative(entry, { personOnly: true }) || peopleOpRefusal(entry, roster) !== null : true;
   if (roster.starter === undefined && entry.actor.kind === "person") roster.starter = entry.actor.id;
   if (!event || refused) return;
   const { members, docs, retiredAgents } = roster;

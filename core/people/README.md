@@ -66,7 +66,9 @@ used (installing twice is a no-op). The same checks also run on **replay**:
 have refused, so an entry appended directly (by an agent, or to a ledger that
 never installed the rules) cannot add an owner or change a role. Authority
 comes from the actor of each entry and the ledger's history, never from the
-payload alone; who the actor really is, is the ledger's job (#4).
+payload alone: replay applies a people entry only when
+`isAuthoritative(entry, { personOnly: true })` from core/ledger says a person
+wrote it, and the ledger never lets an agent or Jev write `decision.made`.
 
 - **Solo first.** Until the first member is added nobody is restricted, so a
   project that never adds helpers behaves exactly as before. The first member
