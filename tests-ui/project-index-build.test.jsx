@@ -96,6 +96,22 @@ test("index panel searches saved tasks and opens the matching Ledger task", asyn
   expect(screen.getByText(/Nothing in this project matches/)).toBeTruthy();
 });
 
+test("index search announces the result count and says when a long paste was cut", async () => {
+  render(<Live Panel={ProjectIndexPanel} />);
+  await waitFor(() => expect(screen.getByLabelText("What is searchable").textContent).toContain("2 tasks"));
+  const input = screen.getByRole("searchbox", { name: "Search this project" });
+  fireEvent.change(input, { target: { value: "cart.test" } });
+  expect(screen.getByRole("status").textContent).toMatch(/^1 result for “cart\.test”$/);
+  fireEvent.change(input, { target: { value: "nothing like this" } });
+  expect(screen.getByRole("status").textContent).toMatch(/^0 results/);
+  expect(screen.queryByText(/Search uses the first 160 characters/)).toBeNull();
+  fireEvent.change(input, { target: { value: "x".repeat(400) } });
+  expect(input.value).toHaveLength(160);
+  expect(screen.getByText(/Search uses the first 160 characters/)).toBeTruthy();
+  fireEvent.change(input, { target: { value: "cart" } });
+  expect(screen.queryByText(/Search uses the first 160 characters/)).toBeNull();
+});
+
 // Regression (screen tour, 9 Oct 2026): proof saved on the Evidence page is stored
 // as { items: { T0001: [...] } }. Build said "None attached yet" and Index counted
 // 0 proof items because neither read that shape.
