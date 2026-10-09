@@ -62,15 +62,18 @@ if echo "$windows" | grep -q '^windows:'; then
   t="$(ax text "$bundle_id")"
   if echo "$r" | grep -q pressed && echo "$t" | grep -qiE 'keychain|reviewer key|preferences'; then check "settings opens" pass "$r"; else check "settings opens" fail "$r"; fi
   ax key "$bundle_id" escape >/dev/null
-  r="$(ax press "$bundle_id" '^connect agent$')"; sleep 3; screencapture -x "$out/$label-04-connect-agent.png" || true
+  # The drawer opens on the toolbar button; the drawer's own "Connect agent" button (the last match) shows the line.
+  r="$(ax press "$bundle_id" '^connect agent$')"; sleep 3
+  r2="$(ax press "$bundle_id" '^connect agent$' last)"; sleep 4; screencapture -x "$out/$label-04-connect-agent.png" || true
   t="$(ax text "$bundle_id")"; echo "$t" > "$out/$label-ax-connect.txt"
-  line="$(echo "$t" | grep -E 'npx |claude mcp|node |perfect-planner' | head -n1)"
-  err="$(echo "$t" | grep -iE "couldn't|could not|failed|unavailable|not running" | head -n1)"
+  lines="$(echo "$t" | grep -E 'npx |claude mcp|codex |gemini |node |perfect-planner' || true)"
+  line="$(echo "$lines" | head -n1)"
+  err="$(echo "$t" | grep -iE "couldn't|could not|failed|unavailable|not running|does not know where" | head -n1)"
   if echo "$r" | grep -q pressed && [ -n "$line" ] && [ -z "$err" ]; then check "connect agent shows a line" pass "line: $line"
-  else check "connect agent shows a line" fail "${r}; line: ${line:-none}; panel says: ${err:-$(echo "$t" | tr '\n' ' ' | head -c 200)}"; fi
-  if [ -n "$line" ]; then
-    ph="$(echo "$line" | grep -oE '<[^<>]+>' | tr '\n' ' ')"
-    if [ -z "$ph" ]; then check "connect line runnable as copied" pass "no placeholders"; else check "connect line runnable as copied" fail "line still contains $ph"; fi
+  else check "connect agent shows a line" fail "${r}; ${r2}; line: ${line:-none}; panel says: ${err:-$(echo "$t" | tr '\n' ' ' | head -c 200)}"; fi
+  if [ -n "$lines" ]; then
+    ph="$(echo "$lines" | grep -oE '<[^<>[:space:]][^<>]*>|\{\{[^}]+\}\}' | sort -u | tr '\n' ' ')"
+    if [ -z "$ph" ]; then check "connect lines runnable as copied" pass "$(echo "$lines" | wc -l | tr -d ' ') lines, no placeholders"; else check "connect lines runnable as copied" fail "placeholders shown: $ph"; fi
   fi
   check "open project folder" skip "native NSOpenPanel is not driven on macOS runners; covered on Windows and Linux"
 else

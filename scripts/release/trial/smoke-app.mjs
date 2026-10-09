@@ -71,7 +71,7 @@ const CLICK_BY_TEXT = `
   const nodes = [...document.querySelectorAll("button, a, [role=button], [role=menuitem], [role=tab]")];
   const visible = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 && !el.closest("[inert]"); };
   // Match a control's first line of text (its name, not its subtitle) or its aria-label.
-  const firstLine = (el) => (el.innerText || "").trim().split("\n")[0].trim();
+  const firstLine = (el) => (el.innerText || "").trim().split("\\n")[0].trim();
   const hit = nodes.find((el) => visible(el) && (pattern.test(firstLine(el)) || pattern.test((el.getAttribute("aria-label") || "").trim())));
   if (!hit) return null;
   hit.scrollIntoView({ block: "center" });
@@ -188,28 +188,38 @@ async function main() {
   await shot("03-folder-opened");
   record("open project folder", folderOk, folderSeen);
 
-  // 4. Connect agent panel shows a line to run.
+  // 4. Connect agent panel shows a line to run. The drawer may lead with its own "Connect agent"
+  // button that writes the real line; press it, then read every copyable block in the drawer.
   await pressEscape();
   const connect = await clickText("^connect agent$");
-  const panel = connect
-    ? await waitFor(async () => run(`
-        const dialogs = [...document.querySelectorAll("[role=dialog], aside, .side-drawer")].filter((d) => d.getAttribute("aria-hidden") !== "true" && /connect|agent/i.test(d.innerText || ""));
-        const d = dialogs.pop(); if (!d) return null;
-        const code = [...d.querySelectorAll("code, pre, input[readonly], textarea")].map((n) => (n.value || n.innerText || "").trim()).filter(Boolean);
-        return { text: d.innerText.trim(), code };
-      `), 15_000)
-    : null;
+  const READ_DRAWER = `
+    const dialogs = [...document.querySelectorAll("[role=dialog], aside, .side-drawer")].filter((d) => d.getAttribute("aria-hidden") !== "true" && /connect|agent/i.test(d.innerText || ""));
+    const d = dialogs.pop(); if (!d) return null;
+    if (arguments[0]) {
+      const inner = [...d.querySelectorAll("button")].find((b) => /^connect agent$/i.test((b.innerText || "").trim()) && !b.disabled);
+      if (inner) inner.click();
+    }
+    const code = [...d.querySelectorAll("code, pre, input[readonly], textarea")].map((n) => (n.value || n.innerText || "").trim()).filter((c) => c.length > 10);
+    return { text: d.innerText.trim(), code: [...new Set(code)] };
+  `;
+  let panel = connect ? await waitFor(() => run(READ_DRAWER, false), 15_000) : null;
+  if (panel) {
+    const before = panel.code.length;
+    await run(READ_DRAWER, true).catch(() => null);
+    panel = (await waitFor(async () => { const p = await run(READ_DRAWER, false); return p && p.code.length > before ? p : null; }, 15_000)) || (await run(READ_DRAWER, false));
+  }
   await shot("04-connect-agent");
-  const line = panel?.code?.find((c) => c.length > 10) || "";
+  const lines = panel?.code || [];
+  const line = lines[0] || "";
   const panelError = panel && /couldn't|could not|failed|unavailable|not running|error/i.test(panel.text) ? panel.text.match(/[^\n]*(couldn't|could not|failed|unavailable|not running|error)[^\n]*/i)?.[0] : null;
   record("connect agent shows a line", Boolean(line) && !panelError,
-    !connect ? "no Connect agent button" : !panel ? "panel did not open" : line ? `line: ${JSON.stringify(line.slice(0, 200))}${panelError ? `; but panel says ${JSON.stringify(panelError)}` : ""}` : `no line; panel says ${JSON.stringify(panel.text.replace(/\s+/g, " ").slice(0, 240))}`);
+    !connect ? "no Connect agent button" : !panel ? "panel did not open" : line ? `first line: ${JSON.stringify(line.slice(0, 240))}${panelError ? `; but panel says ${JSON.stringify(panelError)}` : ""}` : `no line; panel says ${JSON.stringify(panel.text.replace(/\s+/g, " ").slice(0, 240))}`);
 
-  // 4b. The line must be runnable as copied: no <placeholders> a person has to fill in by hand.
-  if (line) {
-    const placeholders = line.match(/<[^<>]+>/g) || [];
-    record("connect line runnable as copied", placeholders.length === 0,
-      placeholders.length ? `line still contains ${placeholders.join(", ")}` : "no placeholders");
+  // 4b. Every line the drawer offers must be runnable as copied: no <placeholders> to fill in by hand.
+  if (lines.length) {
+    const bad = lines.filter((c) => /<[^<>\s][^<>]*>|\{\{[^}]+\}\}/.test(c));
+    record("connect lines runnable as copied", bad.length === 0,
+      `${lines.length} copyable block(s); ${bad.length ? `with placeholders: ${bad.map((c) => JSON.stringify(c.slice(0, 160))).join(" | ")}` : "none has placeholders"}`);
   }
 
   // 5. Closes cleanly: ending the session closes the window; the workflow then checks no process is left.
