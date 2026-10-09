@@ -279,4 +279,17 @@ function main(argv: string[]): number {
   });
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) process.exit(main(process.argv.slice(2)));
+/**
+ * True when `script` (process.argv[1]) is this module, compared as real paths: a path through a link
+ * (macOS /var is /private/var, an app folder behind a symlink) must still run connect.mjs.
+ */
+export function isMainModule(script: string | undefined, moduleUrl: string): boolean {
+  if (!script) return false;
+  try {
+    return fs.realpathSync.native(script) === fs.realpathSync.native(fileURLToPath(moduleUrl));
+  } catch {
+    return false;
+  }
+}
+
+if (isMainModule(process.argv[1], import.meta.url)) process.exit(main(process.argv.slice(2)));
