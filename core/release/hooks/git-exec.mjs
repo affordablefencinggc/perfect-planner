@@ -2,7 +2,9 @@
 import { accessSync, constants, statSync } from "node:fs";
 import path from "node:path";
 export const NO_CWD_SEARCH_ENV = { NoDefaultCurrentDirectoryInExePath: "1" };
-const isNetworkPath = (dir, platform) => platform === "win32" && /^[\\/]{2}/.test(dir);
+export function isLocalWindowsPath(file) {
+    return /^[A-Za-z]:[\\/]/.test(file);
+}
 export function findExecutable(name, env, cwd, platform = process.platform) {
     const windows = platform === "win32";
     const pathValue = Object.entries(env).find(([key]) => (windows ? key.toUpperCase() === "PATH" : key === "PATH"))?.[1] ?? "";
@@ -10,7 +12,7 @@ export function findExecutable(name, env, cwd, platform = process.platform) {
     const extensions = windows ? [".exe"] : [""];
     for (const entry of pathValue.split(windows ? ";" : ":")) {
         const dir = entry.trim().replace(/^"(.*)"$/, "$1");
-        if (!dir || !path.isAbsolute(dir) || isNetworkPath(dir, platform))
+        if (!dir || !path.isAbsolute(dir) || (windows && !isLocalWindowsPath(dir)))
             continue;
         if (isWithin(here, path.resolve(dir)))
             continue;
