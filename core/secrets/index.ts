@@ -148,6 +148,8 @@ interface ValueRule {
   description: string;
   /** The secret value is group 1. */
   pattern: RegExp;
+  /** Count a value that is just a word like "password" (otherwise read as documentation). */
+  words?: boolean;
 }
 
 /** Formats beyond SECRET_RULES; both redaction and the diff check use them. */
@@ -157,6 +159,8 @@ const VALUE_RULES: readonly ValueRule[] = [
   { id: "connection-string", description: "password in a connection string", pattern: /\b[a-z][a-z0-9+.-]*:\/\/[^\s:@/"'`]*:([^\s@/"'`]+)@/gi },
   { id: "mysql-password", description: "mysql -p password", pattern: /\b(?:mysql|mysqldump|mysqladmin|mariadb|mariadb-dump)\b[^\n]*?\s-p([^\s-][^\s]*)/gi },
   { id: "password-flag", description: "password on a command line", pattern: /--(?:password|passwd|pass|token|secret|api-key|apikey|auth-token)(?:=|\s+)([^\s"'`-][^\s"'`]*)/gi },
+  // curl -u user:password / --user user:password ("pass" counts: a real password can be a word)
+  { id: "curl-user", description: "password in curl -u", pattern: /\bcurl\b[^\n]*?\s(?:-u|--user)(?:\s+|=)["']?[^\s:"'$]+:([^\s"'$][^\s"']*)/gi, words: true },
   { id: "npm-token", description: "npm token", pattern: /\b(npm_[A-Za-z0-9]{36})\b/g },
   { id: "stripe-test-key", description: "Stripe test key", pattern: /\b([rs]k_test_[A-Za-z0-9]{16,})/g },
 ];
@@ -243,6 +247,7 @@ function looksGenerated(run: string): boolean {
 
 // Cookie: a=1; b=2 and Set-Cookie: sid=...; Path=/
 const COOKIE_HEADER = /\b(?:set-)?cookie\s*:\s*([^\n]+)/gi;
+const SESSION_COOKIE = /sess|sid|token|auth|jwt|login|remember/i;
 const COOKIE_ATTRIBUTES = new Set(["path", "domain", "expires", "max-age", "samesite", "secure", "httponly", "priority", "partitioned"]);
 
 export interface SecretSpan {
@@ -270,7 +275,7 @@ function scanLine(line: string, mode: Mode, file: string): SecretSpan[] {
   for (const rule of VALUE_RULES) {
     for (const m of line.matchAll(rule.pattern)) {
       const value = m[1];
-      if (!value || isPlaceholder(value) || CODE_START.test(value) || value.includes(REDACTED) || !/[A-Za-z0-9]/.test(value) || SECRET_WORDS.has(value.toLowerCase())) continue;
+      if (!value || isPlaceholder(value) || CODE_START.test(value) || value.includes(REDACTED) || !/[A-Za-z0-9]/.test(value) || (!rule.words && SECRET_WORDS.has(value.toLowerCase()))) continue;
       const start = (m.index ?? 0) + m[0].lastIndexOf(value);
       add(rule.id, rule.description, start, start + value.length);
     }
@@ -283,15 +288,18 @@ function scanLine(line: string, mode: Mode, file: string): SecretSpan[] {
     const start = (m.index ?? 0) + m[0].lastIndexOf(value);
     add("secret-assignment", `value assigned to ${name}`, start, start + value.length);
   }
-  if (mode === "redact") {
-    for (const m of line.matchAll(COOKIE_HEADER)) {
-      const base = (m.index ?? 0) + m[0].length - m[1]!.length;
-      for (const pair of m[1]!.matchAll(/([^=;\s]+)=([^;\s]+)/g)) {
-        if (COOKIE_ATTRIBUTES.has(pair[1]!.toLowerCase())) continue;
-        const start = base + (pair.index ?? 0) + pair[0].length - pair[2]!.length;
-        add("cookie", "cookie value", start, start + pair[2]!.length);
-      }
+  // Redaction hides every cookie value; the diff check flags session-like ones (URL-encoded or not).
+  for (const m of line.matchAll(COOKIE_HEADER)) {
+    const base = (m.index ?? 0) + m[0].length - m[1]!.length;
+    for (const pair of m[1]!.matchAll(/([^=;\s]+)=([^;\s]+)/g)) {
+      const [, cookie, value] = pair;
+      if (COOKIE_ATTRIBUTES.has(cookie!.toLowerCase())) continue;
+      if (mode === "detect" && !(SESSION_COOKIE.test(cookie!) && value!.length >= 8 && !isPlaceholder(value!) && !CODE_START.test(value!))) continue;
+      const start = base + (pair.index ?? 0) + pair[0].length - value!.length;
+      add("cookie", "cookie value", start, start + value!.length);
     }
+  }
+  if (mode === "redact") {
     for (const m of line.matchAll(LONG_RUN)) {
       if (looksGenerated(m[0])) add("high-entropy", "generated token", m.index ?? 0, (m.index ?? 0) + m[0].length);
     }

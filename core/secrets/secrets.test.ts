@@ -14,6 +14,8 @@ describe("redaction (review samples, #7 at b359f6f)", () => {
     ["cookie session id", j("Cookie: ", "session=", "s3ss10nAbc123; theme=dark"), "s3ss10nAbc123"],
     ["Set-Cookie session id", j("Set-Cookie: ", "sid=", "8f2kQ93mzz; Path=/; HttpOnly"), "8f2kQ93mzz"],
     ["Stripe test key", j("sk", "_test_", "D".repeat(24)), "D".repeat(24)],
+    ["curl -u password", j("curl -u admin:", "pass", " https://x.test"), "admin:pass "],
+    ["curl --user password", j("curl --user ", "admin:", "Hunter22", " https://x.test"), "Hunter22"],
   ])("hides %s", (_name, text, leak) => {
     expect(redactSecrets(text)).not.toContain(leak);
   });
@@ -33,6 +35,8 @@ describe("the diff check finds what redaction finds (review samples)", () => {
     ["Stripe test key", "src/pay.ts", j('const k = "sk', "_test_", "E".repeat(24), '";')],
     ["letters-only password in a config file", "config/app.yml", j("  pass", "word: ", "hunter")],
     ["letters-only env value", ".env.production", j("DB_", "PASSWORD=", "letmein")],
+    ["curl -u password", "scripts/check.sh", j("curl -u admin:", "pass", " https://x.test")],
+    ["URL-encoded cookie session", "docs/debug.md", j("Cookie: ", "session=", "eyJ1c2VyIjoxfQ%3D%3D.Zk9a2", "; theme=dark")],
   ];
   it.each(MUST_FIND)("finds %s", (_name, file, line) => {
     expect(detectSecrets(file, line)).not.toEqual([]);
@@ -48,6 +52,8 @@ describe("the diff check finds what redaction finds (review samples)", () => {
     ["an environment read", "src/a.ts", "const password = process.env.DB_PASSWORD;"],
     ["a template header", "src/a.ts", "headers: { Authorization: `Bearer ${token}` },"],
     ["a password field label", "src/Login.jsx", '<input type="password" name="password" />'],
+    ["a curl call without a password", "scripts/check.sh", "curl -u \"$USER:$PASS\" https://x.test"],
+    ["a cookie with no session", "docs/debug.md", "Cookie: theme=dark; lang=en"],
   ];
   it.each(MUST_PASS)("leaves %s alone", (_name, file, line) => {
     expect(detectSecrets(file, line)).toEqual([]);
