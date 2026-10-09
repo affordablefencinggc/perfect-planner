@@ -6,6 +6,8 @@ import {
   GENESIS_PREV,
   LedgerError,
   REASON_REQUIRED_TYPES,
+  DEFAULT_PERMISSIONS,
+  type PermissionTable,
   type Actor,
   type ChainResult,
   type EntryDraft,
@@ -16,6 +18,8 @@ import {
 export type LedgerRule = (draft: EntryDraft, ledger: Ledger) => string | null;
 
 export interface OpenOptions {
+  /** Who may write which entry types; defaults to DEFAULT_PERMISSIONS. */
+  permissions?: PermissionTable;
   readOnly?: boolean;
   /** Clock for `at`; tests pass a fixed one. */
   now?: () => Date;
@@ -31,11 +35,20 @@ export class Ledger {
   private readonly listeners = new Set<(entry: LedgerEntry) => void>();
   private readonly rules: LedgerRule[] = [];
   private readonly now: () => Date;
+  private readonly permissions: PermissionTable;
   private writable: boolean;
   private chain: ChainResult;
   private acknowledged: string[];
 
-  private constructor(store: LedgerStore, entries: LedgerEntry[], chain: ChainResult, acknowledged: string[], writable: boolean, now: () => Date) {
+  private constructor(
+    store: LedgerStore,
+    entries: LedgerEntry[],
+    chain: ChainResult,
+    acknowledged: string[],
+    writable: boolean,
+    now: () => Date,
+    permissions: PermissionTable,
+  ) {
     this.store = store;
     this.list = entries;
     entries.forEach((entry, i) => this.index.set(entry.n, i));
@@ -43,6 +56,7 @@ export class Ledger {
     this.acknowledged = acknowledged;
     this.writable = writable;
     this.now = now;
+    this.permissions = permissions;
   }
 
   /** Loads and re-checks the whole chain (spec §2.5), then takes the writer lock unless read-only. */
@@ -67,7 +81,7 @@ export class Ledger {
       }
     }
     const writable = !options.readOnly && store.acquireWriter();
-    return new Ledger(store, loaded.entries, chain, acknowledged, writable, options.now ?? (() => new Date()));
+    return new Ledger(store, loaded.entries, chain, acknowledged, writable, options.now ?? (() => new Date()), options.permissions ?? DEFAULT_PERMISSIONS);
   }
 
   get status(): LedgerStatus {
@@ -208,6 +222,10 @@ export class Ledger {
     }
     if ((actor.kind === "agent" || actor.kind === "jev") && !isFilled(actor.model)) {
       throw new LedgerError("BAD_ACTOR", `an ${actor.kind} actor must name its model`);
+    }
+    const allowed = this.permissions[actor.kind];
+    if (allowed !== "any" && !allowed?.includes(draft.type)) {
+      throw new LedgerError("NOT_PERMITTED", `${actor.kind === "jev" ? "Jev" : `an ${actor.kind}`} (${actor.id}) may not write ${draft.type}`);
     }
     if (!isFilled(draft.subject)) throw new LedgerError("EMPTY_FIELD", "subject may not be empty");
     if (!isFilled(draft.summary)) throw new LedgerError("EMPTY_FIELD", "summary may not be empty or TBD");
