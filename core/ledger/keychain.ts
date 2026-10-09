@@ -229,7 +229,18 @@ export class KeychainKeyProvider implements KeyProvider {
 
   trustedKeys(): TrustedKey[] {
     if (!this.state().available) return [];
-    return this.principals().flatMap((principal) => this.publicKeys(principal));
+    return [...this.principals().flatMap((principal) => this.publicKeys(principal)), ...this.pins()];
+  }
+
+  /**
+   * Trusts someone else's public key on this device only (the owner's key on
+   * a helper's device), after the person checked its fingerprint.
+   */
+  pinKey(key: TrustedKey): void {
+    this.requireAvailable();
+    if (keyIdOf(key.publicKey) !== key.keyId || !/^(person:.+|system)$/.test(key.principal)) throw new RangeError("not a valid key");
+    const pins = this.pins().filter((k) => k.keyId !== key.keyId);
+    this.store.set("pins", JSON.stringify([...pins, { keyId: key.keyId, principal: key.principal, publicKey: key.publicKey }]));
   }
 
   /** The principal's active key, made on first call. A person action in the app, never an agent's. */
@@ -246,6 +257,35 @@ export class KeychainKeyProvider implements KeyProvider {
     return this.createKey(principal);
   }
 
+  /** A new key that does not sign yet; see KeyProvider.stageKey. */
+  stageKey(principal: string): TrustedKey {
+    this.requireAvailable();
+    if (!/^(person:.+|system)$/.test(principal)) throw new RangeError(`not a principal: ${principal}`);
+    const pair = newKeyPair();
+    this.store.set(`staged.${principal}`, pair.privateKey);
+    return { keyId: keyIdOf(pair.publicKey), principal, publicKey: pair.publicKey };
+  }
+
+  activateKey(principal: string, keyId: string): void {
+    this.requireAvailable();
+    const privateKey = this.store.get(`staged.${principal}`);
+    if (!privateKey) throw new Error(`no staged key for ${principal}`);
+    const publicKey = createPublicKey(createPrivateKey({ key: Buffer.from(privateKey, "base64"), format: "der", type: "pkcs8" }))
+      .export({ format: "der", type: "spki" })
+      .toString("base64");
+    if (keyIdOf(publicKey) !== keyId) throw new Error(`the staged key for ${principal} is not ${keyId}`);
+    const key: TrustedKey = { keyId, principal, publicKey };
+    this.store.set(`private.${principal}`, privateKey);
+    this.writePublic(principal, [...this.publicKeys(principal).map((k) => ({ ...k, retired: true })), key]);
+    const principals = this.principals();
+    if (!principals.includes(principal)) this.store.set("principals", JSON.stringify([...principals, principal]));
+    this.store.remove(`staged.${principal}`);
+  }
+
+  discardStagedKey(principal: string): void {
+    this.store.remove(`staged.${principal}`);
+  }
+
   sign(principal: string, message: Buffer): { keyId: string; signature: string } {
     this.requireAvailable();
     const active = this.publicKeys(principal).find((k) => !k.retired);
@@ -257,10 +297,19 @@ export class KeychainKeyProvider implements KeyProvider {
   /** Removes every key this provider stored; for tests and for an explicit reset by the person. */
   removeAll(): void {
     for (const principal of this.principals()) {
+      this.store.remove(`staged.${principal}`);
       this.store.remove(`private.${principal}`);
       this.store.remove(`public.${principal}`);
     }
     this.store.remove("principals");
+    this.store.remove("pins");
+  }
+
+  private pins(): TrustedKey[] {
+    const raw = this.store.get("pins");
+    if (!raw) return [];
+    const list = JSON.parse(raw) as TrustedKey[];
+    return Array.isArray(list) ? list.filter((k) => k && typeof k.publicKey === "string" && keyIdOf(k.publicKey) === k.keyId) : [];
   }
 
   private createKey(principal: string): TrustedKey {

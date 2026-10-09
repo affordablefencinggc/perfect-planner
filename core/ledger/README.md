@@ -50,7 +50,7 @@ interface LedgerEntry {
   refs: string[];       // clauses implemented or changed: ["P-2 §3.1"]
   corrects?: string;    // "L-000229" when this entry corrects an earlier one
   data?: Record<string, unknown>;  // type-specific payload, see "Payloads"
-  sig?: { key: string; value: string };  // person and system entries: Ed25519 signature
+  sig?: { key: string; value: string; pub: string };  // person and system entries: Ed25519 signature, key id, public key
   prev: string;         // hash of the previous entry ("0"*64 for L-000001)
   hash: string;         // sha256 of canonical JSON of every field except hash
 }
@@ -70,10 +70,10 @@ Entry types (spec §2.3), exported as `ENTRY_TYPES`:
 | Git | `worktree.created`, `commit.observed`, `collision.detected`, `collision.resolved`, `merge.done`, `worktree.removed` |
 | Proof | `test.defined`, `test.approved`, `test.passed`, `test.failed`, `review.verdict` |
 | Release | `release.cut`, `release.rollback` |
-| Housekeeping | `correction`, `budget.warning`, `chain.acknowledged`, `key.trusted` |
+| Housekeeping | `correction`, `budget.warning`, `chain.acknowledged`, `key.trusted`, `key.retired` |
 
 `chain.acknowledged` is how a person clears a fingerprint break (§2.5).
-`key.trusted` is how a person trusts a signing key (see "Signatures").
+`key.trusted` and `key.retired` are how a person trusts and retires signing keys (see "Signatures").
 
 ## Writing
 
@@ -120,7 +120,7 @@ Checked before every other rule, from `DEFAULT_PERMISSIONS` (or
 | Actor kind | May write |
 |---|---|
 | `person` | any type (`core/people` narrows this per role: owner, helper, viewer) |
-| `system` (the gate, the git watcher) | any type except `chain.acknowledged` and `key.trusted` |
+| `system` (the gate, the git watcher) | any type except `chain.acknowledged`, `key.trusted` and `key.retired` |
 | `agent` | `task.claimed`, `task.progress`, `task.blocked`, `task.proof`, `test.defined` (a proposal), and the relay: `question.asked`, `question.answered` |
 | `jev` | `review.verdict`, `question.asked` |
 
@@ -201,26 +201,81 @@ signature is a `signature` break. Writes stop, as with any break. A person
 may acknowledge the break to resume work. The entry stays non-authoritative
 either way.
 
-Trusted keys are the provider's own keys plus keys added by `key.trusted`
-entries, written by a person, signed by an already-trusted person key,
-`data: { keyId, principal, publicKey }`, reason required. `ledger.trustKey(person, key, reason)`
-writes one. It is allowed while the only problem is signatures this device
-cannot check. A key trusted late in the ledger also covers what it signed
-earlier.
+Every signature records its public key (`sig.pub`, which must hash to
+`sig.key`), so the ledger keeps every key that ever signed it.
+`recordedKeys(entries)` lists them. Recording a key is not trusting it.
 
-**Rotation.** `rotateKey(principal)` retires the active key and makes a new
-one. The retired public key stays trusted, so old entries still verify, but
-it never signs again.
+Trusted keys come from two places:
+
+- **The device.** The provider's own keys, and keys pinned on this device
+  only (`pin` / `pinKey`) after the person checked the fingerprint. For
+  example, a helper's device pins the owner's key.
+- **The ledger.** Keys added by `key.trusted` entries,
+  `data: { keyId, principal, publicKey }`, reason required.
+  `ledger.trustKey(person, key, reason)` writes one. It is allowed while the
+  only problem is signatures this device cannot check. A key trusted late in
+  the ledger also covers what it signed earlier.
+
+Who may trust a key for a principal: that same person (a new device, a
+rotation, recovery), or the owner (only with `ownerKey`, below). A key the ledger already shows signing
+for one person cannot be trusted as another's.
+
+**The owner** exists only when the app names it.
+
+- At project creation, the app makes the owner's key (`ensureKey`) and keeps
+  that key id outside the ledger, in project settings or the keychain.
+- On every open it passes the id: `Ledger.open(store, { keys, ownerKey })`.
+- The ledger's first person entry must be signed by exactly that key, and
+  the key must be trusted on this device. Otherwise it is a `signature`
+  break on open, and `NOT_PERMITTED` when writing.
+- Then `ledger.owner` and `status.owner` name the owner.
+  `ledger.ownerKeyPinned` and `ledger.pinnedOwnerKey` say whether a key was
+  passed, whether or not it checked out.
+
+Without `ownerKey` there is no owner, whoever wrote first. Each person can
+still trust and retire their own keys, but nobody can trust or retire
+another person's.
+
+**Rotation and stolen keys.** Call `ledger.rotateKey(person, reason)`. It
+works with any provider that can stage keys (`stageKey`, `activateKey`), and
+both built-in providers can:
+
+1. The provider stages a new key, which does not sign yet.
+2. The old key vouches for it in a `key.trusted` entry.
+3. The new key becomes active.
+4. The new key retires the old one in a `key.retired` entry.
+
+Every device that trusted the old key replays those two entries, so it
+trusts the new key from step 2. It also refuses anything the old key signs
+after step 4.
+
+`ledger.retireKey` refuses to sign with a key the ledger does not record
+yet: no other device could know that key, so they would ignore the
+retirement. After a rotation, use `rotateKey`. The owner can retire a
+helper's key the same way, for example when they leave.
+
+Key trust is replayed in ledger order a fixed number of times:
+
+1. A plain replay.
+2. A replay in which keys a person re-trusted count from the start.
+3. A final check.
+
+So the answer never depends on the ledger's length. A retirement is final:
+no later entry can bring a key back.
 
 **Lost keychain** (reinstall, new PC). Make a new key. The ledger then shows
 the old entries as signed by a key this device does not trust. The app shows
-the old key's fingerprint (`sig.key`, and the public key from any earlier
-`key.trusted` entry or another device). Once the person confirms it was
-theirs, `trustKey` restores it. Without that confirmation, the old entries
-stay unchecked: shown, but not authoritative.
+the old key's fingerprint from `recordedKeys`. Once the person confirms it
+was theirs, `trustKey` restores it, signed by their new key. Everything the
+old key signed counts again, including enrolments the owner made.
 
-**Another device or a helper.** Its key is trusted the same way, by a
-person who checked the fingerprint.
+Without that confirmation, the old entries stay unchecked: shown, but not
+authoritative. A helper who lost their key needs the owner to re-enrol
+them, or a second device of their own.
+
+**Another device or a helper.** A second device of the same person is
+trusted by that person. A helper is enrolled by the owner. Each device also
+pins the keys it needs to read the others, after the fingerprint is checked.
 
 **What this does not stop:**
 
@@ -232,8 +287,13 @@ person who checked the fingerprint.
   OS user, a sandbox, or a container. That is the gate's job.
 - Requiring Windows Hello, Touch ID or a polkit prompt per signature is the
   next step.
-- Revoking a stolen key is not built yet; rotate it, and acknowledge
-  anything it signed that the person did not.
+- A thief who uses a stolen key before it is retired: those entries count.
+  Retire it as soon as the loss is known.
+- If the thief retires the person's new key first, the owner has to re-enrol
+  them.
+- Anyone with write access to the files can append entries signed with
+  keys nobody trusts. That stops writes until a person acknowledges the
+  break. It is a nuisance, not a forgery: those entries never count.
 
 ## Reading
 

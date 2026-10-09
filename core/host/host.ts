@@ -6,11 +6,11 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { KeychainKeyProvider, LedgerError, MemoryKeyProvider, type KeyProvider } from "../ledger/index";
 import { startBridge, ToolError, type Bridge } from "../mcp/index";
 import { PeopleError } from "../people/index";
-import { openCoreProject, projectKey, type CoreProject } from "./project";
+import { openCoreProject, projectKey, writeOwnerPin, type CoreProject } from "./project";
 import { HttpError, Router } from "./router";
 import { PersonSessions } from "./session";
 import { registerRoutes } from "./routes/index";
-import { localPersonId } from "./routes/people";
+import { DEFAULT_LOCAL_PERSON, localPersonId } from "./routes/people";
 
 export const CORE_PREFIX = "/api/core";
 export { PERSON_COOKIE, CSRF_HEADER } from "./session";
@@ -69,6 +69,27 @@ export class CoreHost {
     if (this.keys.trustedKeys().some((key) => key.principal === principal && !key.retired)) return;
     if (this.keys.ensureKey) this.keys.ensureKey(principal);
     else if (this.keys instanceof MemoryKeyProvider) this.keys.createKey(principal);
+  }
+
+  /**
+   * A new project (no pin, nobody has written as a person) gets the local person's key pinned as
+   * its owner key, on the person's own request, and is reopened so the ledger names its owner.
+   * A ledger with person entries but no pin stays ownerless rather than trusting its own file.
+   */
+  pinOwnerIfNew(project: CoreProject): CoreProject {
+    if (project.ledger.ownerKeyPinned || project.entries().some((e) => e.actor?.kind === "person")) return project;
+    const principal = `person:${DEFAULT_LOCAL_PERSON}`;
+    this.ensureKey(principal);
+    const key = this.keys.trustedKeys().find((k) => k.principal === principal && !k.retired);
+    if (!key) return project; // no key store: the ledger refuses the write (NOT_SIGNED) and says why
+    try {
+      writeOwnerPin(project.root, key.keyId, principal);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    }
+    project.ledger.close();
+    this.projects.delete(project.key);
+    return this.project(project.key);
   }
 
   ensurePersonKey(person: string): void {
@@ -135,8 +156,9 @@ export class CoreHost {
     }
     try {
       const body = method === "POST" ? await readJson(req) : undefined;
-      const project = this.project(projectKey(url.searchParams.get("project")));
+      let project = this.project(projectKey(url.searchParams.get("project")));
       if (method === "POST") {
+        project = this.pinOwnerIfNew(project);
         // The person is here, in their own window: make their key and the system key
         // (planning's asker, the gate) if this device has none yet.
         this.ensurePersonKey(localPersonId(project));

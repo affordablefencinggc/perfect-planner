@@ -68,6 +68,31 @@ describe("KeychainKeyProvider", () => {
     expect(keys.sign("person:owner", Buffer.from("x")).keyId).toBe(second.keyId);
   });
 
+  it("pins another person's public key on this device without being able to sign for them", () => {
+    const keys = new KeychainKeyProvider(new FakeSecrets());
+    const other = new KeychainKeyProvider(new FakeSecrets()).ensureKey("person:owner");
+    keys.pinKey(other);
+    expect(keys.trustedKeys()).toEqual([other]);
+    expect(() => keys.sign("person:owner", Buffer.from("x"))).toThrow("no signing key");
+  });
+
+  it("rotates through the ledger so the old key vouches for the new one", () => {
+    const secrets = new FakeSecrets();
+    const keys = new KeychainKeyProvider(secrets);
+    const first = keys.ensureKey("person:owner");
+    const root = tempRoot();
+    const ledger = Ledger.openSync(new FileStore(root), { keys });
+    ledger.append({ actor: owner, type: "task.created", subject: "T-1", summary: "First task" });
+    const { trusted, retired } = ledger.rotateKey(owner, "New laptop");
+    expect(trusted.sig!.key).toBe(first.keyId);
+    expect(retired.sig!.key).not.toBe(first.keyId);
+    expect(keys.trustedKeys().find((k) => !k.retired)!.keyId).toBe(retired.sig!.key);
+    expect(secrets.get("staged.person:owner")).toBeUndefined();
+    expect(ledger.status.ok).toBe(true);
+    ledger.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
   it("refuses to sign when the keychain is unavailable and says why", () => {
     const keys = new KeychainKeyProvider(new FakeSecrets("No Secret Service is running"));
     expect(keys.state()).toEqual({ available: false, reason: "No Secret Service is running" });
