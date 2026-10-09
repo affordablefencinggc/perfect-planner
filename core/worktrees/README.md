@@ -74,5 +74,5 @@ user's repo as `cwd` would otherwise run a `git.exe` planted in that repo, becau
 the current folder before PATH. Every child also gets `NO_CWD_SEARCH_ENV`
 (`NoDefaultCurrentDirectoryInExePath=1`), so cmd.exe and nested programs skip the current folder too.
 Other modules that spawn git (the ledger's ignore check, release hooks) should import
-`gitExecutable` and `NO_CWD_SEARCH_ENV` from `core/worktrees`, or call `runGit`, rather than spawning
+`gitExecutable` and `NO_CWD_SEARCH_ENV` from `core/exec` (re-exported by `core/worktrees`), or call `runGit`, rather than spawning
 a bare `git`.

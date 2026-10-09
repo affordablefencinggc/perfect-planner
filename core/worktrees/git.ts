@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { gitExecutable, NO_CWD_SEARCH_ENV } from "./executable";
+import { gitExecutable, NO_CWD_SEARCH_ENV } from "../exec/index";
 
 export interface GitResult {
   code: number;

@@ -4,7 +4,7 @@ import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { surfacesOverlap } from "../../src/engine/collisionEngine.js";
-import { NO_CWD_SEARCH_ENV } from "./executable";
+import { NO_CWD_SEARCH_ENV } from "../exec/index";
 import { ensureRequiredIgnores, privatePaths } from "./ignores";
 import { git, GitError, runGit } from "./git";
 import { isWithin, lines, realDir, samePath, toRepoPath } from "./platform";
