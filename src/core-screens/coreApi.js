@@ -82,7 +82,7 @@ export function resetPersonSession() {
   writeCsrf(null);
 }
 
-const READ_ONLY_MESSAGE = "This window can only read. To make changes, open Perfect Planner from its launcher (the one-time link npm start prints).";
+const READ_ONLY_MESSAGE = "This window can only read. To make changes, open a one-time link from the terminal running Perfect Planner (press Enter there for a new one, or restart it).";
 
 async function call(path, project, options = {}) {
   const { method = "GET", fetchImpl = globalThis.fetch } = options;

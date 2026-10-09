@@ -452,7 +452,7 @@ function reviewCard(e: LedgerEntry, roster: Roster): DecisionCard {
 
 export async function buildDecisionsView(project: CoreProject, now = new Date()): Promise<DecisionsView> {
   const entries = project.entries();
-  const roster = replayRoster(entries);
+  const roster = replayRoster(entries, project.ledger.owner);
   const questions = askedQuestions(entries);
   const answeredDecisions = new Set<string>();
   const open: DecisionCard[] = [];
@@ -500,7 +500,7 @@ function openQuestion(project: CoreProject, body: unknown): Asked {
 /** The card as it is now must be the card the person approved. */
 function checkFingerprint(project: CoreProject, asked: Asked, body: unknown): void {
   const entries = project.entries();
-  const card = questionCard(entries, replayRoster(entries), asked);
+  const card = questionCard(entries, replayRoster(entries, project.ledger.owner), asked);
   requireFingerprint(body, card.fingerprint ?? "", "question and recommendation");
 }
 

@@ -85,11 +85,9 @@ function createControlledAdapter({
   };
 }
 
-async function chooseAndApprove(user) {
+async function chooseFolder(user) {
   await user.click(screen.getByRole("button", { name: "Choose app folder" }));
-  await user.click(
-    screen.getByRole("button", { name: /Approve read-only analysis/i }),
-  );
+  await user.click(await screen.findByRole("button", { name: "Approve read-only scan" }));
 }
 
 beforeEach(() => {
@@ -129,7 +127,7 @@ describe("Structure workspace runtime resilience", () => {
         onIntakeSummary={onIntakeSummary}
       />,
     );
-    await chooseAndApprove(user);
+    await chooseFolder(user);
     await waitFor(() =>
       expect(adapter.censusRegisteredWorkspace).toHaveBeenCalledTimes(1),
     );
@@ -186,7 +184,7 @@ describe("Structure workspace runtime resilience", () => {
       { once: true },
     );
     await user.click(
-      screen.getByRole("button", { name: /Cancel (?:indexing|analysis)/i }),
+      screen.getByRole("button", { name: /Cancel scan/i }),
     );
 
     expect(scanInput.signal.aborted).toBe(true);
@@ -213,7 +211,7 @@ describe("Structure workspace runtime resilience", () => {
         onProjectUnavailable={onProjectUnavailable}
       />,
     );
-    await chooseAndApprove(user);
+    await chooseFolder(user);
 
     await screen.findByText(/registration bridge offline/i);
     expect(screen.getByText(/^error$/i)).toBeTruthy();
@@ -230,7 +228,7 @@ describe("Structure workspace runtime resilience", () => {
     expect(adapter.censusRegisteredWorkspace).not.toHaveBeenCalled();
     expect(onProjectCaptured).not.toHaveBeenCalled();
     expect(
-      screen.getByRole("button", { name: /read-only analysis/i }).disabled,
+      screen.getByRole("button", { name: "Scan again" }).disabled,
     ).toBe(false);
   });
 
@@ -257,7 +255,7 @@ describe("Structure workspace runtime resilience", () => {
         onProjectUnavailable={onProjectUnavailable}
       />,
     );
-    await chooseAndApprove(user);
+    await chooseFolder(user);
 
     await screen.findByText(/census worker interrupted/i);
     expect(onDiagnostic).toHaveBeenCalledWith(
@@ -274,7 +272,7 @@ describe("Structure workspace runtime resilience", () => {
     expect(onIntakeSummary).not.toHaveBeenCalled();
 
     await user.click(
-      screen.getByRole("button", { name: /read-only analysis/i }),
+      screen.getByRole("button", { name: "Scan again" }),
     );
     await waitFor(() => expect(onProjectCaptured).toHaveBeenCalledTimes(1));
 
@@ -321,7 +319,7 @@ describe("Structure workspace runtime resilience", () => {
         onProjectUnavailable={onProjectUnavailable}
       />,
     );
-    await chooseAndApprove(user);
+    await chooseFolder(user);
 
     const refusal = await screen.findByRole("alert", {
       name: "Folder analysis refused",
@@ -378,7 +376,7 @@ describe("Structure workspace runtime resilience", () => {
       <StructureWorkspace workspaceAdapter={adapter} />,
     );
 
-    await chooseAndApprove(user);
+    await chooseFolder(user);
     await screen.findByText(/120 files observed/i);
     expect(
       container.querySelectorAll('.workspace-tree-files [role="listitem"]'),
@@ -425,7 +423,7 @@ describe("Structure workspace runtime resilience", () => {
       <StructureWorkspace workspaceAdapter={adapter} />,
     );
 
-    await chooseAndApprove(user);
+    await chooseFolder(user);
     await screen.findByText(/1500 files observed/i);
     await screen.findByText(/View capped at 1,200 nodes/i, {}, { timeout: 15_000 });
     expect(container.querySelectorAll(".workspace-tree-node").length).toBeLessThanOrEqual(1_200);

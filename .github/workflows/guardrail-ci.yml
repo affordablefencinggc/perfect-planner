@@ -16,8 +16,9 @@ jobs:
   web-and-contracts:
     name: Web, contracts, MCP, and Sites (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    # Windows runs the whole node suite (about 13 minutes there) before the UI suite.
-    timeout-minutes: 45
+    # Measured on windows-latest: build ~5 min, core tests ~12 min, UI tests ~8 min
+    # (each vitest file pays ~6 s of jsdom/import setup there), so 25 min cannot fit.
+    timeout-minutes: ${{ matrix.os == 'windows-latest' && 45 || 25 }}
     strategy:
       fail-fast: false
       matrix:

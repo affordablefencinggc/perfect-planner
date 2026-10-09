@@ -116,6 +116,11 @@ export default function PeopleScreen() {
       resource={resource}
       empty={<strong>People could not be shown yet.</strong>}
     >
+      {data?.ownerMissing && (
+        <p className="people-screen-notice is-bad" role="alert">
+          This device does not have this project's owner key, so nobody can add people or share documents here. Open the project on the computer where it was started, or start a new project.
+        </p>
+      )}
       {data?.firstRun && (
         <p className="people-screen-intro core-card">
           Nobody is on the roster yet, so this project works just for you. Add yourself first: the first person added is the owner, who can then add helpers and viewers.
@@ -124,7 +129,7 @@ export default function PeopleScreen() {
       {notice && (
         <p className={`people-screen-notice is-${notice.kind}`} role={notice.kind === "bad" ? "alert" : "status"}>{notice.text}</p>
       )}
-      {data && <PeoplePanel view={data.view} photos={data.photos ?? {}} me={data.me} starter={data.starter} {...handlers} />}
+      {data && <PeoplePanel view={data.view} photos={data.photos ?? {}} me={data.me} starter={data.starter} {...handlers} {...(data.ownerMissing ? { onAddMember: undefined, onShareDoc: undefined } : {})} />}
       {data && <PeopleDetails data={data} />}
     </CoreScreen>
   );

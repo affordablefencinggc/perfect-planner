@@ -38,9 +38,16 @@ export async function claimLaunch(base: string, launch: string): Promise<{ statu
   return { status: res.status, cookie: (res.headers.get("set-cookie") ?? "").split(";")[0] || undefined, csrf: body.result?.csrf };
 }
 
-export async function startTestHost(): Promise<{ host: CoreHost; base: string; dir: string; stop: () => Promise<void> }> {
+/**
+ * Test-only owner pin: every project is owned by the local person ("owner"), whose memory key is
+ * made up front. The app's real pin is signed and kept outside the project folder (#25).
+ * Pass { owned: false } for a project with no owner key on this device.
+ */
+export async function startTestHost({ owned = true }: { owned?: boolean } = {}): Promise<{ host: CoreHost; base: string; dir: string; stop: () => Promise<void> }> {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "pp-core-host-"));
-  const h = createCoreHost({ root, bridge: true, keys: new MemoryKeyProvider({ autoCreate: false }) });
+  const keys = new MemoryKeyProvider({ autoCreate: false });
+  const ownerKey = owned ? keys.createKey("person:owner").keyId : undefined;
+  const h = createCoreHost({ root, bridge: true, keys, ...(ownerKey ? { ownerKey: () => ownerKey } : {}) });
   const s = http.createServer((req, res) => h.middleware(req, res, () => { res.statusCode = 404; res.end(); }));
   await new Promise<void>((resolve) => s.listen(0, "127.0.0.1", resolve));
   const url = `http://127.0.0.1:${(s.address() as AddressInfo).port}/api/core`;

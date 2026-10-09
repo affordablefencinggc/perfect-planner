@@ -55,7 +55,7 @@ function personActor(project: CoreProject): Actor {
 
 function personName(project: CoreProject, id: string | undefined): string | undefined {
   if (!id) return undefined;
-  const member = replayRoster(project.entries()).members.get(id);
+  const member = replayRoster(project.entries(), project.ledger.owner).members.get(id);
   if (member) return member.name;
   return id === localPersonId(project) ? "You" : id;
 }

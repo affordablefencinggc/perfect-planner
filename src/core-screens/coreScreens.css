@@ -7,6 +7,8 @@
   align-content: start;
   gap: var(--space-5);
   padding: var(--space-5) var(--frame-pad);
+  /* Room below the last row so the fixed Settings button (bottom-left) never covers it. */
+  padding-bottom: calc(var(--space-5) + 80px);
   color: var(--ink);
 }
 .core-screen-head {

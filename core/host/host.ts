@@ -6,7 +6,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { KeychainKeyProvider, LedgerError, MemoryKeyProvider, type KeyProvider } from "../ledger/index";
 import { startBridge, ToolError, type Bridge } from "../mcp/index";
 import { PeopleError } from "../people/index";
-import { openCoreProject, projectKey, type CoreProject } from "./project";
+import { openCoreProject, projectKey, type CoreProject, type OwnerKeySource } from "./project";
 import { HttpError, Router } from "./router";
 import { PersonSessions } from "./session";
 import { registerRoutes } from "./routes/index";
@@ -27,6 +27,8 @@ export interface CoreHostOptions {
   bridge?: boolean;
   /** Signing keys for person and system entries. Default: the OS keychain. */
   keys?: SigningKeys;
+  /** The project's owner key id, from a pin kept outside the project folder (see project.ts). None: projects open unowned. */
+  ownerKey?: OwnerKeySource;
 }
 
 /** A key provider that can also make a key on the person's own action. */
@@ -78,7 +80,7 @@ export class CoreHost {
   project(key: string): CoreProject {
     let project = this.projects.get(key);
     if (!project) {
-      project = openCoreProject(this.options.root, key, this.options.projectRootOverride, this.keys);
+      project = openCoreProject(this.options.root, key, this.options.projectRootOverride, this.keys, this.options.ownerKey);
       this.projects.set(key, project);
     }
     return project;

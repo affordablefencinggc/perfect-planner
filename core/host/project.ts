@@ -28,10 +28,20 @@ export function projectKey(raw: string | null | undefined): string {
   return KEY.test(key) ? key : "default";
 }
 
-export function openCoreProject(baseRoot: string, key: string, override?: string, keys?: KeyProvider): CoreProject {
+/**
+ * Supplies the project's owner key id. The ledger names an owner only when it is opened with this
+ * key (core/ledger "The owner"), and the people rules let only that owner start the roster. The pin
+ * must live outside the project folder (agents can write there), so nothing in the folder is read
+ * for it: without an ownerKey source the project opens unowned. The app's signed pin (#25) plugs in
+ * here; tests pass their own.
+ */
+export type OwnerKeySource = (project: { key: string; root: string }) => string | undefined;
+
+export function openCoreProject(baseRoot: string, key: string, override?: string, keys?: KeyProvider, ownerKeyFor?: OwnerKeySource): CoreProject {
   const root = override ?? path.join(baseRoot, "projects", key);
   fs.mkdirSync(root, { recursive: true });
-  const ledger = Ledger.openSync(new FileStore(root), keys ? { keys } : {});
+  const ownerKey = ownerKeyFor?.({ key, root });
+  const ledger = Ledger.openSync(new FileStore(root), { ...(keys ? { keys } : {}), ...(ownerKey ? { ownerKey } : {}) });
   // The same rules every core module assumes: numbering (D-/Q-/T-/R- subjects), clauses, people, planning gates.
   installNumberingRules(ledger);
   installClauseRules(ledger);

@@ -36,7 +36,7 @@ export const DEFAULT_LOCAL_PERSON = "owner";
  * should use this id, or the people rules refuse them once a roster exists.
  */
 export function localPersonId(project: CoreProject): string {
-  return buildPeopleView(project.entries()).owner?.person ?? DEFAULT_LOCAL_PERSON;
+  return buildPeopleView(project.entries(), { owner: project.ledger.owner }).owner?.person ?? DEFAULT_LOCAL_PERSON;
 }
 
 export function localPerson(project: CoreProject): Actor {
@@ -80,20 +80,33 @@ export interface PeopleResult {
   firstRun: boolean;
   /** The person who first wrote to this project; only they may become its owner. */
   starter?: string;
+  /**
+   * True when this device has no owner key for the project (lost, or not pinned yet): nobody can
+   * add people or share documents here, so the screen says so instead of offering "Add the first person".
+   */
+  ownerMissing?: boolean;
 }
 
+/** Who may become the owner: the person whose key is pinned as the owner key. */
 function starter(project: CoreProject): string | undefined {
-  return replayRoster(project.entries()).starter;
+  if (!project.ledger.ownerKeyPinned) return undefined;
+  return replayRoster(project.entries(), project.ledger.owner).pinnedOwner ?? (project.entries().some((e) => e.actor?.kind === "person") ? undefined : DEFAULT_LOCAL_PERSON);
+}
+
+/** No owner key for this project on this device: nobody can start the roster or share documents here. */
+function ownerMissing(project: CoreProject): boolean {
+  return !project.ledger.ownerKeyPinned;
 }
 
 function peopleResult(project: CoreProject): PeopleResult {
-  const view = buildPeopleView(project.entries());
+  const view = buildPeopleView(project.entries(), { owner: project.ledger.owner });
   return {
     view,
     photos: photoSources(view, new FilePhotoStore(project.root)),
     me: view.owner?.person ?? DEFAULT_LOCAL_PERSON,
-    firstRun: view.members.length === 0,
+    firstRun: view.members.length === 0 && !ownerMissing(project),
     ...(view.members.length === 0 && starter(project) ? { starter: starter(project) } : {}),
+    ...(ownerMissing(project) ? { ownerMissing: true } : {}),
   };
 }
 
@@ -116,7 +129,7 @@ export function registerPeopleRoutes(router: Router): void {
   // First run: the first person added becomes the owner (and the person at this computer).
   router.post("/people/claim", ({ project, body: raw, host }) => {
     const b = body(raw);
-    if (buildPeopleView(project.entries()).members.length > 0) throw new HttpError(409, "HAS_OWNER", "This project already has an owner.");
+    if (buildPeopleView(project.entries(), { owner: project.ledger.owner }).members.length > 0) throw new HttpError(409, "HAS_OWNER", "This project already has an owner.");
     const id = person(b.person ?? DEFAULT_LOCAL_PERSON);
     host.ensurePersonKey(id); // the person naming themselves, in their own window
     const entry = claimOwnership(project.ledger, { kind: "person", id }, text(b.name, "a name"));
@@ -128,7 +141,7 @@ export function registerPeopleRoutes(router: Router): void {
     const id = person(b.person);
     const name = text(b.name, "a name");
     const r = b.role === undefined ? undefined : role(b.role);
-    const roster = buildPeopleView(project.entries());
+    const roster = buildPeopleView(project.entries(), { owner: project.ledger.owner });
     if (roster.members.length === 0) {
       if (r !== undefined && r !== "owner") throw new HttpError(422, "FIRST_IS_OWNER", "The first person on a project is its owner. Add yourself as owner first, then add helpers.");
       host.ensurePersonKey(id);
