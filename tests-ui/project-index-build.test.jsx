@@ -44,6 +44,16 @@ test("an unchecked planning status before any approval is not called out of date
   expect(screen.queryByText(/out of date/)).toBeNull();
 });
 
+// The pending original request is reconciled in the Ledger's plan-approval panel, so that is where the button goes.
+for (const state of ["pending", "unfinished"]) test(`an approval still ${state} sends the user to the Ledger, where it is finished`, async () => {
+  const onWorkspace = vi.fn();
+  render(<Live Panel={ProjectBuildBoard} context={{ planStatuses: { [project.projectId]: { state, projectId: project.projectId } } }} onWorkspace={onWorkspace} />);
+  expect(await screen.findByText("A plan approval is still in progress in the Ledger.")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: /Open Plan/ })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: /Open Ledger/ }));
+  expect(onWorkspace).toHaveBeenCalledWith("ledger");
+});
+
 test("Done is refused inline while something is in the way, and a self-reported Done is not shown as verified", async () => {
   // T0002 loses its owner in Allocation: the saved row wins over the draft owner.
   writeSection(project.projectId, "allocation", { taskIds: ["T0001", "T0002"], assignments: { T0001: { owner: "Sam", wave: 1 }, T0002: { owner: "", wave: 1 } } });
