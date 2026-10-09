@@ -10,9 +10,11 @@ const base = { SystemRoot: "C:\\Windows", WINDIR: "C:\\Windows", TEMP: scratch, 
 const pick = (...names) => Object.fromEntries(names.filter((n) => process.env[n] !== undefined).map((n) => [n, process.env[n]]));
 const cases = {
   stripped: base,
+  fixedSystemModulesFirst: { ...base, PSModulePath: "C:\\Windows\\system32\\WindowsPowerShell\\v1.0\\Modules" },
   profile: { ...base, ...pick("USERPROFILE", "APPDATA", "LOCALAPPDATA", "HOMEDRIVE", "HOMEPATH", "USERNAME", "USERDOMAIN") },
   profileData: { ...base, ...pick("USERPROFILE", "APPDATA", "LOCALAPPDATA", "HOMEDRIVE", "HOMEPATH", "USERNAME", "USERDOMAIN", "ProgramData", "ALLUSERSPROFILE", "PUBLIC") },
   psmodule: { ...base, ...pick("PSModulePath") },
+  fixedSystemModules: { ...base, PSModulePath: "C:\\Windows\\system32\\WindowsPowerShell\\v1.0\\Modules" },
   programData: { ...base, ...pick("ProgramData", "ALLUSERSPROFILE") },
   comspecPath: { ...base, ...pick("ComSpec", "PATH", "PATHEXT") },
   full: { ...process.env },
