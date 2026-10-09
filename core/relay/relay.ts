@@ -89,6 +89,16 @@ export interface RelayOptions {
   settled?: SettledAnswerer | null;
 }
 
+/**
+ * Whether a reader may take an entry as written: an agent's or Jev's own entry
+ * (they hold no keys), or a person or system entry whose signature the ledger
+ * verified. A forged person or system entry on disk is ignored.
+ */
+export function trustedEntry(entry: LedgerEntry): boolean {
+  const kind = entry.actor?.kind;
+  return kind === "agent" || kind === "jev" || isAuthoritative(entry);
+}
+
 export class Relay {
   private readonly ledger: Ledger;
   private readonly settled: SettledAnswerer | null;
@@ -120,6 +130,9 @@ export class Relay {
 
   private apply(e: LedgerEntry): void {
     const d = e.data ?? {};
+    // Agents (and Jev) hold no keys, so their entries are taken as written; a
+    // person or system entry counts only when the ledger verified its signature.
+    if (!trustedEntry(e)) return;
     if (e.type === "question.asked") {
       this.questions.set(e.subject, {
         q: e.subject,
@@ -145,10 +158,10 @@ export class Relay {
       // Only a person's (or the system's) decision may answer later questions.
       const person = typeof d.person === "string" ? d.person : typeof d.question === "string" ? this.questions.get(d.question)?.person : undefined;
       if (person !== undefined) this.decisions.set(decisionKey(person, d.key), { d: e.subject, answer: String(d.answer ?? e.summary) });
-    } else if (e.type === "task.blocked" && d.pauseAll === true) {
+    } else if (e.type === "task.blocked" && d.pauseAll === true && isAuthoritative(e)) {
       this.pausedAll = { reason: e.reason ?? "Paused" };
       this.pausedTasks.add(e.subject);
-    } else if (e.type === "task.progress" && d.resumeAll === true) {
+    } else if (e.type === "task.progress" && d.resumeAll === true && isAuthoritative(e)) {
       this.pausedAll = null;
       this.pausedTasks.delete(e.subject);
     }
