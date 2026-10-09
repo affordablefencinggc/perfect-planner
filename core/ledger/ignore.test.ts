@@ -53,6 +53,26 @@ describe("the ledger folder stays out of the user's commits", () => {
     expect(exclude(root).filter((line) => line === "/.perfect-planner/")).toHaveLength(1);
   });
 
+  it("never runs a git planted in the project, even with . first on PATH", () => {
+    const root = repo();
+    const planted = path.join(root, process.platform === "win32" ? "git.exe" : "git");
+    if (process.platform === "win32") {
+      fs.copyFileSync(path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "hostname.exe"), planted);
+    } else {
+      fs.writeFileSync(planted, `#!/bin/sh\necho planted > "${path.join(root, "planted-ran")}"\n`);
+      fs.chmodSync(planted, 0o755);
+    }
+    const original = process.env.PATH;
+    process.env.PATH = `.${path.delimiter}${root}${path.delimiter}${original}`;
+    try {
+      write(root);
+    } finally {
+      process.env.PATH = original;
+    }
+    expect(fs.existsSync(path.join(root, "planted-ran"))).toBe(false);
+    expect(exclude(root)).toContain("/.perfect-planner/");
+  });
+
   it("does nothing outside a git repo", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "pp-ignore-plain-"));
     roots.push(root);
