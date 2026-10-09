@@ -3,6 +3,7 @@
 // the ledger and the agent service: no verification is implied.
 import type { Router } from "../router";
 import type { CoreProject } from "../project";
+import { isAuthoritative } from "../../ledger/index";
 import { buildPeopleView } from "../../people/index";
 import { ownerMissing } from "./people";
 import { planApprovalView } from "./plan";
@@ -37,7 +38,7 @@ export function coreSummary(project: CoreProject): CoreSummary {
     plan: {
       approved: plan.approved,
       ...(plan.latest ? { latest: plan.latest.plan } : {}),
-      tasks: entries.filter((e) => e.type === "task.created").length,
+      tasks: entries.filter((e) => e.type === "task.created" && isAuthoritative(e)).length,
       ...(idea ? { idea } : {}),
     },
   };

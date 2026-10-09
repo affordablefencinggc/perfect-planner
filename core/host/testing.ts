@@ -4,8 +4,9 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import type { AddressInfo } from "node:net";
-import { MemoryKeyProvider } from "../ledger/index";
+import { MemoryKeyProvider, type LedgerEntry } from "../ledger/index";
 import { CSRF_HEADER, createCoreHost, type CoreHost } from "./index";
+import type { CoreProject } from "./project";
 import { HostKeys } from "./keys";
 
 interface PersonWindow {
@@ -80,4 +81,25 @@ export async function hostCall(base: string, method: "GET" | "POST", route: stri
   const headers: Record<string, string> = { ...(asAgent ? {} : personHeaders(base)), ...(body === undefined ? {} : { "content-type": "application/json" }) };
   const res = await fetch(`${base}${route}`, { method, headers, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
   return { status: res.status, body: (await res.json()) as { ok: boolean; result?: any; code?: string; message?: string } };
+}
+
+/**
+ * Adds a line to what the project reads as if someone wrote it straight into the
+ * ledger file: it parses and chains, but no trusted key signed it, so the ledger
+ * never marks it verified and isAuthoritative is false for it. Readers must ignore it.
+ */
+export function forgeEntry(project: CoreProject, entry: Pick<LedgerEntry, "actor" | "type" | "subject" | "summary"> & Partial<LedgerEntry>): LedgerEntry {
+  const read = project.entries.bind(project);
+  const before = read();
+  const forged: LedgerEntry = {
+    n: `L-${String(before.length + 1).padStart(6, "0")}`,
+    at: new Date().toISOString(),
+    evidence: [],
+    refs: [],
+    prev: before[before.length - 1]?.hash ?? "0".repeat(64),
+    hash: "f".repeat(64),
+    ...entry,
+  };
+  project.entries = () => [...read(), forged];
+  return forged;
 }

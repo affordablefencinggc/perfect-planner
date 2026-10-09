@@ -70,10 +70,10 @@ Entry types (spec §2.3), exported as `ENTRY_TYPES`:
 | Git | `worktree.created`, `commit.observed`, `collision.detected`, `collision.resolved`, `merge.done`, `worktree.removed` |
 | Proof | `test.defined`, `test.approved`, `test.passed`, `test.failed`, `review.verdict` |
 | Release | `release.cut`, `release.rollback` |
-| Housekeeping | `correction`, `budget.warning`, `chain.acknowledged`, `key.trusted`, `key.retired` |
+| Housekeeping | `correction`, `budget.warning`, `chain.acknowledged`, `key.trusted`, `key.retired`, `owner.recovery.set`, `owner.recovered` |
 
 `chain.acknowledged` is how a person clears a fingerprint break (§2.5).
-`key.trusted` and `key.retired` are how a person trusts and retires signing keys (see "Signatures").
+`key.trusted` and `key.retired` are how a person trusts and retires signing keys (see "Signatures"). `owner.recovery.set` and `owner.recovered` are the owner's recovery code and its use ("Lost owner key").
 
 ## Writing
 
@@ -120,7 +120,7 @@ Checked before every other rule, from `DEFAULT_PERMISSIONS` (or
 | Actor kind | May write |
 |---|---|
 | `person` | any type (`core/people` narrows this per role: owner, helper, viewer) |
-| `system` (the gate, the git watcher) | any type except `chain.acknowledged`, `key.trusted` and `key.retired` |
+| `system` (the gate, the git watcher) | any type except `chain.acknowledged`, `key.trusted`, `key.retired` and the `owner.*` types |
 | `agent` | `task.claimed`, `task.progress`, `task.blocked`, `task.proof`, `test.defined` (a proposal), and the relay: `question.asked`, `question.answered` |
 | `jev` | `review.verdict`, `question.asked` |
 
@@ -166,6 +166,8 @@ message to refuse. Sibling threads use this for gate rules (for example
 | `commit.observed` | `T-14` | `{ sha: "9f3c2e1", files?: string[] }` |
 | `correction` | the corrected entry's subject | anything; `corrects` is required |
 | `chain.acknowledged` | the first bad entry, `L-000005` | `{ firstBad, problem }` |
+| `owner.recovery.set` | the recovery key id | `{ genesis, recoveryKeyId, recoveryPublicKey }` (setRecoveryCode only) |
+| `owner.recovered` | the new owner key id | `{ genesis, head: { n, hash }, newKeyId, newPublicKey, recoveryKeyId, recoverySignature }` (recoverOwner only) |
 
 Numbering payloads (`task.created`, `plan.approved`, `release.cut`, …) are
 documented in `core/numbering/README.md`; clause payloads in
@@ -244,6 +246,16 @@ both built-in providers can:
 2. The old key vouches for it in a `key.trusted` entry.
 3. The new key becomes active.
 4. The new key retires the old one in a `key.retired` entry.
+5. Every other key of the person still in force is retired too, unless it
+   is listed in `rotateKey(person, reason, { keep })`. A device key that a
+   thief added with the stolen key must not outlive the rotation.
+   `status.ownKeysRetired` tells a dropped device that it can no longer
+   sign.
+6. A recovery code set by a retired key is void, since it may have been set
+   with the stolen key. When the owner rotates, a new code is made and
+   returned once in `recovery`. After any other retirement,
+   `ledger.recoveryCodeSet` is false until the owner calls
+   `setRecoveryCode`.
 
 Every device that trusted the old key replays those two entries, so it
 trusts the new key from step 2. It also refuses anything the old key signs
@@ -273,6 +285,50 @@ Without that confirmation, the old entries stay unchecked: shown, but not
 authoritative. A helper who lost their key needs the owner to re-enrol
 them, or a second device of their own.
 
+**Lost owner key: the recovery code** (`recovery.ts`, design in
+`specs/owner-key-recovery.md`). The fix above needs the app's owner-key pin,
+which goes with the keychain. So the owner gets a one-time code instead:
+
+- `setRecoveryCode(owner, reason)` makes a 128-bit code (28 characters;
+  the last two catch any one wrong character or swapped pair) and returns it once, for the app to show.
+  Only a public key derived from it is written, in `owner.recovery.set`,
+  signed by an owner key in force. A new code replaces the old one.
+  The derivation is HKDF-SHA256, salted with the project's root: the hash
+  of the ledger's first person entry and the key that signed it. So a code
+  fits one project only, and not a ledger rewritten under another key
+  from that point.
+- Owner keys follow the ledger (`ownerChain`). The first person entry's
+  key starts it. An owner key in force can add one (a rotation or a
+  second device) or retire one. Only the latest code set by a key in force
+  counts.
+- On a new computer, `checkRecoveryCode(code)` shows the owner and the
+  ledger's head. The code proves where the history starts, not that its
+  end is all there, so the person confirms the head first.
+- `recoverOwner(owner, code, confirmedHead, reason)` writes
+  `owner.recovered`. It is signed by this computer's key, which countersigns
+  the entry, and it carries the code key's signature over the project, the
+  confirmed head and both key ids. That key becomes the owner key, and the
+  app must pin `ownerKey` to it (the pin lives in app data, keyed by the
+  ledger's genesis hash). Every owner key in force stops signing at that
+  entry. The code is spent, and a new one is returned. Before spending the
+  code, the whole ledger is checked as the owner's keys would see it. A
+  problem the recovery would not fix stops it, and the code stays unused:
+  a damaged file, or an owner entry the owner's keys do not verify.
+  Entries signed by keys only the old computer knew are accepted as
+  unverified, for example the gate, the watcher or helpers.
+  `recoverOwner` returns their numbers in `unverified`. The owner then
+  checks those keys' fingerprints and trusts them with `trustKey`.
+- A computer still pinned to the old key opens with `status.ownerKeyReplaced`
+  set and can no longer sign as the owner. The app shows a red "recovered on
+  another computer" notice. If that was not the person, the old computer's
+  copy can only be kept read-only and forked.
+- `owner.*` entries are written only by these methods, never by `append`.
+  The methods belong on the person's own app session, never on an agent or
+  MCP route.
+- The code must never reach the clipboard, a log, telemetry or an
+  evidence screenshot. Recovery screens live under `OWNER_RECOVERY_PATH`
+  (`/owner-recovery`), which evidence capture refuses to screenshot.
+
 **Another device or a helper.** A second device of the same person is
 trusted by that person. A helper is enrolled by the owner. Each device also
 pins the keys it needs to read the others, after the fingerprint is checked.
@@ -291,6 +347,16 @@ pins the keys it needs to read the others, after the fingerprint is checked.
   Retire it as soon as the loss is known.
 - If the thief retires the person's new key first, the owner has to re-enrol
   them.
+- A same-user process can read the recovery code while it is shown or
+  typed, and whoever holds the code can take over the project.
+- Recovery cannot detect a tail cut from the ledger before the new
+  computer reads it. The person's check of the head is the only guard
+  there. On a computer that keeps its app data, the `witness` open option
+  (`FileHeadWitness`, a copy of the head in the app's data folder) shows a
+  cut tail or a rewritten last entry, even when HEAD was changed to match.
+  Each copy of a project folder has its own copy of the head. An unreadable
+  copy is reported in `status.witnessProblem` and never overwritten.
+  A same-user process can edit that copy too.
 - Anyone with write access to the files can append entries signed with
   keys nobody trusts. That stops writes until a person acknowledges the
   break. It is a nuisance, not a forgery: those entries never count.

@@ -165,4 +165,35 @@ describe("TasksScreen", () => {
     fireEvent.click(send);
     expect(await screen.findByText(/Reopened as T-1.a2/)).toBeTruthy();
   });
+
+  test("Release claim is offered only while a worker holds the task, says the work is kept, and frees it", async () => {
+    const tree = { path: "/w", branch: "pp/T-1", base: "main", port: 5200 };
+    let tasks = [
+      task({ status: "claimed", owner: "worker-1", stage: "building", worktree: tree }),
+      task({ id: "T-2", label: "T-2", title: "Open notes", stage: "ready-to-claim" }),
+      task({ id: "T-3", label: "T-3", title: "Sync notes", status: "done", stage: "done" }),
+    ];
+    const fetch = routeFetch({
+      "GET /tasks": async () => ok(view(tasks)),
+      "POST /tasks/T-1/release": async (init) => {
+        expect(JSON.parse(init.body)).toEqual({ owner: "worker-1", reason: "Its window was closed" });
+        tasks = [{ ...tasks[0], status: "open", owner: null, stage: "ready-to-claim" }, tasks[1], tasks[2]];
+        return ok({ released: "T-1", from: "worker-1", entry: "L-000020", ...view(tasks) });
+      },
+    });
+    renderScreen();
+    const t1 = await card("T-1 Save notes");
+    expect(within(await card("T-2 Open notes")).queryByRole("button", { name: "Release claim" })).toBeNull();
+    expect(within(await card("T-3 Sync notes")).queryByRole("button", { name: "Release claim" })).toBeNull();
+    fireEvent.click(within(t1).getByRole("button", { name: "Release claim" }));
+    expect(within(t1).getByText(/Release this task so another worker can take it\. Its worktree and commits are kept\./)).toBeTruthy();
+    // Nothing is sent until the person confirms.
+    expect(fetch.mock.calls.some(([u]) => String(u).includes("/release"))).toBe(false);
+    fireEvent.change(within(t1).getByLabelText("Why (optional)"), { target: { value: "Its window was closed" } });
+    fireEvent.click(within(t1).getByRole("button", { name: "Release T-1" }));
+    expect(await screen.findByText(/Released T-1 from worker-1\. Its worktree and commits are kept/)).toBeTruthy();
+    const after = await card("T-1 Save notes");
+    expect(within(after).queryByRole("button", { name: "Release claim" })).toBeNull();
+    expect(within(after).getByRole("button", { name: "Start worker" })).toBeTruthy();
+  });
 });
