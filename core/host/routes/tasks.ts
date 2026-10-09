@@ -375,6 +375,27 @@ async function releaseClaim(project: CoreProject, id: string, body: Record<strin
   return { released: label, from: owner, entry: entry.n, ...(await overview(project)) };
 }
 
+/**
+ * Changed files that can run code or change how git, npm or CI behave on the person's machine (install
+ * scripts, lockfiles, git attributes and hooks, workflows, npm settings). The diff screen lists them in a
+ * block that needs its own confirmation before the diff can be approved. Stand-in until core/worktrees
+ * exports its own list.
+ */
+const SENSITIVE: readonly RegExp[] = [
+  /(^|\/)package\.json$/,
+  /(^|\/)(package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lockb?)$/,
+  /(^|\/)\.gitattributes$/,
+  /^\.gitmodules$/,
+  /^\.github\/workflows\//,
+  /(^|\/)\.githooks\//,
+  /(^|\/)\.husky\//,
+  /(^|\/)\.npmrc$/,
+];
+
+export function sensitiveFiles(files: readonly string[]): string[] {
+  return files.filter((file) => SENSITIVE.some((pattern) => pattern.test(file.replace(/\\/g, "/")))).sort();
+}
+
 export function registerTaskRoutes(router: Router): void {
   router.get("/tasks", ({ project }) => overview(project));
 
@@ -467,7 +488,7 @@ export function registerTaskRoutes(router: Router): void {
     const tip = await git(tree.path, ["rev-parse", "HEAD"]);
     const files = (await git(tree.path, ["diff", "--name-only", "--no-renames", tree.baseSha, tip])).split(/\r?\n/).filter(Boolean).sort();
     const text = await git(tree.path, ["diff", "--no-color", "--no-renames", tree.baseSha, tip]);
-    return { task: attemptLabel(task), base: tree.baseSha, commit: tip, files, text: text.length > MAX_DIFF ? `${text.slice(0, MAX_DIFF)}\n… diff cut at ${MAX_DIFF} characters` : text, truncated: text.length > MAX_DIFF };
+    return { task: attemptLabel(task), base: tree.baseSha, commit: tip, files, sensitive: sensitiveFiles(files), text: text.length > MAX_DIFF ? `${text.slice(0, MAX_DIFF)}\n… diff cut at ${MAX_DIFF} characters` : text, truncated: text.length > MAX_DIFF };
   });
 
   /** POST /tasks/:id/approve-diff: the person approves the diff at the commit the test passed on. */
@@ -479,6 +500,14 @@ export function registerTaskRoutes(router: Router): void {
     // Bound to the commit the person reviewed, which must still be the tip the test passed on.
     if (!sameCommit(bodyOf(body).commit, tip) || !passed?.passed || !sameCommit(passed.commit, tip)) {
       throw stale("The work changed since you reviewed it. Check it again and read the new diff before approving.");
+    }
+    // Files that can run code on this machine need their own confirmation, naming exactly those files.
+    const tree = await worktreeFor(project, label);
+    const changed = (await git(tree.path, ["diff", "--name-only", "--no-renames", tree.baseSha, tip])).split(/\r?\n/).filter(Boolean);
+    const sensitive = sensitiveFiles(changed);
+    const confirmed = bodyOf(body).confirmSensitive;
+    if (sensitive.length && !(Array.isArray(confirmed) && confirmed.length === sensitive.length && sensitive.every((file) => confirmed.includes(file)))) {
+      throw new HttpError(409, "CONFIRM_SENSITIVE", `This diff changes files that can run code on your computer (${sensitive.join(", ")}). Confirm you read them before approving.`);
     }
     refuse(project.service.gate.approveDiff(attemptLabel(task), localPerson(project)));
     return overview(project);
