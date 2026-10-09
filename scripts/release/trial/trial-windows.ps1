@@ -6,7 +6,7 @@ param(
   [Parameter(Mandatory)][ValidateSet("nsis", "msi")][string]$Kind,
   [Parameter(Mandatory)][string]$Out,
   [Parameter(Mandatory)][string]$Folder,
-  [Parameter(Mandatory)][string]$NativeDriver
+  [Parameter(Mandatory)][string]$NativeDriver  # msedgedriver.exe matching the WebView2 runtime
 )
 $ErrorActionPreference = "Continue"
 $label = "windows-$Kind"
@@ -40,17 +40,32 @@ if ($installDir) {
 $lnk = Get-ChildItem "$env:APPDATA\Microsoft\Windows\Start Menu\Programs", "$env:ProgramData\Microsoft\Windows\Start Menu\Programs" -Recurse -Filter "*Perfect Planner*.lnk" -ErrorAction SilentlyContinue
 Check "start menu shortcut" $(if ($lnk) { "pass" } else { "fail" }) "$(($lnk | ForEach-Object { $_.FullName }) -join '; ')"
 
-# 2. Smoke test the installed app through tauri-driver.
+# 2. Smoke test the installed app. msedgedriver cannot launch this app ("DevToolsActivePort file
+# doesn't exist"), so start it like a person would, with WebView2's DevTools port open, and attach.
 if ($exe) {
-  $driver = Start-Process tauri-driver -ArgumentList "--native-driver `"$NativeDriver`"" -PassThru -RedirectStandardOutput (Join-Path $Out "$label-driver.out.log") -RedirectStandardError (Join-Path $Out "$label-driver.err.log")
+  $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-port=9222"
+  $sw = [Diagnostics.Stopwatch]::StartNew()
+  $app = Start-Process -FilePath $exe.FullName -PassThru
+  Remove-Item Env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS
+  $ready = $null
+  for ($i = 0; $i -lt 60 -and -not $ready; $i++) { try { $ready = Invoke-RestMethod http://127.0.0.1:9222/json/version -TimeoutSec 2 } catch { Start-Sleep -Milliseconds 500 } }
+  if ($ready) { Check "launch" pass "window up, WebView2 $($ready.Browser) after $([int]$sw.Elapsed.TotalSeconds) s" }
+  else { Check "launch" fail "no WebView2 DevTools endpoint within 30 s; app process alive: $(-not $app.HasExited)" }
+  $driver = Start-Process $NativeDriver -ArgumentList "--port=4444" -PassThru -RedirectStandardOutput (Join-Path $Out "$label-driver.out.log") -RedirectStandardError (Join-Path $Out "$label-driver.err.log")
+  Start-Sleep -Seconds 2
+  if ($ready) { node scripts/release/trial/smoke-app.mjs --app $exe.FullName --folder $Folder --out $Out --label $label --attach 127.0.0.1:9222 }
+  # Close like clicking the window's X, then make sure the app and its children are gone.
+  $closed = $false
+  $main = Get-Process -Id $app.Id -ErrorAction SilentlyContinue
+  if ($main) { [void]$main.CloseMainWindow(); $closed = $main.WaitForExit(15000) } else { $closed = $true }
+  Check "close" $(if ($closed) { "pass" } else { "fail" }) "$(if ($main) { if ($closed) { 'window X closed the app' } else { 'still running 15 s after closing the window' } } else { 'app had already exited' })"
   Start-Sleep -Seconds 3
-  node scripts/release/smoke-installed-app.mjs --app $exe.FullName --folder $Folder --out $Out --label $label
-  Start-Sleep -Seconds 5
   $left = AppProcesses
-  Check "no process after close" $(if ($left) { "fail" } else { "pass" }) "$(if ($left) { ($left | ForEach-Object { "$($_.Name) pid $($_.Id)" }) -join ', ' } else { 'none running' })"
+  $webviews = Get-CimInstance Win32_Process -Filter "Name='msedgewebview2.exe'" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -like "*com.perfectplanner.desktop*" }
+  Check "no process after close" $(if ($left -or $webviews) { "fail" } else { "pass" }) "$(if ($left -or $webviews) { (@($left | ForEach-Object { "$($_.Name) pid $($_.Id)" }) + @($webviews | ForEach-Object { "msedgewebview2 pid $($_.ProcessId)" })) -join ', ' } else { 'none running' })"
   $left | Stop-Process -Force -ErrorAction SilentlyContinue
+  $webviews | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
   Stop-Process -Id $driver.Id -Force -ErrorAction SilentlyContinue
-  Get-Process msedgedriver -ErrorAction SilentlyContinue | Stop-Process -Force
 }
 
 # 3. Silent uninstall and leftovers.

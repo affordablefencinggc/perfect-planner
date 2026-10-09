@@ -14,7 +14,7 @@ smoke() { # label app
   local label="$1" app="$2"
   tauri-driver > "$out/$label-driver.log" 2>&1 & local driver=$!
   sleep 3
-  node scripts/release/smoke-installed-app.mjs --app "$app" --folder "$folder" --out "$out" --label "$label"
+  node scripts/release/trial/smoke-app.mjs --app "$app" --folder "$folder" --out "$out" --label "$label"
   sleep 5
   local left; left="$(app_procs)"
   if [ -z "$left" ]; then check "$label" "no process after close" pass "none running"; else check "$label" "no process after close" fail "$left"; pkill -9 -f 'perfect-planner|\.AppImage' || true; fi
@@ -23,8 +23,8 @@ smoke() { # label app
 
 # --- .deb -----------------------------------------------------------------
 label="$prefix-deb"
-deb="$(ls "$dir"/*.deb 2>/dev/null | head -n1)"
-if [ -z "$deb" ]; then check "$label" install fail "no .deb in artifact"; else
+deb="$(readlink -f "$(ls "$dir"/*.deb 2>/dev/null | head -n1)" 2>/dev/null)"
+if [ ! -f "$deb" ]; then check "$label" install fail "no .deb in artifact"; else
   pkg="$(dpkg-deb -f "$deb" Package)"
   check "$label" "package metadata" pass "$(dpkg-deb -f "$deb" Package Version Architecture Depends | tr '\n' ' ')"
   if sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "$deb" > "$out/$label-apt.log" 2>&1; then

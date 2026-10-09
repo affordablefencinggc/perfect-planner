@@ -25,6 +25,11 @@ permissions:
   contents: read
   actions: read
 
+# A newer push to the same trial branch replaces a trial still waiting or running.
+concurrency:
+  group: installer-trial-${{ github.ref }}-${{ github.event_name }}-${{ inputs.source_runs || 'default' }}
+  cancel-in-progress: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/heads/trial/') }}
+
 env:
   # Push-triggered trials use these Release runs (37921501956: PR #31, core host bundled in the installer).
   DEFAULT_SOURCE_RUNS: '["37921501956"]'
@@ -75,10 +80,9 @@ jobs:
           pattern: PerfectPlanner-*-windows-x64
           path: installers
           merge-multiple: true
-      - name: Install tauri-driver and the WebView2-matched msedgedriver
+      - name: Get the msedgedriver that matches the WebView2 runtime
         shell: pwsh
         run: |
-          cargo install tauri-driver --locked
           $v = (Get-ItemProperty 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}' -ErrorAction SilentlyContinue).pv
           Write-Output "WebView2 runtime $v"
           $dest = Join-Path $env:RUNNER_TEMP edgedriver

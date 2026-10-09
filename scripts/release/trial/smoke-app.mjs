@@ -2,8 +2,8 @@
 // Used by .github/workflows/installer-trial.yml on Windows and Linux runners; macOS has no
 // WKWebView driver, so the workflow checks the Mac app at the process and screenshot level.
 //
-//   node scripts/release/smoke-installed-app.mjs --app <path to installed binary>
-//        --folder <project folder to open> --out <dir for screenshots + result.json> [--label nsis]
+//   node scripts/release/trial/smoke-app.mjs --app <path to installed binary>
+//        --folder <project folder to open> --out <dir for screenshots + result.json> [--label nsis] [--attach 127.0.0.1:9222]
 //
 // Every check is recorded as pass/fail with what was actually seen; the script exits 1 if any
 // check failed, after writing result.json, so the workflow can still upload the evidence.
@@ -70,7 +70,9 @@ const CLICK_BY_TEXT = `
   const pattern = new RegExp(arguments[0], "i");
   const nodes = [...document.querySelectorAll("button, a, [role=button], [role=menuitem], [role=tab]")];
   const visible = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 && !el.closest("[inert]"); };
-  const hit = nodes.find((el) => visible(el) && (pattern.test(el.innerText || "") || pattern.test(el.getAttribute("aria-label") || "")));
+  // Match a control's first line of text (its name, not its subtitle) or its aria-label.
+  const firstLine = (el) => (el.innerText || "").trim().split("\n")[0].trim();
+  const hit = nodes.find((el) => visible(el) && (pattern.test(firstLine(el)) || pattern.test((el.getAttribute("aria-label") || "").trim())));
   if (!hit) return null;
   hit.scrollIntoView({ block: "center" });
   hit.click();
@@ -118,9 +120,12 @@ function answerFolderDialog() {
 
 async function main() {
   const started = Date.now();
-  const created = await wd("POST", "/session", {
-    capabilities: { alwaysMatch: { browserName: "wry", "tauri:options": { application: app } } },
-  }, 120_000);
+  // --attach host:port: the app was started with WebView2's DevTools port open (Windows), so
+  // msedgedriver attaches to it instead of launching it. Otherwise tauri-driver launches the app.
+  const capabilities = args.attach
+    ? { browserName: "MicrosoftEdge", "ms:edgeOptions": { debuggerAddress: args.attach } }
+    : { browserName: "wry", "tauri:options": { application: app } };
+  const created = await wd("POST", "/session", { capabilities: { alwaysMatch: capabilities } }, 120_000);
   session = created.sessionId;
   record("launch", true, `WebDriver session up after ${Date.now() - started} ms`);
 
@@ -134,11 +139,11 @@ async function main() {
   record("first-run screen", firstOk, firstText ? JSON.stringify(firstText.trim().replace(/\s+/g, " ").slice(0, 220)) : "no text within 60 s");
 
   // 2. Settings opens (top bar, or inside More actions).
-  let settingsLabel = await clickText("^\\s*settings\\b|open settings");
+  let settingsLabel = await clickText("^(open )?settings$");
   if (!settingsLabel) {
     await clickText("^more actions$");
     await sleep(500);
-    settingsLabel = await clickText("settings");
+    settingsLabel = await clickText("^(open )?settings$");
   }
   let settingsText = null;
   if (settingsLabel) {
@@ -155,9 +160,17 @@ async function main() {
   await sleep(500);
 
   // 3. A project folder can be opened through the native picker.
-  const toStructure = (await clickText("drop your app|review intake")) || (await clickText("^structure$"));
-  await sleep(1000);
-  const chooser = await clickText("^choose app folder$");
+  // Reach the Structure page's "Choose app folder" by whichever route this build offers.
+  let chooser = await clickText("^choose app folder$");
+  const route = [];
+  for (const step of ["drop your app|review intake|^add project$", "^(0?1\\s*)?define$", "^structure$"]) {
+    if (chooser) break;
+    const hit = await clickText(step);
+    if (hit) route.push(hit);
+    await sleep(1000);
+    chooser = await clickText("^choose app folder$");
+  }
+  const toStructure = route.join(" > ") || null;
   let folderOk = false;
   let folderSeen = chooser ? "" : `no "Choose app folder" button (navigated via ${JSON.stringify(toStructure)})`;
   if (chooser) {
@@ -200,6 +213,8 @@ async function main() {
   }
 
   // 5. Closes cleanly: ending the session closes the window; the workflow then checks no process is left.
+  // When attached, ending the session only detaches; the caller closes the window like a person.
+  if (args.attach) { await wd("DELETE", `/session/${session}`).catch(() => {}); session = null; return; }
   const closeStart = Date.now();
   await wd("DELETE", `/session/${session}`).then(
     () => record("close", true, `session closed in ${Date.now() - closeStart} ms`),
