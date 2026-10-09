@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { FileStore, Ledger, MemoryKeyProvider, MemoryStore, type Actor } from "../ledger/index";
+import { FileStore, Ledger, MemoryKeyProvider, MemoryStore, type Actor, type LedgerEntry } from "../ledger/index";
 import { appendNumbered } from "../numbering/index";
 import {
   MVP_STAGER,
@@ -317,5 +317,48 @@ describe("restart", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("forged entries", () => {
+  // A copy or hand-built entry is what a process writing the ledger files
+  // directly produces: same shape, no ledger-checked signature.
+  function forged(base: LedgerEntry, data: Record<string, unknown>, type = base.type): LedgerEntry {
+    return { ...base, type, data };
+  }
+
+  it("ignores a forged proposal, move, rename and journey", () => {
+    const l = open();
+    recordProposal(l, proposal);
+    const real = l.entries()[l.entries().length - 1]!;
+    const genuine = boardFromLedger(l.entries());
+    const forgedEntries = [
+      forged(real, { mvp: { kind: "proposal", journey, placements: [{ feature: "a", stage: "scale", reason: "forged" }], summary: "forged" } }),
+      forged(real, { mvp: { kind: "move", feature: "a", from: "mvp", to: "scale", reason: "forged" } }),
+      forged(real, { mvp: { kind: "rename", stage: "mvp", name: "Forged" } }),
+      forged(real, { mvp: { kind: "journey", journey: { ...journey, test: "true" }, moved: [] } }),
+      forged({ ...real, actor: person }, { mvp: { kind: "confirm" } }),
+    ];
+    expect(boardFromLedger([...l.entries(), ...forgedEntries])).toEqual(genuine);
+  });
+
+  it("does not count a forged journey pass toward done", () => {
+    const l = open();
+    recordProposal(l, proposal);
+    confirmMvp(l, person);
+    const real = l.entries()[l.entries().length - 1]!;
+    const board = boardFromLedger(l.entries());
+    const pass = forged({ ...real, actor: gate, subject: "T-1" }, { test: journey.test }, "test.passed");
+    const done = mvpDoneWhen(board, [...l.entries(), pass], [feat("a", "done"), feat("b", "done"), feat("c", "done")]);
+    expect(done.journeyPassed).toBe(false);
+  });
+
+  it("counts a journey pass the ledger recorded from the gate", () => {
+    const l = open();
+    recordProposal(l, proposal);
+    confirmMvp(l, person);
+    l.append({ actor: gate, type: "test.passed", subject: "T-1", summary: "ok", evidence: [], refs: [], data: { test: journey.test } });
+    const done = mvpDoneWhen(boardFromLedger(l.entries()), l.entries(), [feat("a", "done"), feat("b", "done"), feat("c", "done")]);
+    expect(done.journeyPassed).toBe(true);
   });
 });
