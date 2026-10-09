@@ -94,8 +94,10 @@ export class PlanningSession {
   /**
    * Records what an existing repo already decided (see readRepoStack) as
    * answered questions, each with the files that show it, so the mind map and
-   * roadmap build on the real stack. Call before start(); a question already
-   * answered is left alone. Returns the decision numbers.
+   * roadmap build on the real stack. Only a person answers planning
+   * questions, so `actor` is the person confirming what the repo shows. Call
+   * before start(); a question already answered is left alone. Returns the
+   * decision numbers.
    */
   recordRepoFacts(actor: Actor, profile: IdeaProfile, facts: readonly RepoFact[]): string[] {
     const decided: string[] = [];

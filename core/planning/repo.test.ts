@@ -10,6 +10,8 @@ import { profileRepo, readRepoStack } from "./repo";
 import { planningAnswers } from "./state";
 
 const agent: Actor = { kind: "agent", id: "claude-code", model: "test-model" };
+// Only a person answers planning questions: the person confirms what the repo shows.
+const owner: Actor = { kind: "person", id: "looplet-spare" };
 
 function tmp(files: Record<string, string>): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "pp-repo-"));
@@ -75,7 +77,7 @@ describe("planning an existing repo", () => {
     const profile = profileRepo("A fencing contractor app for quotes and invoices", stack);
     expect(profile.signals).toEqual(expect.arrayContaining(["desktop", "mobile", "payments", "web"]));
 
-    const decided = session.recordRepoFacts(agent, profile, stack.facts);
+    const decided = session.recordRepoFacts(owner, profile, stack.facts);
     expect(decided).toHaveLength(stack.facts.length);
     session.start(agent, profile);
 
@@ -107,8 +109,17 @@ describe("planning an existing repo", () => {
     const session = new PlanningSession(ledger, { person: "looplet-spare" });
     const stack = readRepoStack(looplet());
     const profile = profileRepo("x", stack);
-    session.recordRepoFacts(agent, profile, stack.facts);
-    expect(session.recordRepoFacts(agent, profile, stack.facts)).toEqual([]);
+    session.recordRepoFacts(owner, profile, stack.facts);
+    expect(session.recordRepoFacts(owner, profile, stack.facts)).toEqual([]);
+  });
+
+  it("an agent cannot settle the repo's stack on the person's behalf", async () => {
+    const ledger = await Ledger.open(new MemoryStore());
+    installNumberingRules(ledger);
+    installPlanningRules(ledger);
+    const session = new PlanningSession(ledger, { person: "looplet-spare" });
+    const stack = readRepoStack(looplet());
+    expect(() => session.recordRepoFacts(agent, profileRepo("x", stack), stack.facts)).toThrow(/person/);
   });
 });
 
@@ -120,7 +131,7 @@ describe("roadmap for an existing repo", () => {
     const session = new PlanningSession(ledger, { person: "looplet-spare" });
     const stack = readRepoStack(looplet());
     const profile = profileRepo("A fencing contractor app for quotes and invoices, offline on site", stack);
-    session.recordRepoFacts(agent, profile, stack.facts);
+    session.recordRepoFacts(owner, profile, stack.facts);
     session.start(agent, profile);
     return { session, ledger };
   }
