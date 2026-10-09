@@ -77,4 +77,15 @@ describe("the planner-private folder in the user's repo", () => {
     expect(exclude(repo)).toContain("/apps/web/.perfect-planner/");
     expect(stageable(repo)).toEqual([]);
   });
+
+  it("is not deleted under a running git: closing the host waits for the git runs started at open", async () => {
+    const repo = newRepo();
+    const ctx = await startTestHost({ projectRootOverride: repo });
+    cleanups.push(() => ctx.stop());
+    const project = ctx.host.project("app");
+    let settled = false;
+    void Promise.allSettled([project.ready, project.protection]).then(() => { settled = true; });
+    await ctx.host.close();
+    expect(settled).toBe(true);
+  });
 });
