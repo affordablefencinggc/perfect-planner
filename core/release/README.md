@@ -47,6 +47,13 @@ the rule existed is ignored. Switching it off removes only our own hook.
 `prePush.state` is `installed`, `opted-out`, `foreign-hook` (the repo has its
 own hook, left alone; chain the scan into it by hand) or `not-a-repo`.
 
+Known bypasses of the pre-push scan (it is a local, best-effort layer):
+`git push --no-verify` skips every pre-push hook, and in the `foreign-hook`
+state the repository already had a pre-push hook that is not ours, so ours is
+not installed and nothing scans until a person chains it in. Neither bypasses
+the review gate (`runCheapFirst`) or GitHub push protection, which are the
+binding checks.
+
 ## Protect `main` on GitHub (your setting)
 
 A direct push to an unprotected `main` skips review and CI, and no code in
@@ -125,8 +132,11 @@ placeholder only when the whole value is one (`changeme`, `<token>`,
 `${API_KEY}`, …) or a reference to a secret store (`secret://…`, `dpapi:…`,
 `keychain:…`).
 
-The pre-push hook is a dependency-free `.mjs` (git cannot run TypeScript).
-Its rules mirror `secrets.ts`; `secrets.test.ts` fails if they drift.
+The detection rules are `core/secrets` (`SECRET_RULES`, `findSecrets`), the
+same ones Jev's diff check uses; `secrets.ts` adds forbidden file names, the
+`.npmrc` token, fingerprints and the branch scan. The pre-push hook is a
+dependency-free `.mjs` (git cannot run TypeScript). Its rules mirror
+`core/secrets`; `secrets.test.ts` fails if they drift.
 Install it with `installPrePushHook(run, { cwd, hookScript })`, which writes
 the shim where git looks (`git rev-parse --git-path hooks`, so it follows the
 `core.hooksPath` that `core/worktrees` sets) and never overwrites a hook that
