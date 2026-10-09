@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -200,6 +201,33 @@ describe("finding Claude Code", () => {
     program(path.join(project, "pkg", "cli.js"));
     link(path.join(project, "pkg"), path.join(sneaky, "node_modules", "@anthropic-ai", "claude-code"));
     expect(claudeLaunch([], { Path: sneaky }, project, [])).toBeNull();
+  });
+
+  it.runIf(!windows)("runs an npm-installed claude script under this Node, so a planted node on PATH never runs", () => {
+    const project = temp();
+    const outside = temp();
+    const marker = path.join(outside, "planted-node-ran");
+    // The planted node, reached through a PATH folder that links into the project.
+    fs.mkdirSync(path.join(project, "bin"));
+    fs.writeFileSync(path.join(project, "bin", "node"), `#!/bin/sh\ntouch '${marker}'\n`, { mode: 0o755 });
+    const linked = path.join(outside, "linked-bin");
+    link(path.join(project, "bin"), linked);
+    // npm's layout: bin/claude links to the package's cli.js, which starts with an env-node shebang.
+    const cli = path.join(outside, "lib", "node_modules", "@anthropic-ai", "claude-code", "cli.js");
+    fs.mkdirSync(path.dirname(cli), { recursive: true });
+    fs.writeFileSync(cli, "#!/usr/bin/env node\nprocess.stdout.write('safe ' + process.argv.slice(2).join(' '));\n", { mode: 0o755 });
+    fs.mkdirSync(path.join(outside, "npm-bin"));
+    fs.symlinkSync(cli, path.join(outside, "npm-bin", "claude"));
+    // A plain script (no .js name) with the same shebang is treated the same way.
+    const plain = program(path.join(outside, "plain", "claude"));
+    fs.writeFileSync(plain, "#!/usr/bin/env node\n");
+    const PATH = [linked, path.join(outside, "npm-bin")].join(sep);
+    const launch = claudeLaunch(["mcp", "list"], { PATH }, project, []);
+    expect(launch).toEqual({ command: process.execPath, args: [path.join(outside, "npm-bin", "claude"), "mcp", "list"] });
+    const run = spawnSync(launch!.command, launch!.args, { encoding: "utf8", env: { ...process.env, PATH } });
+    expect(run.stdout).toBe("safe mcp list");
+    expect(fs.existsSync(marker)).toBe(false);
+    expect(claudeLaunch([], { PATH: path.dirname(plain) }, project, [])).toEqual({ command: process.execPath, args: [plain] });
   });
 
   it("returns null when Claude Code is not installed", () => {

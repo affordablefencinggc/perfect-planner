@@ -141,7 +141,8 @@ export function protectFor(tokenFile: string | null): string[] {
 /**
  * How to start Claude Code without a shell, by core/exec's finder, so a claude planted in the project,
  * the picked repo or a PATH folder that links into either never runs. On Windows a claude.exe runs as
- * itself; an npm shim (claude.cmd) is never run: its package entry runs under this Node instead, and only
+ * itself; on macOS and Linux an npm-installed claude (a node script) runs under this Node, never
+ * through its `env node` shebang; an npm shim (claude.cmd) is never run: its package entry runs under this Node instead, and only
  * when that entry also lies outside every protected folder. Null when no usable Claude Code is found.
  */
 export function claudeLaunch(
@@ -153,7 +154,8 @@ export function claudeLaunch(
 ): Launch | null {
   const program = findExecutable("claude", env, cwd, platform, protect, [".exe", ".cmd"]);
   if (!program) return null;
-  if (platform !== "win32" || !/\.cmd$/i.test(program)) return { command: program, args };
+  if (platform !== "win32") return nodeScript(program) ? { command: process.execPath, args: [program, ...args] } : { command: program, args };
+  if (!/\.cmd$/i.test(program)) return { command: program, args };
   const entry = path.join(path.dirname(program), ...NPM_ENTRY);
   let real: string;
   try {
@@ -165,6 +167,27 @@ export function claudeLaunch(
   const roots = [cwd, ...protect, ...registeredRoots()];
   if (roots.some((root) => isWithin(root, entry) || isWithin(root, real) || isWithin(safeReal(root), real))) return null;
   return { command: process.execPath, args: [entry, ...args] };
+}
+
+/**
+ * True for an npm-installed claude on macOS and Linux: a link to a .js file or a script starting
+ * `#!/usr/bin/env node`. Its shebang would look node up on PATH, where a planted node could sit, so
+ * it runs under this Node instead.
+ */
+function nodeScript(program: string): boolean {
+  try {
+    if (/\.[cm]?js$/i.test(fs.realpathSync.native(program))) return true;
+    const fd = fs.openSync(program, "r");
+    try {
+      const head = Buffer.alloc(128);
+      const read = fs.readSync(fd, head, 0, head.length, 0);
+      return /^#!\s*\S*\/env\s+(?:-S\s+)?node(?:\s|$)/.test(head.subarray(0, read).toString("utf8"));
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return false;
+  }
 }
 
 function safeReal(p: string): string {
