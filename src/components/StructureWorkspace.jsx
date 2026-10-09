@@ -87,6 +87,9 @@ function censusFailureText(reason, path) {
 }
 
 const cloneSeed = () => structuredClone(currentFolderContractInput);
+// Only the Demo starts from the sample folders. A real project, and the page
+// before any project is chosen, start from an empty plan.
+const startingDraft = (demo, planId) => (demo ? cloneSeed() : { ...cloneSeed(), planId, nodes: [] });
 const waves = ["approval", "architecture", "build", "proof", "release"];
 const policies = ["owner-only", "collision-review", "immutable-after-approval"];
 const MAX_RENDERED_FOLDER_NODES = 1_200;
@@ -224,11 +227,12 @@ export function StructureWorkspace({
   const imported = activeProject && activeProject.kind !== "demo";
   const demo = activeProject?.kind === "demo";
   const planId = imported ? activeProject.projectId : currentFolderContractInput.planId;
-  const [draft, setDraft] = useState(cloneSeed);
+  const [draft, setDraft] = useState(() => startingDraft(demo, planId));
+  const [confirmReset, setConfirmReset] = useState(false);
   const [architecture, setArchitecture] = useState({ head: null, error: null });
   const [draftStorageError, setDraftStorageError] = useState("");
   const [loadedDraftPlan, setLoadedDraftPlan] = useState(null);
-  const [selectedId, setSelectedId] = useState("F001");
+  const [selectedId, setSelectedId] = useState(demo ? "F001" : undefined);
   const [openSections, setOpenSections] = useState({
     intake: true,
     dependencies: true,
@@ -373,7 +377,9 @@ export function StructureWorkspace({
     setArchitecture({ head: null, error: null });
     setLoadedDraftPlan(null);
     setDraftStorageError("");
-    let nextDraft = imported ? { ...cloneSeed(), planId, nodes: [] } : cloneSeed();
+    let nextDraft = startingDraft(demo, planId);
+    setConfirmReset(false);
+    setSelectedId(demo ? "F001" : undefined);
     if (imported) {
       try {
         const raw = localStorage.getItem(`perfect-planner:folder-draft:v1:${planId}`);
@@ -404,7 +410,7 @@ export function StructureWorkspace({
       }).catch((error) => { if (current) setArchitecture({ head: null, error: error.message }); });
     }
     return () => { current = false; };
-  }, [planId]);
+  }, [planId, demo]);
 
   useEffect(() => {
     if (!imported || loadedDraftPlan !== planId || draft.planId !== planId || draftStorageError) return;
@@ -1039,6 +1045,15 @@ export function StructureWorkspace({
     }
   };
 
+  function resetProposal() {
+    setConfirmReset(false);
+    // A real project (or no project yet) starts from an empty plan, never the sample folders.
+    setDraft(demo
+      ? cloneSeed()
+      : { ...startingDraft(false, planId), architectureContractDigest: architecture.head?.contractDigest ?? null, architectureRevision: architecture.head?.revision ?? null });
+    setSelectedId(demo ? "F001" : undefined);
+  }
+
   return (
     <section
       className="workspace structure-workspace"
@@ -1138,16 +1153,24 @@ export function StructureWorkspace({
           </button>
           <button
             className="soft-button"
+            aria-expanded={confirmReset}
             onClick={() => {
-              // A real project starts from an empty plan, never the sample folders.
-              setDraft(imported
-                ? { ...cloneSeed(), planId, nodes: [], architectureContractDigest: architecture.head?.contractDigest ?? null, architectureRevision: architecture.head?.revision ?? null }
-                : cloneSeed());
-              setSelectedId(imported ? undefined : "F001");
+              // Resetting throws away every planned folder, so ask first.
+              if (draft.nodes.length && !confirmReset) { setConfirmReset(true); return; }
+              resetProposal();
             }}
           >
             <ShieldCheckIcon /> Reset proposal
           </button>
+          {confirmReset && (
+            <span role="group" aria-label="Confirm reset proposal" className="structure-reset-confirm">
+              <span>{demo
+                ? `Replace your ${draft.nodes.length} planned ${draft.nodes.length === 1 ? "folder" : "folders"} with the Demo sample?`
+                : `Remove all ${draft.nodes.length} planned ${draft.nodes.length === 1 ? "folder" : "folders"}? This starts an empty plan.`}</span>
+              <button type="button" className="soft-button" onClick={resetProposal}>Yes, reset</button>
+              <button type="button" className="soft-button" onClick={() => setConfirmReset(false)}>Keep my folders</button>
+            </span>
+          )}
         </div>
       </section>
       <section
@@ -1672,6 +1695,9 @@ export function StructureWorkspace({
           </header>
           {openSections.paths && (
             <div className="structure-tree" id="structure-planned-paths">
+              {!activeProject && !draft.nodes.length && (
+                <p className="structure-empty-plan">Choose an app folder first. The folders you plan for it appear here.</p>
+              )}
               {draft.nodes.map((node) => {
                 const depth = node.path.split("/").length - 1;
                 return (

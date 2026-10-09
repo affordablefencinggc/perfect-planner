@@ -30,8 +30,25 @@ describe("Define controls", () => {
     await user.click(screen.getByRole("button", { name: /Add folder/ }));
     const metric = () => screen.getByText("named paths").previousSibling.textContent;
     expect(metric()).toBe("1");
+    // define-02: resetting discards planned folders, so it asks first and Keep changes nothing.
     await user.click(screen.getByRole("button", { name: /Reset proposal/ }));
+    expect(screen.getByRole("group", { name: "Confirm reset proposal" }).textContent).toContain("Remove all 1 planned folder?");
+    expect(metric()).toBe("1");
+    await user.click(screen.getByRole("button", { name: "Keep my folders" }));
+    expect(screen.queryByRole("group", { name: "Confirm reset proposal" })).toBeNull();
+    expect(metric()).toBe("1");
+    await user.click(screen.getByRole("button", { name: /Reset proposal/ }));
+    await user.click(screen.getByRole("button", { name: "Yes, reset" }));
     expect(metric()).toBe("0");
+    expect(screen.queryByText("F001")).toBeNull();
+  });
+
+  test("define-14: with no project chosen, Structure shows an empty plan, not the Demo's sample folders", async () => {
+    const user = userEvent.setup();
+    render(<StructureWorkspace workspaceAdapter={{ mode: "native" }} />);
+    expect(screen.getByText("named paths").previousSibling.textContent).toBe("0");
+    await user.click(screen.getByRole("button", { name: /Planned paths/ }));
+    expect(screen.getByText(/Choose an app folder first/)).toBeTruthy();
     expect(screen.queryByText("F001")).toBeNull();
   });
 
@@ -42,6 +59,7 @@ describe("Define controls", () => {
     await user.click(screen.getByRole("button", { name: /Add folder/ }));
     expect(screen.getByText("named paths").previousSibling.textContent).toBe(String(Number(before) + 1));
     await user.click(screen.getByRole("button", { name: /Reset proposal/ }));
+    await user.click(screen.getByRole("button", { name: "Yes, reset" }));
     expect(screen.getByText("named paths").previousSibling.textContent).toBe(before);
   });
 
