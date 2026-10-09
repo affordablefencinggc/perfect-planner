@@ -6,6 +6,7 @@ import type { Ledger } from "../ledger/index";
 import { git, runGit } from "./git";
 import { WorktreeManager } from "./manager";
 import { lines, samePath } from "./platform";
+import { PLACEHOLDER } from "./settings";
 import { commitAll, makeRepo, memoryLedger, writeFiles } from "./testing";
 
 const person = { kind: "person", id: "looplet-spare" } as const;
@@ -82,7 +83,7 @@ describe("WorktreeManager", () => {
     const fakeKey = ["sk", "live", "abcdefghijklmnopqrstuvwxyz"].join("-");
     writeFiles(repo.root, { ".env": `API_KEY=${fakeKey}\r\nPORT=3000\r\nDB_PASSWORD=hunter2hunter2\r\n`, ".env.example": "API_KEY=\n" });
     const info = await manager.create({ taskId: "T-5", actor: person });
-    expect(readFileSync(path.join(info.path, ".env"), "utf8")).toBe("API_KEY=PLACEHOLDER\r\nPORT=3000\r\nDB_PASSWORD=PLACEHOLDER\r\n");
+    expect(readFileSync(path.join(info.path, ".env"), "utf8")).toBe(`API_KEY=${PLACEHOLDER}\r\nPORT=3000\r\nDB_PASSWORD=${PLACEHOLDER}\r\n`);
     expect(readFileSync(path.join(info.path, ".env.example"), "utf8")).toBe("API_KEY=\n");
   }, SLOW);
 
@@ -148,7 +149,7 @@ describe("WorktreeManager", () => {
     writeFiles(info.path, { ".env": "PORT=3000\nAPI_KEY=real-value-typed-in\n" });
     rmSync(path.join(info.path, "ideas.local.md"));
     await expect(manager.remove("T-18")).rejects.toThrow(/\.env/);
-    writeFiles(info.path, { ".env": "PORT=3000\nAPI_KEY=PLACEHOLDER\n" });
+    writeFiles(info.path, { ".env": `PORT=3000\nAPI_KEY=${PLACEHOLDER}\n` });
     expect((await manager.remove("T-18")).taskId).toBe("T-18");
     expect(existsSync(info.path)).toBe(false);
   }, SLOW);

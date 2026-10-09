@@ -1,14 +1,15 @@
 // Secret scanning for "Shipping safely" (layers 1-3: staged/added text, ignore
 // list, whole-branch scan before push). Plain Node, injected git runner.
 //
-// The rules come from core/secrets and are mirrored in hooks/pre-push.mjs
-// (which cannot import TS); secrets.test.ts fails if the two drift apart.
+// Detection is core/secrets detectSecrets, the same check Jev runs on a diff.
+// hooks/pre-push.mjs imports a generated JS copy of it (git runs hooks with
+// node, which cannot load TS); secrets.test.ts fails if the copy is stale.
 //
 // A full secret is never printed, stored or thrown: every finding carries only
 // maskSecret(match), e.g. "ghp_…(40)".
 
 import { ALLOWLIST_PATH, fingerprintOf, parseAllowlist } from "./allowlist";
-import { PLACEHOLDER, SECRET_RULES, findSecrets, isConfigLikeFile, isPlaceholder, maskSecret, minValueLength } from "../secrets/index";
+import { PLACEHOLDER, SECRET_RULES, detectSecrets, isConfigLikeFile, isPlaceholder, maskSecret, minValueLength } from "../secrets/index";
 import type { ChangedFile, CommandRunner, SecretFinding } from "./types";
 
 export { ALLOWLIST_PATH, fingerprintOf, parseAllowlist };
@@ -54,9 +55,6 @@ export function isForbiddenFile(path: string): string | null {
   return null;
 }
 
-/** A value that is only the name of a secret field (a UI label), mirrored in hooks/pre-push.mjs. */
-export const FIELD_WORD = /^(?:password|passwd|passphrase|secret|token|api[ _-]?key|client[ _-]?secret|credentials?)$/i;
-
 const NPMRC_TOKEN = /_authToken\s*=\s*(\S+)/;
 
 /** Scans text line by line; line numbers are 1-based. Findings in `allow` (by fingerprint) are skipped. */
@@ -71,14 +69,19 @@ export function scanText(file: string, text: string, allow?: ReadonlySet<string>
       if (allow?.has(fingerprint)) return;
       findings.push({ file, line: i + 1, rule, preview: maskSecret(secret), fingerprint });
     };
-    for (const match of findSecrets(file, line)) {
-      // "passwordLabel": "Password" names a field; it is not a credential.
-      if (match.name !== undefined && FIELD_WORD.test(match.value)) continue;
-      add(match.rule, match.value);
-    }
+    // The same detector as Jev's diff check (core/secrets detectSecrets).
+    // An .npmrc auth token is reported under its own rule; the detector skips that span.
+    let npmStart: number | undefined;
     if (isNpmrc) {
       const m = NPMRC_TOKEN.exec(line);
-      if (m && !isPlaceholder(m[1])) add("npmrc-auth-token", m[1]);
+      if (m && !isPlaceholder(m[1])) {
+        npmStart = (m.index ?? 0) + m[0].length - m[1].length;
+        add("npmrc-auth-token", m[1]);
+      }
+    }
+    for (const span of detectSecrets(file, line)) {
+      if (npmStart !== undefined && span.end > npmStart) continue;
+      add(span.rule, line.slice(span.start, span.end));
     }
   }
   return findings;

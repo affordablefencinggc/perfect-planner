@@ -1,3 +1,5 @@
+import { claimPatternProblem, claimPatternsOverlap } from "./claimPatterns.js";
+
 const allowedKinds = new Set(["file", "api", "database", "dependency"]);
 const allowedAccess = new Set(["read", "write"]);
 
@@ -13,6 +15,12 @@ export async function sha256Hex(value) {
   const bytes = new TextEncoder().encode(typeof value === "string" ? value : canonicalize(value));
   const digest = await crypto.subtle.digest("SHA-256", bytes);
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+// Same path cleanup as normalizeSurface, but keeps the author's letter case for display.
+export function displaySurface(kind, surface) {
+  if (kind !== "file") return normalizeSurface(kind, surface);
+  return String(surface ?? "").trim().replaceAll("\\", "/").replace(/^\.\//, "").replace(/\/+/g, "/").replace(/\/$/, "");
 }
 
 export function normalizeSurface(kind, surface) {
@@ -65,9 +73,8 @@ export function validateManifest(manifest) {
       if (!allowedAccess.has(claim.access)) errors.push(`Task ${task.taskId} claim ${claimIndex + 1} has invalid access.`);
       if (typeof claim.surface !== 'string' || !claim.surface.trim() || claim.surface.length > 1024 || /[\u0000-\u001f]/.test(claim.surface)) { errors.push(`Task ${task.taskId} claim ${claimIndex + 1} requires a bounded text surface.`); continue; }
       if (claim.kind === 'file') {
-        const relative = claim.surface.trim().replaceAll('\\', '/').replace(/^\.\//, '');
-        const base = relative.replace(/\/\*\*?$/, '').replace(/\/$/, '');
-        if (!base || /[:*?<>|\[\]{}]/.test(base) || base.split('/').some(part => !part || part === '.' || part === '..' || /[. ]$/.test(part))) errors.push(`Task ${task.taskId} file claim must be a relative path, optionally ending in /* or /**; other wildcards, traversal and trailing dot/space aliases are unsupported.`);
+        const relative = claim.surface.trim().replaceAll('\\', '/').replace(/^\.\//, '').replace(/\/$/, '');
+        if (claimPatternProblem(relative) || relative.split('/').some(part => /[. ]$/.test(part))) errors.push(`Task ${task.taskId} file claim must be a relative path using /; * and ? match inside one name and ** matches any folders, while { } [ ] patterns, traversal and trailing dot/space aliases are unsupported.`);
       }
     }
   }
@@ -79,21 +86,15 @@ export function validateManifest(manifest) {
   return errors;
 }
 
-function stripGlob(surface) {
-  return surface.replace(/\/\*\*?$/, "");
-}
-
 export function surfacesOverlap(left, right) {
   if (left.kind !== right.kind) return false;
   const a = normalizeSurface(left.kind, left.surface);
   const b = normalizeSurface(right.kind, right.surface);
   if (a === b) return true;
   if (left.kind !== "file") return false;
-  const baseA = stripGlob(a);
-  const baseB = stripGlob(b);
-  // File claims are hierarchical (including the supported trailing /* and
-  // /** forms). Compare both normalized bases: overlap cannot depend on order.
-  return baseA === baseB || baseA.startsWith(`${baseB}/`) || baseB.startsWith(`${baseA}/`);
+  // File claims are hierarchical and may use * ? and ** globs. They overlap
+  // when some concrete path could match both; the check is symmetric.
+  return claimPatternsOverlap(a, b);
 }
 
 export function claimsConflict(left, right) {
@@ -112,6 +113,7 @@ function flattenClaims(manifests) {
     kind: claim.kind,
     access: claim.access,
     surface: normalizeSurface(claim.kind, claim.surface),
+    displaySurface: displaySurface(claim.kind, claim.surface),
   }))));
 }
 
@@ -141,10 +143,12 @@ export function assessCollisions(manifests) {
       const severity = left.access === "write" && right.access === "write" ? "hard-stop" : "ordered";
       collidedClaimKeys.add(`${left.planId}:${left.taskId}:${left.claimIndex}`);
       collidedClaimKeys.add(`${right.planId}:${right.taskId}:${right.claimIndex}`);
+      const shorter = left.surface.length <= right.surface.length ? left : right;
       collisions.push({
         id: "",
         kind: left.kind,
-        surface: left.surface.length <= right.surface.length ? left.surface : right.surface,
+        surface: shorter.surface,
+        displaySurface: shorter.displaySurface,
         severity,
         left,
         right,

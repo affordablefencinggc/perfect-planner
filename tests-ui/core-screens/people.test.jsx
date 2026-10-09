@@ -35,6 +35,15 @@ function renderScreen(mode = "simple") {
 const posts = (fetch) => fetch.mock.calls.filter(([, init]) => init?.method === "POST").map(([url, init]) => ({ url: String(url), body: JSON.parse(init.body) }));
 
 describe("People screen", () => {
+  it("says the owner key is missing and offers no first-person form when the device lost it", async () => {
+    stub(() => ok({ view: { members: [], docs: [] }, photos: {}, me: "owner", firstRun: false, ownerMissing: true }));
+    renderScreen();
+    expect(await screen.findByRole("alert")).toBeTruthy();
+    expect(screen.getByText(/does not have this project's owner key/)).toBeTruthy();
+    expect(screen.queryByText("Add the first person")).toBeNull();
+    expect(screen.queryByText(/Nobody is on the roster yet/)).toBeNull();
+  });
+
   it("shows loading, then the roster", async () => {
     stub(() => ok(ready));
     renderScreen();

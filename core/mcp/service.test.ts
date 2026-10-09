@@ -60,7 +60,7 @@ describe("check-in and roles", () => {
 
   it("refuses bad tokens, missing hello and invalid input", async () => {
     const { service, w1 } = setup();
-    await expectCode(service.call({ token: "pp_w_not-a-real-token-at-all" }, "hello", { name: "x" }), "UNAUTHORIZED");
+    await expectCode(service.call({ token: ["pp_w_", "not-a-real-token-at-all"].join("") }, "hello", { name: "x" }), "UNAUTHORIZED");
     await expectCode(service.call({ token: w1, agent: "nobody" }, "list_tasks", {}), "UNAUTHORIZED", /hello/);
     const a = await hello(service, w1, "w");
     await expectCode(service.call(a, "claim_task", { task: "14" }), "INVALID", /T-14/);

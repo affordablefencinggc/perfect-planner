@@ -97,7 +97,16 @@ export function resetPersonSession() {
   writeCsrf(null);
 }
 
-const READ_ONLY_MESSAGE = "This window can only read. To make changes, open Perfect Planner from its launcher: press Enter in the terminal running it (l and Enter with npm run dev) for a new one-time link.";
+/**
+ * A one-time link for another window that can make changes, asked for by this window (it must hold
+ * the person's session). Returns the URL to open, e.g. with window.open or the desktop shell.
+ */
+export async function newWindowLink(project, options) {
+  const { launch } = await corePost("/session/new-window", project, {}, options);
+  return `${globalThis.location?.origin ?? ""}/#pp-launch=${launch}`;
+}
+
+const READ_ONLY_MESSAGE = "This window can only read. To make changes, open a one-time link from the terminal running Perfect Planner (press Enter there for a new one, l and Enter with npm run dev, or restart it).";
 
 async function call(path, project, options = {}) {
   const { method = "GET", fetchImpl = globalThis.fetch } = options;

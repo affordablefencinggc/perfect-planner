@@ -36,7 +36,7 @@ describe("person session in the app window", () => {
   it("stays read-only without a launch secret and says how to get one", async () => {
     const fetchImpl = vi.fn(async () => reply(401, { ok: false, code: "PERSON_REQUIRED", message: "Only the person..." }));
     expect(await claimPersonSession(fetchImpl)).toBe(false);
-    await expect(corePost("/planning/start", "p", {}, { fetchImpl })).rejects.toMatchObject({ code: "PERSON_REQUIRED", message: expect.stringMatching(/open Perfect Planner from its launcher/) });
+    await expect(corePost("/planning/start", "p", {}, { fetchImpl })).rejects.toMatchObject({ code: "PERSON_REQUIRED", message: expect.stringMatching(/press Enter there for a new one/) });
     expect(fetchImpl.mock.calls.some(([url]) => String(url).includes("/session"))).toBe(false);
   });
 });

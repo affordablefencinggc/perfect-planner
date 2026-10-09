@@ -4,6 +4,7 @@ import { nextNumber } from "../numbering/index";
 import { installPrePushHook, removePrePushHook } from "./layers";
 import { installReleaseRules } from "./pipeline";
 import { RELEASE_SAFETY_TOPIC } from "./presets";
+import { safeRunner } from "./run";
 import type { CommandRunner } from "./types";
 
 // Shipping safety on by default. The host calls protectProject when it opens a
@@ -59,16 +60,18 @@ export interface ProtectionReport {
  */
 export async function protectProject(
   ledger: Ledger,
-  options: { run: CommandRunner; cwd: string; hookScript?: string; now?: () => Date },
+  options: { run?: CommandRunner; cwd: string; hookScript?: string; now?: () => Date },
 ): Promise<ProtectionReport> {
   installReleaseRules(ledger, options.now ? { now: options.now } : {});
   const wanted = prePushScanWanted(ledger.entries());
+  // Default: git by absolute path, never one planted in the repo (core/exec).
+  const run = options.run ?? safeRunner;
   try {
     if (!wanted) {
-      const removed = await removePrePushHook(options.run, { cwd: options.cwd });
+      const removed = await removePrePushHook(run, { cwd: options.cwd });
       return { rules: "on", prePush: { state: "opted-out", path: removed.path, reason: "A person switched the pre-push secret scan off in the ledger" } };
     }
-    const result = await installPrePushHook(options.run, { cwd: options.cwd, hookScript: options.hookScript ?? DEFAULT_PRE_PUSH_SCRIPT });
+    const result = await installPrePushHook(run, { cwd: options.cwd, hookScript: options.hookScript ?? DEFAULT_PRE_PUSH_SCRIPT });
     if (!result.installed) return { rules: "on", prePush: { state: "foreign-hook", path: result.path, reason: result.reason ?? "The repository has its own pre-push hook" } };
     return { rules: "on", prePush: { state: "installed", path: result.path, reason: "The whole-branch secret scan runs before every push" } };
   } catch (error) {

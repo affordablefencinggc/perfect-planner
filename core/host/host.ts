@@ -7,10 +7,11 @@ import { LedgerError } from "../ledger/index";
 import { startBridge, ToolError, type Bridge } from "../mcp/index";
 import { PeopleError } from "../people/index";
 import { asPersonRequest, hostKeys, type HostKeys } from "./keys";
-import { excludePrivateFolder, openCoreProject, projectKey, projectRootFor, type CoreProject } from "./project";
+import { excludePrivateFolder, openCoreProject, pinOwnerAfterWrite, projectKey, projectRootFor, type CoreProject, type OwnerKeySource } from "./project";
 import { HttpError, Router } from "./router";
 import { PersonSessions } from "./session";
 import { registerRoutes } from "./routes/index";
+import { syncJevPolicy } from "./routes/decisions";
 
 export const CORE_PREFIX = "/api/core";
 export { PERSON_COOKIE, CSRF_HEADER } from "./session";
@@ -27,6 +28,8 @@ export interface CoreHostOptions {
   bridge?: boolean;
   /** Signing keys for person and system entries. Default: the OS keychain (PP_CORE_KEYS=memory for throwaway keys). */
   keys?: HostKeys;
+  /** Supplies each project's owner key instead of the app's signed pin (core/host/owner.ts). Tests and embedders only. */
+  ownerKey?: OwnerKeySource;
 }
 
 /** The host's key provider type (kept for callers of the older name). */
@@ -44,6 +47,9 @@ export class CoreHost {
   constructor(private readonly options: CoreHostOptions) {
     this.keys = options.keys ?? hostKeys();
     registerRoutes(this.router);
+    // The person's own window asks for a one-time link for another window (POST, so it needs the
+    // window's cookie, CSRF token and Origin). A process without the person's session cannot get one.
+    this.router.post("/session/new-window", () => ({ launch: this.issueLaunch() }));
     this.router.get("/status", ({ project }) => ({
       project: project.key,
       ledger: project.ledger.status,
@@ -84,7 +90,7 @@ export class CoreHost {
   project(key: string): CoreProject {
     let project = this.projects.get(key);
     if (!project) {
-      project = openCoreProject(this.options.root, key, this.options.projectRootOverride, this.keys);
+      project = openCoreProject(this.options.root, key, this.options.projectRootOverride, this.keys, this.options.ownerKey);
       this.projects.set(key, project);
     }
     return project;
@@ -98,6 +104,7 @@ export class CoreHost {
     if (!this.projects.has(key)) await excludePrivateFolder(projectRootFor(this.options.root, key, this.options.projectRootOverride));
     const project = this.project(key);
     await project.ready;
+    await syncJevPolicy(project);
     return project;
   }
 
@@ -156,6 +163,8 @@ export class CoreHost {
       const call = () => match.handler({ path, params: match.params, query: url.searchParams, body, project, host: this });
       // A person's POST may make their signing key on first use (keys.ts); nothing else can.
       const result = await (method === "POST" ? asPersonRequest(call) : call());
+      // A new project's owner is pinned only after a write from the person's own window.
+      if (method === "POST") pinOwnerAfterWrite(this.options.root, project, this.keys);
       send(200, { ok: true, result: result ?? null });
     } catch (error) {
       if (error instanceof HttpError) return send(error.status, { ok: false, code: error.code, message: error.message });
@@ -169,6 +178,8 @@ export class CoreHost {
 
   async close(): Promise<void> {
     for (const bridge of this.bridges.values()) await (await bridge).close().catch(() => undefined);
+    // Wait for the git runs started at open (exclude, protection) so none outlives the host in the project folder.
+    for (const project of this.projects.values()) await Promise.allSettled([project.ready, project.protection]);
     for (const project of this.projects.values()) project.ledger.close();
     this.bridges.clear();
     this.projects.clear();

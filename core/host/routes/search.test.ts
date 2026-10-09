@@ -39,7 +39,7 @@ function seedAsPerson(ledger: Ledger) {
 describe("search routes", () => {
   let ctx: Awaited<ReturnType<typeof startTestHost>>;
   beforeEach(async () => {
-    ctx = await startTestHost();
+    ctx = await startTestHost({ owned: false }); // seeds write as sam; an owner pin would make person:owner the only first writer
     ctx.host.ensureKey("system");
     ctx.host.ensurePersonKey(owner.id); // seeds write as the pinned owner, signed like the person's own window would
   });

@@ -203,6 +203,9 @@ function overview(project: CoreProject) {
     approval: {
       canApprove: questions.length > 0 && open.length === 0 && !current,
       current,
+      /** The same fact under the names the core-screens UI reads. */
+      upToDate: current,
+      changedSinceApproval: approved.length > 0 && !current,
       message: questions.length === 0 ? "Start with your idea first; there is nothing to approve yet." : open.length ? blockerMessage(open) : current ? "This plan is approved as it stands. Change an answer to approve a new version." : approved.length ? "The plan changed since it was approved. Approve the new version." : "Every blocking question is settled. The plan can be approved.",
       approved,
     },

@@ -42,7 +42,7 @@ function ReadOnlyNotice() {
   if (usePersonSession()) return null;
   return (
     <p className="core-readonly" role="note">
-      <LockSimpleIcon aria-hidden="true" /> This window can only read. To make changes, open a new one-time link: press Enter in the terminal running Perfect Planner (l and Enter with npm run dev), then open the link it prints.
+      <LockSimpleIcon aria-hidden="true" /> This window can only read. To make changes, open a new one-time link: press Enter in the terminal running Perfect Planner (l and Enter with npm run dev), or restart it, then open the link it prints.
     </p>
   );
 }
@@ -50,8 +50,9 @@ function ReadOnlyNotice() {
 const OWNER_PROBLEMS = {
   "key-missing": "This project's owner key is not on this computer, so nothing here can be approved or changed in it.",
   tampered: "This project's owner record does not check out on this computer, so nothing here can be approved or changed in it.",
-  missing: "This project was started before Perfect Planner recorded owners, so it has no owner on this computer and nothing here can be approved or changed in it.",
+  missing: "This computer has no owner record for this project, so nothing here can be approved or changed in it.",
   unavailable: "This computer's key store is not available, so nothing you approve can be signed.",
+  replaced: "This folder's project history was deleted or swapped since you last worked here, so nothing here can be approved or changed in it.",
 };
 
 const OWNER_NEXT = {

@@ -64,3 +64,15 @@ Windows, macOS and Linux. Git runs without a shell; output is split on LF or CRL
 stored with forward slashes and compared case-insensitively on Windows and macOS; temp and
 worktree paths are resolved with `realpath` so 8.3 names and `/var` → `/private/var` don't
 create false mismatches; the registry write retries the atomic rename when Windows briefly locks the file.
+
+## Starting git safely
+
+Every git the core starts goes through `runGit`, which runs `gitExecutable(cwd)`: an absolute path
+resolved once from PATH (again only if PATH changes), skipping empty, relative and network entries and
+any entry inside the repo, and refused if it sits inside `cwd`. On Windows `spawn("git")` with the
+user's repo as `cwd` would otherwise run a `git.exe` planted in that repo, because CreateProcess looks in
+the current folder before PATH. Every child also gets `NO_CWD_SEARCH_ENV`
+(`NoDefaultCurrentDirectoryInExePath=1`), so cmd.exe and nested programs skip the current folder too.
+Other modules that spawn git (the ledger's ignore check, release hooks) should import
+`gitExecutable` and `NO_CWD_SEARCH_ENV` from `core/exec` (re-exported by `core/worktrees`), or call `runGit`, rather than spawning
+a bare `git`.
