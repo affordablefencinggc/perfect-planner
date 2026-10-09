@@ -10,6 +10,9 @@ import { createDemoProjectSession, DEMO_PROJECT_ID } from "../src/demo/demoProje
 import { createRuntimeEventLedger, DEFAULT_RUNTIME_EVENT_STORAGE_KEY } from "../src/runtime/runtimeEventLedger.js";
 import { diagnosticSessionFixture } from './diagnosticSessionFixture.js';
 
+// Workspaces load on demand; a busy Windows runner can take over a second to fetch one.
+const LAZY = { timeout: 5000 };
+
 afterEach(() => { cleanup(); window.localStorage.clear(); });
 
 function renderDemoShell() {
@@ -59,27 +62,27 @@ describe("Perfect Planner shell interaction and accessibility", () => {
   test("navigates the staged journey, synchronizes deep links, and keeps Allocation blocked", async () => {
     window.history.replaceState({}, "", "/?workspace=plan");
     const user = userEvent.setup(); renderDemoShell();
-    expect(await screen.findByRole("region", { name: "Plan workspace" })).toBeTruthy();
+    expect(await screen.findByRole("region", { name: "Plan workspace" }, LAZY)).toBeTruthy();
     expect(screen.getByRole("navigation", { name: "Coordinate pages" })).toBeTruthy();
     const pages = screen.getByRole("navigation", { name: "Coordinate pages" });
     // Coordinate pages use the same tab row in the context strip as every other stage.
     expect(pages.closest(".workspace-context")).toBeTruthy();
     expect(within(pages).getByRole("button", { name: "Plan", exact: true }).getAttribute("aria-current")).toBe("page");
     await user.click(screen.getByRole("button", { name: "Allocation" }));
-    expect(await screen.findByRole("region", { name: "Allocation workspace" })).toBeTruthy();
+    expect(await screen.findByRole("region", { name: "Allocation workspace" }, LAZY)).toBeTruthy();
     expect(window.location.search).toContain("workspace=allocation");
     expect(screen.getByText(/Collision gate locked/)).toBeTruthy();
     expect(screen.getByRole("button", { name: /Create branches unavailable/ }).disabled).toBe(true);
     await user.click(screen.getByRole("button", { name: "Index" }));
-    expect(await screen.findByRole("region", { name: "Project index" })).toBeTruthy();
+    expect(await screen.findByRole("region", { name: "Project index" }, LAZY)).toBeTruthy();
     expect(window.location.search).toContain("workspace=index");
     await user.click(screen.getByRole("button", { name: "Close project index" }));
-    expect(await screen.findByRole("region", { name: "Project Home workspace" })).toBeTruthy();
+    expect(await screen.findByRole("region", { name: "Project Home workspace" }, LAZY)).toBeTruthy();
     await user.click(screen.getByRole("button", { name: /Drop your app/ }));
-    expect(await screen.findByRole("region", { name: "Strict folder contract workspace" })).toBeTruthy();
+    expect(await screen.findByRole("region", { name: "Strict folder contract workspace" }, LAZY)).toBeTruthy();
     expect(window.location.search).toContain("workspace=structure");
     await user.click(screen.getByRole("button", { name: "Build" }));
-    expect(await screen.findByRole("region", { name: "Build workspace" })).toBeTruthy();
+    expect(await screen.findByRole("region", { name: "Build workspace" }, LAZY)).toBeTruthy();
     expect(window.location.search).toContain("workspace=build");
   });
 
