@@ -1,3 +1,4 @@
+import "./helpers/hermetic-env.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { blueprintRulebookBoundary, evaluateBlueprint, recommendTemplates } from "../src/engine/blueprintEngine.js";

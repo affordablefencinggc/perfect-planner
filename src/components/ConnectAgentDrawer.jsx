@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { ArrowRightIcon, CheckCircleIcon, CopyIcon, InfoIcon, RobotIcon, XIcon } from "@phosphor-icons/react";
 import { AGENT_TOOLS, buildAgentSnippets, copyText, resolveAgentSetup } from "../project/connectAgentSetup.js";
 import "./ConnectAgentDrawer.css";
@@ -46,7 +47,8 @@ export function ConnectAgentDrawer({ open, onClose, onWorkspace, setup: setupOve
     panelRef.current?.querySelector(`#connect-agent-tab-${next.id}`)?.focus();
   };
 
-  return (
+  // Portalled so the header's backdrop filter cannot clip the full-height panel.
+  return createPortal(
     <>
       <button type="button" className="connect-agent-scrim" aria-label="Close agent setup" tabIndex={-1} onClick={onClose} />
       <aside ref={panelRef} className="connect-agent-drawer" role="dialog" aria-modal="true" aria-labelledby="connect-agent-title">
@@ -118,6 +120,7 @@ export function ConnectAgentDrawer({ open, onClose, onWorkspace, setup: setupOve
           </section>
         </div>
       </aside>
-    </>
+    </>,
+    document.body,
   );
 }
