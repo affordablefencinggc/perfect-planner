@@ -1,3 +1,4 @@
+import "./helpers/hermetic-env.mjs";
 import test from'node:test';import assert from'node:assert/strict';import os from'node:os';import path from'node:path';import{mkdtemp}from'node:fs/promises';
 import{createAgentLedgerReads}from'../mcp/agentLedgerReads.mjs';import{createAgentClientRouter}from'../mcp/agentClientRouter.mjs';import{createAgentSessionBroker}from'../mcp/agentSessionBroker.mjs';import{createNativeTaskDraftSubmission}from'../src/node/nativeTaskDraftSubmission.mjs';import{emptyTaskDraftLedger,updateTaskDraft}from'../src/project/taskDraftLedger.js';
 test('scoped router reads paged real journal and refuses mixing revisions',async()=>{
