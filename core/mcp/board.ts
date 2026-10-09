@@ -18,6 +18,7 @@ export interface TaskView {
 }
 
 const TASK_ID = /^T-\d+$/;
+const ATTEMPT = /^(T-\d+)\.a\d+$/;
 
 export function isTaskId(value: string): boolean {
   return TASK_ID.test(value);
@@ -31,7 +32,9 @@ export function attemptLabel(task: Pick<TaskView, "id" | "attempt">): string {
 export function foldBoard(entries: readonly LedgerEntry[]): Map<string, TaskView> {
   const board = new Map<string, TaskView>();
   for (const entry of entries) {
-    if (!isTaskId(entry.subject)) continue;
+    // Entries about one attempt ("T-14.a2": the gate's runs, a claim on a retry) belong to the task.
+    const id = ATTEMPT.exec(entry.subject)?.[1] ?? entry.subject;
+    if (!isTaskId(id)) continue;
     if (entry.type === "task.created") {
       board.set(entry.subject, {
         id: entry.subject,
@@ -47,7 +50,7 @@ export function foldBoard(entries: readonly LedgerEntry[]): Map<string, TaskView
       });
       continue;
     }
-    const task = board.get(entry.subject);
+    const task = board.get(id);
     if (!task) continue;
     task.lastEntry = entry.n;
     switch (entry.type) {

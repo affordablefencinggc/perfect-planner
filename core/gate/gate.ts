@@ -823,8 +823,12 @@ export class TestGate {
     return { ok: true };
   }
 
-  /** Jev rejects the diff: record the verdict, reopen the task under its next attempt id, return that id (spec 5.5). */
-  reject(taskId: string, reviewer: Actor, notes: string | string[]): Ok<{ newTaskId: string; entries: LedgerEntry[] }> | Refusal {
+  /**
+   * Jev rejects the diff: record the verdict, reopen the task under its next attempt id, return that id (spec 5.5).
+   * The verdict is the reviewer's; the reopen is the gate's own entry, since Jev may only write verdicts.
+   * Pass `verdict` (the ledger number of a review.verdict the reviewer already wrote) to cite it instead of writing another.
+   */
+  reject(taskId: string, reviewer: Actor, notes: string | string[], options: { verdict?: string } = {}): Ok<{ newTaskId: string; entries: LedgerEntry[] }> | Refusal {
     const list = (Array.isArray(notes) ? notes : [notes]).map((note) => oneLine(note, 500)).filter(Boolean);
     if (!list.length) throw new GateError("A rejection needs notes the worker can act on.");
     const state = this.state(taskId);
@@ -833,15 +837,26 @@ export class TestGate {
     const newTaskId = nextAttemptId(taskId);
     if (!TASK_ID.test(newTaskId)) return { ok: false, reason: `${taskId} has run out of attempts.` };
     const reason = oneLine(list.join("; "), 500);
-    const verdict = this.ledger.append({
-      type: "review.verdict",
-      actor: reviewer,
-      subject: taskId,
-      summary: `Diff for ${taskId} rejected`,
-      reason,
-      evidence: ["scope:diff", "verdict:reject", ...(state.worktree?.commit ? [`commit:${state.worktree.commit}`] : []), ...list.map((note) => `note:${note}`)],
-      data: { scope: "diff", verdict: "reject", notes: list },
-    });
+    let verdict: LedgerEntry | undefined;
+    if (options.verdict !== undefined) {
+      verdict = this.ledger.entries().find((entry) => entry.n === options.verdict);
+      if (!verdict || verdict.type !== "review.verdict" || parseTaskId(verdict.subject).baseId !== state.baseId) {
+        throw new GateError(`${options.verdict} is not a review verdict on ${taskId}.`);
+      }
+    }
+    const written: LedgerEntry[] = [];
+    if (!verdict) {
+      verdict = this.ledger.append({
+        type: "review.verdict",
+        actor: reviewer,
+        subject: taskId,
+        summary: `Diff for ${taskId} rejected`,
+        reason,
+        evidence: ["scope:diff", "verdict:reject", ...(state.worktree?.commit ? [`commit:${state.worktree.commit}`] : []), ...list.map((note) => `note:${note}`)],
+        data: { scope: "diff", verdict: "reject", notes: list },
+      });
+      written.push(verdict);
+    }
     const reopened = this.ledger.append({
       type: "task.reopened",
       // The reviewer (often Jev) only gives the verdict; reopening is the gate's own act.
@@ -850,9 +865,10 @@ export class TestGate {
       summary: `${taskId} goes back to the worker as ${newTaskId}`,
       reason,
       evidence: [`attempt:${newTaskId}`, `verdict:${verdict.n}`, `reviewer:${reviewer.kind}:${reviewer.id}`],
-      data: { attempt: newTaskId, notes: list, reviewer },
+      data: { attempt: newTaskId, notes: list, verdict: verdict.n, reviewer },
     });
-    return { ok: true, newTaskId, entries: [verdict, reopened] };
+    written.push(reopened);
+    return { ok: true, newTaskId, entries: written };
   }
 
   /**
