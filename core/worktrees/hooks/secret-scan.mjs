@@ -2,6 +2,8 @@
 // copies this file into the managed repo's git dir, so it may import nothing but Node.
 // Patterns mirror scripts/verify-secrets.mjs.
 import { spawnSync } from "node:child_process";
+import { accessSync, constants, statSync } from "node:fs";
+import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 export const SECRET_PATTERNS = [
@@ -34,8 +36,55 @@ export function scanDiff(diff) {
   return findings;
 }
 
+const within = (root, candidate) => {
+  const relative = path.relative(path.resolve(root), path.resolve(candidate));
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+};
+
+const isProgram = (file, windows) => {
+  try {
+    if (!statSync(file).isFile()) return false;
+    if (!windows) accessSync(file, constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * The absolute git to run, never one in the repo (on Windows, spawn("git") with the repo as cwd would run
+ * a planted git.exe). Prefers the git that started this hook (GIT_EXEC_PATH), else walks PATH skipping
+ * empty, relative, network and in-repo entries; the same rule as core/exec's gitExecutable, inlined
+ * because this file is copied out of the app. Returns null when nothing qualifies.
+ */
+export function resolveGit(env, cwd, platform = process.platform) {
+  const windows = platform === "win32";
+  const name = windows ? "git.exe" : "git";
+  const here = path.resolve(cwd);
+  const usable = (dir) => Boolean(dir) && path.isAbsolute(dir) && !(windows && /^[\\/]{2}/.test(dir)) && !within(here, dir);
+  const execPath = (env.GIT_EXEC_PATH ?? "").trim();
+  if (usable(execPath) && isProgram(path.join(execPath, name), windows)) return path.join(execPath, name);
+  const pathValue = Object.entries(env).find(([key]) => (windows ? key.toUpperCase() === "PATH" : key === "PATH"))?.[1] ?? "";
+  for (const entry of pathValue.split(windows ? ";" : ":")) {
+    const dir = entry.trim().replace(/^"(.*)"$/, "$1");
+    if (usable(dir) && isProgram(path.join(dir, name), windows)) return path.join(dir, name);
+  }
+  return null;
+}
+
 function main() {
-  const result = spawnSync("git", ["-c", "core.quotepath=off", "diff", "--cached", "--no-color", "--no-ext-diff", "-U0", "--diff-filter=ACMR"], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, windowsHide: true });
+  const git = resolveGit(process.env, process.cwd());
+  if (!git) {
+    process.stderr.write("Perfect Planner secret scan could not find git outside this repo on PATH, so it could not check the commit.\n");
+    process.exit(1);
+  }
+  const result = spawnSync(git, ["-c", "core.quotepath=off", "diff", "--cached", "--no-color", "--no-ext-diff", "-U0", "--diff-filter=ACMR"], {
+    encoding: "utf8",
+    maxBuffer: 64 * 1024 * 1024,
+    windowsHide: true,
+    // Keep Windows (and anything git starts) from searching the repo for programs.
+    env: { ...process.env, NoDefaultCurrentDirectoryInExePath: "1" },
+  });
   if (result.status !== 0) {
     process.stderr.write(`Perfect Planner secret scan could not read the staged changes: ${result.stderr || result.error}\n`);
     process.exit(1);
