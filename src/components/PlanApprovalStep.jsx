@@ -47,11 +47,12 @@ export function PlanApprovalStep({ project, records, onWorkspace, store }) {
   return <section className={`plan-approval-step tone-${tone}`} aria-label="Approve this plan" data-requirement-target="AUTH-PLAN LEDGER-TASKS" tabIndex={-1}>
     <header>
       <span><SealCheckIcon aria-hidden="true" /><strong>Approve this plan</strong></span>
-      <small>{status?.state === "recorded" ? "Approved" : status?.state === "review" ? "Tasks changed" : status?.state === "stale" ? "Out of date" : status ? "Needs approval again" : "Not approved yet"}</small>
+      <small>{status?.state === "recorded" ? "Approved by you" : status?.state === "review" ? "Tasks changed" : status?.state === "stale" ? "Out of date" : status ? "Needs approval again" : "Not approved yet"}</small>
     </header>
     <div className="plan-approval-step-body">
       {!status && <p>No plan is approved yet. Approving saves a snapshot of the saved tasks below on this device, so later pages can tell if the tasks change.</p>}
-      {status?.state === "recorded" && <p className="plan-approval-step-state is-done"><CheckCircleIcon weight="fill" aria-hidden="true" />{plural(status.record.taskCount, "task")} approved {when(status.record.approvedAt)}{status.record.source === "planning-ledger" ? " through the planning ledger" : " on this device"}.{status.confirmed ? " Project confirmed ready." : ""}</p>}
+      {status?.state === "recorded" && <p className="plan-approval-step-state is-done"><CheckCircleIcon weight="fill" aria-hidden="true" />Plan approved by you: {plural(status.record.taskCount, "task")} approved {when(status.record.approvedAt)}{status.record.source === "planning-ledger" ? " through the planning ledger" : " on this device"}.{status.confirmed ? " Project confirmed ready." : ""}</p>}
+      {status?.state === "recorded" && <p><small>This approval is enough to start building. The separate saved-plan check (under “Plan at a glance”) can also lock it to this exact saved Ledger; it does not change this approval.</small></p>}
       {status && status.state !== "recorded" && <p className="plan-approval-step-state is-attention"><WarningIcon weight="fill" aria-hidden="true" />{status.state === "review" ? "Tasks changed since approval." : status.detail}{status.state === "review" ? " Review them and approve again." : ""}</p>}
       {status?.state === "recorded" && digest && !upToDate && <p className="plan-approval-step-state is-attention"><WarningIcon weight="fill" aria-hidden="true" />The saved tasks no longer match the approved plan.</p>}
 

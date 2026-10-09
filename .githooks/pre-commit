@@ -1,4 +1,5 @@
 #!/bin/sh
 set -eu
 echo "Perfect Planner: checking staged files for credentials"
-npm run verify:secrets -- --staged
+# Run the checker with Node directly so no "npm" is looked up on PATH (or, on Windows, in the repo).
+node scripts/verify-secrets.mjs --staged

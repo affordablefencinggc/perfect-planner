@@ -15,10 +15,24 @@ function crc32(bytes) {
 }
 function paeth(a, b, c) { const p = a + b - c; const pa = Math.abs(p - a); const pb = Math.abs(p - b); const pc = Math.abs(p - c); return pa <= pb && pa <= pc ? a : pb <= pc ? b : c; }
 function isWithin(root, candidate) { const relative = path.relative(path.resolve(root), path.resolve(candidate)); return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative)); }
+/**
+ * Owner recovery screens (core/ledger/recovery.ts) show or take a one-time recovery code, so they are
+ * never captured. They live under /owner-recovery; the path, query and hash are all checked, decoded.
+ */
+function isOwnerRecoveryTarget(target) {
+  let text = `${target.pathname}${target.search}${target.hash}`;
+  // Decode until stable (catches double encoding); an address that cannot be decoded fails closed.
+  for (let round = 0; round < 5; round += 1) {
+    let decoded; try { decoded = decodeURIComponent(text); } catch { return true; }
+    if (decoded === text) break; text = decoded;
+  }
+  return /owner[-_]?recovery/i.test(text.replace(/\+/g, " "));
+}
 function normalizedTarget(value) {
   let target; try { target = new URL(value); } catch { throw new Error("Screenshot target must be a valid URL."); }
   const localHttp = target.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(target.hostname);
   if (!(target.protocol === "https:" || localHttp) || target.username || target.password) throw new Error("Screenshot target must be credential-free HTTPS or localhost HTTP.");
+  if (isOwnerRecoveryTarget(target)) throw new Error("Screenshot target is an owner recovery screen (or cannot be decoded to rule one out); recovery codes are never captured as evidence.");
   return target.toString();
 }
 

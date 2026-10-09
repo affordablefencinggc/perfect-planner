@@ -2,7 +2,8 @@ import React, { StrictMode } from 'react';
 import { afterEach, expect, test, vi } from 'vitest';
 vi.mock('../src/project/taskFormRecovery.js',async importOriginal=>{const actual=await importOriginal(),{createMemoryTaskFormRecovery}=await import('./fixtures/memoryTaskFormRecovery.js');return {...actual,createTaskFormRecovery:()=>createMemoryTaskFormRecovery(actual.appendTaskFormHistory)};});
 import {withMemoryTaskSaveIntents} from './fixtures/memoryTaskSaveIntents.js';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { rememberCensusPaths } from '../src/project/censusPaths.js';
 import { TaskDraftLedger } from '../src/components/TaskDraftLedger.jsx';
 import { emptyTaskDraftLedger, updateTaskDraft, taskDraftBinding, rebindTaskDraft, importTaskDraft } from '../src/project/taskDraftLedger.js';
 afterEach(cleanup);
@@ -51,7 +52,7 @@ test('unsaved text prevents import and oversize files are rejected before readin
 test('add, edit, archive and inspect previous revision without implying approval',async()=>{
  const p=project('edit'),store=memoryStore(p);render(<StrictMode><TaskDraftLedger project={p} store={withMemoryTaskSaveIntents(store)}/></StrictMode>);
  await screen.findByText('No task drafts yet. Add the first task using the form.');
- fill('Task title','Preserve work');fill('Full description','Keep the changed files safe.');
+ fill('Task title','Preserve work');fill('Responsibility and full description','Keep the changed files safe.');
  fireEvent.click(screen.getByRole('button',{name:'Save task draft'}));
  await screen.findByRole('button',{name:'Edit T0001'});
  await waitFor(()=>expect(screen.getByRole('status',{name:'Draft editing status'}).textContent).toContain('No work was approved or executed'));
@@ -124,7 +125,7 @@ test('concurrent review failure clears acknowledgments and never enables stale d
 test('a refused file scope keeps the form editable with every value and shows the error beside File scope',async()=>{
  const p=project('refused_scope'),store=memoryStore(p);render(<TaskDraftLedger project={p} store={withMemoryTaskSaveIntents(store)}/>);
  await screen.findByText('No task drafts yet. Add the first task using the form.');
- fill('Task title','Area claim');fill('Full description','Touch the core area.');fill('Proposed owner','Agent: core');
+ fill('Task title','Area claim');fill('Responsibility and full description','Touch the core area.');fill('Proposed owner','Agent: core');
  const scope=screen.getByLabelText(/^File scope/);fireEvent.change(scope,{target:{value:'write ../x'}});
  fireEvent.click(screen.getByRole('button',{name:'Save task draft'}));
  const inline=await screen.findByTestId('task-draft-claims-error');
@@ -133,7 +134,7 @@ test('a refused file scope keeps the form editable with every value and shows th
  expect(scope.getAttribute('aria-invalid')).toBe('true');expect(scope.getAttribute('aria-describedby')).toBe(inline.id);
  expect(scope.closest('fieldset').disabled).toBe(false);
  expect(screen.queryByText('Editor operation finished or was interrupted. Review its retained outcome before continuing.')).toBeNull();
- expect(screen.getByLabelText('Task title').value).toBe('Area claim');expect(screen.getByLabelText('Full description').value).toBe('Touch the core area.');
+ expect(screen.getByLabelText('Task title').value).toBe('Area claim');expect(screen.getByLabelText('Responsibility and full description').value).toBe('Touch the core area.');
  expect(screen.getByLabelText('Proposed owner').value).toBe('Agent: core');expect(scope.value).toBe('write ../x');
  expect((await store.read()).revision).toBe(0);
  fireEvent.change(scope,{target:{value:'write src/core/**\nread tests/core-*.test.mjs'}});
@@ -205,4 +206,75 @@ test('after a reload the ledger offers the kept text by title instead of claimin
  await waitFor(()=>expect(restore.disabled).toBe(false));fireEvent.click(restore);
  await waitFor(()=>expect(screen.getByLabelText('Task title').value).toBe('Typed before reload'));
  expect(screen.queryByRole('button',{name:'Restore “Typed before reload”'})).toBeNull();
+});
+// Gap 15: claimed paths that the last folder scan did not see are marked, never refused.
+test('file scopes naming nothing in the last scan are marked beside the field and on the saved task',async()=>{
+ const digest='c'.repeat(64),p={...project('scan_markers'),census:{digest}},store=memoryStore(p);
+ rememberCensusPaths({digest,files:[{path:'src/App.jsx'},{path:'src/components/Header.jsx'},{path:'tests/app.test.mjs'}]});
+ render(<TaskDraftLedger project={p} store={store}/>);
+ await screen.findByText('No task drafts yet. Add the first task using the form.');
+ fill('Task title','Settings page');
+ fill(/^File scope/,'write src/core\nwrite tests/core-*.test.mjs\nwrite src/components/SettingsPage.jsx\nread src/App.jsx\nwrite src/components');
+ const notes=within(screen.getByRole('form',{name:'Task draft editor'})).getByRole('list',{name:'File scope notes'});
+ expect(within(notes).getAllByRole('listitem').map(item=>item.textContent)).toEqual([
+  'src/core — New file (not in the last scan)','tests/core-*.test.mjs — Matches no scanned file yet','src/components/SettingsPage.jsx — New file (not in the last scan)']);
+ fireEvent.click(screen.getByRole('button',{name:'Save task draft'}));
+ await screen.findByRole('button',{name:'Edit T0001'});
+ expect((await store.read()).tasks[0].claims.map(c=>c.path)).toEqual(['src/core','tests/core-*.test.mjs','src/components/SettingsPage.jsx','src/App.jsx','src/components']);
+ const card=document.getElementById('draft-task-T0001');
+ expect(within(card).getAllByText(/New file \(not in the last scan\)|Matches no scanned file yet/)).toHaveLength(3);
+});
+test('without a known scan list the form says file scopes are not compared, and marks nothing',async()=>{
+ const p={...project('scan_unknown'),census:{digest:'d'.repeat(64)}},store=memoryStore(p);
+ render(<TaskDraftLedger project={p} store={store}/>);
+ await screen.findByText('No task drafts yet. Add the first task using the form.');
+ fill(/^File scope/,'write src/core');
+ expect(screen.queryByRole('list',{name:'File scope notes'})).toBeNull();
+ expect(screen.getByText(/not compared with the folder scan/)).toBeTruthy();
+});
+// Gap 13: responsibility goes in the description field, whose label now says so.
+test('the description field is labelled for responsibility and full description',async()=>{
+ const p=project('responsibility'),store=memoryStore(p);render(<TaskDraftLedger project={p} store={store}/>);
+ await screen.findByText('No task drafts yet. Add the first task using the form.');
+ expect(screen.getByLabelText('Responsibility and full description').tagName).toBe('TEXTAREA');
+ expect(screen.getByText(/who is responsible/i)).toBeTruthy();
+});
+// Gap 16: the form comes first; idle recovery and history panels share one collapsed section.
+const follows=(earlier,later)=>Boolean(earlier.compareDocumentPosition(later)&Node.DOCUMENT_POSITION_FOLLOWING);
+test('the task form and paste box come before a collapsed Recovery and history section when nothing needs action',async()=>{
+ const p=project('page_order'),store=memoryStore(p);store.submissionHistory=async()=>[];
+ render(<TaskDraftLedger project={p} store={store}/>);
+ await screen.findByText('No task drafts yet. Add the first task using the form.');
+ await screen.findByText(/Save request history inspected/);
+ await screen.findByText(/Recovery inspected/);
+ const form=screen.getByRole('form',{name:'Task draft editor'});
+ const paste=screen.getByText(/^Paste a task list/).closest('details');
+ const history=screen.getByText(/^Recovery and history/).closest('details');
+ expect(history.open).toBe(false);
+ for(const name of ['Original Save recovery','Unfinished editor recovery','Send saved planning draft','Review shared plan']){
+  const panel=screen.getByRole('region',{name,hidden:true});
+  expect(history.contains(panel)).toBe(true);
+  expect(follows(form,panel)).toBe(true);
+ }
+ expect(history.contains(screen.getByLabelText('Draft JSON file'))).toBe(true);
+ expect(follows(form,paste)).toBe(true);expect(follows(paste,history)).toBe(true);
+});
+test('a recovery panel that needs action stays visible above the form with its message',async()=>{
+ const p=project('page_attention'),store=memoryStore(p);store.submissionHistory=async()=>[];
+ store.listSaveIntents=async()=>{throw new Error('Saved Save requests could not be read.');};
+ render(<TaskDraftLedger project={p} store={store}/>);
+ await screen.findByText('No task drafts yet. Add the first task using the form.');
+ const panel=await screen.findByRole('region',{name:'Original Save recovery'});
+ expect(within(panel).getByRole('alert').textContent).toBe('Saved Save requests could not be read.');
+ expect(panel.closest('details')).toBeNull();
+ expect(follows(panel,screen.getByRole('form',{name:'Task draft editor'}))).toBe(true);
+});
+test('an error inside Recovery and history opens the section and says so at the top',async()=>{
+ const p=project('page_nested_error'),store=memoryStore(p);store.submissionHistory=async()=>{throw new Error('broken');};
+ render(<TaskDraftLedger project={p} store={store}/>);
+ await screen.findByText('No task drafts yet. Add the first task using the form.');
+ await screen.findByText(/Submission history could not be read/);
+ const history=screen.getByText(/^Recovery and history/).closest('details');
+ await waitFor(()=>expect(history.open).toBe(true));
+ expect(screen.getByText(/needs your attention/)).toBeTruthy();
 });

@@ -1,5 +1,5 @@
 import { workspaceDiscoveryCategories } from "../engine/workspaceDiscoveryEngine.js";
-import { deriveDiscoveryReview, discoveryReviewDetail } from "./discoveryReviewModel.js";
+import { deriveDiscoveryReview, discoveryAreaCounts, discoveryReviewDetail } from "./discoveryReviewModel.js";
 import { deriveProjectHomeModel } from "./projectHomeModel.js";
 import { validateProjectSession } from "./projectSession.js";
 import { deriveWorkRecordReceipt } from "./workRecordReceipts.js";
@@ -125,6 +125,12 @@ function planReceipt(project, records) {
   return receipt("AUTH-PLAN", "Plan approval", effectiveState(project, status.state), status.detail, status.revision ? `Saved plan approval · revision ${status.revision}` : null);
 }
 
+// Counted in areas, the same unit as "Review what we found"; answered areas clear.
+function discoveryAreaSummary(areas) {
+  const plural = (count, word) => `${count} area${count === 1 ? "" : "s"} ${word}`;
+  return `${plural(areas.observed, "found")} · ${plural(areas.signals, "to check")} · ${plural(areas.unanswered, "unanswered")}`;
+}
+
 function sessionReceipts(project, records = null) {
   const registration = project.registration;
   const census = project.census;
@@ -156,7 +162,7 @@ function sessionReceipts(project, records = null) {
       "Discovery snapshot",
       effectiveState(project, discoveryState),
       discovery
-        ? `${discovery.counts.observed} observed · ${discovery.counts.signals} review signal${discovery.counts.signals === 1 ? "" : "s"} · ${discovery.counts.unanswered} unanswered · ${discoveryReviewDetail(discoveryReview)}`
+        ? `${discoveryAreaSummary(discoveryAreaCounts(discoveryReview))} · ${discoveryReviewDetail(discoveryReview)}`
         : "No discovery snapshot is saved yet.",
     ),
     authorityReceipt(project, "architecture", "Architecture approval"),

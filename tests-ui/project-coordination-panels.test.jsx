@@ -218,3 +218,22 @@ test("allocation warns when waves contradict a recorded overlap decision", async
   await user.clear(screen.getByLabelText("Wave for T0001")); await user.type(screen.getByLabelText("Wave for T0001"), "2");
   expect(screen.queryByText(/These waves contradict the plan/)).toBeNull();
 });
+
+// Gap 20: a folder claim against three files inside it showed three "src/components (…)" lines.
+test("a folder overlapping several files in it is listed once per kind of overlap", async () => {
+  const user = userEvent.setup();
+  const folderLedger = [task("Folder", [["write", "src/Components"]]), task("Files", [["write", "src/components/A.jsx"], ["write", "src/components/B.jsx"], ["write", "src/components/C.jsx"]])]
+    .reduce((current, item) => updateTaskDraft(current, item), emptyTaskDraftLedger(binding));
+  const folderStore = { read: async () => folderLedger, subscribe: () => () => {} };
+  function FolderHarness({ storage }) {
+    const records = useProjectWorkRecords(project.projectId, storage);
+    return <ProjectCollisionPanel project={project} records={records} store={folderStore} storage={storage} />;
+  }
+  render(<FolderHarness storage={memoryStorage()} />);
+  await user.click(await screen.findByRole("button", { name: /Check tasks now/ }));
+  const card = await screen.findByRole("article", { name: "T0001 and T0002 overlap" });
+  const items = within(card).getAllByRole("listitem");
+  expect(items).toHaveLength(1);
+  expect(items[0].textContent).toContain("src/Components");
+  expect(items[0].textContent).toContain("(src/components/A.jsx, src/components/B.jsx, src/components/C.jsx)");
+});

@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { ArrowRightIcon, ArrowsClockwiseIcon, CheckCircleIcon, IntersectIcon, WarningOctagonIcon } from "@phosphor-icons/react";
 import { writeSection } from "../project/projectWorkRecords.js";
 import { useSavedTaskDrafts } from "../project/useSavedTaskDrafts.js";
-import { activeTasks, buildCollisionRecord, collisionStatus, createResolution, resolutionState, taskSnapshot } from "../project/taskCoordination.js";
+import { activeTasks, buildCollisionRecord, collisionStatus, createResolution, overlapFileLines, resolutionState, taskSnapshot } from "../project/taskCoordination.js";
 import "./ProjectCoordinationPanels.css";
 
 const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
@@ -62,7 +62,7 @@ function CollisionCard({ collision, resolution, canDecide, onDecide, onClear, on
       <span className="coord-tag">{hard ? <><WarningOctagonIcon aria-hidden="true" />Must not run at the same time</> : "Needs an order"}</span>
     </header>
     <p>{hard ? "Both tasks change these files:" : "One task changes a file the other reads:"}</p>
-    <ul className="coord-files">{collision.files.map((file) => <li key={file.paths.join("|")}><code>{file.path}</code>{file.paths.length > 1 && <small>({file.paths.join(" and ")})</small>}<small>{file.severity === "hard-stop" ? "both change it" : "one changes, one reads"}</small></li>)}</ul>
+    <ul className="coord-files">{overlapFileLines(collision.files).map((file) => <li key={`${file.path}|${file.severity}`}><code>{file.path}</code>{file.paths.length > 0 && <small>({file.paths.join(", ")})</small>}<small>{file.severity === "hard-stop" ? "both change it" : "one changes, one reads"}</small></li>)}</ul>
     {splitPending && <div className="coord-note warn" role="status"><p><b>Split chosen: edit the file scopes of {a} or {b} so they no longer overlap.</b> This overlap stays open until then. Next step: change one task’s files in the Ledger, then check again here.</p><button type="button" onClick={() => onWorkspace?.("ledger")}>Edit file scopes in Ledger <ArrowRightIcon aria-hidden="true" /></button></div>}
     {!decided && !splitPending && <p className="coord-hint">Suggested: {label(collision, collision.suggestedFirst)} first{collision.dependencyOrdered ? " (it is already listed as a dependency)" : ""}.</p>}
     {decided && <p className="coord-decided"><CheckCircleIcon weight="fill" aria-hidden="true" /> Decided: {decisionText(collision, decided)}</p>}

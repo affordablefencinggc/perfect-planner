@@ -9,6 +9,9 @@ export const continuationArtifacts = {
     "tests/census-large-handoff.test.mjs"
   ],
   "C023": [
+    "src/engine/architectureSeedEngine.js",
+    "tests/architecture-seed-engine.test.mjs",
+    "tests-ui/architecture-seed-fill.test.jsx",
     "src/components/ArchitectureDraftPanel.css",
     "src/components/ArchitectureDraftPanel.jsx",
     "src/project/architectureRefresh.js",

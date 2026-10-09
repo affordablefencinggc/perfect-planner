@@ -63,6 +63,8 @@ function ImportedProjectBlueprint({ activeProject, onSelect, onOpenStructure }) 
   const [savedArchitecture, setSavedArchitecture] = useState(null);
   const [architectureError,setArchitectureError]=useState(false);
   const architectureRequest=useRef(0);
+  const workRecords=useProjectWorkRecords(activeProject.projectId);
+  const discoveryReview=useMemo(()=>deriveDiscoveryReview(activeProject,workRecords),[activeProject,workRecords]);
   const hasProvider=Boolean(projectContext);
   useEffect(() => {
     const request=++architectureRequest.current;
@@ -78,9 +80,6 @@ function ImportedProjectBlueprint({ activeProject, onSelect, onOpenStructure }) 
   const census = activeProject.census ?? null;
   const discovery = activeProject.discovery ?? null;
   const categoryReceipts = new Map((discovery?.categories ?? []).map((category) => [category.id, category]));
-  // Answers given in Structure's "Review what we found" count here too.
-  const records = useProjectWorkRecords(activeProject.projectId);
-  const discoveryReview = useMemo(() => deriveDiscoveryReview(activeProject, records), [activeProject, records]);
   const providerProject=projectContext?.projects?.find(project=>project.projectId===activeProject.projectId)??(projectContext?.activeProject?.projectId===activeProject.projectId?projectContext.activeProject:null);
   const architectureAuthority = hasProvider ? providerProject?.authorities?.architecture??null : savedArchitecture?.head ? { state: architectureError?'unavailable':"authoritative", revision: savedArchitecture.head.revision, digest: savedArchitecture.head.contractDigest } : null;
   const projectUnavailable = activeProject.state === "unavailable";
@@ -166,7 +165,7 @@ function ImportedProjectBlueprint({ activeProject, onSelect, onOpenStructure }) 
           </section>
         </aside>
       </div>
-      <ArchitectureDraftPanel key={activeProject.projectId} projectId={activeProject.projectId} onPublished={(receipt)=>{architectureRequest.current++;if(hasProvider){projectContext.refreshArchitecture?.(activeProject.projectId);}else{setSavedArchitecture(receipt);setArchitectureError(false);}}} />
+      <ArchitectureDraftPanel key={activeProject.projectId} projectId={activeProject.projectId} discoveryReview={discoveryReview} onPublished={(receipt)=>{architectureRequest.current++;if(hasProvider){projectContext.refreshArchitecture?.(activeProject.projectId);}else{setSavedArchitecture(receipt);setArchitectureError(false);}}} />
     </section>
   );
 }

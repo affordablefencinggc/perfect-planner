@@ -189,3 +189,32 @@ test("Next honest action never routes to the page that is already open", async (
   const afterApproval = deriveImportedProjectWorkflowModel(session, "allocation", readWorkRecords(session.projectId, storage)).nextAction;
   assert.deepEqual([afterApproval.workspace, afterApproval.target], ["collision", "ALLOC-CLEARANCE"]);
 });
+
+test("the person's plan approval and the ledger-bound saved-plan check have distinct, consistent wording (gap 17)", async () => {
+  const { savedPlanCheckText, SAVED_PLAN_CHECK_ACTION } = await import("../src/project/planApproval.js");
+  const storage = memoryStorage(), session = project();
+  assert.equal(SAVED_PLAN_CHECK_ACTION, "Run saved-plan check");
+  // Nothing approved: never "not checked" as if a check were the missing piece.
+  const none = savedPlanCheckText({ check: null, approval: planApprovalStatus(session, readWorkRecords(session.projectId, storage)) });
+  assert.equal(none.text, "No plan approved yet. Approve the plan on the Plan page first.");
+  // Approved by the person, check not run: says so plainly.
+  await recordPlanApproval(session.projectId, { tasks: TASKS, censusDigest: session.census.digest }, { storage, now });
+  const approval = planApprovalStatus(session, readWorkRecords(session.projectId, storage));
+  for (const check of [null, { state: "stale", projectId: session.projectId, reason: "ledger-context-changed" }]) {
+    const copy = savedPlanCheckText({ check, approval });
+    assert.equal(copy.text, "Plan approved. Run the saved-plan check to lock it to this exact Ledger.");
+    assert.equal(copy.approvedByYou, true);
+    assert.doesNotMatch(copy.text, /not checked/i);
+  }
+  assert.match(savedPlanCheckText({ check: null, approval }).explainer, /^Saved-plan check:/);
+  assert.match(savedPlanCheckText({ check: null, approval }).explainer, /never runs/);
+  // A passed check is named the same way everywhere.
+  const passed = savedPlanCheckText({ check: { state: "observed", revision: 3, ledgerRevision: 7 }, approval, checked: true });
+  assert.equal(passed.text, "Saved-plan check passed: planning approval revision 3 matches this exact saved Ledger (revision 7). Planning only; nothing was run.");
+  // A check that ran but could not match the current records keeps the approval and says what is missing.
+  const notMatched = savedPlanCheckText({ check: { state: "stale", projectId: session.projectId, rootIdentity: session.registration.rootIdentity }, approval });
+  assert.match(notMatched.text, /^Plan approved\. The saved-plan check could not lock it/);
+  const noLedgerApproval = savedPlanCheckText({ check: { state: "missing" }, approval });
+  assert.match(noLedgerApproval.text, /^Plan approved\./);
+  assert.match(savedPlanCheckText({ check: { state: "refreshing" }, approval }).text, /Running the saved-plan check/);
+});

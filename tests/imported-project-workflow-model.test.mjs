@@ -167,7 +167,7 @@ test("proof pages with no tasks send people to plan tasks instead of a dead end 
 test("counts read as English for one and for zero (proverel-23)", () => {
   const model = deriveImportedProjectWorkflowModel(importedProject(), "ledger");
   const discovery = model.requirements.find((item) => item.id === "REC-DISCOVERY");
-  assert.match(discovery.detail, /1 review signal ·/);
+  assert.match(discovery.detail, /^1 area found · 1 area to check · /);
   assert.ok(assessCompletion({ items: [], openGates: 1 }).reasons.includes("1 collision gate remains open"));
   assert.ok(assessCompletion({ items: [], openGates: 2 }).reasons.includes("2 collision gates remain open"));
   assert.equal(ownerSummary(null, [], { tasks: [] }).text, "Owners are not assigned in Allocation yet.");
