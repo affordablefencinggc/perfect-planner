@@ -156,7 +156,14 @@ export class Ledger {
 
   get status(): LedgerStatus {
     const head = this.last()?.n;
-    const base = { writable: this.writable, entries: this.list.length, head, acknowledged: [...this.acknowledged], ...(this.repaired ? { repaired: this.repaired } : {}) };
+    const base = {
+      writable: this.writable,
+      entries: this.list.length,
+      head,
+      acknowledged: [...this.acknowledged],
+      ...(this.trust.owner ? { owner: this.trust.owner } : {}),
+      ...(this.repaired ? { repaired: this.repaired } : {}),
+    };
     if (this.chain.ok) return { ok: true, ...base };
     return { ok: false, ...base, brokenAt: this.chain.firstBad, problem: this.chain.problem, detail: this.chain.detail };
   }
@@ -544,10 +551,11 @@ export class Ledger {
     if (this.trust.retired.has(key.keyId)) throw new LedgerError("RULE", `key ${key.keyId} was already retired at ${this.trust.retired.get(key.keyId)!.n}`);
   }
 
-  /** The owner; before any person entry, the person writing becomes it. */
+  /** The owner, or, before any person entry, the person writing when their key is the pinned owner key. */
   private ownerFor(actor: Actor): string | undefined {
-    if (this.trust.owner) return this.trust.owner;
-    return this.list.some((e) => e.actor?.kind === "person") ? undefined : principalOf(actor);
+    if (this.trust.owner || !this.ownerKey || this.list.some((e) => e.actor?.kind === "person")) return this.trust.owner;
+    const own = this.trusted.get(this.ownerKey);
+    return own && own.principal === principalOf(actor) ? own.principal : undefined;
   }
 
   private reassess(): void {

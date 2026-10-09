@@ -156,9 +156,10 @@ export interface KeyTrust {
  * - Recovery: a key a person re-trusts with their own key counts from the
  *   start of the ledger, so what it signed earlier counts again; its
  *   retirements still apply.
- * - The owner is the principal of the ledger's first person entry, when that
- *   entry verifies with keys trusted without the owner's help (and, with
- *   `ownerKey`, was signed by exactly that key).
+ * - The owner is the principal of the ledger's first person entry, only
+ *   when the app pins `ownerKey` and that entry was signed by exactly that
+ *   key, trusted without the owner's help. Without `ownerKey` there is no
+ *   owner: nobody can trust or retire another person's key.
  */
 export function keyTrust(anchors: readonly TrustedKey[], entries: readonly LedgerEntry[], options: { ownerKey?: string } = {}): KeyTrust {
   const bound = new Map<string, string>();
@@ -170,11 +171,12 @@ export function keyTrust(anchors: readonly TrustedKey[], entries: readonly Ledge
   const firstIndex = entries.findIndex((entry) => entry.actor?.kind === "person" && typeof entry.actor.id === "string");
   let owner: string | undefined;
   let ownerProblem: KeyTrust["ownerProblem"];
-  if (firstIndex >= 0) {
+  // Only the app can name the owner, by pinning the owner key it kept outside the ledger.
+  if (firstIndex >= 0 && options.ownerKey) {
     const first = entries[firstIndex];
     const problem = signatureProblem(first, withoutOwner.trusted, withoutOwner.retired, firstIndex);
     if (problem) ownerProblem = { n: first.n, detail: `no owner: ${problem}` };
-    else if (options.ownerKey && first.sig?.key !== options.ownerKey) {
+    else if (first.sig?.key !== options.ownerKey) {
       ownerProblem = { n: first.n, detail: `${first.n} was not signed by this project's owner key ${options.ownerKey}` };
     } else owner = principalOf(first.actor);
   }
