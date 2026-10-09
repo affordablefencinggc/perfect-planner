@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { Ledger, MemoryStore, type Actor } from "../ledger/index";
 import {
   MockJev, boardFromLedger, boardReport, confirmMvp, featuresIn, moveFeature, mvpDoneWhen,
-  renameStage, scanReport, stageExistingProject, stageNewProject, stageOf, MvpError,
+  renameStage, scanReport, MVP_STAGER, stageExistingProject, stageNewProject, stageOf, MvpError,
 } from "./index";
 
 const root = fileURLToPath(new URL("../..", import.meta.url));
@@ -24,6 +24,10 @@ describe("MVP-first stages on this repository", () => {
     expect(scan.features.length).toBeGreaterThanOrEqual(40);
     // The repo's own end-to-end journey (C057) anchors the MVP.
     expect(proposal.journey.features).toContain("C057");
+    // Jev may not write decisions, so the stager records its proposal and names it.
+    const recorded = ledger.entries()[0];
+    expect(recorded.actor).toEqual(MVP_STAGER);
+    expect((recorded.data?.mvp as { proposedBy: unknown }).proposedBy).toEqual(new MockJev().actor);
     let board = boardFromLedger(ledger.entries());
     expect(stageOf(board, "C057")).toBe("mvp");
     expect(board.placements).toHaveLength(scan.features.length);
@@ -51,7 +55,7 @@ describe("MVP-first stages on this repository", () => {
     expect(done.done).toBe(false);
     expect(done.blocking.join("\n")).toContain(proposal.journey.test);
 
-    ledger.append({ actor: agent, type: "test.passed", subject: "MVP", summary: "Journey passed", evidence: [], refs: [], data: { test: proposal.journey.test } });
+    ledger.append({ actor: { kind: "system", id: "gate" }, type: "test.passed", subject: "MVP", summary: "Journey passed", evidence: [], refs: [], data: { test: proposal.journey.test } });
     done = mvpDoneWhen(boardFromLedger(ledger.entries()), ledger.entries(), scan.features);
     expect(done.journeyPassed).toBe(true);
     const notDone = scan.features.filter((f) => featuresIn(board, "mvp").includes(f.id) && f.status !== "done");
