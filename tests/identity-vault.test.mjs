@@ -47,9 +47,12 @@ test("inspection exposes fingerprints but never private material", async (t) => 
   const inspected = await inspectIdentityVault(vault); assert.equal(inspected.identityCount, 2); assert.equal(inspected.privateKeys, "REDACTED"); assert.equal(JSON.stringify(inspected).includes("PRIVATE KEY"), false);
 });
 
-test("concurrent additions serialize without losing identities", async (t) => {
+// Each holder runs two synchronous scrypts inside the vault lock, so the last of four waiters
+// queues behind three. The default 5 s wait is wall-clock and timed out on loaded machines while
+// every holder was live; this test checks serialization (stuck holders: truth-core), so wait unbounded.
+test("concurrent additions serialize without losing identities", { timeout: 120_000 }, async (t) => {
   const { root, vault } = await fixture(); t.after(() => rm(root, { recursive: true, force: true })); await createIdentityVault(vault, password, ["danie"]);
-  await Promise.all(["mira", "jon", "agent-a", "agent-b"].map((id) => addIdentityToVault(vault, password, id)));
+  await Promise.all(["mira", "jon", "agent-a", "agent-b"].map((id) => addIdentityToVault(vault, password, id, { timeoutMs: Number.POSITIVE_INFINITY })));
   const opened = await openIdentityVault(vault, password); assert.deepEqual(opened.identities.map((item) => item.actorId).sort(), ["agent-a", "agent-b", "danie", "jon", "mira"]);
 });
 

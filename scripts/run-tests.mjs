@@ -32,6 +32,8 @@ async function runNodeSuite() {
   const code = await run(process.execPath, [
     "--import", pathToFileURL(path.join(root, "tests/helpers/hermetic-git.mjs")).href,
     "--test",
+    // A hung test fails by name instead of silently consuming the CI job's time budget.
+    "--test-timeout=300000",
     "--test-reporter=spec", "--test-reporter-destination=stdout",
     `--test-reporter=${pathToFileURL(path.join(root, "scripts/test-summary-reporter.mjs")).href}`, `--test-reporter-destination=${output}`,
     ...(files.length ? files : ["tests/*.test.mjs"]),
