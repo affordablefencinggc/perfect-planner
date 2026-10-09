@@ -4,6 +4,7 @@
 import { canonicalArchitectureJson as canonical } from "../engine/architectureContractVerification.js";
 import { inspectTaskDraft } from "./taskDraftLedger.js";
 import { allocationByTask, approvedTaskIdsFrom, proofItems, recordedCollisions } from "./workRecordReaders.js";
+import { uniquePaths } from "./taskCoordination.js";
 
 export const BUILD_STATES = Object.freeze(["not-started", "in-progress", "done", "blocked"]);
 export const BUILD_STATE_LABELS = Object.freeze({ "not-started": "Not started", "in-progress": "In progress", done: "Done", blocked: "Blocked" });
@@ -60,7 +61,8 @@ export function deriveBuildBoard({ project, ledger, sections = {}, planStatus = 
     for (const item of collisions ?? []) {
       if (!item.taskIds.includes(id)) continue;
       const others = item.taskIds.filter((other) => other !== id);
-      const where = item.paths.length ? ` (${item.paths.join(", ")})` : "";
+      const paths = uniquePaths(item.paths);
+      const where = paths.length ? ` (${paths.join(", ")})` : "";
       if (item.resolved) constraints.push(`Agreed with ${others.join(", ") || "another task"}${where}${item.note ? `: ${item.note}` : ""}.`);
       else blockers.push({ kind: "collision", text: `Unresolved overlap with ${others.join(", ") || "another task"}${where}.`, workspace: "collision" });
     }
