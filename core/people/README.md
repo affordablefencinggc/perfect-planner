@@ -28,7 +28,7 @@ import { installPeopleRules, claimOwnership, addMember, changeMember, removeMemb
          setPhoto, clearPhoto, shareDoc, removeDoc, FilePhotoStore } from "../people/index";
 
 installNumberingRules(ledger);   // people entries take D-n numbers
-installPeopleRules(ledger, { ownerPinned: true });   // openPeopleLedger does this for you
+installPeopleRules(ledger);   // openPeopleLedger and the helpers below do this for you
 
 claimOwnership(ledger, me, "Looplet Spare");                       // first member, always the owner
 addMember(ledger, me, { person: "mia", name: "Mia", role: "helper", agents: ["mia-worker"] });

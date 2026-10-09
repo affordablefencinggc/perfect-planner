@@ -46,7 +46,7 @@ function open(): Ledger {
   const { store, ownerKey } = pinned();
   const ledger = Ledger.openSync(store, { now: clock(), ownerKey });
   installNumberingRules(ledger);
-  installPeopleRules(ledger, { ownerPinned: true });
+  installPeopleRules(ledger);
   return ledger;
 }
 
@@ -427,7 +427,7 @@ describe("the view", () => {
     const { store, ownerKey } = pinned();
     const writer = Ledger.openSync(store, { now: clock(), ownerKey });
     installNumberingRules(writer);
-    installPeopleRules(writer, { ownerPinned: true });
+    installPeopleRules(writer);
     claimOwnership(writer, owner, "Looplet Spare");
     addMember(writer, owner, { person: "mia", name: "Mia", role: "helper" });
     const view = peopleView(writer);
@@ -586,6 +586,13 @@ describe("opening a ledger with people rules", () => {
 });
 
 describe("the pinned owner key", () => {
+  it("lets the owner claim a fresh pinned ledger through the helpers alone", () => {
+    const { store, ownerKey } = pinned();
+    const ledger = Ledger.openSync(store, { now: clock(), ownerKey });
+    claimOwnership(ledger, owner, "Looplet Spare");
+    expect(peopleView(ledger).owner?.person).toBe("looplet-spare");
+  });
+
   it("allows no helper enrolment and no roles without an ownerKey", () => {
     const ledger = Ledger.openSync(new MemoryStore(), { now: clock() });
     expect(ledger.owner).toBeUndefined();

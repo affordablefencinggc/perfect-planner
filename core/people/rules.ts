@@ -12,27 +12,12 @@ import { APPROVAL_TYPES, type Approval } from "./types";
  * project that never adds helpers behaves exactly as before.
  */
 const installed = new WeakMap<Ledger, () => void>();
-const ownerPinned = new WeakSet<Ledger>();
 
-export interface PeopleRuleOptions {
-  /**
-   * The ledger was opened with the project's `ownerKey`. Only then may the
-   * first person entry claim ownership before `ledger.owner` is known (the
-   * ledger itself refuses a first person entry not signed by that key).
-   */
-  ownerPinned?: boolean;
-}
-
-/**
- * Idempotent: a ledger gets the people rules once (a later call can still
- * mark it owner-pinned). The write helpers in actions.ts call it;
- * openPeopleLedger calls it with the open options.
- */
-export function installPeopleRules(ledger: Ledger, options: PeopleRuleOptions = {}): () => void {
-  if (options.ownerPinned) ownerPinned.add(ledger);
+/** Idempotent: a ledger gets the people rules once. The write helpers in actions.ts and openPeopleLedger call it. */
+export function installPeopleRules(ledger: Ledger): () => void {
   const existing = installed.get(ledger);
   if (existing) return existing;
-  const remove = ledger.addRule((draft, current) => peopleRefusal(draft, current.entries(), current.owner, ownerPinned.has(current)));
+  const remove = ledger.addRule((draft, current) => peopleRefusal(draft, current.entries(), current.owner, current.ownerKeyPinned));
   const uninstall = () => {
     remove();
     installed.delete(ledger);
@@ -85,13 +70,14 @@ export async function openPeopleLedger(store: LedgerStore, options: OpenOptions 
     const more = violations.length > 1 ? ` (and ${violations.length - 1} more)` : "";
     throw new PeopleError("STORED_VIOLATION", `${first!.n} breaks the people rules: ${first!.reason}${more}`);
   }
-  installPeopleRules(ledger, { ownerPinned: options.ownerKey !== undefined });
+  installPeopleRules(ledger);
   return ledger;
 }
 
 /**
- * `owner` is `ledger.owner`; `pinned` says the ledger was opened with the
- * owner key, which lets the very first person entry claim the project.
+ * `owner` is `ledger.owner`; `pinned` is `ledger.ownerKeyPinned`, which lets
+ * the very first person entry claim the project (the ledger makes the owner
+ * key sign it).
  */
 export function peopleRefusal(draft: EntryDraft, entries: readonly LedgerEntry[], owner?: string, pinned = false): string | null {
   const roster = replayRoster(entries, owner);
