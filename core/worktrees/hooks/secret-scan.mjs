@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 // Commit-time secret scan for task worktrees. Standalone on purpose: Perfect Planner
 // copies this file into the managed repo's git dir, so it may import nothing but Node.
 // Patterns mirror scripts/verify-secrets.mjs.
