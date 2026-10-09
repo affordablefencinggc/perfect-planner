@@ -152,7 +152,6 @@ impl Drop for CandidateGuard{fn drop(&mut self){if !self.settlement_attempted{le
 #[cfg(test)]mod tests{
  use super::*;
  fn root(name:&str)->PathBuf{
-  assert_eq!(std::env::var("COMPUTERNAME").unwrap().to_lowercase(),"dans1");
   let root=PathBuf::from(std::env::var_os("PP_CUSTODY_PROBE_ROOT").expect("disposable root required")).join(name);fs::create_dir(&root).unwrap();root
  }
  #[test]fn hardlinked_input_is_refused(){

@@ -167,7 +167,6 @@ fn run_with<F:FnOnce(&Path,&HostConfiguration,&Value)->crate::native_host_superv
     #[test]
     #[ignore="Requires explicit DANS1 registered package fixture"]
     fn actual_saved_setup_prepare_and_exact_retry(){
-        assert_eq!(std::env::var("COMPUTERNAME").unwrap().to_lowercase(),"dans1");
         let bytes=fs::read(std::env::var_os("PP_TEST_CHECK_PREPARATION_CONFIG").expect("fixture required")).unwrap();assert!(bytes.len()<=65536);
         let v:Value=serde_json::from_slice(&bytes).unwrap();let m=&v["metadataConfig"];let text=|x:&Value|x.as_str().unwrap().to_owned();
         let mut cfg=HostConfiguration{metadata_executable:PathBuf::from(text(&m["executable"])),metadata_digest:text(&m["executableDigest"]),registry_root:PathBuf::from(text(&m["registryRoot"])),state_directory:PathBuf::from(text(&v["stateDirectory"])),workspace_id:text(&m["workspaceId"]),registry_revision:m["registryRevision"].as_u64().unwrap().try_into().unwrap(),expected_binding:serde_json::from_value(v["expectedBinding"].clone()).unwrap(),actor:"local-native-user".into(),source:"perfect-planner-native-checks".into(),check_contract:None,check_profile_provision:Some(json!({"profileId":"perfect-planner-checks-v1"})),prepared_check_selection:None};

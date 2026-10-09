@@ -44,5 +44,20 @@ jobs:
           cache: npm
       - uses: dtolnay/rust-toolchain@stable
       - run: npm ci
+      - name: Prepare native test fixtures
+        shell: pwsh
+        run: |
+          # Fresh, empty, long-form fixture roots. The runner's default %TEMP%
+          # is an 8.3 short path (RUNNER~1), which the native path-canonicality
+          # checks correctly refuse, so tests get a canonical temp root instead.
+          $base = Join-Path $env:RUNNER_TEMP 'pp-native'
+          $tmp = New-Item -ItemType Directory -Force (Join-Path $base 'tmp')
+          $custody = New-Item -ItemType Directory -Force (Join-Path $base 'custody-probe')
+          $archive = New-Item -ItemType Directory -Force (Join-Path $base 'archive-fixture')
+          "TMP=$($tmp.FullName)" >> $env:GITHUB_ENV
+          "TEMP=$($tmp.FullName)" >> $env:GITHUB_ENV
+          "PP_CUSTODY_PROBE_ROOT=$($custody.FullName)" >> $env:GITHUB_ENV
+          "PP_ARCHIVE_FIXTURE_ROOT=$($archive.FullName)" >> $env:GITHUB_ENV
+          "PP_TEST_AGENT_NODE=$((Get-Command node).Source)" >> $env:GITHUB_ENV
       - run: npm run test:native
       - run: npm run tauri:build -- --no-bundle

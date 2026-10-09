@@ -219,7 +219,6 @@ impl RetainedInputs{
   let path:Vec<u16>=path.to_str().unwrap().encode_utf16().chain(Some(0)).collect();let applied=SetFileSecurityW(path.as_ptr(),4,descriptor);let error=std::io::Error::last_os_error();LocalFree(descriptor);assert_ne!(applied,0,"{error}");
  }}
  fn fixture(label:&str)->(PathBuf,AppContainer,ArchiveBinding){
-  assert_eq!(std::env::var("COMPUTERNAME").unwrap().to_lowercase(),"dans1");
   let base=PathBuf::from(std::env::var_os("PP_ARCHIVE_FIXTURE_ROOT").expect("explicit fresh archive fixture required"));let source=base.join(label);fs::create_dir(&source).unwrap();
   let name=format!("perfect-planner.execution.{}-{}",std::process::id(),std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos());let profile=AppContainer::create_fresh(&name).unwrap();
   let binding=ArchiveBinding{run_id:format!("archive-{label}"),root_identity:"a".repeat(64),candidate_digest:"b".repeat(64),intent_digest:"c".repeat(64)};

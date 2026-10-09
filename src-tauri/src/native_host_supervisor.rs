@@ -320,7 +320,6 @@ mod containment{
     }
     fn binding()->Binding{Binding{project_id:"project-1".into(),root_identity:"a".repeat(64),census_digest:"b".repeat(64)}}
     #[test]fn proposal_reads_admit_only_bounded_exact_payloads(){
-        assert_eq!(std::env::var("COMPUTERNAME").unwrap().to_lowercase(),"dans1");
         let good=[("read-proposal-brief",json!({"offset":0,"expectedHeadDigest":null})),("read-proposal-task",json!({"taskId":"T0001","offset":0,"expectedHeadDigest":"a".repeat(64)})),("read-proposal-request",json!({"requestId":"original-1"}))];
         for (command,payload) in good{
             let request=json!({"version":1,"requestId":"native-read","command":command,"payload":payload});
@@ -363,7 +362,6 @@ mod containment{
     fn actual_full_task_batch_records_all_checks_and_recovers(){full_supervisor_fixture(false,true);}
     fn full_supervisor_fixture(failing:bool,batch:bool){
         use sha2::{Digest,Sha256};
-        assert_eq!(std::env::var("COMPUTERNAME").unwrap().to_lowercase(),"dans1");
         let out=PathBuf::from(std::env::var_os("PP_SUPERVISOR_EXECUTION_OUT").expect("fixture output"));
         std::fs::create_dir(&out).unwrap();
         let root=out.join("candidate");let state=out.join("state");let registry=out.join("registry");
@@ -496,7 +494,6 @@ mod containment{
     #[ignore = "Requires fresh DANS1 packaged host, native census and large submitted plan"]
     fn actual_packaged_large_snapshot(){
         use sha2::{Digest,Sha256};
-        assert_eq!(std::env::var("COMPUTERNAME").unwrap().to_lowercase(),"dans1");
         let bytes=std::fs::read(std::env::var_os("PP_TEST_NATIVE_HOST_SUPERVISOR_CONFIG").expect("explicit fixture required")).unwrap();
         let v:Value=serde_json::from_slice(&bytes).unwrap();let m=&v["metadataConfig"];
         let text=|value:&Value|value.as_str().expect("fixture string").to_owned();
@@ -535,7 +532,6 @@ mod containment{
     #[test]
     #[ignore = "Requires explicit DANS1 prepared-check package fixture"]
     fn actual_prepared_selection_supervisor(){
-        assert_eq!(std::env::var("COMPUTERNAME").unwrap().to_lowercase(),"dans1");
         let bytes=std::fs::read(std::env::var_os("PP_TEST_NATIVE_HOST_SUPERVISOR_CONFIG").expect("fixture required")).unwrap();assert!(bytes.len()<=65536);
         let v:Value=serde_json::from_slice(&bytes).unwrap();let m=&v["metadataConfig"];
         let text=|x:&Value|x.as_str().expect("fixture string").to_owned();

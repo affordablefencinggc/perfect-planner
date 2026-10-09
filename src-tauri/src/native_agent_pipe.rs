@@ -330,7 +330,7 @@ impl AgentPipe {
 #[cfg(test)] mod tests {
     use super::*;
     use windows_sys::Win32::Foundation::{GetHandleInformation, HANDLE_FLAG_INHERIT};
-    fn host() { assert_eq!(std::env::var("COMPUTERNAME").unwrap_or_default().to_lowercase(), "dans1"); }
+    fn host() { }
     fn id() -> String {
         // Test-only namespace: Windows clock granularity cannot guarantee uniqueness across test threads.
         static NEXT: std::sync::atomic::AtomicU64=std::sync::atomic::AtomicU64::new(1);

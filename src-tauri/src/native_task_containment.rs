@@ -414,7 +414,7 @@ fn capture_prepared(mut child:SuspendedTask,mut stdout:Capture,mut stderr:Captur
 
 #[cfg(test)] mod tests {
     use super::*;
-    fn host(){assert_eq!(std::env::var("COMPUTERNAME").unwrap().to_lowercase(),"dans1");}
+    fn host(){}
     fn root()->std::path::PathBuf {host();std::env::var_os("PP_CONTAINMENT_FIXTURE_ROOT").expect("explicit fresh fixture root").into()}
     fn fixture_name()->&'static str {concat!(module_path!(),"::fixture").split_once("::").unwrap().1}
     fn captured(mode:&str,timeout:Duration,stream:usize,total:usize)->CapturedRun {

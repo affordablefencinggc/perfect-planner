@@ -126,7 +126,6 @@ fn run_with<F:FnOnce(&Path,&HostConfiguration,&Value)->crate::native_host_superv
 #[cfg(test)]mod tests{
  use super::*;
  fn fixture()->(PathBuf,HostConfiguration,ExecutionRequest){
-  assert_eq!(std::env::var("COMPUTERNAME").unwrap().to_lowercase(),"dans1");
   let dir=std::env::temp_dir().join(fresh_id());fs::create_dir(&dir).unwrap();let dir=fs::canonicalize(dir).unwrap();
   let binding=Binding{project_id:project_id(&"a".repeat(64)),root_identity:"a".repeat(64),census_digest:"b".repeat(64)};
   let r:ExecutionRequest=serde_json::from_value(json!({"identity":{"schemaVersion":1,"workspaceId":"fixture","registryRevision":1,"rootIdentity":binding.root_identity,"censusDigest":binding.census_digest},"setupReference":"d".repeat(64),"expected":{"hostRevision":1,"headDigest":"e".repeat(64)},"contractHead":{"revision":1,"headDigest":"f".repeat(64)},"requestId":"execution-1","confirmationId":"approved-1","taskId":"T0001","checkId":"unit","attemptId":"attempt-1","attemptNumber":1})).unwrap();

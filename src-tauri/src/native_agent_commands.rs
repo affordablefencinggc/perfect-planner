@@ -153,7 +153,6 @@ pub async fn stop_project_agent_broker(app:tauri::AppHandle,request:AgentRequest
 #[cfg(test)]mod plan_request_tests{
     use super::*;
     #[test]fn plan_pairing_cannot_accept_configuration_or_silently_change_existing_request(){
-        assert_eq!(std::env::var("COMPUTERNAME").unwrap().to_lowercase(),"dans1");
         let identity=json!({"schemaVersion":1,"projectId":"pp_example","generation":1,"workspaceId":"example","registryRevision":1,"rootIdentity":"a".repeat(64)});
         assert!(serde_json::from_value::<AgentRequest>(identity.clone()).is_ok());
         assert!(serde_json::from_value::<AgentPlanRequest>(identity.clone()).is_err());
