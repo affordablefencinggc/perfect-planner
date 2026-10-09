@@ -173,31 +173,31 @@ fn log_file(app: &AppHandle) -> Option<(PathBuf, std::fs::File)> {
     Some((path, file))
 }
 
-fn spawn_service(app: &AppHandle, runtime: &Runtime, data_dir: &Path, log: Option<std::fs::File>) -> std::io::Result<Child> {
+/**
+ * The service's environment: nothing from the person's shell setup may load code into it, and
+ * PP_DATA_DIR is Tauri's app_data_dir on every platform, the same folder the native commands use,
+ * so the ledgers, owner pins and agent token files never split across two data folders.
+ */
+pub(crate) fn service_env(runtime_node: &Path, bundled: bool, data_dir: &Path) -> Vec<(&'static str, Option<std::ffi::OsString>)> {
+    let mut env: Vec<(&'static str, Option<std::ffi::OsString>)> = ["NODE_OPTIONS", "NODE_PATH", "PP_PORT", "PP_CLIENT_DIR", "PP_CORE_PROJECT_ROOT", "PP_CORE_KEYS"].into_iter().map(|k| (k, None)).collect();
+    env.push(("PP_NODE_BINARY", bundled.then(|| runtime_node.as_os_str().to_owned())));
+    env.push(("PP_DATA_DIR", Some(data_dir.as_os_str().to_owned())));
+    env
+}
+
+fn spawn_service(runtime: &Runtime, data_dir: &Path, log: Option<std::fs::File>) -> std::io::Result<Child> {
     let mut command = Command::new(&runtime.node);
     command
         .arg(&runtime.entry)
         .current_dir(runtime.entry.parent().unwrap_or(Path::new(".")))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(log.map(Stdio::from).unwrap_or_else(Stdio::null))
-        // Nothing from the person's shell setup may load code into the service.
-        .env_remove("NODE_OPTIONS")
-        .env_remove("NODE_PATH")
-        .env_remove("PP_PORT")
-        .env_remove("PP_CLIENT_DIR")
-        .env_remove("PP_CORE_PROJECT_ROOT")
-        .env_remove("PP_CORE_KEYS");
-    if runtime.bundled {
-        command.env("PP_NODE_BINARY", &runtime.node);
-    } else {
-        command.env_remove("PP_NODE_BINARY");
-    }
-    // Windows keeps npm start's data folder (%LOCALAPPDATA%); elsewhere the app's own data folder.
-    if cfg!(windows) {
-        command.env_remove("PP_DATA_DIR");
-    } else {
-        command.env("PP_DATA_DIR", data_dir);
+        .stderr(log.map(Stdio::from).unwrap_or_else(Stdio::null));
+    for (key, value) in service_env(&runtime.node, runtime.bundled, data_dir) {
+        match value {
+            Some(value) => command.env(key, value),
+            None => command.env_remove(key),
+        };
     }
     #[cfg(windows)]
     {
@@ -205,7 +205,6 @@ fn spawn_service(app: &AppHandle, runtime: &Runtime, data_dir: &Path, log: Optio
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         command.creation_flags(CREATE_NO_WINDOW);
     }
-    let _ = app;
     command.spawn()
 }
 
@@ -250,7 +249,7 @@ fn start(app: AppHandle, window: WebviewWindow, splash: Url) {
         let (window, log_path) = (window.clone(), log_path.clone());
         move |message: &str, node_missing: bool| show_error(&window, &splash, message, node_missing, log_path.as_deref())
     };
-    let (Ok(resources), Ok(data_dir)) = (app.path().resource_dir(), app.path().app_local_data_dir()) else {
+    let (Ok(resources), Ok(data_dir)) = (app.path().resource_dir(), app.path().app_data_dir()) else {
         return fail("Perfect Planner could not find its own folders.", false);
     };
     let runtime = match locate_runtime(&resources, &data_dir) {
@@ -262,7 +261,7 @@ fn start(app: AppHandle, window: WebviewWindow, splash: Url) {
         let _ = writeln!(f, "--- Perfect Planner {} starting {} with {}", env!("CARGO_PKG_VERSION"), runtime.entry.display(), runtime.node.display());
         f
     }));
-    let mut child = match spawn_service(&app, &runtime, &data_dir, log) {
+    let mut child = match spawn_service(&runtime, &data_dir, log) {
         Ok(child) => child,
         Err(error) => return fail(&format!("Perfect Planner could not start its local service: {error}."), !runtime.bundled),
     };
@@ -384,6 +383,19 @@ mod tests {
     fn error_fragment_is_url_safe_and_flags_a_missing_node() {
         assert_eq!(error_fragment("No Node 20+ (here: v18)", true), "error=No%20Node%2020%2B%20%28here%3A%20v18%29&node=missing");
         assert_eq!(error_fragment("a&b#c", false), "error=a%26b%23c");
+    }
+
+    #[test]
+    fn the_service_gets_the_app_data_folder_and_a_clean_node_environment() {
+        let data = Path::new("/home/u/.local/share/com.perfectplanner.desktop");
+        let env = service_env(Path::new("/opt/pp/desktop-host/node"), true, data);
+        let get = |k: &str| env.iter().find(|(key, _)| *key == k).map(|(_, v)| v.clone());
+        assert_eq!(get("PP_DATA_DIR"), Some(Some(data.as_os_str().to_owned())));
+        assert_eq!(get("PP_NODE_BINARY"), Some(Some("/opt/pp/desktop-host/node".into())));
+        for removed in ["NODE_OPTIONS", "NODE_PATH", "PP_CORE_KEYS", "PP_CORE_PROJECT_ROOT"] {
+            assert_eq!(get(removed), Some(None), "{removed}");
+        }
+        assert_eq!(service_env(Path::new("node"), false, data).iter().find(|(k, _)| *k == "PP_NODE_BINARY").unwrap().1, None);
     }
 
     #[test]

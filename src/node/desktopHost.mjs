@@ -16,15 +16,18 @@ import { localAuthorityRoot } from "./localAuthorityHost.mjs";
 // from one launch to the next. Busy ports fall through to the next ones.
 export const DESKTOP_PORT = 41730;
 
+/** The local service's data under the desktop app's data folder (Tauri app_data_dir). */
+export const desktopAuthorityRoot = (appDataDir) => path.join(path.resolve(appDataDir), "authority");
+
 /** Where the bundled files are and where the data goes, from the shell's environment. */
 export function desktopHostConfig(env = process.env, here = path.dirname(fileURLToPath(import.meta.url))) {
   const port = env.PP_PORT === undefined || env.PP_PORT === "" ? DESKTOP_PORT : Number(env.PP_PORT);
   return {
     clientDirectory: env.PP_CLIENT_DIR ? path.resolve(env.PP_CLIENT_DIR) : path.join(here, "..", "client"),
     coreHostBundle: path.join(here, "index.mjs"),
-    // Windows keeps npm start's folder (%LOCALAPPDATA%), so both ways of running share one ledger.
-    // macOS and Linux get the app's own data folder from the shell instead of a temp folder.
-    root: env.PP_DATA_DIR ? path.join(path.resolve(env.PP_DATA_DIR), "PerfectPlannerCleanroom", "authority") : localAuthorityRoot(env),
+    // The shell passes Tauri's app_data_dir (the folder its native commands use) as PP_DATA_DIR,
+    // so ledgers, owner pins and agent token files live in the app's one data folder.
+    root: env.PP_DATA_DIR ? desktopAuthorityRoot(env.PP_DATA_DIR) : localAuthorityRoot(env),
     port,
   };
 }

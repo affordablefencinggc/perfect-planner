@@ -61,7 +61,8 @@ test("the desktop service finds its bundled files and keeps data out of temp fol
   const config = desktopHostConfig({ PP_DATA_DIR: "/data" }, here);
   assert.equal(config.clientDirectory, path.join("/app", "desktop-host", "client"));
   assert.equal(config.coreHostBundle, path.join(here, "index.mjs"));
-  assert.equal(config.root, path.join(path.resolve("/data"), "PerfectPlannerCleanroom", "authority"));
+  // One data folder: the shell's app_data_dir (native_core_host.rs service_env) holds the service's ledgers too.
+  assert.equal(config.root, path.join(path.resolve("/data"), "authority"));
   assert.equal(config.port, DESKTOP_PORT);
   assert.equal(desktopHostConfig({ PP_PORT: "0" }, here).port, 0);
 });
@@ -100,6 +101,15 @@ test("the desktop service serves the app on loopback, reports ready once, and st
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("the shell hands the service Tauri's app data folder on every platform, and the service keeps its data there", () => {
+  const rust = readFileSync(new URL("../src-tauri/src/native_core_host.rs", import.meta.url), "utf8");
+  assert.match(rust, /app\.path\(\)\.app_data_dir\(\)/);
+  assert.doesNotMatch(rust, /app_local_data_dir/);
+  assert.match(rust, /\("PP_DATA_DIR", Some\(data_dir\.as_os_str\(\)\.to_owned\(\)\)\)/);
+  const appData = path.join(path.resolve("/home/u/.local/share"), "com.perfectplanner.desktop");
+  assert.ok(desktopHostConfig({ PP_DATA_DIR: appData }, "/x").root.startsWith(appData + path.sep));
 });
 
 test("the Tauri bundle ships the desktop host as resources and builds it before bundling", () => {
