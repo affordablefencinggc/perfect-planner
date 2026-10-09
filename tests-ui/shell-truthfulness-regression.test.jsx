@@ -99,7 +99,7 @@ describe("shared-shell truthfulness outside explicit Demo mode", () => {
       await user.click(operations);
 
       await user.click(screen.getByRole("button", { name: "Branches & worktrees" }));
-      expect(screen.getByRole("button", { name: "Inspect local Git" }).disabled).toBe(true);
+      expect((await screen.findByRole("button", { name: "Inspect local Git" })).disabled).toBe(true);
       expect(screen.getByText("Git inspection requires a current registered project in the desktop app.")).toBeTruthy();
       expect(screen.queryByRole("button", { name: "Copy observation" })).toBeNull();
       expect(container.querySelectorAll(".branch-table-row")).toHaveLength(0);

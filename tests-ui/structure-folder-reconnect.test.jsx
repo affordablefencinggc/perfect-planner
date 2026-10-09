@@ -68,4 +68,18 @@ describe("Structure folder reconnect after reload", () => {
     await waitFor(() => expect(screen.getByRole("region", { name: "Folder connection" }).textContent).toContain("does not remember the folder"));
     expect(screen.queryByRole("button", { name: /Reconnect folder/ })).toBeNull();
   });
+
+  // Regression (screen tour, 9 Oct 2026): an imported project with no proposed folder
+  // plan showed "BLOCKED · 1 blockers" in the header while Home said Ready.
+  test("an imported project with no proposed folders is not shown as blocked", async () => {
+    const { container } = render(<StructureWorkspace activeProject={project} workspaceAdapter={adapterWith()} />);
+    await screen.findByRole("region", { name: "Folder connection" });
+    const state = container.querySelector(".structure-state");
+    expect(state.className).not.toContain("blocked");
+    expect(state.textContent).toContain("NO FOLDER PLAN");
+    expect(state.textContent).toContain("nothing here blocks your project");
+    expect(state.textContent).not.toMatch(/BLOCKED|blockers/);
+    expect(container.querySelector(".structure-validation").textContent).toContain("No folder plan proposed");
+    expect(container.querySelector(".structure-validation").textContent).not.toMatch(/not ready for approval|blockers/);
+  });
 });
