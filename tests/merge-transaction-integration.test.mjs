@@ -1,5 +1,4 @@
-// Real Git below: run hermetically regardless of the caller's Git config or GIT_* env.
-import "./helpers/hermetic-git.mjs";
+import "./helpers/hermetic-env.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { lstat, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";

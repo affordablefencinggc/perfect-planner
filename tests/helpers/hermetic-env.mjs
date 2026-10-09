@@ -1,16 +1,16 @@
-// Hermetic Git environment for the node:test suite.
+// Hermetic environment for the node:test suite. Every tests/*.test.mjs file
+// imports this first, so plain `npm test`, a single `node --test` file and
+// scripts/run-tests.mjs all behave the same on Windows, macOS and Linux.
 //
-// The suite creates real repositories and runs real Git. Product code refuses
-// any inherited GIT_CONFIG* or routing variable (see guardedGitRunner.mjs and
-// verify-secrets.mjs), and a developer's or CI runner's global config can add
-// commit signing, hooks paths or URL rewrites. So tests must not inherit
-// either. Importing this module (directly, or through `node --import`) once
-// per process:
+// The suite creates real repositories and temp-folder fixtures. Product code
+// refuses inherited GIT_CONFIG* or routing variables (guardedGitRunner.mjs,
+// verify-secrets.mjs) and any aliased path, and a machine's global Git config
+// can add signing, hooks paths or URL rewrites. Once per process this module:
 //   - removes inherited GIT_* routing, config and override variables;
 //   - points HOME, USERPROFILE and XDG_CONFIG_HOME at a private temp profile
 //     whose .gitconfig sets a fixed identity, no signing and no hooks path;
 //   - points TMPDIR/TMP/TEMP at the canonical (symlink-free) temp folder.
-// Child processes spawned with `{ ...process.env }` inherit the same profile.
+// Child processes spawned with `{ ...process.env }` inherit the same setup.
 import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";

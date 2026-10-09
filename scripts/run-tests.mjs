@@ -30,7 +30,7 @@ function run(command, commandArgs) {
 
 async function runNodeSuite() {
   const code = await run(process.execPath, [
-    "--import", pathToFileURL(path.join(root, "tests/helpers/hermetic-git.mjs")).href,
+    "--import", pathToFileURL(path.join(root, "tests/helpers/hermetic-env.mjs")).href,
     "--test",
     // A hung test fails by name instead of silently consuming the CI job's time budget.
     "--test-timeout=300000",

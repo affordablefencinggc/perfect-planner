@@ -1,3 +1,4 @@
+import "./helpers/hermetic-env.mjs";
 import test from 'node:test';import assert from 'node:assert/strict';
 import {acceptanceSetDigest,parseTaskAttempt,inspectTaskAttemptResults} from '../src/node/taskOutcomeContract.mjs';
 const binding={projectId:'pp_outcome_fixture',rootIdentity:'a'.repeat(64),ledgerRevision:1,ledgerDigest:'b'.repeat(64),taskId:'T0001',taskDigest:'c'.repeat(64),candidateDigest:'d'.repeat(64),acceptanceDigest:acceptanceSetDigest(['unit','integration'])};

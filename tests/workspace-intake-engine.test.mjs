@@ -1,3 +1,4 @@
+import "./helpers/hermetic-env.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { assessWorkspaceIntake, redactWorkspaceIntakeSummary, workspaceIntakeStageState } from "../src/engine/workspaceIntakeEngine.js";
