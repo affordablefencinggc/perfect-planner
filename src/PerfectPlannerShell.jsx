@@ -2739,7 +2739,8 @@ function ProjectHomeWorkspace({
     const { binding, blockers, mode, nextAction, project, stage, summary } =
       homeModel;
     const hasProject = mode !== "empty";
-    if (!hasProject) {
+    // With an approved core-loop plan, Home shows it below instead of the folder prompt.
+    if (!hasProject && !corePlan?.approved) {
       return (
         <section
           className="workspace project-home-workspace project-home-truth project-home-empty"

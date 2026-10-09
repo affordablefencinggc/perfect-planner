@@ -52,6 +52,7 @@ const OWNER_PROBLEMS = {
   tampered: "This project's owner record does not check out on this computer, so nothing here can be approved or changed in it.",
   missing: "This computer has no owner record for this project, so nothing here can be approved or changed in it.",
   unavailable: "This computer's key store is not available, so nothing you approve can be signed.",
+  replaced: "This folder's project history was deleted or swapped since you last worked here, so nothing here can be approved or changed in it.",
 };
 
 const OWNER_NEXT = {

@@ -163,7 +163,7 @@ function JevKeyField({ invoke, onToast }) {
   return (
     <Row
       title="Jev API key"
-      help="Saved only to the Windows keychain (Credential Manager). Perfect Planner never shows it again, never writes it to a file, and never sends it to an agent brief. Nothing in the app uses the key yet; it is kept ready for Jev reviews."
+      help="Saved only to the Windows keychain (Credential Manager). Perfect Planner never shows it again, never writes it to a file, and never sends it to an agent brief. Once the key is saved, Jev must review each task's test before work on that task starts."
       status={statusLabel}
     >
       <form className="settings-key-form" onSubmit={save}>
