@@ -67,6 +67,25 @@ export function isPlaceholder(value: string): boolean {
   return PLACEHOLDER.test(value);
 }
 
+/**
+ * Canary and sentinel strings that say they are not real ("must-not-leave",
+ * "do-not-retain-payload", "fake-key", "example_token"): tests and receipts use
+ * them to prove a secret was dropped.
+ */
+export const SENTINEL = /^(?:do[-_]?not|must[-_]?not|never|not[-_]a|fake|dummy|sample|example|placeholder|redacted)(?:[-_][a-z]+)+$/i;
+
+/**
+ * A phrase of three or more lower-case words joined by "-", "_" or "."
+ * ("must-not-leave", "auth.session.token"): a label, key name or canary, not a
+ * generated secret.
+ */
+export const WORD_PHRASE = /^[a-z]+(?:[-_.][a-z]+){2,}$/;
+
+/** A placeholder, a self-describing sentinel or a word phrase: never a credential. */
+export function isStandIn(value: string): boolean {
+  return isPlaceholder(value) || SENTINEL.test(value) || WORD_PHRASE.test(value);
+}
+
 /** Minimum value length for a secret name: password/secret 8, key/token 12. */
 export function minValueLength(name: string): number {
   return /password|passwd|secret/i.test(name) ? 8 : 12;
@@ -124,7 +143,7 @@ export function findSecrets(file: string, line: string, options: { everywhere?: 
       if (taken.some(([a, b]) => valueStart >= a && valueStart < b)) continue;
       taken.push([valueStart, valueStart + value.length]);
       if (rule.nameGroup !== undefined && value.length < minValueLength(m[rule.nameGroup]!)) continue;
-      if (isPlaceholder(value) || !/[A-Za-z]/.test(value)) continue;
+      if (isStandIn(value) || !/[A-Za-z]/.test(value)) continue;
       found.push({ rule: rule.id, description: rule.description, start: valueStart, end: valueStart + value.length, value, ...(rule.nameGroup !== undefined ? { name: m[rule.nameGroup]! } : {}) });
     }
   }
@@ -159,7 +178,7 @@ const VALUE_RULES: readonly ValueRule[] = [
   { id: "connection-string", description: "password in a connection string", pattern: /\b[a-z][a-z0-9+.-]*:\/\/[^\s:@/"'`]*:([^\s@/"'`]+)@/gi },
   { id: "mysql-password", description: "mysql -p password", pattern: /\b(?:mysql|mysqldump|mysqladmin|mariadb|mariadb-dump)\b[^\n]*?\s-p([^\s-][^\s]*)/gi },
   { id: "password-flag", description: "password on a command line", pattern: /--(?:password|passwd|pass|token|secret|api-key|apikey|auth-token)(?:=|\s+)([^\s"'`-][^\s"'`]*)/gi },
-  // curl -u user:password / --user user:password ("pass" counts: a real password can be a word)
+  // curl -u user:<password> or --user user:<password> ("pass" counts: a real password can be a word)
   { id: "curl-user", description: "password in curl -u", pattern: /\bcurl\b[^\n]*?\s(?:-u|--user)(?:\s+|=)["']?[^\s:"'$]+:([^\s"'$][^\s"']*)/gi, words: true },
   { id: "npm-token", description: "npm token", pattern: /\b(npm_[A-Za-z0-9]{36})\b/g },
   { id: "stripe-test-key", description: "Stripe test key", pattern: /\b([rs]k_test_[A-Za-z0-9]{16,})/g },
@@ -208,7 +227,7 @@ const SHELL_FILE = /\.(?:sh|bash|zsh|ps1|psm1|bat|cmd|envrc)$|(?:^|\/)\.envrc$/i
 type Mode = "redact" | "detect";
 
 function isLiteralSecret(name: string, value: string, quoted: boolean, context: { mode: Mode; envLine: boolean; configFile: boolean; yamlLine: boolean }): boolean {
-  if (value.length < 3 || value.includes(REDACTED) || isPlaceholder(value) || !/[A-Za-z0-9]/.test(value)) return false;
+  if (value.length < 3 || value.includes(REDACTED) || isStandIn(value) || !/[A-Za-z0-9]/.test(value)) return false;
   // In source code the diff check keeps the release scanner's minimum lengths, so
   // test strings ("forged") pass; configuration lines and redaction take any length.
   if (context.mode === "detect" && !context.envLine && !context.configFile && value.length < minValueLength(name)) return false;
@@ -220,7 +239,7 @@ function isLiteralSecret(name: string, value: string, quoted: boolean, context: 
   if (CODE_START.test(value) || CODE_CHARS.test(value) || CODE_WORDS.has(value.toLowerCase())) return false;
   if (!IDENTIFIER_CHAIN.test(value)) return true;
   // A bare identifier: code (token = value, token: string, a.b.c) unless the
-  // line is plainly configuration (DB_PASSWORD=letmein, password: hunter in YAML).
+  // line is plainly configuration (DB_PASSWORD=<word>, or password: <word> in YAML).
   if (context.envLine || context.configFile) return !value.includes(".") || /\d/.test(value);
   // Redaction also hides identifiers with digits ("hunter2"); plain words stay
   // unless the line is a lone `name: value` (YAML in a log or a paste).
@@ -245,7 +264,7 @@ function looksGenerated(run: string): boolean {
   return /[a-z]/.test(run) && /[A-Z]/.test(run) && /[0-9]/.test(run) && entropy(run) >= 4;
 }
 
-// Cookie: a=1; b=2 and Set-Cookie: sid=...; Path=/
+// Cookie and Set-Cookie headers: <name>=<value> pairs, minus attributes like Path
 const COOKIE_HEADER = /\b(?:set-)?cookie\s*:\s*([^\n]+)/gi;
 const SESSION_COOKIE = /sess|sid|token|auth|jwt|login|remember/i;
 const COOKIE_ATTRIBUTES = new Set(["path", "domain", "expires", "max-age", "samesite", "secure", "httponly", "priority", "partitioned"]);
@@ -275,7 +294,7 @@ function scanLine(line: string, mode: Mode, file: string): SecretSpan[] {
   for (const rule of VALUE_RULES) {
     for (const m of line.matchAll(rule.pattern)) {
       const value = m[1];
-      if (!value || isPlaceholder(value) || CODE_START.test(value) || value.includes(REDACTED) || !/[A-Za-z0-9]/.test(value) || (!rule.words && SECRET_WORDS.has(value.toLowerCase()))) continue;
+      if (!value || isStandIn(value) || CODE_START.test(value) || value.includes(REDACTED) || !/[A-Za-z0-9]/.test(value) || (!rule.words && SECRET_WORDS.has(value.toLowerCase()))) continue;
       const start = (m.index ?? 0) + m[0].lastIndexOf(value);
       add(rule.id, rule.description, start, start + value.length);
     }
@@ -294,7 +313,7 @@ function scanLine(line: string, mode: Mode, file: string): SecretSpan[] {
     for (const pair of m[1]!.matchAll(/([^=;\s]+)=([^;\s]+)/g)) {
       const [, cookie, value] = pair;
       if (COOKIE_ATTRIBUTES.has(cookie!.toLowerCase())) continue;
-      if (mode === "detect" && !(SESSION_COOKIE.test(cookie!) && value!.length >= 8 && !isPlaceholder(value!) && !CODE_START.test(value!))) continue;
+      if (mode === "detect" && !(SESSION_COOKIE.test(cookie!) && value!.length >= 8 && !isStandIn(value!) && !CODE_START.test(value!))) continue;
       const start = base + (pair.index ?? 0) + pair[0].length - value!.length;
       add("cookie", "cookie value", start, start + value!.length);
     }
