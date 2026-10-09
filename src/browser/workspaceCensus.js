@@ -2,6 +2,7 @@ import { validateWorkspaceCensus, validateWorkspaceRegistration } from "../nativ
 import { createImportedProjectId } from "../project/projectIds.js";
 import { findRememberedFolder, folderAccessState, lastRememberedFolder, loadRememberedFolder, rememberFolder, requestRememberedFolder } from "./folderAccess.js";
 import { createLaunchFolderHandle, describeLaunchFolder } from "./launchFolder.js";
+import { isSecretFileName } from "../shared/secretFiles.js";
 
 const handles = new Map();
 const encoder = new TextEncoder();
@@ -290,6 +291,12 @@ async function walkDirectory(directory, prefix, context, depth = 0) {
       continue;
     }
     if (handle?.kind !== "file") throw new CensusInterruption("workspace-entry-kind-unsupported", path);
+    // Credentials (.env, private keys, certificates) are listed but never opened, read or hashed.
+    if (isSecretFileName(name)) {
+      context.skipped.push({ path, reason: "secret-file-not-read", size: null });
+      await checkpoint(context, path);
+      continue;
+    }
 
     // An unreadable, locked or stalled file is skipped and listed; only a lost folder permission stops the scan.
     const skipUnreadable = async (error) => {

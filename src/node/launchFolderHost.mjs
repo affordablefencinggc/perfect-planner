@@ -5,6 +5,7 @@
 import path from "node:path";
 import { createReadStream } from "node:fs";
 import { lstat, readdir, realpath, stat } from "node:fs/promises";
+import { isSecretFileName } from "../shared/secretFiles.js";
 
 const PREFIX = "/api/launch-folder";
 const LOOPBACK_HOST = /^(?:127\.0\.0\.1|localhost|\[::1\])(?::\d+)?$/i;
@@ -77,6 +78,8 @@ export function createLaunchFolderMiddleware({ folder }) {
         .map((entry) => ({ name: entry.name, kind: entry.isDirectory() ? "directory" : "file" }));
       return json(res, 200, { entries: listed });
     }
+    // Credential files are never served, even though the census already skips them.
+    if (url.pathname !== `${PREFIX}/list` && isSecretFileName(path.basename(target))) return json(res, 403, { error: "Secret files are never read." });
     if (url.pathname === `${PREFIX}/stat`) {
       try {
         const info = await stat(target);

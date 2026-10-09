@@ -27,6 +27,7 @@ test("launch folder lists, stats and reads files read-only inside the folder", a
   const folder = await mkdtemp(path.join(os.tmpdir(), "pp-launch-"));
   await mkdir(path.join(folder, "src"));
   await writeFile(path.join(folder, "src", "main.js"), "export {};\n");
+  await writeFile(path.join(folder, "src", ".env"), "API_KEY=live\n");
   let linked = true;
   try { await symlink(outside, path.join(folder, "escape"), "dir"); } catch { linked = false; }
   const host = await serve(folder);
@@ -42,6 +43,8 @@ test("launch folder lists, stats and reads files read-only inside the folder", a
   assert.equal(stat.size, 11);
   assert.equal(await (await host.get("/api/launch-folder/file?path=src%2Fmain.js")).text(), "export {};\n");
 
+  assert.equal((await host.get("/api/launch-folder/file?path=src%2F.env")).status, 403, "credential files are never served");
+  assert.equal((await host.get("/api/launch-folder/stat?path=src%2F.env")).status, 403);
   assert.equal((await host.get("/api/launch-folder/file?path=..%2Fsecret.txt")).status, 404);
   assert.equal((await host.get("/api/launch-folder/file?path=src%5C..%5C..%5Csecret.txt")).status, 404);
   if (linked) assert.equal((await host.get("/api/launch-folder/file?path=escape%2Fsecret.txt")).status, 404);
