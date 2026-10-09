@@ -236,14 +236,22 @@ describe("worker commands", () => {
   });
 });
 
-// The reviewer's Batch 3 attack: any program on this PC asks GET /session while claiming to be the
-// app window, gets the person cookie, and then approves and runs things as the person. The fix
-// (the window gets its secret from the native shell; /session never hands it out) lands from #15.
-// Until then this test is expected to fail; when the fix merges it passes and `.fails` must go.
+// The reviewer's Batch 3 attack: any program on this PC asks the host for the person cookie while
+// claiming to be the app window, then approves and runs things as the person. Since #15's fix the
+// cookie only comes from claiming the one-time launch secret the launcher gave the window.
 describe("a forged local request is not the person", () => {
-  it.fails("cannot get the person cookie from /session, so cannot approve a plan, dispatch, set a test or approve it", async () => {
+  it("cannot get the person cookie from /session, so cannot approve a plan, dispatch, set a test or approve it", async () => {
     const origin = ctx.base.replace(/\/api\/core$/, "");
     const session = await fetch(`${ctx.base}/session${q}`, { headers: { "sec-fetch-site": "same-origin", "sec-fetch-mode": "cors", origin } });
+    expect(session.headers.get("set-cookie")).toBeNull();
+    // Guessing a launch secret, or replaying the one the real window already spent, gets nothing either.
+    const guess = await fetch(`${ctx.base}/session/claim`, { method: "POST", headers: { origin, "content-type": "application/json" }, body: JSON.stringify({ launch: "x".repeat(43) }) });
+    expect(guess.status).toBe(401);
+    expect(guess.headers.get("set-cookie")).toBeNull();
+    const launch = ctx.host.issueLaunch();
+    const claim = () => fetch(`${ctx.base}/session/claim`, { method: "POST", headers: { origin, "content-type": "application/json" }, body: JSON.stringify({ launch }) });
+    expect((await claim()).status).toBe(200);
+    expect((await claim()).status).toBe(401);
     const cookie = (session.headers.get("set-cookie") ?? "").split(";")[0];
     const forged = async (route: string, body: unknown = {}) => {
       const res = await fetch(`${ctx.base}${route}${q}`, { method: "POST", headers: { "content-type": "application/json", origin, "sec-fetch-site": "same-origin", ...(cookie ? { cookie } : {}) }, body: JSON.stringify(body) });

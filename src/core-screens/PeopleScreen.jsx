@@ -124,7 +124,7 @@ export default function PeopleScreen() {
       {notice && (
         <p className={`people-screen-notice is-${notice.kind}`} role={notice.kind === "bad" ? "alert" : "status"}>{notice.text}</p>
       )}
-      {data && <PeoplePanel view={data.view} photos={data.photos ?? {}} me={data.me} {...handlers} />}
+      {data && <PeoplePanel view={data.view} photos={data.photos ?? {}} me={data.me} starter={data.starter} {...handlers} />}
       {data && <PeopleDetails data={data} />}
     </CoreScreen>
   );

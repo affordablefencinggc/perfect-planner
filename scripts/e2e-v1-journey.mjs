@@ -214,10 +214,12 @@ async function openPage(cdp) {
 
 async function startServer(appData) {
   const port = await freePort();
-  const child = spawn(process.execPath, [path.join(projectRoot, "scripts", "serve-local.mjs")], { cwd: projectRoot, env: { ...process.env, LOCALAPPDATA: appData, PORT: String(port), PP_OPEN: "0" }, stdio: ["ignore", "pipe", "pipe"] });
+  const child = spawn(process.execPath, [path.join(projectRoot, "scripts", "serve-local.mjs")], { cwd: projectRoot, env: { ...process.env, LOCALAPPDATA: appData, PORT: String(port), PP_OPEN: "0", PP_CORE_KEYS: "memory" }, stdio: ["ignore", "pipe", "pipe"] });
   let output = ""; child.stdout.on("data", (d) => { output += d; }); child.stderr.on("data", (d) => { output += d; });
   const url = await waitFor(() => output.match(/running at (http:\/\/\S+)/)?.[1], { label: `server start (${output.trim()})` });
-  return { url: url.endsWith("/") ? url : `${url}/`, stop: () => new Promise((resolve) => { child.once("exit", resolve); child.kill(); setTimeout(resolve, 2000); }), output: () => output };
+  // The one-time link that lets this window make changes as the person (core/host/session.ts).
+  const launch = await waitFor(() => output.match(/one-time link\): (http:\/\/\S+#pp-launch=[\w-]+)/)?.[1], { label: `launch link (${output.trim()})` });
+  return { url: url.endsWith("/") ? url : `${url}/`, launch, stop: () => new Promise((resolve) => { child.once("exit", resolve); child.kill(); setTimeout(resolve, 2000); }), output: () => output };
 }
 
 // ---------- seed ----------
@@ -294,7 +296,9 @@ async function main() {
 
   try {
     await step("seed-imported-project", async () => {
-      await page.goto(server.url);
+      await page.goto(server.launch);
+      // The window claims the link once and strips it from the address bar.
+      await waitFor(async () => (await page.eval(`Boolean(sessionStorage.getItem("pp.core.csrf")) && !location.hash.includes("pp-launch")`)) || null, { label: "launch link claimed" });
       await page.eval(`localStorage.setItem(${JSON.stringify(DEFAULT_PROJECT_REGISTRY_KEY)}, ${JSON.stringify(seeded.value)}); true`);
       await page.goto(at("home"));
       await page.expectText("E2E Notes App");
@@ -460,6 +464,25 @@ async function journey(page, at, step) {
     if (owner !== "agent: builder") throw new Error(`owner after reload: ${owner}`);
     await page.goto(at("home"));
     await page.expectText("Project status ready");
+  });
+
+  // Every page must agree with Home once the project is Ready (screen tour, 9 Oct 2026).
+  await step("screens-agree-with-ready", async () => {
+    await page.goto(at("build"));
+    await page.expectText(/2 of 2 done/);
+    const attached = (await page.text()).match(/Proof\s*3 attached/g) ?? [];
+    if (attached.length !== 2) throw new Error(`Build cards should each show 3 proof items, saw ${attached.length} cards with proof`);
+    await page.goto(at("index"));
+    await page.expectText(/6\s*proof items/);
+    await page.goto(at("plan"));
+    await page.expectText(/Plan approved: 2 tasks approved on this device/);
+    const map = await page.run((h) => h.findAll({ css: ".draft-map-node" }).map((el) => el.textContent));
+    if (map.length !== 2 || map.some((text) => !/Approved/.test(text) || /Draft/.test(text))) throw new Error(`Plan map tasks should read Approved, saw ${JSON.stringify(map)}`);
+    if (/could not be checked/.test(await page.text())) throw new Error("Plan still says the approval could not be checked");
+    await page.goto(at("structure"));
+    await page.expectText("NO FOLDER PLAN");
+    const header = await page.eval(`document.querySelector(".structure-state")?.textContent ?? ""`);
+    if (/BLOCKED|blockers/.test(header)) throw new Error(`Structure header says blocked on a Ready project: ${header}`);
   });
 
   // Core loop screens (Deep planning, MVP board, Decisions, People, ledger search, Connect agent).

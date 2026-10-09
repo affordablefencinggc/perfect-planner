@@ -17,12 +17,14 @@ function Avatar({ member, photos }) {
   );
 }
 
-function AddMemberForm({ members, firstMember, onAddMember }) {
+function AddMemberForm({ members, firstMember, starter, onAddMember }) {
   const [name, setName] = useState("");
   const [idEdit, setIdEdit] = useState(null);
   const [role, setRole] = useState(firstMember ? "owner" : "helper");
   const [error, setError] = useState("");
-  const person = idEdit ?? slugify(name);
+  // The person who already wrote to this project on this computer is the only one who may become its owner.
+  const fixedId = firstMember && starter ? starter : null;
+  const person = fixedId ?? idEdit ?? slugify(name);
   const taken = members.some((m) => m.person === person);
   const idValid = ID_PATTERN.test(person);
   const idProblem = !person ? "" : !idValid ? "Use lowercase letters, digits and dashes (up to 40 characters)" : taken ? "That person id is already on this project" : "";
@@ -45,7 +47,8 @@ function AddMemberForm({ members, firstMember, onAddMember }) {
     <form className="people-form" aria-label="Add helper" onSubmit={submit}>
       <h3>{firstMember ? "Add the first person" : "Add helper"}</h3>
       <label>Name<input value={name} onChange={(e) => setName(e.target.value)} autoComplete="off" /></label>
-      <label>Person id<input value={person} onChange={(e) => setIdEdit(e.target.value)} autoComplete="off" aria-invalid={idProblem ? "true" : undefined} /></label>
+      <label>Person id<input value={person} onChange={(e) => setIdEdit(e.target.value)} readOnly={Boolean(fixedId)} autoComplete="off" aria-invalid={idProblem ? "true" : undefined} /></label>
+      {fixedId && <p className="people-hint">You have already been working on this project as {fixedId}, so that stays your person id.</p>}
       <label>Role<select value={chosenRole} onChange={(e) => setRole(e.target.value)}>{roles.map((r) => <option key={r} value={r}>{r}</option>)}</select></label>
       {idProblem && <p className="people-error" role="alert">{idProblem}</p>}
       {error && <p className="people-error" role="alert">{error}</p>}
@@ -81,7 +84,7 @@ function ShareDocForm({ onShareDoc }) {
   );
 }
 
-export function PeoplePanel({ view, photos = {}, me, now = () => new Date(), onAddMember, onChangeRole, onRemoveMember, onSetPhoto, onShareDoc, onOpenDoc }) {
+export function PeoplePanel({ view, photos = {}, me, starter, now = () => new Date(), onAddMember, onChangeRole, onRemoveMember, onSetPhoto, onShareDoc, onOpenDoc }) {
   const [confirming, setConfirming] = useState(null);
   const [photoError, setPhotoError] = useState("");
   const members = view?.members ?? [];
@@ -166,7 +169,7 @@ export function PeoplePanel({ view, photos = {}, me, now = () => new Date(), onA
             })}
           </ul>
         )}
-        {canAdd && <AddMemberForm members={members} firstMember={solo} onAddMember={onAddMember} />}
+        {canAdd && <AddMemberForm members={members} firstMember={solo} starter={starter} onAddMember={onAddMember} />}
       </section>
 
       <section className="people-section" aria-label="Shared documents">

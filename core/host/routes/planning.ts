@@ -26,6 +26,7 @@ import {
   type PlanningQuestionState,
 } from "../../planning/index";
 import type { CoreProject } from "../project";
+import { fingerprintOf, requireFingerprint } from "../fingerprint";
 import { HttpError, type Router } from "../router";
 import { localPerson, localPersonId } from "./people";
 
@@ -184,6 +185,7 @@ function overview(project: CoreProject) {
   })).filter((a) => a.questions.length > 0);
   const answered = questions.filter((q) => q.status !== "open").length;
   return {
+    fingerprint: planFingerprint(state.idea, areas),
     started: questions.length > 0,
     idea: state.idea,
     signals: state.profile?.signals ?? [],
@@ -200,6 +202,11 @@ function overview(project: CoreProject) {
       approved: approvals(entries),
     },
   };
+}
+
+/** What the person reviews before approving: the idea and every question as shown (see fingerprint.ts). */
+function planFingerprint(idea: unknown, areas: unknown): string {
+  return fingerprintOf({ idea: idea ?? null, areas });
 }
 
 function mindMapView(project: CoreProject) {
@@ -425,12 +432,14 @@ export function registerPlanningRoutes(router: Router): void {
    * POST /planning/approve: plan.approved P-n, then the roadmap's tasks (T-n)
    * the first time. Refused with the gate's reason while a blocker is open.
    */
-  router.post("/planning/approve", ({ project }) => {
+  router.post("/planning/approve", ({ project, body }) => {
     const state = planning(project);
     const entries = project.entries();
     if (!state.session.questions().length) throw new HttpError(409, "NOT_STARTED", "Start with your idea first; there is nothing to approve yet.");
     const open = openBlockers(entries);
     if (open.length) throw new HttpError(409, "BLOCKERS_OPEN", blockerMessage(open));
+    // Bound to the plan the person is looking at: a changed plan needs a fresh look.
+    requireFingerprint(body, overview(project).fingerprint, "plan");
     const actor = actorFor(project);
     const already = writtenTasks(entries).size > 0;
     // The ledger's planning rule refuses this too if a blocker is open (LedgerError -> 422).

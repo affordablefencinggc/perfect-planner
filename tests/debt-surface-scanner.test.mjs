@@ -17,12 +17,12 @@ async function copyTauriSecurityFixture(targetRoot) {
   for (const file of tauriSecurityFiles) { await mkdir(path.dirname(path.join(targetRoot, file)), { recursive: true }); await copyFile(path.resolve(file), path.join(targetRoot, file)); }
 }
 tauriSecurityFiles.push("src-tauri/src/native_git.rs", "src-tauri/capabilities/main-git-inventory.json", "src-tauri/permissions/git-inventory.json");
-tauriSecurityFiles.push(...['main-native-drafts', 'main-agent-observation', 'main-check-setup', 'main-task-results'].map(name => `src-tauri/capabilities/${name}.json`));
+tauriSecurityFiles.push(...['main-native-drafts', 'main-agent-observation', 'main-check-setup', 'main-task-results', 'main-core-launch'].map(name => `src-tauri/capabilities/${name}.json`));
 
 test('all current capability scopes and both command declarations refuse expansion', async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'pp-current-native-contract-'));
   t.after(() => rm(root, { recursive: true, force: true }));
-  for (const name of ['main-read-only', 'main-collision-authority', 'main-bundled-mcp', 'main-git-inventory', 'main-native-drafts', 'main-agent-observation', 'main-check-setup', 'main-task-results']) {
+  for (const name of ['main-read-only', 'main-collision-authority', 'main-bundled-mcp', 'main-git-inventory', 'main-native-drafts', 'main-agent-observation', 'main-check-setup', 'main-task-results', 'main-core-launch']) {
     for (const mutation of [value => value.permissions.push('core:default'), value => {value.remote={urls:['https://example.invalid']};}, value => value.windows.push('untrusted')]) {
       await copyTauriSecurityFixture(root);
       const file=path.join(root, `src-tauri/capabilities/${name}.json`), value=JSON.parse(await readFile(file, 'utf8'));

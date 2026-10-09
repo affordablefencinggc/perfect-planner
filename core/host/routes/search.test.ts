@@ -40,6 +40,8 @@ describe("search routes", () => {
   let ctx: Awaited<ReturnType<typeof startTestHost>>;
   beforeEach(async () => {
     ctx = await startTestHost();
+    ctx.host.ensureKey("system");
+    ctx.host.ensurePersonKey(owner.id); // seeds write as sam, signed like the person's own window would
   });
   afterEach(async () => {
     await ctx.stop();

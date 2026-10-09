@@ -35,6 +35,16 @@ export class HostKeys implements KeyProvider {
     return this.inner.trustedKeys();
   }
 
+  /**
+   * Makes a key if it is missing: the system key any time, a person's key only inside that
+   * person's own request (otherwise nothing happens and the ledger refuses an unsigned write).
+   */
+  ensure(principal: string): void {
+    if (!this.inner.state().available) return;
+    if (principal.startsWith("person:") && personRequest.getStore() !== true) return;
+    this.make(principal);
+  }
+
   /** The app's own key for gate, watcher and planner entries. */
   ensureSystemKey(): void {
     if (!this.inner.state().available) return;

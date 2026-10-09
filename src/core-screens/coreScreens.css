@@ -113,3 +113,16 @@
 .core-confidence-high .core-confidence-track > span { background: var(--green); }
 .core-confidence-medium .core-confidence-track > span { background: var(--amber); }
 .core-confidence-low .core-confidence-track > span { background: var(--red); }
+
+/* Shown when this window was not opened from the launcher's one-time link (core/host/session.ts). */
+.core-readonly {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-3);
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-lg);
+  background: var(--amber-soft);
+  color: var(--ink);
+  font-size: 0.875rem;
+}

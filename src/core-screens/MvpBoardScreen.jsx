@@ -155,6 +155,8 @@ function Board({ data, resource }) {
       if (done) setNotice(done);
       return true;
     } catch (e) {
+      // The board changed since it was rendered: show what it is now and the server's explanation.
+      if (e.status === 409 && e.code === "STALE") await resource.reload();
       setError(e.message || "That did not work.");
       return false;
     } finally {
@@ -215,7 +217,7 @@ function Board({ data, resource }) {
               <AdvancedOnly> {data.confirmation?.entry} · {data.confirmation?.subject}</AdvancedOnly>
             </span>
           ) : (
-            <button type="button" className="core-button primary" disabled={busy} onClick={() => run("/mvp/confirm", {}, "The MVP line is confirmed.")}>
+            <button type="button" className="core-button primary" disabled={busy} onClick={() => run("/mvp/confirm", { fingerprint: data.fingerprint }, "The MVP line is confirmed.")}>
               <CheckCircleIcon aria-hidden="true" /> Confirm MVP line
             </button>
           )}
