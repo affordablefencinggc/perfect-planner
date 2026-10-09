@@ -3,12 +3,17 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { Ledger, MemoryStore, type Actor } from "../ledger/index";
 import { Relay } from "../relay/index";
+import { installNumberingRules } from "../numbering/index";
+import { installClauseRules } from "../lookup/index";
 import { AgentService, ToolError, bridgeCall, createAgentMcpServer, directCall, startBridge, TokenStore } from "./index";
 
 const owner: Actor = { kind: "person", id: "owner" };
 
 function setup(options: { approveTests?: boolean } = {}) {
   const ledger = Ledger.openSync(new MemoryStore(), { now: () => new Date("2026-10-09T05:00:00Z") });
+  // The sibling modules' rules are on, so every entry the relay and tools write must satisfy them.
+  installNumberingRules(ledger);
+  installClauseRules(ledger);
   for (const [id, title, clause] of [["T-1", "Invoice id survives reload", "P-1 §2.1"], ["T-2", "Recover accepted email", "P-1 §2.2"]] as const) {
     ledger.append({ actor: owner, type: "task.created", subject: id, summary: title, refs: [clause], data: { title } });
     if (options.approveTests !== false) {
@@ -186,17 +191,22 @@ describe("the one-chat relay through the tools", () => {
 });
 
 describe("lookup", () => {
-  it("returns a clause, the tasks that cite it and their commits", async () => {
-    const { service, ledger, connect } = setup();
-    ledger.append({ actor: owner, type: "clause.added", subject: "P-1 §2.1", summary: "Invoice id survives reload", data: { text: "A new invoice keeps its id after a reload." } });
-    ledger.append({ actor: { kind: "system", id: "watcher" }, type: "commit.observed", subject: "T-1", summary: "Commit 9f3c2e1", refs: ["T-1"], data: { sha: "9f3c2e1" } });
+  it("returns a clause, the tasks that cite it and their commits, and questions with their decision", async () => {
+    const { service, ledger, connect, w1 } = setup();
+    ledger.append({ actor: owner, type: "clause.added", subject: "§1", summary: "Scope", data: { clause: "1", kind: "heading", text: "Scope" } });
+    ledger.append({ actor: owner, type: "clause.added", subject: "§2", summary: "Invoice sending", data: { clause: "2", kind: "heading", text: "Invoice sending" } });
+    ledger.append({ actor: owner, type: "clause.added", subject: "§2.1", summary: "Invoice id survives reload", data: { clause: "2.1", kind: "paragraph", text: "A new invoice keeps its id after a reload." } });
+    ledger.append({ actor: owner, type: "plan.approved", subject: "P-1", summary: "Invoice plan approved" });
+    ledger.append({ actor: { kind: "system", id: "watcher" }, type: "commit.observed", subject: "T-1", summary: "Commit 9f3c2e1", refs: ["P-1 §2.1"], data: { sha: "9f3c2e1" } });
     const main = await hello(service, connect, "main");
-    const found = (await service.call(main, "lookup", { ref: "P-1 §2.1" })) as { text: string; citedBy: { type: string; subject: string }[] };
-    expect(found.text).toBe("A new invoice keeps its id after a reload.");
-    expect(found.citedBy.map((e) => `${e.type} ${e.subject}`)).toEqual(expect.arrayContaining(["task.created T-1", "commit.observed T-1"]));
-    expect(found.citedBy.some((e) => e.subject === "T-2")).toBe(false);
-    expect(await service.call(main, "lookup", { ref: "L-1" })).toMatchObject({ ref: { kind: "ledger", ref: "L-000001" }, found: true });
-    expect(await service.call(main, "lookup", { ref: "nonsense" })).toMatchObject({ error: expect.stringContaining("not a reference") });
+    const found = (await service.call(main, "lookup", { ref: "P-1 §2.1" })) as { found: boolean; text: string; tasks: string[]; commits: string[] };
+    expect(found).toMatchObject({ found: true, text: "A new invoice keeps its id after a reload.", tasks: ["T-1"], commits: ["9f3c2e1"] });
+
+    const a = await hello(service, w1, "w1");
+    await service.call(a, "ask_main", { task: "T-1", question: "ISO dates?" });
+    await service.call(main, "answer", { question: "Q-1", text: "Yes" });
+    expect(await service.call(main, "lookup", { ref: "Q-1" })).toMatchObject({ found: true, kind: "question", status: "answered", text: "ISO dates?" });
+    expect(await service.call(main, "lookup", { ref: "nonsense" })).toMatchObject({ found: false, problem: expect.stringContaining("not a reference") });
   });
 });
 

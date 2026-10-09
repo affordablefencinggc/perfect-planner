@@ -9,7 +9,7 @@ import { randomBytes } from "node:crypto";
 import { LedgerError, type Actor, type EntryDraft, type Ledger, type LedgerEntry } from "../ledger/index";
 import { Relay } from "../relay/relay";
 import { attemptLabel, foldBoard, type TaskView } from "./board";
-import { lookup } from "./lookup";
+import { lookup } from "../lookup/index";
 import { TokenStore, type Grant } from "./tokens";
 import { TOOL_INFO, TOOL_INPUTS, type ToolInput, type ToolName } from "./tools";
 

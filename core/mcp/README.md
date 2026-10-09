@@ -37,5 +37,5 @@ rules registered with `ledger.addRule` refuse with their own message, which
 the agent receives as a `REFUSED` error. Error codes: `UNAUTHORIZED`,
 `FORBIDDEN`, `INVALID`, `NOT_FOUND`, `CONFLICT`, `PAUSED`, `REFUSED`.
 
-`lookup` and the board fold live here until `core/lookup` lands; swap them
-for its implementation then.
+`lookup` is `core/lookup`'s; the board fold (`foldBoard`) is the agent-facing
+task view.

@@ -9,6 +9,7 @@
 // the worker that asked, by Q number. A blocking question pauses only that
 // worker.
 import type { Actor, EntryDraft, Ledger, LedgerEntry } from "../ledger/index";
+import { nextNumber } from "../numbering/index";
 
 export interface QuestionInput {
   task: string;
@@ -77,16 +78,6 @@ export function questionKey(question: string, options: readonly string[] = []): 
 }
 
 const SYSTEM: Actor = { kind: "system", id: "perfect-planner" };
-
-function nextNumber(entries: readonly LedgerEntry[], type: LedgerEntry["type"], prefix: string): string {
-  let max = 0;
-  for (const e of entries) {
-    if (e.type !== type) continue;
-    const m = e.subject.match(new RegExp(`^${prefix}-(\\d+)$`));
-    if (m) max = Math.max(max, Number(m[1]));
-  }
-  return `${prefix}-${max + 1}`;
-}
 
 export interface RelayOptions {
   ledger: Ledger;
@@ -165,7 +156,7 @@ export class Relay {
     if (!question) throw new Error("A question needs some words.");
     const options = (input.options ?? []).map((o) => o.trim()).filter(Boolean);
     const blocking = input.blocking === true;
-    const q = nextNumber(this.ledger.entries(), "question.asked", "Q");
+    const q = nextNumber(this.ledger.entries(), "Q");
     this.write({
       actor: worker,
       type: "question.asked",
@@ -237,7 +228,7 @@ export class Relay {
     if (!asked) throw new Error(`${q} is not a question in this project.`);
     if (asked.person !== person) throw new Error(`${q} belongs to another person's main chat.`);
     if (asked.status === "answered") throw new Error(`${q} was already answered: ${asked.answer}`);
-    const d = nextNumber(this.ledger.entries(), "decision.made", "D");
+    const d = nextNumber(this.ledger.entries(), "D");
     this.write({
       actor: main,
       type: "decision.made",
@@ -245,7 +236,7 @@ export class Relay {
       summary: answer,
       reason: `Answer to ${q} from ${asked.task}`,
       refs: [q, asked.task],
-      data: { key: questionKey(asked.question, asked.options), question: asked.question, answer },
+      data: { key: questionKey(asked.question, asked.options), question: q, questionText: asked.question, answer },
     });
     this.write({
       actor: main,
