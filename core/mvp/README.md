@@ -57,7 +57,7 @@ and marker, with repo-relative forward-slash paths on every OS.
 
 | Call | Rule |
 |---|---|
-| `recordProposal(ledger, proposal)` | starts a fresh board; clears any confirmation |
+| `recordProposal(ledger, proposal)` | starts a fresh board; clears any confirmation. Jev may not write decisions, so a Jev proposal is recorded by `MVP_STAGER` (a system actor) with `data.mvp.proposedBy` naming Jev |
 | `moveFeature(ledger, actor, id, stage, reason)` | moving to any stage but the MVP needs a **one-line reason** (non-empty, not "TBD", no newline, at most 200 characters), else `MvpError("REASON_REQUIRED")`; moving into the MVP needs none; any move un-confirms the board |
 | `renameStage(ledger, actor, stage, name)` | 1 to 40 characters, one line, unique |
 | `setJourney(ledger, actor, journey)` | replaces the done-when journey and pulls its features into the MVP |

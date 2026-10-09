@@ -112,6 +112,13 @@ export function boardFromLedger(entries: readonly LedgerEntry[]): StageBoard {
   return board;
 }
 
+/**
+ * The actor that records a proposal. Jev may not write decisions itself
+ * (core/ledger "Who may write what"), so the stager records Jev's proposal as
+ * the system and keeps who proposed it in data.mvp.proposedBy.
+ */
+export const MVP_STAGER: Actor = { kind: "system", id: "mvp-stager" };
+
 export function recordProposal(ledger: Ledger, proposal: MvpProposal): LedgerEntry {
   for (const p of proposal.placements) {
     if (!isStage(p.stage)) throw new MvpError("UNKNOWN_STAGE", `Unknown stage "${String(p.stage)}" for ${p.feature}`);
@@ -119,8 +126,10 @@ export function recordProposal(ledger: Ledger, proposal: MvpProposal): LedgerEnt
   }
   if (!proposal.journey.test.trim()) throw new MvpError("REASON_REQUIRED", "The journey needs a test command");
   const summary = proposal.summary.trim() || "Proposed MVP line";
-  return write(ledger, proposal.by, summary, "Proposed MVP line", {
+  const by = proposal.by.kind === "jev" ? MVP_STAGER : proposal.by;
+  return write(ledger, by, summary, `Proposed MVP line (${proposal.by.id})`, {
     kind: "proposal",
+    proposedBy: proposal.by,
     journey: proposal.journey,
     placements: proposal.placements,
     summary: proposal.summary,
