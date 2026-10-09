@@ -108,7 +108,7 @@ export function agentDefaultsBrief(settings, { jevKeyStored = false } = {}) {
     `- Review preset: ${REVIEW_PRESETS[s.reviewPreset]}`,
     `- Orchestration rounds: at most ${s.maxRounds}`,
     `- Budget cap per run: ${s.budgetCapAud == null ? "none set" : `AUD ${s.budgetCapAud.toFixed(2)}`}`,
-    `- Jev as reviewer: ${s.jevReviewer ? (jevKeyStored ? "yes (key held in the OS keychain)" : "requested, but no key is stored") : "no"}`,
+    `- Jev as reviewer: ${s.jevReviewer ? `requested by the user; Perfect Planner does not run Jev reviews itself yet${jevKeyStored ? " (a key is held in the OS keychain)" : " (no key stored)"}` : "no"}`,
     "Planner gates (collisions, proof, review) still apply and are not relaxed by these settings.",
   ].join("\n");
 }

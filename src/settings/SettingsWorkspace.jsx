@@ -151,7 +151,11 @@ function JevKeyField({ invoke, onToast }) {
   };
   const statusLabel = status === null
     ? { tone: "muted", label: "Checking keychain…" }
-    : !current.available
+    : current.store === "error"
+      ? { tone: "amber", label: "Keychain did not respond" }
+      : current.store === "unsupported-os"
+      ? { tone: "amber", label: "Not available yet on this system" }
+      : !current.available
       ? { tone: "amber", label: "Desktop app only" }
       : current.stored
         ? { tone: "green", label: "Key stored in keychain" }
@@ -159,7 +163,7 @@ function JevKeyField({ invoke, onToast }) {
   return (
     <Row
       title="Jev API key"
-      help="Saved only to the Windows keychain (Credential Manager). Perfect Planner never shows it again, never writes it to a file, and never sends it to an agent brief."
+      help="Saved only to the Windows keychain (Credential Manager). Perfect Planner never shows it again, never writes it to a file, and never sends it to an agent brief. Nothing in the app uses the key yet; it is kept ready for Jev reviews."
       status={statusLabel}
     >
       <form className="settings-key-form" onSubmit={save}>
@@ -177,6 +181,9 @@ function JevKeyField({ invoke, onToast }) {
         <button type="submit" disabled={!current.available || busy || !draft.trim()}>Save to keychain</button>
         <button type="button" className="settings-danger-link" disabled={!current.available || busy || !current.stored} onClick={clear}>Remove</button>
       </form>
+      {current.store === "unsupported-os" && !message && (
+        <p className="settings-inline-note" role="status">Saving the key works on Windows today. macOS and Linux keychain support is not available yet, so nothing is stored here.</p>
+      )}
       {message && <p className="settings-inline-note" role="status">{message}</p>}
     </Row>
   );
@@ -318,7 +325,7 @@ export function SettingsWorkspace({ onWorkspace, onClose, onToast, invoke, jevSt
                 />
               </label>
             </Row>
-            <Row title="Use Jev as a reviewer" help="Adds Jev to review rounds when a key is stored.">
+            <Row title="Use Jev as a reviewer" help="Records that you want Jev as a reviewer and adds that request to the agent brief you copy. Perfect Planner does not run Jev reviews itself yet.">
               <Switch label="Use Jev as a reviewer" checked={settings.jevReviewer} onChange={(jevReviewer) => update({ jevReviewer })} />
             </Row>
             <JevKeyField invoke={invoke} onToast={(message, tone) => { onToast?.(message, tone); readJevKeyStatus({ invoke }).then((status) => setJevStored(status.stored)); }} />

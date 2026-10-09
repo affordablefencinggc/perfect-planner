@@ -73,7 +73,8 @@ describe("settings model", () => {
     expect(brief).toContain("Strict");
     expect(brief).toContain("at most 3");
     expect(brief).toContain("AUD 12.50");
-    expect(brief).toContain("key held in the OS keychain");
+    expect(brief).toContain("a key is held in the OS keychain");
+    expect(brief).toContain("does not run Jev reviews itself yet");
     expect(brief).toContain("not relaxed");
   });
 });
@@ -173,6 +174,26 @@ describe("Settings page", () => {
     fireEvent.click(screen.getByRole("button", { name: "Remove" }));
     await waitFor(() => expect(screen.getByText("No key stored")).toBeTruthy());
     expect(keychain.calls).toContain("jev_key_clear");
+  });
+
+  test("macOS and Linux desktop show a clear not-available-yet state and never store the key", async () => {
+    const platform = vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
+    const userAgent = vi.spyOn(navigator, "userAgent", "get").mockReturnValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0)");
+    const denied = vi.fn(async () => { throw "Command jev_key_status not allowed by ACL"; });
+    renderSettings({ invoke: denied });
+    await waitFor(() => expect(screen.getByText("Not available yet on this system")).toBeTruthy());
+    expect(screen.getByText(/macOS and Linux keychain support is not available yet/)).toBeTruthy();
+    expect(screen.getByLabelText("Jev API key", { selector: "input" }).disabled).toBe(true);
+    const result = await saveJevKey("sk-should-not-store", { invoke: denied });
+    expect(result).toMatchObject({ ok: false, message: expect.stringContaining("not available yet on this operating system") });
+    expect(JSON.stringify(window.localStorage)).not.toContain("sk-should-not-store");
+    platform.mockRestore(); userAgent.mockRestore();
+  });
+
+  test("Jev reviewer help says what is true today", () => {
+    renderSettings();
+    expect(screen.getByText(/does not run Jev reviews itself yet/)).toBeTruthy();
+    expect(screen.queryByText(/Adds Jev to review rounds/)).toBeNull();
   });
 
   test("keychain client fails closed outside the desktop app", async () => {

@@ -18,8 +18,8 @@ plus 1 new Settings page (21 controls) and 2 new entry points. Everything else w
 | Open the app on Home / Last page | did not exist | applied at launch | model + control test |
 | Define / Coordinate / Prove button opens … | did not exist | top-bar stage button lands there | shell test |
 | Open <page> links for every stage page and Index | did not exist | navigate and close Settings | "page links navigate and Back closes" |
-| Worktree mode, Review preset, Orchestration rounds, Budget cap, Use Jev as reviewer | did not exist | saved and written into the agent brief; Planner gates unchanged | control test + agent brief test |
-| Jev API key (masked) Save / Remove | did not exist | Windows Credential Manager only; status-only replies; field clears after save; key never in page, storage or brief | "Jev key goes to the keychain…", Rust unit tests, analyzer guard |
+| Worktree mode, Review preset, Orchestration rounds, Budget cap, Use Jev as reviewer | did not exist | saved and written into the agent brief; Planner gates unchanged. The app does not run Jev reviews itself yet, and the help text says so | control test + agent brief test |
+| Jev API key (masked) Save / Remove | did not exist | Windows Credential Manager only; status-only replies; field clears after save; key never in page, storage or brief. On macOS and Linux the field is disabled with "Not available yet on this system" and nothing is stored | "Jev key goes to the keychain…", Rust unit tests, analyzer guard |
 | Copy agent defaults | did not exist | copies the brief; says so if the clipboard is blocked | clipboard test |
 | Open the operations console on launch, Console opens on, Show Developer Notes | did not exist | applied at launch | "launch preferences open the console…" |
 | Notices stay for 3 / 6 / 10 s / Until closed | fixed 6 s | applied to every notice | "notices close after the chosen time…" |
