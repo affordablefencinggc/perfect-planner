@@ -71,8 +71,8 @@ async function jevConnection(project: CoreProject): Promise<JevConnection> {
   try {
     const status = await jevWiring().keys.status();
     value = status.stored
-      ? { connected: true, model: JEV_MODEL, note: "Jev is connected. New questions are sent to Jev when the plan may settle them." }
-      : { connected: false, model: null, note: status.available ? "Jev is not connected: no TypeSafe key is saved in Settings. Recommendations shown are from the offline reviewer." : "Jev is not connected: this computer has no secure key store Perfect Planner can use. Recommendations shown are from the offline reviewer." };
+      ? { connected: true, model: JEV_MODEL, note: "Jev is connected. New questions are sent to Jev when the plan may settle them, and Jev must review each task's test before work on it starts." }
+      : { connected: false, model: null, note: status.available ? "Jev is not connected: no TypeSafe key is saved in Settings. Recommendations shown are from the offline reviewer. Once the key is saved, Jev must review each task's test before work on it starts." : "Jev is not connected: this computer has no secure key store Perfect Planner can use. Recommendations shown are from the offline reviewer." };
   } catch {
     value = { connected: false, model: null, note: "Jev is not connected: the key store did not answer. Recommendations shown are from the offline reviewer." };
   }
