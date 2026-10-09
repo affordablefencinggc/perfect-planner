@@ -7,7 +7,7 @@ import { LedgerError } from "../ledger/index";
 import { startBridge, ToolError, type Bridge } from "../mcp/index";
 import { PeopleError } from "../people/index";
 import { asPersonRequest, hostKeys, type HostKeys } from "./keys";
-import { excludePrivateFolder, openCoreProject, pinOwnerAfterWrite, projectKey, projectRootFor, type CoreProject, type OwnerKeySource } from "./project";
+import { excludePrivateFolder, ledgerIntegrity, openCoreProject, pinOwnerAfterWrite, projectKey, projectRootFor, type CoreProject, type OwnerKeySource } from "./project";
 import { HttpError, Router } from "./router";
 import { PersonSessions } from "./session";
 import { registerRoutes } from "./routes/index";
@@ -57,6 +57,7 @@ export class CoreHost {
       ledger: project.ledger.status,
       keys: { description: this.keys.description, ...this.keys.state() },
       owner: { state: project.owner.state, ...(project.owner.reason ? { reason: project.owner.reason } : {}) },
+      integrity: ledgerIntegrity(project.ledger),
     }));
   }
 

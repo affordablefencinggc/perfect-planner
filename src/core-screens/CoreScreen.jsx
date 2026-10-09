@@ -60,9 +60,33 @@ const OWNER_NEXT = {
   default: "Its history stays readable. To keep working, open Perfect Planner on the computer that started this project, or start a new project in a new folder, which gets its own owner.",
 };
 
-/** A project whose owner cannot sign here is a hard stop: say so and what to do, instead of failing on every click. */
+const INTEGRITY_PROBLEMS = {
+  "rolled-back": "This project's history is missing work this computer saw written: an older copy of it was put back, or its end was cut off. Nothing here can be approved or changed until that is sorted out.",
+  damaged: "This project's history fails its tamper check, so nothing here can be approved or changed until that is sorted out.",
+};
+
+const INTEGRITY_NEXT = {
+  "rolled-back": "Its history stays readable. Restore the missing entries from git or a backup, then restart Perfect Planner.",
+  damaged: "Its history stays readable. Restore it from git or a backup, then restart Perfect Planner. The Ledger screen in Advanced view shows where it breaks.",
+};
+
+/** A project whose owner cannot sign here, or whose history was rolled back, is a hard stop: say so and what to do, instead of failing on every click. */
 export function OwnerNotice() {
   const status = useCoreResource("/status");
+  const integrity = status.data?.integrity;
+  const broken = integrity && INTEGRITY_PROBLEMS[integrity.state];
+  if (broken) {
+    return (
+      <div className="core-owner-stop" role="alert" data-integrity-state={integrity.state}>
+        <WarningCircleIcon weight="fill" aria-hidden="true" />
+        <div>
+          <strong>{broken}</strong>
+          <p>{INTEGRITY_NEXT[integrity.state]}</p>
+          {integrity.reason && <AdvancedOnly as="p">{integrity.reason}</AdvancedOnly>}
+        </div>
+      </div>
+    );
+  }
   const owner = status.data?.owner;
   const problem = owner && OWNER_PROBLEMS[owner.state];
   if (!problem) return null;

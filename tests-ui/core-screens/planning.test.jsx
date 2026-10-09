@@ -216,6 +216,18 @@ describe("Deep planning screen", () => {
     expect(stop.closest("[role=alert]").textContent).toMatch(/start a new project in a new folder/);
   });
 
+  it("stops plainly when an older copy of the project's history was put back", async () => {
+    mockApi({
+      "GET /planning": () => ok(overview()),
+      "GET /status": () => ok({ project: "default", owner: { state: "pinned" }, integrity: { state: "rolled-back", writesStopped: true, reason: "the ledger ends at L-000002 but the copy of the head this computer keeps says L-000004 was written" } }),
+    });
+    renderScreen();
+    const stop = await screen.findByText(/missing work this computer saw written/);
+    const alert = stop.closest("[role=alert]");
+    expect(alert.getAttribute("data-integrity-state")).toBe("rolled-back");
+    expect(alert.textContent).toMatch(/Restore the missing entries from git or a backup/);
+  });
+
   it("switches to the mind map and the roadmap", async () => {
     mockApi({ "GET /planning": () => ok(overview()), "GET /planning/mindmap": () => ok(mindmap), "GET /planning/roadmap": () => ok(roadmap) });
     renderScreen();
