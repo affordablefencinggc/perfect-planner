@@ -1,3 +1,4 @@
+import "./helpers/hermetic-env.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { architecturePolicyVersion, freezeArchitectureContract, verifyArchitectureContract } from "../src/engine/rulebookEngine.js";

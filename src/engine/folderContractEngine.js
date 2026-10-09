@@ -174,3 +174,14 @@ export function prepareFolderOrganizationReview(analysis, contract) {
 }
 
 export const folderContractStages = [...STAGES];
+
+// Presentation only. An imported app with no proposed folders has nothing to approve,
+// so the empty plan is optional rather than a blocker on the project (Home can be Ready).
+export function folderPlanHeadline(assessment, { imported = false } = {}) {
+  if (imported && assessment.nodes.length === 0) {
+    return { tone: "optional", verdict: "NO FOLDER PLAN", detail: "Optional · nothing here blocks your project", panelTitle: "No folder plan proposed", panelDetail: "Optional · add folders only if you want them managed" };
+  }
+  return assessment.ready
+    ? { tone: "ready", verdict: assessment.verdict, detail: null, panelTitle: null, panelDetail: "Approval details" }
+    : { tone: "blocked", verdict: assessment.verdict, detail: `${assessment.blockers.length} blockers`, panelTitle: "Folder plan not ready for approval", panelDetail: `${assessment.blockers.length} blockers · open to review` };
+}

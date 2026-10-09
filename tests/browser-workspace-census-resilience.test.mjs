@@ -1,3 +1,4 @@
+import "./helpers/hermetic-env.mjs";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { browserWorkspaceAdapter } from "../src/browser/workspaceCensus.js";
@@ -416,4 +417,39 @@ test(".gitignore entries are skipped and listed, and the content budget skips in
     ["secrets", "ignored-by-gitignore"],
     ["zz-large.js", "scan-size-budget-reached"],
   ]);
+});
+
+test("secret files (.env, keys, certificates) are listed as skipped and never read or hashed", async () => {
+  const reads = [];
+  const tracked = (name, content) => {
+    const handle = fileHandle(name, content);
+    return { ...handle, async getFile() { reads.push(name); return handle.getFile(); } };
+  };
+  const root = directoryHandle("secret-root", [
+    [".env", tracked(".env", "API_KEY=live")],
+    [".env.local", tracked(".env.local", "TOKEN=live")],
+    [".env.example", tracked(".env.example", "API_KEY=")],
+    ["app.js", tracked("app.js", "a")],
+    ["config", directoryHandle("config", [
+      ["server.pem", tracked("server.pem", "-----BEGIN")],
+      ["tls.key", tracked("tls.key", "-----BEGIN")],
+      ["id_rsa", tracked("id_rsa", "-----BEGIN")],
+      ["id_ed25519.pub", tracked("id_ed25519.pub", "ssh-ed25519")],
+      ["cert.p12", tracked("cert.p12", "x")],
+      ["keyboard.js", tracked("keyboard.js", "k")],
+    ])],
+  ]);
+  const registration = await register(root, "secret_app");
+  const census = await browserWorkspaceAdapter.censusRegisteredWorkspace({ workspaceId: "secret_app", registryRevision: registration.registryRevision });
+  assert.equal(census.authoritative, true);
+  assert.deepEqual(census.files.map((file) => file.path), [".env.example", "app.js", "config/id_ed25519.pub", "config/keyboard.js"]);
+  assert.deepEqual(census.skipped.map(({ path, reason }) => [path, reason]), [
+    [".env", "secret-file-not-read"],
+    [".env.local", "secret-file-not-read"],
+    ["config/cert.p12", "secret-file-not-read"],
+    ["config/id_rsa", "secret-file-not-read"],
+    ["config/server.pem", "secret-file-not-read"],
+    ["config/tls.key", "secret-file-not-read"],
+  ]);
+  for (const name of [".env", ".env.local", "server.pem", "tls.key", "id_rsa", "cert.p12"]) assert.ok(!reads.includes(name), `${name} must never be opened`);
 });

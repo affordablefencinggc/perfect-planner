@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { ledgerNumber } from "./chain";
+import { excludePrivateFolder } from "./ignore";
 import { MemoryKeyProvider, type KeyProvider } from "./signing";
 import type { LedgerEntry } from "./types";
 
@@ -85,8 +86,11 @@ export class FileStore implements LedgerStore {
   private readonly lockPath: string;
   private readonly headPath: string;
   private holdsLock = false;
+  private readonly projectRoot: string;
+  private excluded = false;
 
   constructor(projectRoot: string) {
+    this.projectRoot = projectRoot;
     this.dir = path.join(projectRoot, ".perfect-planner", "ledger");
     this.lockPath = path.join(this.dir, ".writer.lock");
     this.headPath = path.join(this.dir, "HEAD");
@@ -94,6 +98,15 @@ export class FileStore implements LedgerStore {
 
   get description(): string {
     return this.dir;
+  }
+
+  /** Creates the ledger folder and, inside a git repo, keeps .perfect-planner/ out of commits first. */
+  private makeDir(): void {
+    if (!this.excluded) {
+      excludePrivateFolder(this.projectRoot);
+      this.excluded = true;
+    }
+    fs.mkdirSync(this.dir, { recursive: true });
   }
 
   monthFiles(): string[] {
@@ -129,7 +142,7 @@ export class FileStore implements LedgerStore {
 
   append(entry: LedgerEntry, previous?: { n: string; hash: string }): void {
     if (!this.holdsLock) throw new Error("FileStore.append without the writer lock");
-    fs.mkdirSync(this.dir, { recursive: true });
+    this.makeDir();
     if (!sameHead(this.readHead(), previous)) {
       throw new Error(`the ledger files changed underneath this writer (expected head ${previous?.n ?? "none"})`);
     }
@@ -187,7 +200,7 @@ export class FileStore implements LedgerStore {
 
   acquireWriter(): boolean {
     if (this.holdsLock) return false;
-    fs.mkdirSync(this.dir, { recursive: true });
+    this.makeDir();
     const mine = JSON.stringify({ pid: process.pid, host: os.hostname(), since: new Date().toISOString() });
     for (let attempt = 0; attempt < 3; attempt += 1) {
       try {

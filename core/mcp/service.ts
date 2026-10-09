@@ -6,7 +6,7 @@
 // owns the entry rules and the gate rules other modules register; when the
 // ledger refuses, the agent gets the ledger's reason back.
 import { LedgerError, type Actor, type EntryDraft, type Ledger, type LedgerEntry } from "../ledger/index";
-import { Relay } from "../relay/relay";
+import { Relay, trustedEntry } from "../relay/relay";
 import { attemptLabel, foldBoard, type TaskView } from "./board";
 import { lookup } from "../lookup/index";
 import { TokenStore, tokenId, type Grant } from "./tokens";
@@ -102,7 +102,8 @@ export class AgentService {
       case "answer":
         return this.answer(agent, args as ToolInput<"answer">);
       case "lookup":
-        return lookup(this.ledger.entries(), (args as ToolInput<"lookup">).ref);
+        // Forged person or system entries (plan text, decisions) are left out of what agents read.
+        return lookup(this.ledger.entries().filter(trustedEntry), (args as ToolInput<"lookup">).ref);
       case "release_task":
         return this.release(agent, args as ToolInput<"release_task">);
       default:

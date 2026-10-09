@@ -162,7 +162,8 @@ function keyPayload(type: string, ledger: Ledger): Partial<EntryDraft> {
     return { subject: key, data: { keyId: key } };
   }
   if (type !== "key.trusted") return {};
-  const key = new MemoryKeyProvider().createKey("person:helper");
+  // A second key of the writer's own: that needs no owner.
+  const key = new MemoryKeyProvider().createKey("person:owner");
   return { subject: key.keyId, data: { ...key } };
 }
 

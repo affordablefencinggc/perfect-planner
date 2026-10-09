@@ -1,3 +1,4 @@
+import "./helpers/hermetic-env.mjs";
 import test from 'node:test';import assert from 'node:assert/strict';
 import {mkdtemp,readFile,writeFile,appendFile,link,mkdir} from 'node:fs/promises';import os from 'node:os';import path from 'node:path';
 import {createAgentTaskIntentStore} from '../src/node/agentTaskIntentStore.mjs';

@@ -1,3 +1,4 @@
+import "./helpers/hermetic-env.mjs";
 import test from 'node:test';import assert from 'node:assert/strict';import os from 'node:os';import path from 'node:path';import{mkdtemp}from'node:fs/promises';
 import{createAgentSessionBroker}from'../mcp/agentSessionBroker.mjs';
 import{createNativeTaskDraftSubmission}from'../src/node/nativeTaskDraftSubmission.mjs';
