@@ -3,7 +3,7 @@
 export const nativeCapabilities = Object.freeze([
   'main-read-only', 'main-collision-authority', 'main-bundled-mcp',
   'main-git-inventory', 'main-native-drafts', 'main-agent-observation',
-  'main-check-setup', 'main-task-results',
+  'main-check-setup', 'main-task-results', 'main-jev-keychain',
 ]);
 export const nativeInvokeHandlers = Object.freeze([
   'runtime_snapshot',
@@ -37,6 +37,9 @@ export const nativeInvokeHandlers = Object.freeze([
   'collision_authority::collision_authority_inspect',
   'collision_authority::collision_authority_approve',
   'collision_authority::collision_authority_commit',
+  'jev_keychain::jev_key_status',
+  'jev_keychain::jev_key_save',
+  'jev_keychain::jev_key_clear',
 ]);
 export const nativeCommands = Object.freeze(nativeInvokeHandlers.map(value => value.split('::').at(-1)));
 export function declaredNativeCommands(source) {

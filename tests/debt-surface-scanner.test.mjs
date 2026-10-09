@@ -17,7 +17,7 @@ async function copyTauriSecurityFixture(targetRoot) {
   for (const file of tauriSecurityFiles) { await mkdir(path.dirname(path.join(targetRoot, file)), { recursive: true }); await copyFile(path.resolve(file), path.join(targetRoot, file)); }
 }
 tauriSecurityFiles.push("src-tauri/src/native_git.rs", "src-tauri/capabilities/main-git-inventory.json", "src-tauri/permissions/git-inventory.json");
-tauriSecurityFiles.push(...['main-native-drafts', 'main-agent-observation', 'main-check-setup', 'main-task-results'].map(name => `src-tauri/capabilities/${name}.json`));
+tauriSecurityFiles.push(...['main-native-drafts', 'main-agent-observation', 'main-check-setup', 'main-task-results', 'main-jev-keychain'].map(name => `src-tauri/capabilities/${name}.json`), 'src-tauri/src/jev_keychain.rs');
 
 test('all current capability scopes and both command declarations refuse expansion', async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'pp-current-native-contract-'));

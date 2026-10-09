@@ -9019,3 +9019,9 @@ code {
   color: var(--ink);
   font-size: 13px;
 }
+
+.journey-calendar-rail button:disabled,
+.worker-cell:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
