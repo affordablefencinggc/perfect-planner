@@ -1,0 +1,560 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import {
+  canonicalRef,
+  lookup,
+  matchKeys,
+  numberPlan,
+  parseImplements,
+  parsePlanBlocks,
+  parseRef,
+} from "../src/core/clauses/index.mjs";
+
+const ids = (result) => result.clauses.map((clause) => `${clause.id}|${clause.status}`);
+
+test("a fresh plan gets structural clause numbers for headings, paragraphs and items", () => {
+  const markdown = [
+    "# Scope",
+    "",
+    "The app saves plans.",
+    "",
+    "- First item",
+    "- Second item",
+    "  continued here",
+    "  - nested detail",
+    "",
+    "## Details",
+    "",
+    "Detail paragraph.",
+    "",
+  ].join("\n");
+
+  const result = numberPlan(markdown);
+  assert.deepEqual(result.clauses.map((clause) => clause.id), [
+    "§1",
+    "§1.1",
+    "§1.2",
+    "§1.3",
+    "§1.3.1",
+    "§1.4",
+    "§1.4.1",
+  ]);
+  assert.deepEqual(result.clauses.map((clause) => clause.kind), [
+    "heading",
+    "paragraph",
+    "item",
+    "item",
+    "item",
+    "heading",
+    "paragraph",
+  ]);
+  assert.equal(result.clauses[3].text, "Second item continued here");
+  assert.ok(result.clauses.every((clause) => clause.status === "active"));
+  assert.equal(result.changes.length, result.clauses.length);
+  assert.ok(result.changes.every((change) => change.type === "clause.added"));
+  assert.deepEqual(result.changes[0], { type: "clause.added", clause: "§1", newText: "Scope" });
+});
+
+test("top-level paragraphs before any heading are numbered as top-level clauses", () => {
+  const result = numberPlan("First paragraph.\n\n# Heading\n\nBody.");
+  assert.deepEqual(result.clauses.map((clause) => clause.id), ["§1", "§2", "§2.1"]);
+});
+
+test("a second heading at the same level starts a new top-level clause", () => {
+  const result = numberPlan("# One\n\nA.\n\n# Two\n\nB.\n\n## Deep\n\nC.");
+  assert.deepEqual(result.clauses.map((clause) => clause.id), ["§1", "§1.1", "§2", "§2.1", "§2.2", "§2.2.1"]);
+});
+
+test("sub-headings nest under the nearest higher heading", () => {
+  const result = numberPlan("# One\n\n## Sub\n\n### Leaf\n\nText.\n\n## Sub two");
+  assert.deepEqual(result.clauses.map((clause) => clause.id), ["§1", "§1.1", "§1.1.1", "§1.1.1.1", "§1.2"]);
+});
+
+test("list items are siblings unless indented under a previous item", () => {
+  const result = numberPlan("# List\n\n1. one\n2. two\n   1. two-a\n   2. two-b\n3. three");
+  assert.deepEqual(result.clauses.map((clause) => clause.id), ["§1", "§1.1", "§1.2", "§1.2.1", "§1.2.2", "§1.3"]);
+});
+
+test("fenced code, thematic breaks, blank lines and empty items produce clauses only for real text", () => {
+  const markdown = [
+    "# Code",
+    "",
+    "```js",
+    "const a = 1;",
+    "```",
+    "",
+    "---",
+    "",
+    "-",
+    "- ",
+    "- Real item",
+    "",
+    "~~~",
+    "unclosed tail",
+  ].join("\n");
+  const result = numberPlan(markdown);
+  assert.deepEqual(result.clauses.map((clause) => [clause.id, clause.kind, clause.text]), [
+    ["§1", "heading", "Code"],
+    ["§1.1", "paragraph", "const a = 1;"],
+    ["§1.2", "item", "Real item"],
+    ["§1.3", "paragraph", "unclosed tail"],
+  ]);
+});
+
+test("CRLF line endings and extra whitespace give the same clauses", () => {
+  const unix = numberPlan("# Title\n\nSome   text\nwrapped.\n");
+  const windows = numberPlan("# Title\r\n\r\nSome   text\r\nwrapped.\r\n");
+  assert.deepEqual(windows.clauses, unix.clauses);
+  assert.equal(unix.clauses[1].text, "Some text wrapped.");
+});
+
+test("trailing hashes on headings are not part of the clause text", () => {
+  const result = numberPlan("## Heading ##\n\n# \n");
+  assert.equal(result.clauses[0].text, "Heading");
+  assert.equal(result.clauses.length, 1);
+});
+
+test("an empty plan has no clauses and no changes", () => {
+  assert.deepEqual(numberPlan(""), { clauses: [], changes: [] });
+  assert.deepEqual(numberPlan("\n\n   \n"), { clauses: [], changes: [] });
+});
+
+test("non-string plan markdown is refused", () => {
+  assert.throws(() => numberPlan(42), TypeError);
+  assert.throws(() => parsePlanBlocks(undefined), TypeError);
+});
+
+test("parsePlanBlocks returns kind, indent and text in document order", () => {
+  const blocks = parsePlanBlocks("# H\n- a\n  - b\n\ntext");
+  assert.deepEqual(blocks, [
+    { kind: "heading", level: 1, indent: 0, text: "H" },
+    { kind: "item", indent: 0, text: "a" },
+    { kind: "item", indent: 2, text: "b" },
+    { kind: "paragraph", indent: 0, text: "text" },
+  ]);
+});
+
+test("re-numbering an unchanged plan keeps every id and reports no changes", () => {
+  const markdown = "# Scope\n\nAlpha.\n\n- Beta\n- Gamma\n";
+  const first = numberPlan(markdown);
+  const second = numberPlan(markdown, first);
+  assert.deepEqual(second.clauses, first.clauses);
+  assert.deepEqual(second.changes, []);
+});
+
+test("previous can be plan markdown, a clause array, or a numbering result", () => {
+  const markdown = "# Scope\n\nAlpha.\n";
+  const first = numberPlan(markdown);
+  const fromMarkdown = numberPlan("# Scope\n\nAlpha changed.\n", markdown);
+  const fromArray = numberPlan("# Scope\n\nAlpha changed.\n", first.clauses);
+  const fromResult = numberPlan("# Scope\n\nAlpha changed.\n", first);
+  assert.deepEqual(fromMarkdown, fromArray);
+  assert.deepEqual(fromArray, fromResult);
+  assert.deepEqual(fromResult.changes, [
+    { type: "clause.changed", clause: "§1.1", oldText: "Alpha.", newText: "Alpha changed." },
+  ]);
+});
+
+test("a changed clause keeps its published id and reports old and new text", () => {
+  const previous = numberPlan("# Scope\n\nThe app saves plans.\n\n- First item\n");
+  const next = numberPlan("# Scope\n\nThe app saves plans locally.\n\n- First item\n", previous);
+  assert.deepEqual(ids(next), ["§1|active", "§1.1|active", "§1.2|active"]);
+  assert.deepEqual(next.changes, [
+    { type: "clause.changed", clause: "§1.1", oldText: "The app saves plans.", newText: "The app saves plans locally." },
+  ]);
+});
+
+test("an insertion right after a published clause becomes its sub-clause and never moves published ids", () => {
+  const base = numberPlan("# Plan\n\n## Three\n\nAlpha.\n\n## Four\n\nDelta.\n");
+  assert.deepEqual(base.clauses.map((clause) => clause.id), ["§1", "§1.1", "§1.1.1", "§1.2", "§1.2.1"]);
+  const next = numberPlan("# Plan\n\n## Three\n\nInserted first.\n\nAlpha.\n\n## Four\n\nDelta.\n", base);
+  // The new paragraph follows §1.1 (Three), so it is its sub-clause; 1.1.1 is taken by Alpha.
+  assert.deepEqual(next.clauses.map((clause) => [clause.id, clause.text]), [
+    ["§1", "Plan"],
+    ["§1.1", "Three"],
+    ["§1.1.2", "Inserted first."],
+    ["§1.1.1", "Alpha."],
+    ["§1.2", "Four"],
+    ["§1.2.1", "Delta."],
+  ]);
+  assert.deepEqual(next.changes, [{ type: "clause.added", clause: "§1.1.2", newText: "Inserted first." }]);
+});
+
+test("insertion after a published clause keeps the published numbers and uses a sub-clause id", () => {
+  const previous = numberPlan("# Plan\n\n## Three\n\nAlpha.\n\nBeta.\n");
+  const next = numberPlan("# Plan\n\n## Three\n\nAlpha.\n\nNew one.\n\nBeta.\n", previous);
+  const added = next.clauses.find((clause) => clause.text === "New one.");
+  assert.equal(added.id, "§1.1.1.1");
+  assert.equal(next.clauses.find((clause) => clause.text === "Beta.").id, "§1.1.2");
+});
+
+test("two consecutive insertions become sibling sub-clauses of the same published clause", () => {
+  const previous = numberPlan("# Plan\n\nAnchor.\n");
+  const next = numberPlan("# Plan\n\nAnchor.\n\nOne.\n\nTwo.\n", previous);
+  assert.deepEqual(next.clauses.map((clause) => clause.id), ["§1", "§1.1", "§1.1.1", "§1.1.2"]);
+  assert.deepEqual(next.changes.map((change) => [change.type, change.clause]), [
+    ["clause.added", "§1.1.1"],
+    ["clause.added", "§1.1.2"],
+  ]);
+});
+
+test("insertions before the first published clause use the virtual §0 parent", () => {
+  const previous = numberPlan("# Plan\n\nAnchor.\n");
+  const next = numberPlan("Opening note.\n\n# Plan\n\nAnchor.\n", previous);
+  assert.deepEqual(next.clauses.map((clause) => clause.id), ["§0.1", "§1", "§1.1"]);
+  assert.deepEqual(next.changes, [{ type: "clause.added", clause: "§0.1", newText: "Opening note." }]);
+});
+
+test("a removed clause stays listed as withdrawn and its number is never reused", () => {
+  const previous = numberPlan("# Plan\n\nKeep.\n\nDrop me.\n\n- Item\n");
+  const removed = numberPlan("# Plan\n\nKeep.\n\n- Item\n", previous);
+  assert.deepEqual(removed.clauses.map((clause) => [clause.id, clause.status]), [
+    ["§1", "active"],
+    ["§1.1", "active"],
+    ["§1.2", "withdrawn"],
+    ["§1.3", "active"],
+  ]);
+  assert.deepEqual(removed.changes, [{ type: "clause.withdrawn", clause: "§1.2", oldText: "Drop me." }]);
+
+  const reinserted = numberPlan("# Plan\n\nKeep.\n\nFresh text.\n\n- Item\n", removed);
+  assert.deepEqual(reinserted.clauses.map((clause) => [clause.id, clause.status]), [
+    ["§1", "active"],
+    ["§1.1", "active"],
+    ["§1.1.1", "active"],
+    ["§1.2", "withdrawn"],
+    ["§1.3", "active"],
+  ]);
+  assert.deepEqual(reinserted.changes, [{ type: "clause.added", clause: "§1.1.1", newText: "Fresh text." }]);
+});
+
+test("a withdrawn clause does not come back when the same text is written again", () => {
+  const previous = numberPlan("# Plan\n\nGone.\n");
+  const removed = numberPlan("# Plan\n", previous);
+  const again = numberPlan("# Plan\n\nGone.\n", removed);
+  const gone = again.clauses.find((clause) => clause.id === "§1.1" && clause.status === "withdrawn");
+  assert.ok(gone);
+  const revived = again.clauses.find((clause) => clause.text === "Gone." && clause.status === "active");
+  assert.equal(revived.id, "§1.2");
+  assert.deepEqual(again.changes, [{ type: "clause.added", clause: "§1.2", newText: "Gone." }]);
+});
+
+test("previously withdrawn clauses are carried forward without a new change event", () => {
+  const previous = [
+    { id: "§1", text: "Plan", kind: "heading", status: "active" },
+    { id: "§1.1", text: "Old", kind: "paragraph", status: "withdrawn" },
+    { id: "§1.2", text: "Keep.", kind: "paragraph", status: "active" },
+  ];
+  const result = numberPlan("# Plan\n\nKeep.\n", previous);
+  assert.deepEqual(result.clauses, [
+    { id: "§1", text: "Plan", kind: "heading", status: "active" },
+    { id: "§1.1", text: "Old", kind: "paragraph", status: "withdrawn" },
+    { id: "§1.2", text: "Keep.", kind: "paragraph", status: "active" },
+  ]);
+  assert.deepEqual(result.changes, []);
+});
+
+test("a kind change at the same position is treated as a withdrawal plus an insertion", () => {
+  const previous = numberPlan("# Plan\n\nSame words.\n");
+  const next = numberPlan("# Plan\n\n- Same words.\n", previous);
+  assert.deepEqual(next.clauses.map((clause) => [clause.id, clause.kind, clause.status]), [
+    ["§1", "heading", "active"],
+    ["§1.2", "item", "active"],
+    ["§1.1", "paragraph", "withdrawn"],
+  ]);
+  assert.deepEqual(next.changes.map((change) => change.type), ["clause.added", "clause.withdrawn"]);
+});
+
+test("ids stay unique and published when a whole section is rewritten", () => {
+  const previous = numberPlan("# Plan\n\nOne.\n\nTwo.\n");
+  const next = numberPlan("# Plan\n\nEntirely new.\n", previous);
+  const activeIds = next.clauses.filter((clause) => clause.status === "active").map((clause) => clause.id);
+  assert.equal(new Set(next.clauses.map((clause) => clause.id)).size, next.clauses.length);
+  assert.ok(activeIds.includes("§1"));
+  // The single paragraph is paired with the first old paragraph, so its published id is kept.
+  assert.deepEqual(next.clauses.find((clause) => clause.text === "Entirely new."), {
+    id: "§1.1",
+    text: "Entirely new.",
+    kind: "paragraph",
+    status: "active",
+  });
+  assert.ok(next.clauses.some((clause) => clause.id === "§1.2" && clause.status === "withdrawn"));
+  assert.deepEqual(next.changes.map((change) => [change.type, change.clause]), [
+    ["clause.changed", "§1.1"],
+    ["clause.withdrawn", "§1.2"],
+  ]);
+});
+
+test("a large plan with many distinct clauses still keeps numbers stable through the greedy matcher", () => {
+  const lines = ["# Big"];
+  for (let i = 0; i < 7000; i += 1) lines.push(`Clause text number ${i}.`, "");
+  const markdown = lines.join("\n");
+  const previous = numberPlan(markdown);
+  const edited = numberPlan(markdown.replace("Clause text number 6500.", "Clause text changed 6500."), previous);
+  const changed = edited.clauses.find((clause) => clause.text === "Clause text changed 6500.");
+  assert.equal(changed.id, previous.clauses.find((clause) => clause.text === "Clause text number 6500.").id);
+  assert.equal(edited.clauses.length, previous.clauses.length);
+  assert.equal(edited.changes.length, 1);
+  assert.equal(edited.changes[0].type, "clause.changed");
+});
+
+test("matchKeys pairs the longest common subsequence in increasing order", () => {
+  assert.deepEqual(matchKeys(["a", "b", "c", "d"], ["a", "x", "c", "d"]), [[0, 0], [2, 2], [3, 3]]);
+  assert.deepEqual(matchKeys(["a", "b"], ["c"]), []);
+  assert.deepEqual(matchKeys([], ["a"]), []);
+  assert.deepEqual(matchKeys(["x", "y", "z"], ["y", "z", "x"]).length, 2);
+});
+
+test("previous clause lists are validated", () => {
+  assert.throws(() => numberPlan("# A", 42), TypeError);
+  assert.throws(() => numberPlan("# A", [null]), TypeError);
+  assert.throws(() => numberPlan("# A", [{ id: "1", text: "A", kind: "heading", status: "active" }]), TypeError);
+  assert.throws(() => numberPlan("# A", [{ id: "§1", text: "A", kind: "table", status: "active" }]), TypeError);
+  assert.throws(() => numberPlan("# A", [{ id: "§1", text: "A", kind: "heading", status: "gone" }]), TypeError);
+  assert.throws(() => numberPlan("# A", [
+    { id: "§1", text: "A", kind: "heading", status: "active" },
+    { id: "§1", text: "B", kind: "heading", status: "active" },
+  ]), TypeError);
+});
+
+test("parseRef reads clause refs", () => {
+  assert.deepEqual(parseRef("§3.1"), { kind: "clause", clause: "§3.1", id: "§3.1" });
+  assert.deepEqual(parseRef("§1"), { kind: "clause", clause: "§1", id: "§1" });
+  assert.deepEqual(parseRef("§0.1"), { kind: "clause", clause: "§0.1", id: "§0.1" });
+  assert.deepEqual(parseRef("§3.1.1"), { kind: "clause", clause: "§3.1.1", id: "§3.1.1" });
+  assert.deepEqual(parseRef("  §3.1  "), { kind: "clause", clause: "§3.1", id: "§3.1" });
+});
+
+test("parseRef reads plan-clause refs with a single space or several", () => {
+  assert.deepEqual(parseRef("P-2 §3.1"), { kind: "plan-clause", plan: "P-2", clause: "§3.1", id: "P-2 §3.1" });
+  assert.deepEqual(parseRef("P-12   §3.1.1"), { kind: "plan-clause", plan: "P-12", clause: "§3.1.1", id: "P-12 §3.1.1" });
+});
+
+test("parseRef reads task refs with and without an attempt suffix", () => {
+  assert.deepEqual(parseRef("T-14"), { kind: "task", id: "T-14" });
+  assert.deepEqual(parseRef("T-14.a2"), { kind: "task", id: "T-14", attempt: 2 });
+  assert.deepEqual(parseRef("T-14.a12"), { kind: "task", id: "T-14", attempt: 12 });
+});
+
+test("parseRef reads plan, question, decision, release and entry ids", () => {
+  assert.deepEqual(parseRef("P-2"), { kind: "plan", id: "P-2" });
+  assert.deepEqual(parseRef("Q-2"), { kind: "question", id: "Q-2" });
+  assert.deepEqual(parseRef("D-3"), { kind: "decision", id: "D-3" });
+  assert.deepEqual(parseRef("R-1"), { kind: "release", id: "R-1" });
+  assert.deepEqual(parseRef("L-000231"), { kind: "entry", id: "L-000231" });
+});
+
+test("parseRef refuses malformed, zero, leading-zero and foreign refs", () => {
+  const invalid = [
+    "",
+    "   ",
+    null,
+    undefined,
+    42,
+    {},
+    "3.1",
+    "§",
+    "§03",
+    "§3.",
+    "§3..1",
+    "§0",
+    "§3.0",
+    "P-0",
+    "P-02",
+    "T-0",
+    "T-14.a1",
+    "T-14.a0",
+    "T-14.a",
+    "T-14.2",
+    "T-14 §3.1",
+    "X-1",
+    "Q-",
+    "D-3.a2",
+    "R-0",
+    "L-00231",
+    "L-0000001",
+    "L-000000",
+    "P-2 3.1",
+    "P-2 §3.1 extra",
+    "P-2§3.1",
+    "P-2 T-14",
+  ];
+  for (const value of invalid) assert.equal(parseRef(value), null, `expected null for ${String(value)}`);
+});
+
+test("canonicalRef restores the attempt suffix for tasks", () => {
+  assert.equal(canonicalRef(parseRef("T-14.a3")), "T-14.a3");
+  assert.equal(canonicalRef(parseRef("P-2 §3.1")), "P-2 §3.1");
+  assert.equal(canonicalRef(null), null);
+});
+
+test("parseImplements reads a single trailer with a task", () => {
+  assert.deepEqual(parseImplements("Fix the thing\n\nImplements: P-2 §3.1 (T-14)"), [
+    { ref: "P-2 §3.1", task: "T-14" },
+  ]);
+});
+
+test("parseImplements reads several comma-separated refs and ignores other lines", () => {
+  const message = [
+    "Subject",
+    "",
+    "Body line mentioning P-2 §9 (T-99).",
+    "Implements: P-2 §3.1 (T-14), P-2 §4.2 (T-15)",
+    "Co-Authored-By: someone <x@example.com>",
+  ].join("\n");
+  assert.deepEqual(parseImplements(message), [
+    { ref: "P-2 §3.1", task: "T-14" },
+    { ref: "P-2 §4.2", task: "T-15" },
+  ]);
+});
+
+test("parseImplements allows refs without a task, is case-insensitive on the key, and accepts CRLF", () => {
+  assert.deepEqual(parseImplements("implements: §2.1\r\nIMPLEMENTS:P-1 §1 (T-2.a2)\r\n"), [
+    { ref: "§2.1", task: null },
+    { ref: "P-1 §1", task: "T-2" },
+  ]);
+});
+
+test("parseImplements skips items that are not clause refs or have an invalid task", () => {
+  assert.deepEqual(parseImplements([
+    "Implements: T-14, P-2, Q-1, P-2 §3.1 (not-a-task), P-2 §3.1 (D-3), , P-2 §5 (T-16)",
+  ].join("\n")), [{ ref: "P-2 §5", task: "T-16" }]);
+});
+
+test("parseImplements returns nothing for non-strings or messages without trailers", () => {
+  assert.deepEqual(parseImplements(undefined), []);
+  assert.deepEqual(parseImplements(null), []);
+  assert.deepEqual(parseImplements("No trailer here"), []);
+  assert.deepEqual(parseImplements("Implements:"), []);
+});
+
+const plans = {
+  "P-1": {
+    clauses: [
+      { id: "§3", text: "Old section", kind: "heading", status: "active" },
+      { id: "§3.1", text: "Old wording", kind: "paragraph", status: "active" },
+    ],
+  },
+  "P-2": {
+    clauses: [
+      { id: "§3", text: "Saving", kind: "heading", status: "active" },
+      { id: "§3.1", text: "The app saves plans locally.", kind: "paragraph", status: "active" },
+      { id: "§3.1.1", text: "Inserted rule.", kind: "paragraph", status: "active" },
+      { id: "§4", text: "Removed later", kind: "heading", status: "withdrawn" },
+    ],
+  },
+};
+
+const entries = [
+  { n: "L-000001", type: "plan.approved", subject: "P-2", summary: "Plan two approved", refs: [] },
+  { n: "L-000002", type: "task.created", subject: "T-14", summary: "Save plans locally", refs: ["P-2 §3.1"] },
+  { n: "L-000003", type: "clause.added", subject: "P-2", summary: "Insert rule", refs: ["P-2 §3.1.1"] },
+  { n: "L-000004", type: "clause.changed", subject: "P-2", summary: "Reword save clause", refs: ["P-2 §3.1"] },
+  { n: "L-000005", type: "question.asked", subject: "Q-2", summary: "Local or cloud?", refs: ["P-2 §3.1"] },
+  { n: "L-000006", type: "decision.made", subject: "D-3", summary: "Local first", refs: ["P-2 §3.1"] },
+  { n: "L-000007", type: "commit.observed", subject: "T-14", summary: "Commit abc", refs: ["P-2 §3.1.1"] },
+  { n: "L-000008", type: "task.done", subject: "T-14", summary: "Done", refs: ["T-14"] },
+  { n: "L-000009", type: "clause.withdrawn", subject: "P-2", summary: "Remove section four", refs: ["P-2 §4"] },
+  { n: "L-000010", type: "release.cut", subject: "R-1", summary: "Release one", refs: ["P-2"] },
+];
+
+test("lookup returns the text, clause history and citing entries for a plan-clause ref", () => {
+  const result = lookup("P-2 §3.1", { entries, plans });
+  assert.equal(result.ref, "P-2 §3.1");
+  assert.equal(result.text, "The app saves plans locally.");
+  assert.deepEqual(result.history.map((entry) => entry.n), ["L-000004"]);
+  assert.deepEqual(result.citedBy.map((entry) => entry.n), ["L-000002", "L-000005", "L-000006"]);
+});
+
+test("lookup of a bare clause reads the latest plan that has it", () => {
+  const result = lookup("§3.1", { entries, plans });
+  assert.equal(result.ref, "§3.1");
+  assert.equal(result.text, "The app saves plans locally.");
+  assert.deepEqual(result.history.map((entry) => entry.n), ["L-000004"]);
+});
+
+test("lookup of a clause in an explicit older plan reads that plan's text", () => {
+  const result = lookup("P-1 §3.1", { entries, plans });
+  assert.equal(result.text, "Old wording");
+  assert.deepEqual(result.history, []);
+});
+
+test("lookup reports null text for an unknown plan or clause and empty lists for no matches", () => {
+  const unknownPlan = lookup("P-9 §3.1", { entries, plans });
+  assert.equal(unknownPlan.text, null);
+  assert.deepEqual(unknownPlan.history, []);
+  const unknownClause = lookup("§77", { entries, plans });
+  assert.equal(unknownClause.text, null);
+  assert.deepEqual(unknownClause.citedBy, []);
+});
+
+test("lookup shows a withdrawn clause's text", () => {
+  const result = lookup("P-2 §4", { entries, plans });
+  assert.equal(result.text, "Removed later");
+  assert.deepEqual(result.history.map((entry) => entry.n), ["L-000009"]);
+});
+
+test("lookup of a nested clause matches only that clause in history and citations", () => {
+  const result = lookup("P-2 §3.1.1", { entries, plans });
+  assert.equal(result.text, "Inserted rule.");
+  assert.deepEqual(result.history.map((entry) => entry.n), ["L-000003"]);
+  assert.deepEqual(result.citedBy.map((entry) => entry.n), ["L-000007"]);
+});
+
+test("lookup of a task returns its summary, its own entries, and entries that cite it", () => {
+  const result = lookup("T-14", { entries, plans });
+  assert.equal(result.ref, "T-14");
+  assert.equal(result.text, "Save plans locally");
+  assert.deepEqual(result.history.map((entry) => entry.n), ["L-000002", "L-000007", "L-000008"]);
+  assert.deepEqual(result.citedBy, []);
+});
+
+test("lookup of a task with an attempt suffix uses the same task history and keeps the attempt in the ref", () => {
+  const result = lookup("T-14.a2", { entries, plans });
+  assert.equal(result.ref, "T-14.a2");
+  assert.equal(result.history.length, 3);
+});
+
+test("lookup of a question, decision, and release reads its own entries", () => {
+  const question = lookup("Q-2", { entries, plans });
+  assert.equal(question.text, "Local or cloud?");
+  assert.deepEqual(question.history.map((entry) => entry.n), ["L-000005"]);
+
+  const decision = lookup("D-3", { entries, plans });
+  assert.equal(decision.text, "Local first");
+  assert.deepEqual(decision.history.map((entry) => entry.n), ["L-000006"]);
+
+  const release = lookup("R-1", { entries, plans });
+  assert.equal(release.text, "Release one");
+  assert.deepEqual(release.history.map((entry) => entry.n), ["L-000010"]);
+});
+
+test("lookup of a plan reads its own entries and every entry that cites one of its clauses", () => {
+  const result = lookup("P-2", { entries, plans: { "P-2": { text: "Plan two", clauses: [] } } });
+  assert.equal(result.text, "Plan two");
+  assert.deepEqual(result.history.map((entry) => entry.n), ["L-000001", "L-000003", "L-000004", "L-000009"]);
+  assert.deepEqual(result.citedBy.map((entry) => entry.n), ["L-000002", "L-000005", "L-000006", "L-000007", "L-000010"]);
+});
+
+test("lookup of a plan without plan text falls back to its approval summary", () => {
+  assert.equal(lookup("P-2", { entries, plans }).text, "Plan two approved");
+});
+
+test("lookup of a ledger entry returns that entry's summary and the entries that cite it", () => {
+  const withCitation = [...entries, { n: "L-000011", type: "task.progress", subject: "T-14", summary: "See entry", refs: ["L-000002"] }];
+  const result = lookup("L-000002", { entries: withCitation, plans });
+  assert.equal(result.text, "Save plans locally");
+  assert.deepEqual(result.history.map((entry) => entry.n), ["L-000002"]);
+  assert.deepEqual(result.citedBy.map((entry) => entry.n), ["L-000011"]);
+});
+
+test("lookup accepts missing entries and plans and returns null for invalid refs", () => {
+  const bare = lookup("T-3");
+  assert.deepEqual(bare, { ref: "T-3", text: null, history: [], citedBy: [] });
+  assert.equal(lookup("not a ref", { entries, plans }), null);
+  assert.equal(lookup(undefined, { entries, plans }), null);
+});
+
+test("lookup of a clause with no matching plan map or plan clauses returns null text", () => {
+  const result = lookup("§3", { entries, plans: { "P-3": { clauses: "not-an-array" } } });
+  assert.equal(result.text, null);
+});
