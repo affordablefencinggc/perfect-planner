@@ -25,6 +25,7 @@ export const continuationArtifacts = {
     "tests-ui/browser-input-markers.test.jsx"
   ],
   "C001": [
+    "tests-ui/component-draft-panel-labels.test.jsx",
     "src/components/ComponentDraftPanel.css",
     "src/components/ComponentDraftPanel.jsx",
     "src/engine/componentDraftModel.js",

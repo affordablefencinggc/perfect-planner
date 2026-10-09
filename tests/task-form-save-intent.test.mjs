@@ -1,3 +1,4 @@
+import "./helpers/hermetic-env.mjs";
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {emptyTaskDraftLedger,updateTaskDraft} from '../src/project/taskDraftLedger.js';
@@ -27,3 +28,14 @@ test('retained history capacity refuses without pruning originals',()=>{const re
 test('malformed large nested task fails validation without canonical recursion',()=>{const value=original();value.taskInput.extra=value;assert.throws(()=>validateTaskSaveOriginal(value));});
 test('missing IndexedDB refuses intent preparation',async()=>{const store=createTaskDraftStore({indexedDB:null,keyRange:null});await assert.rejects(store.prepareSaveIntent(original()));});
 test('synchronous open failure can be retried without poisoned connection',async()=>{let calls=0;const store=createTaskDraftStore({indexedDB:{open(){calls++;throw Error('Controlled open failure');}},keyRange:{}});await assert.rejects(store.prepareSaveIntent(original()));await assert.rejects(store.prepareSaveIntent(original()));assert.equal(calls,2);});
+test('a full history makes room by dropping the oldest finished Saves, never an unfinished one',async()=>{const {saveIntentsToEvict}=await import('../src/project/taskFormSaveIntent.js');
+ const row=(id,rev,done)=>({original:{requestId:id,baseLedger:{revision:rev}},outcome:done?{kind:'committed'}:null,acknowledgment:done?{declarationSource:'browser-declared'}:null});
+ const finished=Array.from({length:32},(_,i)=>row(`req-${String(i).padStart(4,'0')}`,i,true));
+ assert.deepEqual(saveIntentsToEvict(finished,row('req-new0001',32,false)),['req-0000']);
+ assert.deepEqual(saveIntentsToEvict(finished.slice(1),row('req-new0001',32,false)),[]);
+ const open=Array.from({length:32},(_,i)=>row(`req-${String(i).padStart(4,'0')}`,i,i!==0));
+ assert.deepEqual(saveIntentsToEvict(open,row('req-new0001',32,false)),['req-0001']);
+ const allOpen=Array.from({length:32},(_,i)=>row(`req-${String(i).padStart(4,'0')}`,i,false));
+ assert.deepEqual(saveIntentsToEvict(allOpen,row('req-new0001',32,false)),[]);
+ assert.deepEqual(saveIntentsToEvict(finished,row('req-0005',5,true)),[],'replacing an existing record needs no room');
+});

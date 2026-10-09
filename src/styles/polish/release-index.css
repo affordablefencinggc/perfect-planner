@@ -1,0 +1,617 @@
+/* Release (ledger) and Index polish: uses the tokens in ../frame.css.
+   Selectors are prefixed `.app-shell` to out-rank the legacy cascade in
+   styles.css; !important appears only where styles.css already uses it. */
+
+/* ---------------------------------------------------------------- shared */
+.app-shell :is(.ledger-workspace, .index-workspace) {
+  padding-top: var(--space-5) !important;
+  padding-bottom: var(--space-6) !important;
+  font-size: var(--text-md);
+}
+.app-shell :is(.ledger-workspace, .index-workspace) .eyebrow {
+  font-size: var(--text-xs);
+  letter-spacing: 0.1em;
+  line-height: 1.4;
+  color: var(--green);
+  font-weight: 700;
+}
+.app-shell :is(.ledger-workspace, .index-workspace) h1 {
+  margin: var(--space-1) 0 var(--space-2);
+  font-size: var(--text-2xl) !important;
+  line-height: 1.15 !important;
+  letter-spacing: -0.02em;
+}
+.app-shell :is(.ledger-page-header, .index-header) {
+  margin-bottom: var(--space-5) !important;
+  padding-bottom: var(--space-4);
+  gap: var(--space-4) var(--space-5) !important;
+  border-bottom: 1px solid var(--border);
+}
+.app-shell :is(.ledger-page-header, .index-header) p {
+  max-width: 78ch;
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-md) !important;
+  line-height: 1.55 !important;
+}
+.app-shell :is(.ledger-workspace, .index-workspace) :is(button, a, input):focus-visible {
+  outline: 2px solid var(--blue-focus);
+  outline-offset: 2px;
+}
+
+/* ---------------------------------------------------------------- Release */
+.app-shell .ledger-page-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+}
+.app-shell .ledger-totals {
+  width: 100%;
+  margin-top: var(--space-2);
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+.app-shell .ledger-totals div {
+  min-width: 0;
+  min-height: 64px;
+  padding: var(--space-3) var(--space-4);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+}
+.app-shell .ledger-totals strong {
+  font-size: var(--text-xl);
+  line-height: 1.2;
+}
+.app-shell .ledger-totals span {
+  color: var(--muted);
+  font-size: var(--text-sm) !important;
+}
+
+/* Two equal-height panels; long lists scroll inside their panel. */
+.app-shell .ledger-grid {
+  margin-top: 0;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-4) !important;
+  align-items: stretch;
+}
+@media (min-width: 1400px) {
+  .app-shell .ledger-grid {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+}
+.app-shell .ledger-panel {
+  height: clamp(480px, calc(100vh - 360px), 860px);
+  min-width: 0;
+  padding: 0 !important;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+}
+.app-shell .ledger-panel-title {
+  min-height: 52px !important;
+  margin: 0 !important;
+  padding: 0 var(--space-4) !important;
+  flex: 0 0 auto;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-2);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-header);
+  box-shadow: none;
+  font-size: var(--text-sm) !important;
+}
+.app-shell .ledger-panel-title strong {
+  font-size: var(--text-md);
+}
+.app-shell .ledger-panel-title span {
+  font-size: var(--text-sm) !important;
+  color: var(--muted);
+}
+
+/* Document register. */
+.app-shell .ledger-doc-table {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  scrollbar-gutter: stable;
+}
+.app-shell .ledger-table-head,
+.app-shell .ledger-table-row {
+  grid-template-columns: 84px minmax(0, 1.5fr) 80px minmax(0, 0.9fr) minmax(0, 1fr);
+  gap: var(--space-3);
+  padding: 0 var(--space-4) !important;
+}
+.app-shell .ledger-table-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  min-height: 40px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-header);
+  color: var(--muted);
+  font-size: var(--text-xs) !important;
+  letter-spacing: 0.06em;
+}
+.app-shell .ledger-table-head span {
+  font-size: var(--text-xs) !important;
+}
+.app-shell .ledger-table-row {
+  min-height: 52px !important;
+  padding-block: var(--space-2) !important;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+  font-size: var(--text-sm) !important;
+}
+.app-shell .ledger-table-row:first-of-type {
+  border-top: 0;
+}
+.app-shell .ledger-table-row:nth-child(even) {
+  background: var(--surface-muted);
+}
+.app-shell .ledger-table-row:hover {
+  background: var(--surface-header);
+}
+.app-shell .ledger-table-row code {
+  color: var(--muted);
+  font-size: var(--text-xs) !important;
+}
+.app-shell .ledger-table-row strong {
+  font-size: var(--text-sm);
+  font-weight: 700;
+  line-height: 1.35;
+}
+.app-shell .ledger-table-row strong,
+.app-shell .ledger-table-row small {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.35 !important;
+}
+.app-shell .ledger-table-row small {
+  color: var(--muted);
+  font-size: var(--text-xs) !important;
+}
+.app-shell .ledger-percent {
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Build commitments. */
+.app-shell .ledger-task-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: var(--space-3) !important;
+  gap: var(--space-2) !important;
+  align-content: start;
+  grid-auto-rows: max-content;
+  overflow: auto;
+  scrollbar-gutter: stable;
+}
+.app-shell .ledger-task-card {
+  min-height: min-content;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-muted);
+  box-shadow: none;
+  transform: none;
+  transition: border-color 0.12s ease, background-color 0.12s ease;
+}
+.app-shell .ledger-task-card:hover {
+  border-color: var(--border-strong);
+  box-shadow: none;
+  transform: none;
+}
+.app-shell .ledger-task-card.expanded {
+  border-color: var(--border-strong);
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+}
+.app-shell .ledger-task {
+  min-height: 68px !important;
+  padding: var(--space-3) var(--space-4) !important;
+  gap: var(--space-3);
+}
+.app-shell .ledger-task:hover {
+  background: var(--surface);
+}
+.app-shell .ledger-task:focus-visible {
+  outline-offset: -2px;
+  border-radius: var(--radius-md);
+}
+.app-shell .ledger-task code {
+  font-size: var(--text-xs) !important;
+}
+.app-shell .ledger-task strong {
+  font-size: var(--text-md);
+  line-height: 1.3;
+}
+.app-shell .ledger-task small {
+  font-size: var(--text-xs) !important;
+}
+.app-shell .ledger-task-detail {
+  padding: 0 var(--space-4) var(--space-4) !important;
+  gap: var(--space-3);
+}
+.app-shell .ledger-task-detail > header {
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: var(--space-2);
+}
+.app-shell .ledger-task-detail > header div,
+.app-shell .ledger-task-proof-grid section,
+.app-shell .ledger-task-files {
+  border-radius: var(--radius-sm);
+  border-color: var(--border);
+}
+.app-shell .ledger-task-detail > header span,
+.app-shell .ledger-task-files > small {
+  font-size: var(--text-xs) !important;
+}
+.app-shell .ledger-task-detail > header strong,
+.app-shell .ledger-task-proof-grid strong,
+.app-shell .ledger-task-files > strong {
+  font-size: var(--text-sm);
+  line-height: 1.4;
+}
+.app-shell .ledger-task-proof-grid {
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: var(--space-2);
+}
+.app-shell .ledger-task-proof-grid small,
+.app-shell .ledger-task-files > span {
+  font-size: var(--text-xs) !important;
+}
+
+/* ---------------------------------------------------------------- Index */
+/* The index is a full page in the same frame as every other page, not an
+   inset floating panel. */
+.app-shell .index-overlay {
+  inset: 0;
+  border: 0;
+  border-radius: 0;
+  background: var(--canvas);
+  box-shadow: none;
+}
+.app-shell .index-overlay .index-workspace {
+  display: block;
+  overflow: auto;
+  background: var(--canvas);
+  scrollbar-gutter: stable;
+}
+
+.app-shell .index-header {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+}
+.app-shell .index-header-actions {
+  align-items: center;
+  gap: var(--space-3);
+}
+.app-shell .index-stats {
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+.app-shell .index-stats span {
+  min-width: 112px;
+  min-height: 64px;
+  padding: var(--space-3) var(--space-4);
+  align-content: center;
+  gap: var(--space-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+  font-size: var(--text-sm) !important;
+}
+.app-shell .index-stats strong {
+  font-size: var(--text-xl);
+  line-height: 1.2;
+}
+@media (max-width: 1100px) {
+  .app-shell .index-header {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: start;
+  }
+}
+
+.app-shell .index-goal {
+  width: auto;
+  margin: 0 0 var(--space-4);
+  padding: var(--space-4);
+  gap: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+}
+.app-shell .index-key {
+  font-size: var(--text-xs);
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+.app-shell .index-goal strong {
+  font-size: var(--text-md);
+  line-height: 1.4;
+}
+.app-shell .index-goal p {
+  font-size: var(--text-sm) !important;
+  line-height: 1.55 !important;
+}
+@media (max-width: 820px) {
+  .app-shell .index-goal {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* Controls: search + filter chips; chips wrap instead of scrolling away. */
+.app-shell .index-controls {
+  margin: 0 0 var(--space-4) !important;
+  padding: 0 0 var(--space-4);
+  grid-template-columns: minmax(280px, 420px) minmax(0, 1fr);
+  align-items: start;
+  gap: var(--space-4) var(--space-5) !important;
+  background: transparent;
+  border-bottom: 1px solid var(--border);
+}
+.app-shell .index-control-block {
+  align-content: start;
+  gap: var(--space-2);
+}
+.app-shell .index-control-block > strong {
+  font-size: var(--text-sm);
+  letter-spacing: 0.02em;
+}
+.app-shell .index-search {
+  height: 40px;
+  padding: 0 var(--space-3);
+  border-color: var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+.app-shell .index-search:focus-within {
+  box-shadow: var(--focus-ring);
+}
+.app-shell .index-search input {
+  font-size: var(--text-sm) !important;
+}
+.app-shell .index-search input:focus-visible {
+  outline: 0;
+}
+.app-shell .index-kinds {
+  flex-wrap: wrap;
+  overflow: visible;
+  gap: var(--space-2);
+}
+.app-shell .index-kinds button {
+  min-height: 36px;
+  padding: 0 var(--space-3);
+  gap: var(--space-2);
+  border-color: var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  color: var(--ink);
+  font-size: var(--text-sm) !important;
+  line-height: 1.2 !important;
+}
+.app-shell .index-kinds button:hover {
+  border-color: var(--border-strong);
+  background: var(--surface-header);
+}
+.app-shell .index-kinds button.active {
+  border-color: var(--green);
+  background: var(--green);
+  color: #fff;
+  box-shadow: none;
+}
+.app-shell .index-kinds small {
+  min-width: 24px;
+  padding: 1px 6px;
+  background: var(--surface-header);
+  color: var(--ink);
+  font-size: var(--text-xs) !important;
+  line-height: 1.4 !important;
+  font-variant-numeric: tabular-nums;
+}
+.app-shell .index-kinds button.active small {
+  background: rgba(255, 255, 255, 0.92);
+  color: var(--green);
+}
+@media (max-width: 900px) {
+  .app-shell .index-controls {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* Body: letter rail + register share the full frame width. */
+.app-shell .index-body {
+  min-height: 0;
+  overflow: visible;
+  grid-template-columns: 72px minmax(0, 1fr);
+  grid-template-rows: auto;
+  align-items: start;
+  gap: var(--space-4) !important;
+}
+.app-shell .index-alpha {
+  position: sticky;
+  top: var(--space-2) !important;
+  height: auto;
+  min-height: 0 !important;
+  max-height: calc(100vh - var(--app-header-height, 120px) - 120px);
+  padding: var(--space-1);
+  overflow: auto;
+  grid-auto-rows: 36px;
+  gap: 2px;
+  align-self: start;
+  border-color: var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+}
+.app-shell .index-alpha a {
+  min-height: 36px;
+  grid-template-columns: 1fr auto;
+  gap: var(--space-1);
+  padding-inline: var(--space-2);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm) !important;
+  line-height: 1.2 !important;
+}
+.app-shell .index-alpha a:hover {
+  background: var(--surface-header);
+}
+.app-shell .index-alpha small {
+  font-size: var(--text-xs) !important;
+  line-height: 1 !important;
+}
+@media (max-width: 1100px) {
+  .app-shell .index-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .app-shell .index-alpha {
+    position: static;
+    max-height: none;
+    display: flex;
+    flex-wrap: wrap;
+  }
+  .app-shell .index-alpha a {
+    min-width: 52px;
+  }
+}
+
+.app-shell .index-register {
+  width: 100% !important;
+  min-width: 0;
+  max-width: none;
+  gap: var(--space-5);
+}
+.app-shell .index-letter-group {
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: var(--space-4);
+  scroll-margin-top: var(--space-4);
+}
+.app-shell .index-letter {
+  padding: var(--space-3) 0 0;
+  border-top: 2px solid var(--ink);
+}
+.app-shell .index-letter strong {
+  font-size: var(--text-2xl);
+  line-height: 1.1;
+}
+.app-shell .index-letter span {
+  font-size: var(--text-xs) !important;
+}
+@media (max-width: 820px) {
+  .app-shell .index-letter-group {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-2);
+  }
+  .app-shell .index-letter {
+    grid-auto-flow: column;
+    justify-content: start;
+    align-items: baseline;
+    gap: var(--space-3);
+  }
+}
+
+.app-shell .index-entries {
+  display: block;
+  gap: 0 !important;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+}
+.app-shell .index-entry {
+  min-height: 72px !important;
+  padding: var(--space-3) var(--space-4) !important;
+  grid-template-columns: minmax(190px, 240px) minmax(0, 1fr) minmax(130px, 170px);
+  gap: var(--space-4);
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+  transition: background-color 0.12s ease;
+}
+.app-shell .index-entry:first-child {
+  border-top: 0;
+}
+.app-shell .index-entry:hover {
+  background: var(--surface-muted);
+}
+.app-shell .index-entry:focus-visible {
+  outline-offset: -2px;
+  position: relative;
+}
+.app-shell .index-entry > span:first-child {
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.app-shell .index-entry > span:nth-child(2) {
+  gap: 2px;
+}
+.app-shell .index-entry code {
+  width: 64px;
+  flex: 0 0 64px;
+  font-size: var(--text-xs) !important;
+}
+.app-shell .index-entry strong {
+  font-size: var(--text-md);
+  line-height: 1.35;
+}
+.app-shell .index-entry small,
+.app-shell .index-entry > span:nth-child(2) em {
+  font-size: var(--text-xs) !important;
+  line-height: 1.45 !important;
+}
+.app-shell .index-entry > span:nth-child(2) em {
+  color: var(--muted);
+}
+.app-shell .index-entry-proof > small {
+  justify-items: end;
+}
+.app-shell .index-entry-proof > small strong {
+  font-size: var(--text-sm);
+}
+.app-shell .index-entry-proof > small em {
+  max-width: 100%;
+  font-size: var(--text-xs) !important;
+}
+@media (max-width: 1100px) {
+  .app-shell .index-entry {
+    grid-template-columns: minmax(130px, 170px) minmax(0, 1fr);
+  }
+  .app-shell .index-entry > span:last-child {
+    display: none;
+  }
+}
+
+.app-shell .index-empty {
+  min-height: 220px;
+  padding: var(--space-6) var(--space-5);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  font-size: var(--text-sm) !important;
+  gap: var(--space-2);
+}
+.app-shell .index-empty strong {
+  color: var(--ink);
+  font-size: var(--text-lg);
+}
+.app-shell .index-empty span {
+  max-width: 52ch;
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}

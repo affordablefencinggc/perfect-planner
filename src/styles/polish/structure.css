@@ -1,0 +1,43 @@
+/* Structure polish: proportions only, so the intake thread's markup changes stay independent. */
+.app-shell .structure-workspace .structure-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3) var(--space-6);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+}
+.app-shell .structure-workspace .structure-metrics {
+  flex: 1 1 auto;
+  display: flex !important;
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  gap: var(--space-2) var(--space-6);
+}
+.app-shell .structure-workspace .structure-metrics span {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  text-align: left;
+}
+.app-shell .structure-workspace .structure-metrics b {
+  font: 700 var(--text-lg) var(--mono);
+}
+.app-shell .structure-workspace .structure-metrics small,
+.app-shell .structure-workspace .mode-switch small {
+  font: var(--text-xs) var(--mono) !important;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.app-shell .structure-workspace .mode-switch button {
+  min-height: 32px;
+  font: var(--text-xs) var(--mono) !important;
+}
+.app-shell .structure-workspace .structure-toolbar-actions {
+  margin-left: auto;
+}
+.app-shell .structure-workspace .structure-metrics { align-self: center; margin: 0; }

@@ -1,3 +1,4 @@
+import "./helpers/hermetic-env.mjs";
 import { nativeCapabilities, nativeCommands, nativeInvokeHandlers, declaredNativeCommands, declaredNativeHandlers } from '../src/node/tauriCommandContract.mjs';
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
