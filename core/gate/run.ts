@@ -14,6 +14,10 @@ export interface TestRunOptions {
    * inside one is refused (see testEnv and resolveCommand).
    */
   protect?: readonly string[];
+  /** After a timeout, wait at most this long for the tree to be killed before reporting. Default 15 s. */
+  killWaitMs?: number;
+  /** How the tree is killed after a timeout. Tests only; default killTree. */
+  killTree?: (child: ChildProcess) => Promise<void>;
 }
 
 export interface TestRunResult {
@@ -29,6 +33,7 @@ export interface TestRunResult {
 export type TestRunner = (command: string, cwd: string, options: TestRunOptions) => Promise<TestRunResult>;
 
 export const DEFAULT_TIMEOUT_MS = 10 * 60_000;
+export const KILL_WAIT_MS = 15_000;
 const TAIL_BYTES = 4096;
 const isWindows = process.platform === "win32";
 
@@ -262,28 +267,39 @@ export function killTree(child: ChildProcess): Promise<void> {
  */
 export function runTestCommand(command: string, cwd: string, options: TestRunOptions = {}): Promise<TestRunResult> {
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const killWaitMs = options.killWaitMs ?? KILL_WAIT_MS;
   const started = Date.now();
   const tail = new Tail();
   return new Promise((resolve) => {
     let settled = false;
     let timedOut = false;
     let child: ChildProcess;
-    let killing: Promise<void> | undefined;
+    let killing: Promise<boolean> | undefined;
     const finish = (exitCode: number | null) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       clearTimeout(grace);
       const report = () => resolve({ passed: !timedOut && exitCode === 0, exitCode: timedOut ? null : exitCode, timedOut, durationMs: Date.now() - started, outputTail: tail.text() });
-      // After a timeout, report only once the tree is gone, so the caller can remove its folder.
-      if (killing) void killing.then(report);
-      else report();
+      // After a timeout, report only once the tree is gone (or the kill stops answering), so the
+      // caller can remove its folder.
+      if (!killing) return report();
+      void killing.then((killed) => {
+        if (!killed) tail.push(Buffer.from(`[perfect-planner] the process tree may still be running: killing it did not finish within ${killWaitMs} ms\n`));
+        report();
+      });
     };
     let grace: NodeJS.Timeout | undefined;
     const timer = setTimeout(() => {
       timedOut = true;
       tail.push(Buffer.from(`\n[perfect-planner] test timed out after ${timeoutMs} ms; process tree killed\n`));
-      killing = killTree(child);
+      let deadline: NodeJS.Timeout | undefined;
+      killing = Promise.race([
+        (options.killTree ?? killTree)(child).then(() => true, () => false),
+        new Promise<boolean>((done) => {
+          deadline = setTimeout(() => done(false), killWaitMs);
+        }),
+      ]).finally(() => clearTimeout(deadline));
       // If something still holds the pipes open, stop waiting for them.
       grace = setTimeout(() => {
         child.stdout?.destroy();
