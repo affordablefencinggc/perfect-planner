@@ -23,10 +23,20 @@ Check whether the `perfect-planner-core` tools are available to you (for example
 node '{{PP_CONNECT_PROGRAM}}' http://127.0.0.1:<port> '<full path ending in .token>'
 ```
 
-(On Windows the paths use backslashes. If the program path above still reads
-`{{PP_CONNECT_PROGRAM}}`, this copy of the skill was not installed by Perfect
-Planner; then the program must be a file named `connect.mjs` inside a
-`dist/core-host` folder, and you say so when you ask for confirmation.)
+The installed desktop app starts the line with its own Node instead of `node`:
+
+```
+'{{PP_NODE_PROGRAM}}' '{{PP_CONNECT_PROGRAM}}' http://127.0.0.1:<port> '<full path ending in .token>'
+```
+
+and in Windows PowerShell with the call operator in front: `& '{{PP_NODE_PROGRAM}}' '{{PP_CONNECT_PROGRAM}}' ...`
+
+(On Windows the paths use backslashes. If the paths above still read
+`{{PP_CONNECT_PROGRAM}}` and `{{PP_NODE_PROGRAM}}`, this copy of the skill was
+not installed by Perfect Planner; then the program must be a file named
+`connect.mjs` inside a `core-host` folder, the Node program, if any, must be
+`node` or `node.exe` in the folder just above that `core-host` folder, and you
+say so when you ask for confirmation.)
 
 1. If the user has not given you a line, ask for exactly this, in one message:
    "In Perfect Planner, click **Connect agent**, then **Connect agent** again in
@@ -34,7 +44,11 @@ Planner; then the program must be a file named `connect.mjs` inside a
 2. When you have a line, check it before doing anything. Every one of these
    must hold, or you do not run it:
    - it is one single command: no `;`, `&&`, `||`, `|`, `>`, `<`, backticks,
-     `$(`, newlines, or anything before `node` or after the token file;
+     `$(`, newlines, or anything after the token file;
+   - it starts with exactly `node`, or with exactly `'{{PP_NODE_PROGRAM}}'`
+     (on Windows `& '{{PP_NODE_PROGRAM}}'`, where `& ` is the only thing allowed
+     before it). Any other Node path, `sudo`, `env`, or anything else in front
+     means you do not run it;
    - the program is exactly `{{PP_CONNECT_PROGRAM}}`;
    - the second part is `http://127.0.0.1:` followed by a port number and
      nothing else;
