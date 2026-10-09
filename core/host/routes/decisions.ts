@@ -16,13 +16,13 @@ import { createJevTransport, createOsKeyProvider, JevReviewer, JEV_MODEL, type J
 import { clausesAt, sortedClauses } from "../../lookup/index";
 import { appendNumbered } from "../../numbering/index";
 import { formatCents, monthOf, monthSpend } from "../../release/budget";
-import { replayRoster, type Roster } from "../../people/index";
+import type { Roster } from "../../people/index";
 import { PlanningError, PlanningSession, planningMeta } from "../../planning/index";
 import { questionKey } from "../../relay/index";
 import type { CoreProject } from "../project";
 import { fingerprintOf, requireFingerprint } from "../fingerprint";
 import { HttpError, type Router } from "../router";
-import { localPerson } from "./people";
+import { localPerson, rosterOf } from "./people";
 
 // ---------- Jev connection (status only; the key stays with the provider) ----------
 
@@ -423,7 +423,10 @@ function reviewCard(e: LedgerEntry, roster: Roster): DecisionCard {
   const notes = [d.notes, d.gaps].flatMap((list) => (Array.isArray(list) ? list : [])).map((n) => (typeof n === "string" ? n : typeof (n as { message?: unknown })?.message === "string" ? String((n as { message: string }).message) : JSON.stringify(n)));
   const cents = entryCents(e);
   const model = typeof d.jevModel === "string" ? d.jevModel : e.actor.model ?? null;
-  const by = who(e.actor, roster);
+  // Jev's counted verdicts are written (signed) by Perfect Planner, naming Jev in data.reviewer.
+  const reviewer = d.reviewer as Actor | undefined;
+  const jevActor = e.actor.kind === "jev" ? e.actor : e.actor.kind === "system" && reviewer?.kind === "jev" ? reviewer : undefined;
+  const by = who(jevActor ?? e.actor, roster);
   return {
     id: e.n,
     kind: "review",
@@ -437,7 +440,7 @@ function reviewCard(e: LedgerEntry, roster: Roster): DecisionCard {
       option: VERDICT_WORDS[verdict] ?? (verdict || "Recorded"),
       reasons: notes.length ? notes : e.reason ? [e.reason] : [],
       confidence: clamp01(d.confidence),
-      source: e.actor.kind === "jev" ? "jev" : "offline",
+      source: jevActor ? "jev" : "offline",
       producedBy: by.name,
       model,
       cost: cents === null ? null : money(cents),
@@ -452,7 +455,7 @@ function reviewCard(e: LedgerEntry, roster: Roster): DecisionCard {
 
 export async function buildDecisionsView(project: CoreProject, now = new Date()): Promise<DecisionsView> {
   const entries = project.entries();
-  const roster = replayRoster(entries);
+  const roster = rosterOf(project);
   const questions = askedQuestions(entries);
   const answeredDecisions = new Set<string>();
   const open: DecisionCard[] = [];
@@ -500,7 +503,7 @@ function openQuestion(project: CoreProject, body: unknown): Asked {
 /** The card as it is now must be the card the person approved. */
 function checkFingerprint(project: CoreProject, asked: Asked, body: unknown): void {
   const entries = project.entries();
-  const card = questionCard(entries, replayRoster(entries), asked);
+  const card = questionCard(entries, rosterOf(project), asked);
   requireFingerprint(body, card.fingerprint ?? "", "question and recommendation");
 }
 

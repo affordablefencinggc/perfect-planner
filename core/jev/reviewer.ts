@@ -3,7 +3,7 @@
 // Planner turns the scores into a verdict with fixed rules it owns (policy
 // below), writes one review.verdict entry per review (§6.8), and never lets a
 // failure, a low score or the cost cap turn into an approval (§6.7, §6.9).
-import type { Actor, Ledger, LedgerEntry } from "../ledger/index";
+import { isAuthoritative, type Actor, type Ledger, type LedgerEntry } from "../ledger/index";
 import type { Question, SettledAnswer, SettledAnswerer } from "../relay/relay";
 import { checkDiff, parseDiff, redactSecrets, type LineNote } from "./diffChecks";
 import { JEV_MODEL, type JevAnswer, type JevCallResult, type JevRequest } from "./transport";
@@ -62,7 +62,7 @@ export interface DiffReviewInput {
   /** Who built the change, with their model. Jev only approves work built by a different model (§6.4). */
   author: Actor;
   attempt?: number;
-  /** The full commit reviewed. When Jev approves, the test gate takes this verdict as the diff approval for that commit. */
+  /** The commit under review; the gate only counts an approval for this exact commit. */
   commit?: string;
 }
 
@@ -112,6 +112,9 @@ export class JevReviewer implements SettledAnswerer {
     this.transport = options.transport;
     this.settings = { ...DEFAULT_SETTINGS, ...options.settings };
     this.now = options.now ?? (() => new Date());
+    const { estimatedCostPerCall, monthlyLimit } = this.settings;
+    if (!(Number.isFinite(estimatedCostPerCall) && estimatedCostPerCall >= 0)) throw new Error("Jev's estimated cost per call must be a number of dollars, 0 or more.");
+    if (monthlyLimit !== null && !(Number.isFinite(monthlyLimit) && monthlyLimit >= 0)) throw new Error("Jev's monthly limit must be a number of dollars, 0 or more, or none.");
   }
 
   // ---------- cost cap (§6.7) ----------
@@ -120,7 +123,9 @@ export class JevReviewer implements SettledAnswerer {
     const month = this.now().toISOString().slice(0, 7);
     let spent = 0;
     for (const e of this.ledger.entries()) {
-      if (e.type === "review.verdict" && monthOf(e.at) === month && typeof e.data?.cost === "number") spent += e.data.cost;
+      // Only verdicts Perfect Planner signed count: a forged entry cannot lower (or raise) the spend.
+      const cost = e.data?.cost;
+      if (e.type === "review.verdict" && monthOf(e.at) === month && typeof cost === "number" && Number.isFinite(cost) && cost >= 0 && isAuthoritative(e)) spent += cost;
     }
     return Math.round(spent * 1e6) / 1e6;
   }
@@ -170,21 +175,24 @@ export class JevReviewer implements SettledAnswerer {
     const cost = called?.ok ? (called.cost ?? this.settings.estimatedCostPerCall) : 0;
     // The test gate reads Jev's test verdicts from evidence (core/gate deriveState). Only a real
     // approve or reject is an opinion on the test; escalations and outages are not.
-    const gateEvidence =
+    const testEvidence =
       review === "test" && extra.definition && (result.verdict === "approve" || result.verdict === "reject")
         ? ["scope:test", `verdict:${result.verdict === "approve" ? "approve" : "gaps"}`, `definition:${extra.definition}`, ...(result.notes as string[]).map((gap) => `gap:${String(gap).replace(/\s+/g, " ").trim()}`)]
-        : review === "diff" && called?.ok && result.verdict === "approve" && extra.commit && /^[0-9a-f]{40,64}$/i.test(extra.commit)
-          ? ["scope:diff", "verdict:approve", `commit:${extra.commit.toLowerCase()}`]
-          : undefined;
+        : undefined;
+    const jev: Actor | undefined = called?.ok ? { kind: "jev", id: "jev", model: called.model } : undefined;
+    // Written as the system, so the ledger signs it with the app's key; Jev itself
+    // holds no signing key, and an entry that merely names Jev as actor never counts.
     return this.ledger.append({
-      actor: called?.ok ? { kind: "jev", id: "jev", model: called.model } : SYSTEM,
+      actor: SYSTEM,
       type: "review.verdict",
       subject: task,
       summary: extra.summary,
       reason: result.reason,
       refs: extra.refs,
-      ...(gateEvidence ? { evidence: gateEvidence } : {}),
+      evidence: testEvidence ?? [`scope:${review}`, `verdict:${result.verdict}`, ...(extra.commit ? [`commit:${extra.commit}`] : [])],
       data: {
+        ...(jev ? { reviewer: jev } : {}),
+        ...(extra.commit ? { commit: extra.commit } : {}),
         review,
         verdict: result.verdict,
         policy: REVIEW_POLICY,
@@ -215,7 +223,16 @@ export class JevReviewer implements SettledAnswerer {
       this.queue.push({ describe, run: again });
       return "queued";
     }
-    return this.transport(request);
+    return this.call(request);
+  }
+
+  /** Every Jev call goes through here: a reply with a cost that is not a non-negative number is refused, never counted. */
+  private async call(request: JevRequest): Promise<JevCallResult> {
+    const called = await this.transport(request);
+    if (called.ok && called.cost !== null && !(Number.isFinite(called.cost) && called.cost >= 0)) {
+      return { ok: false, problem: "malformed", detail: "Jev reported a cost that is not a non-negative number", status: called.status };
+    }
+    return called;
   }
 
   // ---------- job 1: test review, before work starts (§6.2) ----------
@@ -237,9 +254,9 @@ export class JevReviewer implements SettledAnswerer {
     const request: JevRequest = {
       model: this.settings.model,
       state: {
-        task: { id: input.task, title: input.title },
+        task: { id: input.task, title: cut(input.title, 300) },
         clauses: input.clauses.map((c) => ({ ref: c.ref, text: cut(c.text, 2000) })),
-        test: { command: input.test.command, source: cut(input.test.source ?? "", MAX_TEXT) },
+        test: { command: cut(input.test.command, 2000), source: cut(input.test.source ?? "", MAX_TEXT) },
       },
       questions: {
         covers_clauses: {
@@ -289,13 +306,13 @@ export class JevReviewer implements SettledAnswerer {
     const notIndependent = independenceProblem(input.author, this.settings.model);
     if (notIndependent) {
       const result: ReviewResult = { verdict: "escalate", notes: [], reason: `Not independent: ${notIndependent} (§6.4)`, confidence: null };
-      return { ...result, entry: this.record(input.task, "diff", result, { called: null, refs, summary: `Diff for ${input.task} goes to the main chat: Jev cannot review it independently`, data: { ...data, builtBy: input.author ?? null } }).n };
+      return { ...result, entry: this.record(input.task, "diff", result, { called: null, refs, summary: `Diff for ${input.task} goes to the main chat: Jev cannot review it independently`, data: { ...data, builtBy: input.author ?? null }, commit: input.commit }).n };
     }
     const files = parseDiff(input.diff);
     const notes = checkDiff(files, input.allowedFiles);
     if (notes.length) {
       const result: ReviewResult = { verdict: "reject", notes, reason: `Fixed checks failed: ${[...new Set(notes.map((n) => n.rule))].join(", ")}`, confidence: null };
-      return { ...result, entry: this.record(input.task, "diff", result, { called: null, refs, summary: `Diff for ${input.task} rejected: ${notes.length} line note(s)`, data }).n };
+      return { ...result, entry: this.record(input.task, "diff", result, { called: null, refs, summary: `Diff for ${input.task} rejected: ${notes.length} line note(s)`, data, commit: input.commit }).n };
     }
 
     const request: JevRequest = {
@@ -330,7 +347,7 @@ export class JevReviewer implements SettledAnswerer {
     if (called === "queued") return { verdict: "queued", notes: [], reason: "Jev's monthly limit is reached; the review waits in the queue (§6.7)", confidence: null };
     if (!called.ok) {
       const result: ReviewResult = { verdict: "unavailable", notes: [], reason: called.detail, confidence: null };
-      return { ...result, entry: this.record(input.task, "diff", result, { called, refs, summary: `Diff review for ${input.task} could not run`, data }).n };
+      return { ...result, entry: this.record(input.task, "diff", result, { called, refs, summary: `Diff review for ${input.task} could not run`, data, commit: input.commit }).n };
     }
 
     const a = called.answers;
@@ -377,7 +394,7 @@ export class JevReviewer implements SettledAnswerer {
     if (question.options.length < 2 || clauses.length === 0 || this.overCap()) return null;
     const criteria: Record<string, string> = { not_settled: "The plan does not decide this; a person must answer" };
     question.options.forEach((option, i) => (criteria[`option_${i + 1}`] = cut(option, 300)));
-    const called = await this.transport({
+    const called = await this.call({
       model: this.settings.model,
       state: { plan: clauses.map((c) => ({ ref: c.ref, text: cut(c.text, 2000) })).slice(0, 200), question: cut(question.question, 2000), task: question.task },
       questions: {

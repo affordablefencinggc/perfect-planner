@@ -148,9 +148,13 @@ export function setupFor(bridgeUrl: string, tokenFile: string, entry: string, pl
   return { claudeCode, json };
 }
 
+export function tokenFilePath(project: CoreProject, name: string): string {
+  return path.join(project.root, ".perfect-planner", "tokens", `${name}.token`);
+}
+
 /** The token waits in a file only this OS user can read (0600, or an owner-only ACL on Windows); the agent program reads it at start. */
 export function writeTokenFile(project: CoreProject, name: string, token: string): string {
-  const file = path.join(project.root, ".perfect-planner", "tokens", `${name}.token`);
+  const file = tokenFilePath(project, name);
   writeOwnerOnlyFile(file, token);
   return file;
 }

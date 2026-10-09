@@ -11,11 +11,10 @@ import {
   moveFeature, mvpDoneWhen, proposeWith, recordProposal, renameStage, scanFeatures,
   type Feature, type FeatureStatus, type MvpAdvisor, type ScanResult, type ScannedFeature, type StageBoard, type StageId,
 } from "../../mvp/index";
-import { replayRoster } from "../../people/index";
 import { fingerprintOf, requireFingerprint } from "../fingerprint";
 import type { CoreProject } from "../project";
 import { HttpError, type Handler, type Router } from "../router";
-import { localPerson, localPersonId } from "./people";
+import { localPerson, localPersonId, rosterOf } from "./people";
 
 const SCAN_KEY = "mvp.scan";
 const MAX_FEATURES = 200;
@@ -55,7 +54,7 @@ function personActor(project: CoreProject): Actor {
 
 function personName(project: CoreProject, id: string | undefined): string | undefined {
   if (!id) return undefined;
-  const member = replayRoster(project.entries()).members.get(id);
+  const member = rosterOf(project).members.get(id);
   if (member) return member.name;
   return id === localPersonId(project) ? "You" : id;
 }

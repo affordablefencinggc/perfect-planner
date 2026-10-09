@@ -1,6 +1,7 @@
-import type { LedgerEntry } from "../ledger/index";
+import type { Ledger, LedgerEntry } from "../ledger/index";
 import { baseNumber, parseNumber } from "../numbering/index";
 import { claimsPeople, memberForActor, ownerOf, replayRoster, type MemberState, type Roster } from "./model";
+import { PeopleError } from "./errors";
 import { loadPhoto, photoDataUrl, type PhotoStore } from "./photos";
 import type { Member, PeopleView, Presence, SharedDoc, Stage } from "./types";
 
@@ -100,8 +101,8 @@ function toMember(m: MemberState, presence: Presence | undefined): Member {
 }
 
 /** Rebuilds who is on the project, where they are and what they share, from the ledger alone. */
-export function buildPeopleView(entries: readonly LedgerEntry[]): PeopleView {
-  const roster = replayRoster(entries);
+export function buildPeopleView(entries: readonly LedgerEntry[], options: { owner?: string } = {}): PeopleView {
+  const roster = replayRoster(entries, options.owner);
   const where = presences(roster, entries);
   const members = [...roster.members.values()]
     .sort((a, b) => Number(b.role === "owner") - Number(a.role === "owner"))
@@ -120,6 +121,18 @@ export function buildPeopleView(entries: readonly LedgerEntry[]): PeopleView {
   return view;
 }
 
+/**
+ * The view of an open ledger, with the owner the ledger verified from the
+ * pinned owner key. Throws PeopleError NO_OWNER_KEY when the ledger was
+ * opened without `ownerKey`: such a ledger has no owner and so no roster, and
+ * an empty list would hide the caller's mistake.
+ */
+export function peopleView(ledger: Pick<Ledger, "entries" | "owner" | "ownerKeyPinned">): PeopleView {
+  if (!ledger.ownerKeyPinned) throw noOwnerKey();
+  const owner = ledger.owner;
+  return buildPeopleView(ledger.entries(), owner === undefined ? {} : { owner });
+}
+
 /** Data URLs for members' photos, for the panel. Missing or altered photos are left out. */
 export function photoSources(view: PeopleView, store: PhotoStore): Record<string, string> {
   const out: Record<string, string> = {};
@@ -129,4 +142,8 @@ export function photoSources(view: PeopleView, store: PhotoStore): Record<string
     if (bytes) out[m.person] = photoDataUrl(bytes, m.photo.mime);
   }
   return out;
+}
+
+export function noOwnerKey(): PeopleError {
+  return new PeopleError("NO_OWNER_KEY", "this ledger was opened without the project's ownerKey, so it has no owner and no roster; open it with { ownerKey }");
 }

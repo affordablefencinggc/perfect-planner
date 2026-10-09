@@ -28,7 +28,7 @@ import { installPeopleRules, claimOwnership, addMember, changeMember, removeMemb
          setPhoto, clearPhoto, shareDoc, removeDoc, FilePhotoStore } from "../people/index";
 
 installNumberingRules(ledger);   // people entries take D-n numbers
-installPeopleRules(ledger);
+installPeopleRules(ledger);   // openPeopleLedger and the helpers below do this for you
 
 claimOwnership(ledger, me, "Looplet Spare");                       // first member, always the owner
 addMember(ledger, me, { person: "mia", name: "Mia", role: "helper", agents: ["mia-worker"] });
@@ -61,8 +61,17 @@ names on every OS.
 ## Opening a project
 
 ```ts
-const ledger = await openPeopleLedger(new FileStore(projectRoot));
+const ledger = await openPeopleLedger(new FileStore(projectRoot), { keys, ownerKey });
 ```
+
+`ownerKey` is the owner's key id the app keeps outside the ledger (see
+core/ledger "The owner"). The roster's owner is `ledger.owner`; without
+`ownerKey` there is no owner, so nobody can start the roster, enrol helpers,
+change roles or share documents. `openPeopleLedger` and `peopleView(ledger)`
+throw `PeopleError` `NO_OWNER_KEY` for a ledger opened without `ownerKey`,
+so a caller that forgets it fails loudly instead of seeing an empty roster.
+Read views with `peopleView(ledger)`, or `buildPeopleView(entries, { owner:
+ledger.owner })`.
 
 Use this instead of `Ledger.open` for a project ledger. It re-checks every
 stored entry against the people rules as they stood when it was written
@@ -85,9 +94,9 @@ wrote it, and the ledger never lets an agent or Jev write `decision.made`.
 
 - **Solo first.** Until the first member is added nobody is restricted, so a
   project that never adds helpers behaves exactly as before. The first member
-  must be the person writing, as owner, and if the ledger already has
-  entries by a person, only the first such person (who started the project)
-  can claim it.
+  must be the person writing, as owner, and only the pinned owner
+  (`ledger.owner`) can claim it; before anyone has written, a ledger opened
+  with `ownerKey` makes the owner key sign that first entry.
 - Only a person (never an agent) changes people. Only the owner adds,
   changes or removes people and shares documents. One owner, who cannot be
   removed or demoted. Approvals belong to helpers only.
@@ -122,7 +131,7 @@ person, store)` deletes the file as well.
 ## Reading
 
 ```ts
-const view = buildPeopleView(ledger.entries());
+const view = peopleView(ledger);
 // { members: Member[] (owner first), owner?, docs: SharedDoc[], head? }
 const photos = photoSources(view, new FilePhotoStore(projectRoot)); // person -> data URL
 ```

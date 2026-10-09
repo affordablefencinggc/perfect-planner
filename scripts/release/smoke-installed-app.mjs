@@ -9,7 +9,8 @@
 // Screenshots and summary.json go to --out. Exits non-zero on any failure.
 //   node scripts/release/smoke-installed-app.mjs --installer <setup.exe> --out <folder>
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import os from "node:os";
 import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -77,6 +78,22 @@ function install(installer, dir) {
   return path.join(dir, exe);
 }
 
+/** What the runner can see when the window never shows up: processes, the service, the app's log, the screen. */
+function diagnose(app, out) {
+  const ps = (script) => spawnSync("powershell", ["-NoProfile", "-NonInteractive", "-Command", script], { encoding: "utf8", timeout: 60_000 });
+  const processes = ps("Get-CimInstance Win32_Process | Where-Object { $_.Name -match 'perfect|planner|msedgewebview2|node' } | ForEach-Object { $_.ProcessId.ToString() + ' ' + $_.Name + ' ' + $_.CommandLine }");
+  const log = path.join(process.env.LOCALAPPDATA ?? path.join(os.homedir(), "AppData", "Local"), "com.perfectplanner.desktop", "logs", "desktop-host.log");
+  const screen = path.join(out, "0-screen-on-failure.png");
+  ps(`Add-Type -AssemblyName System.Windows.Forms,System.Drawing; $b=[System.Windows.Forms.Screen]::PrimaryScreen.Bounds; $i=New-Object System.Drawing.Bitmap $b.Width,$b.Height; [System.Drawing.Graphics]::FromImage($i).CopyFromScreen($b.Location,[System.Drawing.Point]::Empty,$b.Size); $i.Save('${screen.replace(/'/g, "''")}')`);
+  return {
+    appExitCode: app.exitCode,
+    appSignal: app.signalCode,
+    processes: String(processes.stdout ?? "").trim().split(/\r?\n/).filter(Boolean).map((l) => l.replace(/#pp-launch=[\w-]+/g, "#pp-launch=<hidden>")),
+    log: existsSync(log) ? readFileSync(log, "utf8").slice(-4000) : `(no log at ${log})`,
+    screenshot: existsSync(screen),
+  };
+}
+
 export async function smokeInstalledApp({ installer, out, installDir = "C:\\PP Smoke\\Perfect Planner" }) {
   mkdirSync(out, { recursive: true });
   const summary = { installer: path.basename(installer), installDir };
@@ -90,10 +107,16 @@ export async function smokeInstalledApp({ installer, out, installDir = "C:\\PP S
   summary.appPid = app.pid;
   let client;
   try {
+    let pages = [];
     const target = await until("the app window on the local service", async () => {
       const targets = await getJson(`http://127.0.0.1:${DEVTOOLS_PORT}/json/list`);
+      pages = targets.map((t) => `${t.type} ${String(t.url).replace(/#.*/, "")}`);
       return targets.find((t) => t.type === "page" && String(t.url).startsWith(`${SERVICE_ORIGIN}/`));
-    }, 120_000);
+    }, 120_000).catch(async (error) => {
+      summary.diagnosis = { devtoolsPages: pages, serviceUp: await reachable(`${SERVICE_ORIGIN}/`), ...diagnose(app, out) };
+      console.error(JSON.stringify(summary.diagnosis, null, 2));
+      throw error;
+    });
     summary.windowUrl = target.url.replace(/#.*/, "");
     client = await devtools(target.webSocketDebuggerUrl);
     await client.send("Page.enable");

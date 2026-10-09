@@ -182,7 +182,7 @@ describe("WorktreeManager", () => {
     writeFileSync(exclude, "*.log");
     await manager.create({ taskId: "T-15", actor: person });
     await manager.create({ taskId: "T-16", actor: person });
-    expect(readFileSync(exclude, "utf8")).toBe("*.log\n/.perfect-planner/worktrees/\n");
+    expect(readFileSync(exclude, "utf8")).toBe("*.log\n/.perfect-planner/\n");
   }, SLOW);
 });
 

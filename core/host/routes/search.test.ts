@@ -6,7 +6,7 @@ import { asPersonRequest } from "../keys";
 import { hostCall, startTestHost } from "../testing";
 import { normalizeRef } from "./search";
 
-const owner: Actor = { kind: "person", id: "sam" };
+const owner: Actor = { kind: "person", id: "owner" };
 const watcher: Actor = { kind: "system", id: "watcher" };
 
 const PLAN = `# Invoices
@@ -41,7 +41,7 @@ describe("search routes", () => {
   beforeEach(async () => {
     ctx = await startTestHost();
     ctx.host.ensureKey("system");
-    ctx.host.ensurePersonKey(owner.id); // seeds write as sam, signed like the person's own window would
+    ctx.host.ensurePersonKey(owner.id); // seeds write as the pinned owner, signed like the person's own window would
   });
   afterEach(async () => {
     await ctx.stop();
@@ -81,7 +81,7 @@ describe("search routes", () => {
     expect(c.citedBy.map((e: { subject: string }) => e.subject)).toEqual(expect.arrayContaining(["T-1", "D-1"]));
 
     const release = (await hostCall(ctx.base, "GET", "/lookup?project=s2&ref=R-1")).body.result;
-    expect(release).toMatchObject({ found: true, kind: "release", who: { id: "sam" } });
+    expect(release).toMatchObject({ found: true, kind: "release", who: { id: "owner" } });
     expect(release.release).toMatchObject({ version: "v1.0.0", from: "L-000001", commit: "9f3c2e1" });
     expect(release.release.count).toBe(release.release.entries.length);
     expect(release.release.count).toBeGreaterThan(5);

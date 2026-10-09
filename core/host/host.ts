@@ -7,7 +7,7 @@ import { LedgerError } from "../ledger/index";
 import { startBridge, ToolError, type Bridge } from "../mcp/index";
 import { PeopleError } from "../people/index";
 import { asPersonRequest, hostKeys, type HostKeys } from "./keys";
-import { openCoreProject, projectKey, type CoreProject } from "./project";
+import { excludePrivateFolder, openCoreProject, projectKey, projectRootFor, type CoreProject } from "./project";
 import { HttpError, Router } from "./router";
 import { PersonSessions } from "./session";
 import { registerRoutes } from "./routes/index";
@@ -48,6 +48,7 @@ export class CoreHost {
       project: project.key,
       ledger: project.ledger.status,
       keys: { description: this.keys.description, ...this.keys.state() },
+      owner: { state: project.owner.state, ...(project.owner.reason ? { reason: project.owner.reason } : {}) },
     }));
   }
 
@@ -86,6 +87,17 @@ export class CoreHost {
       project = openCoreProject(this.options.root, key, this.options.projectRootOverride, this.keys);
       this.projects.set(key, project);
     }
+    return project;
+  }
+
+  /**
+   * Opens a project for a request: .perfect-planner/ goes into the repo's info/exclude before the
+   * ledger's first file (its writer lock) is created, and every request waits until that is done.
+   */
+  async openProject(key: string): Promise<CoreProject> {
+    if (!this.projects.has(key)) await excludePrivateFolder(projectRootFor(this.options.root, key, this.options.projectRootOverride));
+    const project = this.project(key);
+    await project.ready;
     return project;
   }
 
@@ -140,7 +152,7 @@ export class CoreHost {
     }
     try {
       const body = method === "POST" ? await readJson(req) : undefined;
-      const project = this.project(projectKey(url.searchParams.get("project")));
+      const project = await this.openProject(projectKey(url.searchParams.get("project")));
       const call = () => match.handler({ path, params: match.params, query: url.searchParams, body, project, host: this });
       // A person's POST may make their signing key on first use (keys.ts); nothing else can.
       const result = await (method === "POST" ? asPersonRequest(call) : call());

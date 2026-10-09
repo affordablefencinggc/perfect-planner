@@ -38,6 +38,13 @@ export const coreHostVitePlugin = () => ({
       server.config.logger.info(`  Perfect Planner (one-time link, can make changes): http://${address.address === "::1" ? "[::1]" : address.address}:${address.port}/#pp-launch=${loaded.issueLaunch()}`);
     };
     server.httpServer?.once("listening", () => { printLaunch().catch(() => undefined); });
+    // A closed window can only be replaced from the terminal: "l + enter" prints a new one-time link.
+    // Only the person at this terminal can do that; no HTTP route hands out links.
+    const bind = server.bindCLIShortcuts.bind(server);
+    server.bindCLIShortcuts = (options = {}) => bind({
+      ...options,
+      customShortcuts: [...(options.customShortcuts ?? []), { key: "l", description: "print a new one-time Perfect Planner link (can make changes)", action: () => printLaunch() }],
+    });
 
   },
 });

@@ -4,6 +4,7 @@ import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { surfacesOverlap } from "../../src/engine/collisionEngine.js";
+import { ensureRequiredIgnores, privatePaths } from "./ignores";
 import { git, GitError, runGit } from "./git";
 import { isWithin, lines, realDir, samePath, toRepoPath } from "./platform";
 import { type Actor, type LedgerPort, WORKTREES_ACTOR } from "./ports";
@@ -305,16 +306,12 @@ export class WorktreeManager {
     }
   }
 
-  /** Keep task worktrees out of the main checkout's status without touching the tracked .gitignore. */
+  /** Keep task worktrees, the ledger and worker tokens out of the main checkout's status without touching the tracked .gitignore. */
   private async excludeWorktreeDir(): Promise<void> {
+    // The whole planner folder (ledger, worker tokens) is always excluded; a custom worktree folder too.
     const relative = toRepoPath(path.relative(this.repoRoot, this.worktreeRoot));
-    if (relative.startsWith("..")) return;
-    const exclude = path.join(await this.gitCommonDir(), "info", "exclude");
-    const current = existsSync(exclude) ? readFileSync(exclude, "utf8") : "";
-    const pattern = `/${relative}/`;
-    if (current.split(/\r?\n/).includes(pattern)) return;
-    mkdirSync(path.dirname(exclude), { recursive: true });
-    writeFileSync(exclude, `${current}${current && !current.endsWith("\n") ? "\n" : ""}${pattern}\n`);
+    const custom = relative.startsWith("..") || privatePaths([relative]).length ? [] : [`/${relative}/`];
+    await ensureRequiredIgnores(this.repoRoot, custom);
   }
 
   private async freePort(taken: WorktreeInfo[]): Promise<number> {

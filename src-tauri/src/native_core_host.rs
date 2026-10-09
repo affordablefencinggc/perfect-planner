@@ -97,6 +97,7 @@ pub(crate) fn error_fragment(message: &str, node_missing: bool) -> String {
     out
 }
 
+#[derive(Debug)]
 pub(crate) struct Runtime {
     pub node: PathBuf,
     pub entry: PathBuf,
