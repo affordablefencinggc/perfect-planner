@@ -31,31 +31,41 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/heads/trial/') }}
 
 env:
-  # Push-triggered trials use these Release runs: PR #31 (core host bundled) and PR #12 head (main + pipeline).
-  DEFAULT_SOURCE_RUNS: '["37925540925","37918632579"]'
+  # Push-triggered trials: PR #31's newest dry run (core host bundled) and the PR #12 head build (main + pipeline).
+  DEFAULT_SOURCE_RUNS: '["branch:release/desktop-core-host","37918632579"]'
 
 jobs:
   plan:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     outputs:
-      sources: ${{ steps.pick.outputs.sources }}
+      sources: ${{ steps.wait.outputs.sources }}
     steps:
-      - id: pick
-        env:
-          INPUT: ${{ inputs.source_runs }}
-        run: echo "sources=${INPUT:-$DEFAULT_SOURCE_RUNS}" >> "$GITHUB_OUTPUT"
-      # A trial pushed while its Release run is still building waits for it (not needed when called by that run).
-      - name: Wait for the Release runs to finish
+      # Each source is a Release run id, or "branch:<name>" for the newest Release run on that
+      # branch. A trial pushed while a Release run is still building waits for it; a run that gets
+      # cancelled (superseded by a newer push) is swapped for the branch's newer run.
+      - id: wait
         env:
           GH_TOKEN: ${{ github.token }}
-          SOURCES: ${{ steps.pick.outputs.sources }}
+          INPUT: ${{ inputs.source_runs }}
+          REPO: ${{ github.repository }}
+          SELF: ${{ github.run_id }}
         run: |
-          for id in $(echo "$SOURCES" | jq -r '.[]'); do
-            [ "$id" = "${{ github.run_id }}" ] && continue
-            until [ "$(gh api "repos/${{ github.repository }}/actions/runs/$id" --jq .status)" = completed ]; do echo "run $id still building"; sleep 60; done
-            echo "run $id: $(gh api "repos/${{ github.repository }}/actions/runs/$id" --jq .conclusion)"
+          latest() { gh api "repos/$REPO/actions/workflows/release.yml/runs?branch=$1&per_page=1" --jq '.workflow_runs[0].id'; }
+          resolved=()
+          for src in $(echo "${INPUT:-$DEFAULT_SOURCE_RUNS}" | jq -r '.[]'); do
+            branch=""; id="$src"
+            case "$src" in branch:*) branch="${src#branch:}"; id="$(latest "$branch")";; esac
+            [[ "$id" =~ ^[0-9]+$ ]] || { echo "::error::source '$src' did not resolve to a run id ('$id')"; exit 1; }
+            while [ "$id" != "$SELF" ]; do
+              read -r status conclusion < <(gh api "repos/$REPO/actions/runs/$id" --jq '"\(.status) \(.conclusion)"')
+              if [ "$status" = completed ] && [ "$conclusion" = cancelled ] && [ -n "$branch" ] && [ "$(latest "$branch")" != "$id" ]; then id="$(latest "$branch")"; continue; fi
+              [ "$status" = completed ] && { echo "run $id: $conclusion"; break; }
+              echo "run $id ($src) still $status"; sleep 60
+            done
+            resolved+=("\"$id\"")
           done
+          echo "sources=[$(IFS=,; echo "${resolved[*]}")]" | tee -a "$GITHUB_OUTPUT"
 
   windows:
     name: Windows (run ${{ matrix.source }})
@@ -153,7 +163,7 @@ jobs:
           sudo apt-get update
           fuse=libfuse2; [ "${{ matrix.os }}" = ubuntu-24.04 ] && fuse=libfuse2t64
           sudo apt-get install -y xvfb xdotool openbox dbus-x11 webkit2gtk-driver xdg-desktop-portal xdg-desktop-portal-gtk desktop-file-utils imagemagick $fuse
-          cargo install tauri-driver --locked
+          cargo install tauri-driver --version 2.1.0 --locked
           ls -la installers
       - name: Trial the .deb and the AppImage
         run: |
