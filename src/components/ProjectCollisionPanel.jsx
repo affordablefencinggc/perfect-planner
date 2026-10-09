@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { ArrowRightIcon, ArrowsClockwiseIcon, CheckCircleIcon, IntersectIcon, WarningOctagonIcon } from "@phosphor-icons/react";
 import { writeSection } from "../project/projectWorkRecords.js";
 import { useSavedTaskDrafts } from "../project/useSavedTaskDrafts.js";
-import { activeTasks, buildCollisionRecord, collisionStatus, createResolution, taskSnapshot, validResolution } from "../project/taskCoordination.js";
+import { activeTasks, buildCollisionRecord, collisionStatus, createResolution, resolutionState, taskSnapshot } from "../project/taskCoordination.js";
 import "./ProjectCoordinationPanels.css";
 
 const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
@@ -44,22 +44,27 @@ function decisionText(collision, resolution) {
   return "Accepted: the two tasks may run at the same time.";
 }
 
-function CollisionCard({ collision, resolution, canDecide, onDecide, onClear }) {
-  const decided = resolution && resolution.signature === collision.signature && validResolution(collision, resolution) ? resolution : null;
-  const initial = decided ? (decided.choice === "order" ? `first:${decided.first}` : decided.choice) : `first:${collision.suggestedFirst}`;
+function CollisionCard({ collision, resolution, canDecide, onDecide, onClear, onWorkspace }) {
+  // A split is only a plan until the two tasks' file scopes stop overlapping.
+  const state = resolutionState(collision, resolution);
+  const decided = state === "decided" ? resolution : null;
+  const splitPending = state === "split-pending";
+  const saved = decided ?? (splitPending ? resolution : null);
+  const initial = saved ? (saved.choice === "order" ? `first:${saved.first}` : saved.choice) : `first:${collision.suggestedFirst}`;
   const [choice, setChoice] = useState(initial);
   useEffect(() => setChoice(initial), [initial]);
   const [a, b] = collision.tasks;
   const hard = collision.severity === "hard-stop";
   const save = () => { const [kind, first] = choice.split(":"); onDecide(collision, kind === "first" ? "order" : kind, first); };
-  return <article className={`coord-card ${hard ? "hard" : "ordered"} ${decided ? "decided" : ""}`} aria-label={`${a} and ${b} overlap`}>
+  return <article className={`coord-card ${hard ? "hard" : "ordered"} ${decided ? "decided" : ""}`} aria-label={`${a} and ${b} overlap`} data-decision-state={state}>
     <header>
       <strong>{label(collision, a)} <span aria-hidden="true">↔</span> {label(collision, b)}</strong>
       <span className="coord-tag">{hard ? <><WarningOctagonIcon aria-hidden="true" />Must not run at the same time</> : "Needs an order"}</span>
     </header>
     <p>{hard ? "Both tasks change these files:" : "One task changes a file the other reads:"}</p>
     <ul className="coord-files">{collision.files.map((file) => <li key={file.paths.join("|")}><code>{file.path}</code>{file.paths.length > 1 && <small>({file.paths.join(" and ")})</small>}<small>{file.severity === "hard-stop" ? "both change it" : "one changes, one reads"}</small></li>)}</ul>
-    {!decided && <p className="coord-hint">Suggested: {label(collision, collision.suggestedFirst)} first{collision.dependencyOrdered ? " (it is already listed as a dependency)" : ""}.</p>}
+    {splitPending && <div className="coord-note warn" role="status"><p><b>Split chosen: edit the file scopes of {a} or {b} so they no longer overlap.</b> This overlap stays open until then. Next step: change one task’s files in the Ledger, then check again here.</p><button type="button" onClick={() => onWorkspace?.("ledger")}>Edit file scopes in Ledger <ArrowRightIcon aria-hidden="true" /></button></div>}
+    {!decided && !splitPending && <p className="coord-hint">Suggested: {label(collision, collision.suggestedFirst)} first{collision.dependencyOrdered ? " (it is already listed as a dependency)" : ""}.</p>}
     {decided && <p className="coord-decided"><CheckCircleIcon weight="fill" aria-hidden="true" /> Decided: {decisionText(collision, decided)}</p>}
     <div className="coord-actions">
       <label>Decision <select value={choice} disabled={!canDecide} onChange={(event) => setChoice(event.target.value)}>
@@ -68,8 +73,8 @@ function CollisionCard({ collision, resolution, canDecide, onDecide, onClear }) 
         <option value="split">Split the work so they don’t overlap</option>
         <option value="accept">Accept — they can run at the same time</option>
       </select></label>
-      <button type="button" disabled={!canDecide} onClick={save}>{decided ? "Update decision" : "Mark resolved"}</button>
-      {decided && <button type="button" disabled={!canDecide} onClick={() => onClear(collision)}>Undo</button>}
+      <button type="button" disabled={!canDecide} onClick={save}>{saved ? "Update decision" : choice === "split" ? "Choose split" : "Mark resolved"}</button>
+      {saved && <button type="button" disabled={!canDecide} onClick={() => onClear(collision)}>Undo</button>}
     </div>
   </article>;
 }
@@ -107,7 +112,7 @@ export function ProjectCollisionPanel({ project, records, onWorkspace, store, st
     {data && !savedCurrent && drafts.ledger && !drafts.stale && <p role="alert" className="coord-note warn">Your tasks or folder changed since the last check ({when(data.evaluatedAt)}). The results below are out of date — check again before deciding.</p>}
     {data && <>
       <p role="status" className="coord-summary">
-        Last checked {when(data.evaluatedAt)} · {plural(status.checked, "task")} checked · {status.total ? `${plural(status.total, "overlap")}, ${status.hardStops} must not run at the same time · ${status.open} undecided` : "no overlapping files found"}
+        Last checked {when(data.evaluatedAt)} · {plural(status.checked, "task")} checked · {status.total ? `${plural(status.total, "overlap")}, ${status.hardStops} must not run at the same time · ${status.open} undecided` : "no overlapping files found"}{status.splitPending ? ` (${status.splitPending} waiting for a split in Ledger)` : ""}
       </p>
       {(data.uncheckedTaskIds?.length > 0 || data.invalid?.length > 0) && <div className="coord-note warn">
         <p><b>Not checked.</b> {data.uncheckedTaskIds?.length ? "These tasks don’t list the files they change, so they could not be compared:" : ""}</p>
@@ -115,7 +120,7 @@ export function ProjectCollisionPanel({ project, records, onWorkspace, store, st
         <button type="button" onClick={() => onWorkspace?.("ledger")}>Add files in Ledger</button>
       </div>}
       <div className="coord-list">
-        {(data.collisions ?? []).map((collision) => <CollisionCard key={collision.key} collision={collision} resolution={data.resolutions?.[collision.key]} canDecide={savedCurrent} onDecide={decide} onClear={clear} />)}
+        {(data.collisions ?? []).map((collision) => <CollisionCard key={collision.key} collision={collision} resolution={data.resolutions?.[collision.key]} canDecide={savedCurrent} onDecide={decide} onClear={clear} onWorkspace={onWorkspace} />)}
       </div>
       {status.checked > 0 && status.open > 0 && savedCurrent && <p className="coord-note warn">{plural(status.open, "overlap")} still {status.open === 1 ? "needs" : "need"} a decision. Build lists undecided overlaps as in the way, including “needs an order” pairs.</p>}
       {status.checked > 0 && status.open === 0 && savedCurrent && <p className="coord-ok"><CheckCircleIcon weight="fill" aria-hidden="true" /> {status.total ? "Every overlap has a decision." : "No checked tasks change the same files."} <button type="button" onClick={() => onWorkspace?.("allocation")}>Assign owners <ArrowRightIcon aria-hidden="true" /></button></p>}

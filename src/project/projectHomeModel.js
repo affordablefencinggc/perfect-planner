@@ -1,7 +1,7 @@
 import { projectAuthorityKinds, validateProjectSession } from "./projectSession.js";
 import { deriveDiscoveryReview } from "./discoveryReviewModel.js";
 import { effectivePlanAuthority } from "./planApproval.js";
-import { allocationStatus, collisionStatus } from "./taskCoordination.js";
+import { allocationStatus, collisionStatus, overlapReviewText, recordOverlapReview } from "./taskCoordination.js";
 
 export const PROJECT_HOME_MODEL_SCHEMA_VERSION = 1;
 
@@ -90,6 +90,26 @@ function summarizeDiscovery(project, records = null) {
   };
 }
 
+// Overlapping tasks, read from the decisions saved on the Collision page. A
+// missing check is "unavailable", never "no overlaps".
+function summarizeOverlaps(project, records = null) {
+  const data = project ? records?.sections?.collisions?.data : null;
+  if (!data || typeof data !== "object") return { state: "unavailable", total: null, decided: null, splitPending: null, open: null, text: null, lines: [] };
+  const stale = Boolean(data.censusDigest && project?.census?.digest && data.censusDigest !== project.census.digest);
+  const review = recordOverlapReview(data);
+  const { headline, lines } = overlapReviewText(review);
+  const settled = review.settled === review.total;
+  return {
+    state: stale ? "stale" : settled ? "available" : "review",
+    total: review.total,
+    decided: review.settled,
+    splitPending: review.splitPending,
+    open: review.open,
+    text: stale ? "The project folder changed since tasks were checked for overlaps. Check them again on the Collision page." : headline ?? "No overlapping files found.",
+    lines: lines.filter((line, index) => review.items[index].state !== "decided"),
+  };
+}
+
 function summarizeAuthorities(project) {
   return Object.fromEntries(projectAuthorityKinds.map((kind) => {
     const authority = project?.authorities?.[kind] ?? null;
@@ -138,6 +158,7 @@ function emptyModel() {
       registration: summarizeRegistration(null),
       census: summarizeCensus(null),
       discovery: summarizeDiscovery(null),
+      overlaps: summarizeOverlaps(null),
       authorities: summarizeAuthorities(null),
     },
     blockers: [blocker("project-missing", "project", "unavailable", "No project identity is active.")],
@@ -157,6 +178,7 @@ function demoModel(project) {
       registration: summarizeRegistration(project),
       census: summarizeCensus(project),
       discovery: summarizeDiscovery(project),
+      overlaps: summarizeOverlaps(null),
       authorities: summarizeAuthorities(project),
     },
     blockers: [blocker("demo-not-project-evidence", "project", "demo", "Demonstration fixtures cannot promote an imported project.")],
@@ -194,6 +216,10 @@ function collectBlockers(project, records = null) {
     else if (authority.state === "stale") blockers.push(blocker(`authority-${kind}-stale`, kind, "stale", `The saved ${kind} record is out of date.`));
     else if (authority.state !== "authoritative") blockers.push(blocker(`authority-${kind}-unapproved`, kind, "review", `The ${kind} record is generated but not approved yet.`));
   }
+
+  const overlaps = summarizeOverlaps(project, records);
+  if (overlaps.state === "stale") blockers.push(blocker("collisions-stale", "collision", "stale", overlaps.text));
+  else if (overlaps.state === "review") blockers.push(blocker("collisions-undecided", "collision", "review", [`${overlaps.text}.`, ...overlaps.lines].join(" ")));
   return blockers;
 }
 
@@ -354,7 +380,8 @@ export function deriveProjectHomeModel(session, records = null) {
   const blockers = collectBlockers(project, records);
   if (project.state === "stale") blockers.unshift(blocker("project-stale", "project", "stale", "The active ProjectSession is stale."));
   if (project.state === "unavailable") blockers.unshift(blocker("project-unavailable", "project", "unavailable", "The active project session record is unavailable."));
-  for (const gap of coordinationGaps(records, plan.status)) blockers.push(blocker(gap.id, gap.workspace, "review", gap.reason));
+  // Undecided overlaps are already listed by collectBlockers (collisions-undecided).
+  for (const gap of coordinationGaps(records, plan.status).filter((item) => item.id !== "collision-undecided")) blockers.push(blocker(gap.id, gap.workspace, "review", gap.reason));
   if (stage.id === "promotion") blockers.push(blocker("project-promotion-pending", "project", "review", "Every planning step is recorded, but nobody has confirmed the project is ready yet."));
 
   return deepFreeze({
@@ -368,6 +395,7 @@ export function deriveProjectHomeModel(session, records = null) {
       registration: summarizeRegistration(project),
       census: summarizeCensus(project),
       discovery: summarizeDiscovery(project, records),
+      overlaps: summarizeOverlaps(project, records),
       authorities: summarizeAuthorities(project),
     },
     blockers,

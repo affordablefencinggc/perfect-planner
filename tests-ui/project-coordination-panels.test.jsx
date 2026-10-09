@@ -73,6 +73,7 @@ test("allocation panel saves owners and waves that follow the collision decision
   await user.click(screen.getByRole("button", { name: "Use suggested waves" }));
   expect(screen.getByLabelText("Wave for T0002").value).toBe("1");
   expect(screen.getByLabelText("Wave for T0001").value).toBe("2");
+  await user.click(screen.getByRole("button", { name: "Confirm Ledger owner for T0001" }));
   await user.type(screen.getByLabelText("Owner for T0002"), "agent: builder");
   await user.click(screen.getByRole("button", { name: "Save assignments" }));
   expect(await screen.findByText("Saved. 1 task still needs an owner.")).toBeTruthy();
@@ -86,6 +87,66 @@ test("allocation panel saves owners and waves that follow the collision decision
   await screen.findByText("Saved. Every task has an owner.");
   records = { sections: { ...records.sections, allocation: readSection(project.projectId, "allocation", storage) } };
   expect(deriveWorkRecordReceipt("ALLOC-OWNERS", records, { project })).toMatchObject({ state: "recorded" });
+});
+
+test("allocation pre-fills Ledger proposed owners but records them only after the person confirms", async () => {
+  const user = userEvent.setup();
+  const storage = memoryStorage();
+  const proposed = [task("Login form", [["write", "a.js"]], "Dana"), task("Session store", [["write", "b.js"]], "Eli"), task("Write docs", [["write", "c.md"]])]
+    .reduce((current, item) => updateTaskDraft(current, item), emptyTaskDraftLedger(binding));
+  const ledgerStore = { read: async () => proposed, subscribe: () => () => {} };
+  function Proposed() {
+    const records = useProjectWorkRecords(project.projectId, storage);
+    return <ProjectAllocationPanel project={project} records={records} store={ledgerStore} storage={storage} />;
+  }
+  render(<Proposed />);
+
+  const owner1 = await screen.findByLabelText("Owner for T0001");
+  expect(owner1.value).toBe("Dana");
+  expect(screen.getByLabelText("Owner for T0002").value).toBe("Eli");
+  expect(screen.getByLabelText("Owner for T0003").value).toBe("");
+  expect(screen.getByText("From the Ledger: Dana")).toBeTruthy();
+  expect(screen.getByText("From the Ledger: Eli")).toBeTruthy();
+
+  // A proposal is not a decision: saving without confirming records no owner.
+  await user.click(screen.getByRole("button", { name: "Save assignments" }));
+  expect(await screen.findByText(/2 owners from the Ledger were not confirmed, so they were not saved/)).toBeTruthy();
+  let saved = readSection(project.projectId, "allocation", storage).data.assignments;
+  expect(saved.T0001.owner).toBe("");
+  expect(saved.T0002.owner).toBe("");
+
+  await user.click(screen.getByRole("button", { name: "Use Ledger owners for all 2 tasks" }));
+  expect(await screen.findByText(/Saved Ledger owners for 2 tasks/)).toBeTruthy();
+  saved = readSection(project.projectId, "allocation", storage).data.assignments;
+  expect(saved.T0001.owner).toBe("Dana");
+  expect(saved.T0002.owner).toBe("Eli");
+  expect(saved.T0003.owner).toBe("");
+  expect(screen.queryByText("From the Ledger: Dana")).toBeNull();
+  expect(screen.queryByRole("button", { name: /Use Ledger owner/ })).toBeNull();
+});
+
+test("an owner already allocated is kept instead of the Ledger proposal", async () => {
+  const user = userEvent.setup();
+  const storage = memoryStorage();
+  const proposed = [task("Login form", [["write", "a.js"]], "Dana"), task("Session store", [["write", "b.js"]], "Eli")]
+    .reduce((current, item) => updateTaskDraft(current, item), emptyTaskDraftLedger(binding));
+  const ledgerStore = { read: async () => proposed, subscribe: () => () => {} };
+  function Proposed() {
+    const records = useProjectWorkRecords(project.projectId, storage);
+    return <ProjectAllocationPanel project={project} records={records} store={ledgerStore} storage={storage} />;
+  }
+  render(<Proposed />);
+  await user.clear(await screen.findByLabelText("Owner for T0002"));
+  await user.type(screen.getByLabelText("Owner for T0002"), "agent: builder");
+  await user.click(screen.getByRole("button", { name: "Save assignments" }));
+  await screen.findByText(/1 owner from the Ledger was not confirmed/);
+
+  await user.click(screen.getByRole("button", { name: "Use the Ledger owner for 1 task" }));
+  await screen.findByText(/Saved the Ledger owner for 1 task/);
+  const saved = readSection(project.projectId, "allocation", storage).data.assignments;
+  expect(saved.T0001.owner).toBe("Dana");
+  expect(saved.T0002.owner).toBe("agent: builder");
+  expect(screen.getByLabelText("Owner for T0002").value).toBe("agent: builder");
 });
 
 test("allocation without an overlap check says so instead of implying clearance", async () => {

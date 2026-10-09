@@ -60,12 +60,12 @@ export function CollisionWorkspace({ onGateChange, onToast }) {
   }, [authority, assessment, censusDigest, onGateChange]);
 
   // A refused write never replaces what the authority already proved: keep it, say why, and re-read.
-  const send = async (key, request, success) => {
+  const send = async (key, request, success, after) => {
     if (inFlight.current) return;
     inFlight.current = true; setPending(key);
     try {
       const snapshot = await request();
-      if (snapshot.authoritative) { setAuthority(snapshot); setLedgerIntegrity("unchecked"); if (success) onToast(success); return; }
+      if (snapshot.authoritative) { setAuthority(snapshot); setLedgerIntegrity("unchecked"); if (success) onToast(success); after?.(snapshot); return; }
       onToast(`Not recorded: ${snapshot.reason} Showing the authority's current record.`);
       const current = await authorityClient.inspect(censusDigest);
       if (current.authoritative || !authority.authoritative) { setAuthority(current); setLedgerIntegrity("unchecked"); }
@@ -77,7 +77,9 @@ export function CollisionWorkspace({ onGateChange, onToast }) {
       onToast("Order staged for review only. Native authority is required to unlock allocation.");
       return;
     }
-    return send(collision.id, () => authorityClient.approve(censusDigest, collision));
+    return send(collision.id, () => authorityClient.approve(censusDigest, collision), null, (snapshot) => {
+      if (!snapshot.approvedIds.includes(collision.id)) onToast(`Approval for ${collision.id} was not recorded: ${snapshot.reason ?? "the authority did not confirm it"}`);
+    });
   };
   const commitAssessment = () => {
     if (committed) return;
@@ -110,7 +112,7 @@ export function CollisionWorkspace({ onGateChange, onToast }) {
         <section className="collision-panel manifest-panel"><div className="collision-panel-title"><HardDrivesIcon /><strong>Active plan census</strong><span>{assessment.safeClaims.length} non-colliding claims</span></div><div className="manifest-list">{manifests.map((manifest) => <article className="manifest-card" key={manifest.planId}><header><code>{manifest.planId}</code><strong>{manifest.title}</strong><span>P{manifest.priority}</span></header>{manifest.tasks.map((task) => <div className="manifest-task" key={task.taskId}><span><code>{task.taskId}</code>{task.title}</span><small>{task.claims.length} claims · depends on {(task.dependsOn ?? []).join(", ") || "none"}</small></div>)}</article>)}</div></section>
         <section className="collision-panel collision-results-panel"><div className="collision-panel-title"><WarningIcon /><strong>Deterministic resolution queue</strong><span>{remaining.length ? "allocation blocked" : "allocation ready"}</span></div><div className="collision-list">{assessment.collisions.map((collision) => {
           const approved = approvedIds.has(collision.id); const staged = stagedIds.has(collision.id);
-          return <article className={`collision-card ${approved ? "collision-approved" : ""}`} key={collision.id}><header><code>{collision.id}</code><strong>{collision.surface}</strong><StatusChip status={approved ? "verified" : collision.severity === "hard-stop" ? "blocked" : "risk"}>{approved ? "order approved" : staged ? "staged only" : collision.severity}</StatusChip></header><p>{collision.reason}</p><div className="collision-pair"><span><small>FIRST</small><strong>{collision.first.planId} · {collision.first.taskId}</strong><code>{collision.first.access}</code></span><ArrowRightIcon /><span><small>THEN</small><strong>{collision.then.planId} · {collision.then.taskId}</strong><code>{collision.then.access}</code></span></div><div className="collision-contingency"><span>CONTINGENCY</span><p>{collision.contingency}</p></div><button disabled={approved || staged || pending !== null || committed} aria-busy={pending === collision.id || undefined} onClick={() => approveCollision(collision)}>{approved ? <CheckCircleIcon weight="fill" /> : <ShieldCheckIcon />}{approved ? "Recorded by authority" : pending === collision.id ? "Requesting…" : staged ? "Staged · gate locked" : authorityClient.available ? "Request approval" : "Stage proposed order"}</button></article>;
+          return <article className={`collision-card ${approved ? "collision-approved" : ""}`} key={collision.id}><header><code>{collision.id}</code><strong>{collision.displaySurface ?? collision.surface}</strong><StatusChip status={approved ? "verified" : collision.severity === "hard-stop" ? "blocked" : "risk"}>{approved ? "order approved" : staged ? "staged only" : collision.severity}</StatusChip></header><p>{collision.reason}</p><div className="collision-pair"><span><small>FIRST</small><strong>{collision.first.planId} · {collision.first.taskId}</strong><code>{collision.first.access}</code></span><ArrowRightIcon /><span><small>THEN</small><strong>{collision.then.planId} · {collision.then.taskId}</strong><code>{collision.then.access}</code></span></div><div className="collision-contingency"><span>CONTINGENCY</span><p>{collision.contingency}</p></div><button disabled={approved || staged || pending !== null || committed} aria-busy={pending === collision.id || undefined} onClick={() => approveCollision(collision)}>{approved ? <CheckCircleIcon weight="fill" /> : <ShieldCheckIcon />}{approved ? "Recorded by authority" : pending === collision.id ? "Requesting…" : staged ? "Staged · gate locked" : authorityClient.available ? "Request approval" : "Stage proposed order"}</button></article>;
         })}</div></section>
       </div>
       <section className={`collision-gate ${gateReady ? "gate-ready" : "gate-locked"}`}><div>{gateReady ? <CheckCircleIcon weight="fill" /> : <XCircleIcon weight="fill" />}<span><strong>{gateReady ? "Allocation conveyor unlocked" : "Allocation conveyor blocked"}</strong><small>{committed ? "Assessment committed. Every collision has an authoritative order bound to this census." : gateReady ? "Every collision has an authoritative order bound to this census." : authority.authoritative ? `${remaining.length} collision decisions still require approval.` : authority.reason}</small></span></div><button className="primary-button" disabled={!gateReady || committed || pending !== null} aria-busy={pending === "commit" || undefined} onClick={commitAssessment}>{committed ? <CheckCircleIcon weight="fill" /> : <ListChecksIcon />} {committed ? "Assessment committed" : pending === "commit" ? "Committing…" : "Commit assessment"}</button></section>
