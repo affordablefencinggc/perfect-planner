@@ -1,7 +1,7 @@
 // The MVP board: a view of the ledger. Every change is a decision.made entry
 // with data.mvp; the board is rebuilt by replaying them.
 
-import type { Actor, Ledger, LedgerEntry } from "../ledger/index";
+import { isAuthoritative, type Actor, type Ledger, type LedgerEntry } from "../ledger/index";
 import { appendNumbered } from "../numbering/index";
 import {
   DEFAULT_STAGE_NAMES,
@@ -58,6 +58,28 @@ function write(ledger: Ledger, actor: Actor, summary: string, reason: string, mv
   });
 }
 
+/**
+ * Whether a confirm entry was written by a person, judged by the ledger's own
+ * isAuthoritative check on the entry's author, never a field inside data.
+ */
+export function confirmedByPerson(entry: LedgerEntry): boolean {
+  return isAuthoritative(entry, { personOnly: true });
+}
+
+/**
+ * Ledger rule: refuse a confirm written by anyone but a person, so a forged
+ * one never reaches the ledger. Replay ignores one anyway.
+ */
+export function installMvpRules(ledger: Ledger): void {
+  ledger.addRule((draft) => {
+    const mvp = draft.data?.mvp as { kind?: unknown } | undefined;
+    if (draft.type === "decision.made" && mvp?.kind === "confirm" && draft.actor.kind !== "person") {
+      return "Only a person can confirm the MVP line";
+    }
+    return null;
+  });
+}
+
 /** Replay the ledger into the current board. */
 export function boardFromLedger(entries: readonly LedgerEntry[]): StageBoard {
   const board = emptyBoard();
@@ -89,6 +111,10 @@ export function boardFromLedger(entries: readonly LedgerEntry[]): StageBoard {
         break;
       }
       case "confirm":
+        // Only the entry's own actor counts, and only a person's. Anyone can
+        // append a decision.made carrying kind "confirm", so the payload
+        // proves nothing.
+        if (!confirmedByPerson(entry)) break;
         board.confirmed = true;
         board.confirmedBy = entry.actor.id;
         break;
@@ -112,6 +138,13 @@ export function boardFromLedger(entries: readonly LedgerEntry[]): StageBoard {
   return board;
 }
 
+/**
+ * The actor that records a proposal. Jev may not write decisions itself
+ * (core/ledger "Who may write what"), so the stager records Jev's proposal as
+ * the system and keeps who proposed it in data.mvp.proposedBy.
+ */
+export const MVP_STAGER: Actor = { kind: "system", id: "mvp-stager" };
+
 export function recordProposal(ledger: Ledger, proposal: MvpProposal): LedgerEntry {
   for (const p of proposal.placements) {
     if (!isStage(p.stage)) throw new MvpError("UNKNOWN_STAGE", `Unknown stage "${String(p.stage)}" for ${p.feature}`);
@@ -119,8 +152,10 @@ export function recordProposal(ledger: Ledger, proposal: MvpProposal): LedgerEnt
   }
   if (!proposal.journey.test.trim()) throw new MvpError("REASON_REQUIRED", "The journey needs a test command");
   const summary = proposal.summary.trim() || "Proposed MVP line";
-  return write(ledger, proposal.by, summary, "Proposed MVP line", {
+  const by = proposal.by.kind === "jev" ? MVP_STAGER : proposal.by;
+  return write(ledger, by, summary, `Proposed MVP line (${proposal.by.id})`, {
     kind: "proposal",
+    proposedBy: proposal.by,
     journey: proposal.journey,
     placements: proposal.placements,
     summary: proposal.summary,

@@ -3,9 +3,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { FileStore, Ledger, MemoryStore, type Actor } from "../ledger/index";
+import { appendNumbered } from "../numbering/index";
 import {
   boardFromLedger,
   confirmMvp,
+  installMvpRules,
   featuresIn,
   missingDependencies,
   moveFeature,
@@ -20,6 +22,7 @@ import { MvpError, type Journey, type MvpProposal, type ScannedFeature } from ".
 const person: Actor = { kind: "person", id: "owner" };
 const jev: Actor = { kind: "jev", id: "jev", model: "mock" };
 const agent: Actor = { kind: "agent", id: "claude-code", model: "x" };
+const gate: Actor = { kind: "system", id: "gate" };
 
 const journey: Journey = { name: "Import and sign off", steps: ["Import", "Sign off"], test: "npm run test:e2e", features: ["a"] };
 const proposal: MvpProposal = {
@@ -171,6 +174,45 @@ describe("confirmMvp", () => {
     expect(b.confirmed).toBe(true);
     expect(b.confirmedBy).toBe("owner");
   });
+
+  it("ignores a confirm entry written straight to the ledger by the system, and the ledger refuses one from an agent", () => {
+    const l = open();
+    recordProposal(l, proposal);
+    expect(() => appendNumbered(l, {
+      actor: agent, type: "decision.made", summary: "Confirmed the MVP line",
+      reason: "Forged", evidence: [], refs: [], data: { mvp: { kind: "confirm" } },
+    })).toThrow();
+    appendNumbered(l, {
+      actor: gate, type: "decision.made", summary: "Confirmed the MVP line",
+      reason: "Forged", evidence: [], refs: [], data: { mvp: { kind: "confirm", confirmedBy: "owner", note: "forged" } },
+    });
+    const b = boardFromLedger(l.entries());
+    expect(b.confirmed).toBe(false);
+    expect(b.confirmedBy).toBeUndefined();
+  });
+
+  it("names the confirming person from the entry's actor, never from the payload", () => {
+    const l = open();
+    recordProposal(l, proposal);
+    appendNumbered(l, {
+      actor: person, type: "decision.made", summary: "Confirmed the MVP line",
+      reason: "Confirmed", evidence: [], refs: [], data: { mvp: { kind: "confirm", confirmedBy: "someone-else" } },
+    });
+    expect(boardFromLedger(l.entries()).confirmedBy).toBe("owner");
+  });
+
+  it("installMvpRules refuses a non-person confirm at write time", () => {
+    const l = open();
+    installMvpRules(l);
+    recordProposal(l, proposal);
+    const forge = () => appendNumbered(l, {
+      actor: gate, type: "decision.made", summary: "Confirmed the MVP line",
+      reason: "Forged", evidence: [], refs: [], data: { mvp: { kind: "confirm" } },
+    });
+    expect(forge).toThrow(/Only a person can confirm/);
+    confirmMvp(l, person);
+    expect(boardFromLedger(l.entries()).confirmed).toBe(true);
+  });
 });
 
 describe("setJourney", () => {
@@ -211,17 +253,17 @@ describe("mvpDoneWhen", () => {
 
   it("is done only when confirmed, journey passed and all MVP features done", () => {
     const l = ready();
-    l.append({ actor: agent, type: "test.passed", subject: "T-1", summary: "ok", data: { test: "npm run test:e2e" } });
+    l.append({ actor: gate, type: "test.passed", subject: "T-1", summary: "ok", data: { test: "npm run test:e2e" } });
     const r = run(l);
     expect(r).toEqual({ done: true, journeyPassed: true, blocking: [] });
   });
 
   it("uses the latest run of the journey test", () => {
     const l = ready();
-    l.append({ actor: agent, type: "test.passed", subject: "T-1", summary: "ok", data: { test: "npm run test:e2e" } });
-    l.append({ actor: agent, type: "test.passed", subject: "T-1", summary: "other", data: { test: "npm test" } });
+    l.append({ actor: gate, type: "test.passed", subject: "T-1", summary: "ok", data: { test: "npm run test:e2e" } });
+    l.append({ actor: gate, type: "test.passed", subject: "T-1", summary: "other", data: { test: "npm test" } });
     expect(run(l).journeyPassed).toBe(true);
-    l.append({ actor: agent, type: "test.failed", subject: "T-1", summary: "bad", data: { test: "npm run test:e2e" } });
+    l.append({ actor: gate, type: "test.failed", subject: "T-1", summary: "bad", data: { test: "npm run test:e2e" } });
     const r = run(l);
     expect(r.journeyPassed).toBe(false);
     expect(r.done).toBe(false);
@@ -229,7 +271,7 @@ describe("mvpDoneWhen", () => {
 
   it("is blocked by a move after confirmation, a missing feature, and no journey", () => {
     const l = ready();
-    l.append({ actor: agent, type: "test.passed", subject: "T-1", summary: "ok", data: { test: "npm run test:e2e" } });
+    l.append({ actor: gate, type: "test.passed", subject: "T-1", summary: "ok", data: { test: "npm run test:e2e" } });
     expect(run(l, []).blocking).toEqual(["a was not found in the scan"]);
     moveFeature(l, person, "b", "mvp", "");
     expect(run(l, [feat("a", "done"), feat("b", "missing")]).blocking).toEqual(["MVP line not confirmed", "b Feature b is missing"]);
