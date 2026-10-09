@@ -137,4 +137,34 @@ describe("git resolver", () => {
     expect(realpathSync.native(gitExecutable(repo)).startsWith(repo)).toBe(false);
     expect(existsSync(path.join(repo, "bin", "planted-ran"))).toBe(false);
   });
+
+  // Review of 4c317f7: the project can be a subfolder of the repo (core/ledger/ignore.ts runs git
+  // there), so a PATH entry at the repo root, such as an activated .venv/bin, was still searched.
+  it("skips PATH entries inside the roots the host protects, with a subfolder cwd", () => {
+    const repo = makeRepo();
+    const project = path.join(repo, "apps", "web");
+    mkdirSync(project, { recursive: true });
+    mkdirSync(path.join(repo, ".venv", "bin"), { recursive: true });
+    plantGit(path.join(repo, ".venv", "bin"));
+    const tools = tempDir("pp-exe-tools-");
+    const real = plantGit(tools);
+    const env = { PATH: [path.join(repo, ".venv", "bin"), tools].join(path.delimiter) };
+    // cwd alone does not cover the repo root; that is what `protect` is for.
+    expect(findExecutable("git", env, project)).not.toBe(real);
+    expect(findExecutable("git", env, project, process.platform, [repo])).toBe(real);
+  });
+
+  it("gitExecutable looks again when its cached git is inside a protected root", () => {
+    const repo = makeRepo();
+    const project = path.join(repo, "apps", "web");
+    mkdirSync(project, { recursive: true });
+    plantGit(repo);
+    process.env.PATH = `${repo}${path.delimiter}${originalPath}`;
+    // A first call without the root caches the repo's git, which is never run here.
+    expect(gitExecutable(project).startsWith(repo)).toBe(true);
+    const safe = gitExecutable(project, [repo]);
+    expect(realpathSync.native(safe).startsWith(repo)).toBe(false);
+    expect(execFileSync(safe, ["--version"], { cwd: project, encoding: "utf8", env: { ...process.env, ...NO_CWD_SEARCH_ENV } })).toMatch(/^git version \d/);
+    expect(existsSync(path.join(repo, "planted-ran"))).toBe(false);
+  });
 });
