@@ -70,7 +70,7 @@ function RequirementList({ model, onSelect, query }) {
       onClick={() => onSelect?.(selectedItem(item, model))}
     >
       <span className="imported-workflow-requirement-number">{String(index + 1).padStart(2, "0")}</span>
-      <code>{item.id}</code>
+      <code className="advanced-only">{item.id}</code>
       <span className="imported-workflow-requirement-copy"><strong>{item.label}</strong><small>{item.detail}</small></span>
       <StateMark state={item.state} />
     </button></div>)}
@@ -105,9 +105,9 @@ function QuestionMap({ model, onSelect, query }) {
           ],
         })}
       >
-        <span><code>{item.id}</code><strong>{item.title}</strong></span>
+        <span><code className="advanced-only">{item.id}</code><strong>{item.title}</strong></span>
         <StateMark state={item.state} />
-        {item.findingIds.length > 0 && <small className="imported-workflow-finding-ids">Finding references: {item.findingIds.join(" · ")}</small>}
+        {item.findingIds.length > 0 && <small className="imported-workflow-finding-ids advanced-only">Finding references: {item.findingIds.join(" · ")}</small>}
         <ul>{item.questions.map((question) => <li key={question}>{question}</li>)}</ul>
       </button>)}
       {!questions.length && <p className="imported-workflow-search-empty">No discovery question matches “{query}”.</p>}
@@ -207,7 +207,7 @@ export function ImportedProjectWorkflowWorkspace({
       </main>
 
       <aside className="imported-workflow-aside">
-        <section className="imported-workflow-panel imported-workflow-binding">
+        <section className="imported-workflow-panel imported-workflow-binding advanced-only">
           <header><span><ShieldWarningIcon aria-hidden="true" /><strong>Scan binding</strong></span></header>
           <dl>
             <div><dt>Project</dt><dd>{model.binding.projectId}</dd></div>

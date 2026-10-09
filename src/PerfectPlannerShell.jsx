@@ -66,6 +66,8 @@ const ComponentPlansWorkspace = lazy(() => import("./components/ComponentPlansWo
 import { ImportedProjectWorkflowWorkspace } from "./components/ImportedProjectWorkflowWorkspace.jsx";
 const ConnectAgentDrawer = lazy(() => import("./components/ConnectAgentDrawer.jsx").then((module) => ({ default: module.ConnectAgentDrawer })));
 import { ProjectTruthGate } from "./components/ProjectTruthGate.jsx";
+import { ViewModeToggle } from "./components/ViewModeToggle.jsx";
+import { ViewModeContext, useViewModeState } from "./project/viewMode.js";
 import { DEMO_ONLY_REASON, DemoOnlyReason, DemoSampleBadge } from "./demo/DemoSampleNotice.jsx";
 const loadRuntimeTools = (name) => import("./components/RuntimeConnectionsPanel.jsx")
   .then((module) => ({ default: module[name] })).catch(() => ({ default: RuntimeToolsUnavailable }));
@@ -1292,7 +1294,7 @@ function RepositoryDrawer({
                         ? "Demo fixtures · not imported evidence"
                         : `${project.registration?.rootLabel ?? "Local folder"} · ${censusLabel}`}
                     </small>
-                    <code>{project.projectId}</code>
+                    <code className="advanced-only">{project.projectId}</code>
                   </span>
                   <StatusChip status={status}>{project.state}</StatusChip>
                 </button>
@@ -2629,6 +2631,7 @@ function WorkspaceContextBar({
         </span>
       </div>
       <div className="workspace-route-controls">
+        <ViewModeToggle />
         <div className="workspace-breadcrumb">
           <span>{stage ? `${stage.number} · ${stage.label}` : "Project"}</span>
           <CaretRightIcon />
@@ -2712,7 +2715,7 @@ function ProjectHomeWorkspace({
           <div>
             <span className="eyebrow">
               {hasProject
-                ? `${project.projectId} · scan ${project.generation} · ${mode}`
+                ? <><span className="advanced-only">{`${project.projectId} · scan ${project.generation} · `}</span>{mode}</>
                 : "No project selected · honest empty state"}
             </span>
             <h1>
@@ -2742,7 +2745,7 @@ function ProjectHomeWorkspace({
             <small>NEXT STEP</small>
             <strong>{nextAction.label}</strong>
             <p>{nextAction.reason}</p>
-            {hasProject && <span>
+            {hasProject && <span className="advanced-only">
               Bound to {binding.projectId} · scan {binding.sessionGeneration ?? "unavailable"} · registry {binding.registryRevision ?? "unavailable"}
             </span>}
           </div>
@@ -2777,11 +2780,11 @@ function ProjectHomeWorkspace({
                   : "No app folder registered"
                 : `${summary.census.state === "stale" ? "Last known · " : ""}${summary.census.fileCount} files captured`}
             </strong>
-            <small>
+            <small className="advanced-only">
               Skipped {unavailableValue(summary.census.skippedCount, summary.census.state)} · fingerprint {digestValue(summary.census.digest, summary.census.state)} · registry revision {unavailableValue(binding.registryRevision, summary.registration.state)}
             </small>
           </div>
-          <em>
+          <em className={summary.registration.state === "unavailable" ? undefined : "advanced-only"}>
             {summary.registration.state === "unavailable"
               ? "Registration unavailable"
               : `${summary.registration.adapter} · ${summary.registration.persistence}`}
@@ -2803,13 +2806,13 @@ function ProjectHomeWorkspace({
             <article data-fact-state={summary.registration.state}>
               <small>REGISTRATION</small>
               <strong>{unavailableValue(summary.registration.rootLabel, summary.registration.state)}</strong>
-              <p>{unavailableValue(summary.registration.access, summary.registration.state)} · {unavailableValue(summary.registration.adapter, summary.registration.state)}</p>
+              <p className={summary.registration.state === "unavailable" ? undefined : "advanced-only"}>{unavailableValue(summary.registration.access, summary.registration.state)} · {unavailableValue(summary.registration.adapter, summary.registration.state)}</p>
               <StatusChip status={summary.registration.state === "available" ? "verified" : summary.registration.state === "unavailable" ? "risk" : "active"}>{summary.registration.state}</StatusChip>
             </article>
             <article data-fact-state={summary.census.state}>
               <small>FOLDER SCAN</small>
               <strong>{unavailableValue(summary.census.fileCount, summary.census.state, " files")}</strong>
-              <p>{unavailableValue(summary.census.skippedCount, summary.census.state, " skipped")} · fingerprint {digestValue(summary.census.digest, summary.census.state)}</p>
+              <p>{unavailableValue(summary.census.skippedCount, summary.census.state, " skipped")}<span className="advanced-only"> · fingerprint {digestValue(summary.census.digest, summary.census.state)}</span></p>
               <StatusChip status={summary.census.state === "available" ? "verified" : summary.census.state === "unavailable" || summary.census.state === "blocked" ? "risk" : "active"}>{summary.census.state}</StatusChip>
             </article>
             <article data-fact-state={summary.discovery.state}>
@@ -2825,7 +2828,7 @@ function ProjectHomeWorkspace({
                   <li key={kind} data-fact-state={authority.state}>
                     <span>{kind === "plan" ? "Saved Plan record" : kind}</span>
                     <strong>{authority.state}</strong>
-                    <em>{authority.revision == null ? "revision unavailable" : `${authority.state === "unavailable" || authority.state === "stale" ? "last known · " : ""}revision ${authority.revision}`}</em>
+                    <em className="advanced-only">{authority.revision == null ? "revision unavailable" : `${authority.state === "unavailable" || authority.state === "stale" ? "last known · " : ""}revision ${authority.revision}`}</em>
                   </li>
                 ))}
               </ul>
@@ -2886,7 +2889,7 @@ function ProjectHomeWorkspace({
               <ol>
                 {blockers.map((item) => (
                   <li key={item.id} data-blocker-state={item.state}>
-                    <code>{item.id}</code>
+                    <code className="advanced-only">{item.id}</code>
                     <span><strong>{item.scope}</strong><small>{item.reason}</small></span>
                     <StatusChip status={item.state === "unavailable" || item.state === "blocked" || item.state === "stale" ? "risk" : "active"}>{item.state}</StatusChip>
                   </li>
@@ -5494,6 +5497,7 @@ function PerfectPlannerShellCore({
   runtimeCapabilityNow,
   diagnosticSession,
 }) {
+  const viewMode = useViewModeState();
   const activeProject = projectContext.activeProject;
   const demoMode = isDemoProject(activeProject);
   const projectWorkflowReady = Boolean(activeProject) && !["stale", "unavailable"].includes(activeProject.state);
@@ -5997,8 +6001,10 @@ function PerfectPlannerShellCore({
   };
 
   return (
+    <ViewModeContext.Provider value={viewMode}>
     <div
       className={`app-shell workspace-${workspace} ${opsOpen ? "ops-is-open" : ""}`}
+      data-view-mode={viewMode.mode}
     >
       <TopBar
         workspace={workspace}
@@ -6370,6 +6376,7 @@ function PerfectPlannerShellCore({
         </div>
       )}
     </div>
+    </ViewModeContext.Provider>
   );
 }
 

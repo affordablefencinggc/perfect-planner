@@ -3,6 +3,8 @@ import { ClockIcon, ShieldCheckIcon, WarningIcon, XCircleIcon } from "@phosphor-
 
 const NON_READY_STATES = new Set(["empty", "unavailable", "stale"]);
 const KNOWN_STATES = new Set(["empty", "demo", "imported", "generated", "authoritative", "ready", "unavailable", "stale"]);
+// Exact identifiers stay available in Advanced view; Simple view hides them with CSS only.
+const TECHNICAL_ROWS = new Set(["Project ID", "Generation", "Entity", "Digest", "Schema", "Revision", "Adapter"]);
 const ROW_LABEL_OVERRIDES = { Generation: "Scan", Digest: "Fingerprint", "Authority reason": "Approval reason" };
 const WINDOWS_PATH = /(?:[a-zA-Z]:[\\/]|\\\\)[^\n\r]*/g;
 const POSIX_PATH = /(^|[\s("'=])\/(?!\/)[^\n\r]*/g;
@@ -110,6 +112,7 @@ export function ProjectTruthGate({
       key: label.toLowerCase().replaceAll(" ", "-"),
       label: ROW_LABEL_OVERRIDES[label] ?? label,
       value: safeText(value),
+      technical: TECHNICAL_ROWS.has(label),
     }));
   }, [projectSession, provenance, state, statusReason]);
 
@@ -175,7 +178,7 @@ export function ProjectTruthGate({
         <span className="project-truth-trigger-copy">
           <small>ACTIVE PROJECT</small>
           <strong>{projectName}</strong>
-          <span>{hasProject ? projectId : stateLabel(state, hasProject)}{projectSession?.generation !== null && projectSession?.generation !== undefined ? ` · scan ${safeText(projectSession.generation)}` : ""}</span>
+          <span className={hasProject ? "advanced-only" : undefined}>{hasProject ? projectId : stateLabel(state, hasProject)}{projectSession?.generation !== null && projectSession?.generation !== undefined ? ` · scan ${safeText(projectSession.generation)}` : ""}</span>
         </span>
         {isDemo && <span className="project-truth-demo-badge">Demo</span>}
         <span className={`project-truth-state-badge state-${state}`}>{stateLabel(state, hasProject)}</span>
@@ -219,7 +222,7 @@ export function ProjectTruthGate({
 
             <dl className="project-truth-provenance-list">
               {rows.map((row) => (
-                <div key={row.key} className="project-truth-provenance-row" data-provenance-field={row.key}>
+                <div key={row.key} className={`project-truth-provenance-row${row.technical ? " advanced-only" : ""}`} data-provenance-field={row.key}>
                   <dt>{row.label}</dt>
                   <dd>{row.value}</dd>
                 </div>
