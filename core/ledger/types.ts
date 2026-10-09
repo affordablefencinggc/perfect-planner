@@ -36,6 +36,7 @@ export const ENTRY_TYPES = [
   "correction",
   "budget.warning",
   "chain.acknowledged",
+  "key.trusted",
 ] as const;
 
 export type EntryType = (typeof ENTRY_TYPES)[number];
@@ -48,6 +49,7 @@ export const REASON_REQUIRED_TYPES: ReadonlySet<EntryType> = new Set<EntryType>(
   "clause.withdrawn",
   "chain.acknowledged",
   "task.reopened",
+  "key.trusted",
 ]);
 
 export const ACTOR_KINDS = ["person", "agent", "jev", "system"] as const;
@@ -84,11 +86,13 @@ export interface LedgerEntry {
   refs: string[];
   corrects?: string;
   data?: Record<string, unknown>;
+  /** Person and system entries only: Ed25519 signature over every field except hash and sig. */
+  sig?: { key: string; value: string };
   prev: string;
   hash: string;
 }
 
-export type ChainProblem = "hash" | "prev" | "number" | "parse" | "truncated" | "permission" | "write";
+export type ChainProblem = "hash" | "prev" | "number" | "parse" | "truncated" | "permission" | "signature" | "write";
 
 export type ChainResult =
   | { ok: true }
@@ -117,6 +121,7 @@ export type LedgerErrorCode =
   | "CHAIN_BROKEN"
   | "READ_ONLY"
   | "NOT_PERMITTED"
+  | "NOT_SIGNED"
   | "RULE";
 
 export class LedgerError extends Error {
