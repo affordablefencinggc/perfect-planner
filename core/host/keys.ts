@@ -18,7 +18,7 @@ export function asPersonRequest<T>(fn: () => T): T {
   return personRequest.run(true, fn);
 }
 
-type EnsuringProvider = KeyProvider & ({ ensureKey(principal: string): TrustedKey } | { createKey(principal: string): TrustedKey });
+type EnsuringProvider = KeyProvider & { rotateKey(principal: string): TrustedKey } & ({ ensureKey(principal: string): TrustedKey } | { createKey(principal: string): TrustedKey });
 
 /** Wraps a provider so person keys are made only inside asPersonRequest. */
 export class HostKeys implements KeyProvider {
@@ -39,6 +39,16 @@ export class HostKeys implements KeyProvider {
   ensureSystemKey(): void {
     if (!this.inner.state().available) return;
     this.make("system");
+  }
+
+  /**
+   * A new key for this person; the old one never signs here again. Call only from the person's own
+   * request, then retire the old key in each ledger it signed (rotatePersonKey does both).
+   */
+  rotate(principal: string): { oldKeyId: string | undefined; key: TrustedKey } {
+    if (personRequest.getStore() !== true) throw new Error("Only the person's own request can rotate their key.");
+    const oldKeyId = this.inner.trustedKeys().find((k) => k.principal === principal && !k.retired)?.keyId;
+    return { oldKeyId, key: this.inner.rotateKey(principal) };
   }
 
   sign(principal: string, message: Buffer): { keyId: string; signature: string } {
