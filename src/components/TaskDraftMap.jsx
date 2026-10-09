@@ -4,14 +4,17 @@ import { projectTaskDraftMap, taskDraftLink, taskDraftConnectionPoints } from '.
 import { createTaskDraftStore } from '../project/taskDraftStore.js';
 import {useOptionalProject} from '../project/ProjectProvider.jsx';
 import {canonicalArchitectureJson as canonical} from '../engine/architectureContractVerification.js';
-import {digestPlanTasks, planApprovalStatus} from '../project/planApproval.js';
+import {digestPlanTasks, planApprovalStatus, savedPlanCheckText} from '../project/planApproval.js';
+import {useProjectWorkRecords} from '../project/useProjectWorkRecords.js';
 import './TaskDraftMap.css';
 
 export function TaskDraftMap({project,records,onWorkspace,store}){
   let binding;try{binding=taskDraftBinding(project);}catch{return <section className="draft-map-panel"><h2>Plan at a glance</h2><p>Import your app folder before planning its work.</p></section>;}
   return <BoundMap key={`${binding.projectId}:${binding.rootIdentity}:${binding.censusDigest}`} binding={binding} project={project} onWorkspace={onWorkspace} providedStore={store} records={records}/>;
 }
-function BoundMap({binding,project,records,onWorkspace,providedStore}){
+function BoundMap({binding,project,records:providedRecords,onWorkspace,providedStore}){
+  // Read saved work records when the caller doesn't pass them, so the map still sees a Plan-page approval.
+  const storedRecords=useProjectWorkRecords(binding.projectId),records=providedRecords??storedRecords;
   const projectContext=useOptionalProject(),planStatus=projectContext?.planStatuses?.[binding.projectId]??projectContext?.planRefreshStatus;
   const store=useMemo(()=>providedStore??createTaskDraftStore(),[providedStore]);
   const viewport=useRef(null),sequence=useRef(0),alive=useRef(false);
@@ -22,7 +25,8 @@ function BoundMap({binding,project,records,onWorkspace,providedStore}){
   // The plan approved on the Plan page (a device-local work record) counts too, so the map
   // agrees with the Approved banner below it when no native planning check is available.
   const localApproval=planApprovalStatus(project,records),[ledgerDigest,setLedgerDigest]=useState(null);
-  useEffect(()=>{let current=true;setLedgerDigest(null);if(ledger)digestPlanTasks(ledger.tasks).then(d=>{if(current)setLedgerDigest(d);}).catch(()=>{});return()=>{current=false;};},[ledger]);
+  const [digestFailed,setDigestFailed]=useState(false);
+  useEffect(()=>{let current=true;setLedgerDigest(null);setDigestFailed(false);if(ledger)digestPlanTasks(ledger.tasks).then(d=>{if(current)setLedgerDigest(d);}).catch(()=>{if(current)setDigestFailed(true);});return()=>{current=false;};},[ledger]);
   const localRecorded=!planChecked&&!busy&&!error&&!stale&&ledger&&localApproval?.state==='recorded'&&ledgerDigest!==null;
   const localApproved=localRecorded&&ledgerDigest===localApproval.record.planDigest;
   const localChanged=!planChecked&&ledger&&!stale&&(localApproval?.state==='review'||localApproval?.state==='stale'||(localRecorded&&!localApproved));
@@ -39,8 +43,8 @@ function BoundMap({binding,project,records,onWorkspace,providedStore}){
   return <section className="draft-map-panel" aria-label="Project draft mind map">
     <header><div><h2>Plan at a glance</h2><p>Saved Ledger revision {model?.revision??'—'} · {model?.nodes.length??0} active drafts{model?.archived?` · ${model.archived} archived in Ledger`:''}</p></div><div className="draft-map-tools"><button type="button" onClick={refresh} disabled={busy}>Refresh map</button><button type="button" onClick={()=>onWorkspace?.('ledger')}>Open Ledger</button></div></header>
     <details className="draft-map-note"><summary>How to read this map</summary><p>Lines show recorded dependencies, not progress or permission to execute. Click a task for its full Ledger record. File conflicts and incomplete details still need review.</p></details>
-    <p role="status">{busy?'Reading the saved draft…':error?'Map refresh failed; any displayed map is the last loaded revision.':`${model?.reviewCount??0} planning review findings · ${planChecked?'planning approval checked; no work executed or completed':localApproved?'plan approved on this device; no work executed or completed':'no current planning approval checked; no work completed'}`}</p>
-    <div aria-label="Map planning approval"><p>{planChecked?`Checked planning approval revision ${planStatus.revision} for this exact saved Ledger. Planning only.`:localApproved?`Plan approved: ${localApproval.detail} · Planning only.`:localChanged?'Tasks changed since the plan was approved. Approve the current tasks below.':planStatus?.state==='unfinished'?'Unfinished editor text needs recovery or an explicit decision in Ledger.':planStatus?.state==='pending'?'An original request needs reconciliation in Ledger.':planStatus?.state==='missing'?'No saved planning approval exists. Review in Ledger.':planStatus?.state==='unavailable'?'Planning approval could not be checked. Last-known history is not current.':planStatus?.state==='refreshing'?'Checking planning approval…':'Planning approval is not checked for this exact saved Ledger. Refresh or review in Ledger.'}</p><button type="button" disabled={!projectContext?.refreshPlan||busy||planStatus?.state==='refreshing'} onClick={()=>{void projectContext?.refreshPlan(binding.projectId);}}>Check planning approval</button></div>
+    <p role="status">{busy?'Reading the saved draft…':error?'Map refresh failed; any displayed map is the last loaded revision.':`${model?.reviewCount??0} planning review findings · ${planChecked?'saved-plan check passed; no work executed or completed':localApproved?'plan approved on this device; saved-plan check not passed yet; no work executed or completed':localChanged?'tasks changed since the plan was approved; no work completed':localApproval?.state==='recorded'&&digestFailed?'approval check failed; no work completed':localApproval?.state==='recorded'?'plan approved by you; saved-plan check not passed yet; no work completed':'no plan approved yet; no work completed'}`}</p>
+    {(()=>{const copy=savedPlanCheckText({check:planStatus,approval:localApproval,checked:planChecked});const text=planChecked?copy.text:localChanged?'Tasks changed since the plan was approved. Approve the current tasks below.':localApproved?`Plan approved: ${localApproval.detail}. Run the saved-plan check to lock it to this exact Ledger.`:localApproval?.state==='recorded'&&digestFailed?'This browser could not check that the approved plan matches the current tasks, so the approval is not shown as current. Reload, or approve the plan again on the Plan page.':copy.text;return <div aria-label="Map planning approval"><p>{text}</p><p><small>{copy.explainer}</small></p><button type="button" disabled={!projectContext?.refreshPlan||busy||planStatus?.state==='refreshing'} onClick={()=>{void projectContext?.refreshPlan(binding.projectId);}}>{copy.action}</button></div>;})()}
     {error&&<p role="alert" className="draft-map-error">{error}</p>}
     {stale&&<p role="alert" className="draft-map-error">This draft belongs to an older folder census. It is shown for reference only. Review it in the Ledger.</p>}
     {model?.edges.length>800&&<p>Dense dependency map: focus or hover a task to show its connections. All {model.nodes.length} active tasks remain visible; full dependency lists are in the Ledger.</p>}

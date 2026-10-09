@@ -6,6 +6,10 @@ import { DiscoveryReviewPanel } from "../src/components/DiscoveryReviewPanel.jsx
 import { readSection, readWorkRecords } from "../src/project/projectWorkRecords.js";
 import { createImportedProjectSession } from "../src/project/projectSession.js";
 import { deriveImportedProjectWorkflowModel } from "../src/project/importedProjectWorkflowModel.js";
+import { saveDiscoveryFindings } from "../src/project/discoveryReviewModel.js";
+import { ProjectProvider, useProject } from "../src/project/ProjectProvider.jsx";
+import { createMemoryStorage, createProjectRegistry } from "../src/project/projectRegistry.js";
+import { buildWorkspaceDiscovery } from "../src/engine/workspaceDiscoveryEngine.js";
 
 const AT = "2026-09-04T11:00:00.000Z";
 
@@ -90,6 +94,57 @@ describe("Review what we found", () => {
     expect(screen.getByText(/earlier answers no longer count/)).toBeTruthy();
     expect(screen.getByText("7 of 7 areas still need your answer.")).toBeTruthy();
     expect(screen.queryByText("React-style component files")).toBeNull();
+  });
+
+  test("after a reload the saved finding labels and evidence paths are shown without scanning again", () => {
+    const storage = memoryStorage();
+    const session = project();
+    const scan = { categories: [
+      { id: "A01", findings: [{ id: "S001", label: "JavaScript or TypeScript app", certainty: "observed", evidence: ["package.json"], evidenceCount: 1, detail: "A package manifest exists at the app root." }] },
+      { id: "A02", findings: [{ id: "S013", label: "React-style component files", certainty: "signal", evidence: ["src/App.jsx", "src/main.jsx", "src/Nav.jsx"], evidenceCount: 12, detail: "12 JSX/TSX files suggest React-style UI." }] },
+    ] };
+    saveDiscoveryFindings(session, scan, { storage, now: () => AT });
+    // No live scan in this session: only what was saved with the scan.
+    render(<DiscoveryReviewPanel project={session} storage={storage} />);
+    const runtime = screen.getByRole("listitem", { name: "Runtime & framework" });
+    expect(within(runtime).getByText("React-style component files")).toBeTruthy();
+    expect(within(runtime).getByText("src/App.jsx")).toBeTruthy();
+    expect(within(runtime).getByText(/and 9 more/)).toBeTruthy();
+    expect(within(screen.getByRole("listitem", { name: "App identity" })).getByText("package.json")).toBeTruthy();
+    expect(screen.queryByText(/scan the folder again in this session/i)).toBeNull();
+  });
+
+  test("details saved for an older scan are not shown for a newer one", () => {
+    const storage = memoryStorage();
+    saveDiscoveryFindings(project(), { categories: [{ id: "A02", findings: [{ id: "S013", label: "React-style component files", certainty: "signal", evidence: ["src/App.jsx"], evidenceCount: 1, detail: "" }] }] }, { storage, now: () => AT });
+    render(<DiscoveryReviewPanel project={project({ generatedAt: "2026-09-05T09:00:00.000Z" })} storage={storage} />);
+    expect(screen.queryByText("React-style component files")).toBeNull();
+    expect(screen.getAllByText(/scan the folder again in this session/i).length).toBeGreaterThan(0);
+  });
+
+  test("importing a scanned folder saves its finding details so the review shows them after a reload", async () => {
+    const user = userEvent.setup();
+    const storage = createMemoryStorage();
+    const rootIdentity = "f".repeat(64);
+    const census = { digest: "9".repeat(64), fileCount: 3, generatedEpochMs: Date.parse(AT), registryRevision: 1, rootIdentity, skipped: [{ path: ".git", reason: "generated-or-dependency-directory-excluded", size: null }], totalBytesHashed: 30, workspaceId: "reload-app",
+      files: [{ path: "package.json" }, { path: "src/App.jsx" }, { path: ".openai/hosting.json" }] };
+    const discovery = buildWorkspaceDiscovery(census, { appName: "Reload App" });
+    function Importer() {
+      const projects = useProject();
+      return <button onClick={() => projects.registerImportedProject({ name: "Reload App", adapter: "native", now: AT, registration: { access: "metadata-read-only", canonicalRoot: "C:\\private\\Reload App", registryRevision: 1, rootIdentity, workspaceId: "reload-app" }, census, discovery })}>Import</button>;
+    }
+    const first = render(<ProjectProvider storage={storage} initialUrl="/?workspace=structure"><Importer /></ProjectProvider>);
+    await user.click(screen.getByRole("button", { name: "Import" }));
+    first.unmount();
+
+    // Reload: a new registry reads the saved project; no scan exists in this session.
+    const saved = createProjectRegistry({ storage }).getSnapshot().activeProject;
+    expect(saved.name).toBe("Reload App");
+    render(<DiscoveryReviewPanel project={saved} storage={storage} />);
+    const identity = screen.getByRole("listitem", { name: "App identity" });
+    expect(within(identity).getByText("Git metadata present")).toBeTruthy();
+    expect(within(screen.getByRole("listitem", { name: "Tests, CI & deployment" })).getByText(".openai/hosting.json")).toBeTruthy();
+    expect(screen.queryByText(/scan the folder again in this session/i)).toBeNull();
   });
 
   test("renders nothing for the Demo project", () => {
