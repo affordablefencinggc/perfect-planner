@@ -32,4 +32,4 @@ npm run tauri:dev  # desktop app (needs Rust)
 
 Push a tag named `R-<number>` (for example `git tag R-2 && git push origin R-2`). The **Perfect Planner Release** workflow builds the Windows, macOS and Linux installers and attaches them to a **draft** release with the release stamp, version and commit in each file name. Review the draft on GitHub and publish it yourself.
 
-For a test build without a release, run the workflow by hand from the Actions tab and leave the stamp as `dry-run`; the installers appear as downloadable workflow artifacts.
+For a test build without a release, push to a `release/…` branch (or run the workflow by hand from the Actions tab with the stamp left as `dry-run`); the installers appear as downloadable workflow artifacts on that run.
