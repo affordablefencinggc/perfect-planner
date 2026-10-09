@@ -111,3 +111,44 @@ describe("planning an existing repo", () => {
     expect(session.recordRepoFacts(agent, profile, stack.facts)).toEqual([]);
   });
 });
+
+describe("roadmap for an existing repo", () => {
+  async function planned() {
+    const ledger = await Ledger.open(new MemoryStore());
+    installNumberingRules(ledger);
+    installPlanningRules(ledger);
+    const session = new PlanningSession(ledger, { person: "looplet-spare" });
+    const stack = readRepoStack(looplet());
+    const profile = profileRepo("A fencing contractor app for quotes and invoices, offline on site", stack);
+    session.recordRepoFacts(agent, profile, stack.facts);
+    session.start(agent, profile);
+    return { session, ledger };
+  }
+
+  it("lists no build task for a part the repo already has, and names those parts instead", async () => {
+    const { session } = await planned();
+    // A person decides something the code cannot show; that part is still planned.
+    const offline = session.open().find((q) => q.id === "offline.required")!;
+    session.answer({ kind: "person", id: "looplet-spare" }, offline.q, { choice: "full-offline" });
+    const roadmap = session.roadmap("x", "looplet-spare");
+    const titles = roadmap.phases.flatMap((p) => p.tasks.map((t) => t.title));
+    expect(titles).toContain("Build Sync engine");
+    for (const built of ["Set up Data store", "Build App shell", "Integrate Payments", "Build Mobile screens", "Build Sign-in"]) {
+      expect(titles).not.toContain(built);
+    }
+    expect(titles.some((t) => t.startsWith("Integrate Framework"))).toBe(false);
+    expect(roadmap.existing?.map((e) => e.label)).toEqual(expect.arrayContaining(["Data store", "App shell", "Payments", "Mobile screens", "Sign-in"]));
+    // Every dependency still points at a task that is in the roadmap.
+    const keys = new Set(roadmap.phases.flatMap((p) => p.tasks.map((t) => t.key)));
+    for (const task of roadmap.phases.flatMap((p) => p.tasks)) for (const d of task.dependsOn) expect(keys.has(d)).toBe(true);
+  });
+
+  it("keeps what the code cannot show open for a person to answer", async () => {
+    const { session } = await planned();
+    const open = session.open().map((q) => q.id);
+    expect(open).toEqual(expect.arrayContaining(["money.pricing", "offline.required", "auth.signin"]));
+    expect(session.blockers().length).toBeGreaterThan(0);
+    // Nothing is written as a plan while those blockers are open.
+    expect(() => session.writeRoadmap({ kind: "person", id: "looplet-spare" }, session.roadmap("x"))).toThrow(/blocking questions/);
+  });
+});

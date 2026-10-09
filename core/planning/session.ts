@@ -36,6 +36,8 @@ export interface AnswerInput {
   reason?: string;
   /** Files or URLs that back the answer, recorded on the decision. */
   evidence?: string[];
+  /** "repo" when the answer was read from the existing code, not chosen by a person. */
+  source?: "repo";
   /** Turn a deferral into a dated spike task instead of a decision. */
   spike?: SpikePlan;
 }
@@ -108,6 +110,7 @@ export class PlanningSession {
         // "TypeScript everywhere" already says "TypeScript"; add the repo's words only when they say more.
         ...(!label || !label.toLowerCase().includes(fact.text.toLowerCase()) ? { text: fact.text } : {}),
         reason: `Found in the repo: ${fact.evidence.join(", ")}`,
+        source: "repo",
         evidence: fact.evidence,
       });
       if (result.status === "decided") decided.push(result.decision);
@@ -202,7 +205,7 @@ export class PlanningSession {
       reason,
       refs: [q, PLAN_TASK],
       evidence: [...(input.evidence ?? []), ...(question.recommendation.sources ?? []).map((s) => s.url)],
-      data: { question: q, questionText: question.text, answer, choice, planning: { id: question.id, area: question.area } },
+      data: { question: q, questionText: question.text, answer, choice, planning: { id: question.id, area: question.area }, ...(input.source ? { source: input.source } : {}) },
     });
     this.ledger.append({
       actor,

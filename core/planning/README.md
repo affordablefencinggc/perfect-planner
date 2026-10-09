@@ -75,7 +75,10 @@ when there is one, the stack in words and the files that show it.
 `profile.known`, so `start()` does not ask it. `session.recordRepoFacts(actor,
 profile, facts)` writes each fact as an answered question whose decision has
 reason "Found in the repo: <files>" and those files as evidence, so the mind
-map and roadmap build on the real stack. Found running Perfect Planner on
+map and roadmap build on the real stack. Mind map nodes a repo answer produced
+are marked `existing` (risks never are), and `buildRoadmap` gives them no
+build task: they are listed in `roadmap.existing` instead. Questions the code
+cannot answer (pricing, offline, sign-in) stay open for a person. Found running Perfect Planner on
 Looplet, where planning recommended Tauri, Expo and SQLite for an Electron,
 Capacitor and Supabase app.
 

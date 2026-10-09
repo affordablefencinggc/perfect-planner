@@ -186,7 +186,7 @@ export function buildMindMap(idea: string, answers: PlanningAnswer[]): MindMap {
   const rootLabel = short(idea, 60) || "Untitled idea";
   nodes.root = { id: "root", kind: "component", label: rootLabel, from: [], children: [] };
 
-  const place = (spec: NodeSpec, parent: string, from: string): void => {
+  const place = (spec: NodeSpec, parent: string, from: string, fromRepo = false): void => {
     const id = nodeId(spec.kind, spec.label);
     const existing = nodes[id];
     if (existing) {
@@ -196,11 +196,12 @@ export function buildMindMap(idea: string, answers: PlanningAnswer[]): MindMap {
       nodes[parent]!.children.push(id);
       links.push({ from: parent, to: id });
     }
-    for (const child of spec.children ?? []) place(child, id, from);
+    if (fromRepo && spec.kind !== "risk") nodes[id]!.existing = true;
+    for (const child of spec.children ?? []) place(child, id, from, fromRepo);
   };
 
   for (const answer of sortAnswers(answers)) {
-    for (const spec of AREA_RULES[answer.area](answer)) place(spec, "root", answer.questionId);
+    for (const spec of AREA_RULES[answer.area](answer)) place(spec, "root", answer.questionId, answer.fromRepo === true);
     if (answer.spike) {
       place(
         {
