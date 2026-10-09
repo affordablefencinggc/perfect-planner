@@ -390,8 +390,8 @@ describe("redaction covers the formats the release scanner knows, and more", () 
     ["AWS key id", j("AK", "IA", "ABCDEFGHIJKLMNOP"), "ABCDEFGHIJKLMNOP"],
     ["Stripe live key", j("sk", "_live_", "C".repeat(24)), "C".repeat(24)],
     ["mysql -p", j("mysql -u root ", "-p", "rootpw77 app"), "rootpw77"],
-    ["--password flag", j("psql ", "--password=", "flagpw88"), "flagpw88"],
-    ["high-entropy token", j("token is ", "q7Xk2LmP9vR4tY8wZ3nB6cJ1hF5dG0sA"), "q7Xk2LmP9vR4tY8wZ3nB6cJ1hF5dG0sA"],
+    ["password flag", j("psql --pass", "word=", "flagpw88"), "flagpw88"],
+    ["high-entropy token", j("token is ", "q7Xk2LmP9vR4tY8w", "Z3nB6cJ1hF5dG0sA"), j("q7Xk2LmP9vR4tY8w", "Z3nB6cJ1hF5dG0sA")],
   ];
 
   it.each(CASES)("redacts %s", (_name, text, leak) => {
