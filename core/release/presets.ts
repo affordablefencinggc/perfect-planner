@@ -1,5 +1,6 @@
 import { isAuthoritative, type Actor, type Ledger, type LedgerEntry } from "../ledger/index";
 import { nextNumber } from "../numbering/index";
+import { SECRET_ALLOWLIST_TOPIC } from "./allowlist";
 import type { Triage } from "./risk";
 import type { PresetName } from "./types";
 
@@ -60,6 +61,9 @@ export function needsDeepReview(preset: PresetName, triage: Triage): { deep: boo
 
 const PRESET_TOPIC = "review-preset";
 
+/** Person decisions that switch the default shipping protections (see protect.ts). */
+export const RELEASE_SAFETY_TOPIC = "release-safety";
+
 /** The preset in force: the latest person's decision.made with topic "review-preset", else Balanced. */
 export function currentPreset(entries: readonly LedgerEntry[]): PresetName {
   for (let i = entries.length - 1; i >= 0; i--) {
@@ -89,7 +93,7 @@ export function setPreset(ledger: Ledger, actor: Actor, preset: PresetName, reas
 }
 
 /** Decisions about how much review and money the project spends; only a person may make them. */
-export const PERSON_ONLY_TOPICS: ReadonlySet<string> = new Set([PRESET_TOPIC, "budget"]);
+export const PERSON_ONLY_TOPICS: ReadonlySet<string> = new Set([PRESET_TOPIC, "budget", SECRET_ALLOWLIST_TOPIC, RELEASE_SAFETY_TOPIC]);
 
 /**
  * Refuses a review-preset or budget decision from anyone but a person, so an
@@ -101,6 +105,11 @@ export function installSettingsRule(ledger: Ledger): () => void {
   return ledger.addRule((draft) => {
     const topic = draft.data?.topic;
     if (draft.type !== "decision.made" || typeof topic !== "string" || !PERSON_ONLY_TOPICS.has(topic)) return null;
-    return draft.actor.kind === "person" ? null : `Only a person can change the ${topic === "budget" ? "budget" : "review preset"}`;
+    const what =
+      topic === "budget" ? "budget"
+      : topic === SECRET_ALLOWLIST_TOPIC ? "secret-scan exceptions"
+      : topic === RELEASE_SAFETY_TOPIC ? "pre-push secret scan"
+      : "review preset";
+    return draft.actor.kind === "person" ? null : `Only a person can change the ${what}`;
   });
 }
