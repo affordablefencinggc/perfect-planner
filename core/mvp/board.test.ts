@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { FileStore, Ledger, MemoryKeyProvider, MemoryStore, type Actor } from "../ledger/index";
 import { appendNumbered } from "../numbering/index";
 import {
+  MVP_STAGER,
   boardFromLedger,
   confirmMvp,
   installMvpRules,
@@ -159,6 +160,16 @@ describe("renameStage", () => {
     renameStage(l, person, "mvp", "Pilot");
     recordProposal(l, proposal);
     expect(boardFromLedger(l.entries()).stages[0]!.name).toBe("Pilot");
+  });
+});
+
+describe("who writes a proposal", () => {
+  it("records Jev's proposal as the stager, since the ledger refuses decision.made from Jev", () => {
+    const l = open();
+    expect(() => appendNumbered(l, { actor: jev, type: "decision.made", summary: "x", reason: "x", evidence: [], refs: [] })).toThrow();
+    const e = recordProposal(l, proposal);
+    expect(e.actor).toEqual(MVP_STAGER);
+    expect((e.data!.mvp as { proposedBy: unknown }).proposedBy).toEqual(jev);
   });
 });
 
