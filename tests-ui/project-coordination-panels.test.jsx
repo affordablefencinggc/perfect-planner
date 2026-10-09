@@ -195,6 +195,7 @@ test("allocation refuses invalid waves and a bare 'agent:' owner inline and save
   await user.click(screen.getByLabelText("Owner for T0002")); await user.paste(long);
   expect(screen.getByText(/at most 120 characters \(this one is 130\)/)).toBeTruthy();
   await user.clear(screen.getByLabelText("Owner for T0002")); await user.type(screen.getByLabelText("Owner for T0002"), "agent: builder");
+  await user.click(screen.getByRole("button", { name: "Confirm Ledger owner for T0001" }));
   await user.click(screen.getByRole("button", { name: "Save assignments" }));
   expect(await screen.findByText(/^Saved\./)).toBeTruthy();
   expect(readSection(project.projectId, "allocation", storage).data.assignments.T0001).toEqual({ owner: "Ana", wave: 2 });
