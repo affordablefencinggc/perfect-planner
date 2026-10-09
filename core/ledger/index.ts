@@ -28,9 +28,11 @@ export {
   checkRecoveryCode,
   deriveRecoveryKey,
   formatRecoveryCode,
+  OWNER_RECOVERY_PATH,
   ownerChain,
   parseRecoveryCode,
   recoveryStatement,
   type OwnerChain,
   type RecoveryCheck,
 } from "./recovery";
+export { FileHeadWitness, MemoryHeadWitness, type HeadWitness, type WitnessedHead } from "./witness";

@@ -1,6 +1,7 @@
 import { acknowledgesExactly, hashEntry, ledgerNumber, parseLedgerNumber, verifyWithAcknowledgements } from "./chain";
 import { checkRecoveryCode, deriveRecoveryKey, formatRecoveryCode, newRecoverySecret, ownerChain, parseRecoveryCode, recoveryStatement, type RecoveryCheck } from "./recovery";
 import type { LedgerStore } from "./store";
+import type { HeadWitness } from "./witness";
 import {
   recordedKeys,
   keyFromData,
@@ -51,6 +52,12 @@ export interface OpenOptions {
   ownerKey?: string;
   /** Clock for `at`; tests pass a fixed one. */
   now?: () => Date;
+  /**
+   * A copy of the head kept outside the project folder (the app's data
+   * folder). Opening compares against it, so a ledger cut short together
+   * with its HEAD file still reads as truncated; every write updates it.
+   */
+  witness?: HeadWitness;
 }
 
 const TYPES: ReadonlySet<string> = new Set(ENTRY_TYPES);
@@ -75,6 +82,8 @@ export class Ledger {
   private ownerKey?: string;
   /** Set only inside setRecoveryCode and recoverOwner: owner.* entries are never written through append. */
   private writingOwnerEntry = false;
+  private witness?: HeadWitness;
+  private witnessProblem?: string;
 
   private constructor(
     store: LedgerStore,
@@ -131,12 +140,25 @@ export class Ledger {
         chain = { ok: false, firstBad: head.n, problem: "hash", detail: `${head.n} was rewritten after it was recorded` };
       }
     }
+    const witness = options.witness;
+    const witnessed = witness && loaded.entries.length ? readWitness(witness, loaded.entries[0].hash) : undefined;
+    if (witnessed && (chain.ok || chain.problem === "signature")) {
+      const same = loaded.entries.find((entry) => entry.n === witnessed.n);
+      const where = `the copy of the head kept outside the project (${witness!.description})`;
+      if (loaded.entries.length < witnessed.entries || !same) {
+        chain = { ok: false, firstBad: witnessed.n, problem: "truncated", detail: `the ledger ends at ${last?.n ?? "nothing"} but ${where} says ${witnessed.n} was written; restore the missing entries, or, if an older copy was restored on purpose, remove that outside copy to accept it` };
+      } else if (same.hash !== witnessed.hash) {
+        chain = { ok: false, firstBad: witnessed.n, problem: "hash", detail: `${witnessed.n} differs from ${where}` };
+      }
+    }
     if (writable && chain.ok && last && (loaded.head?.n !== last.n || loaded.head?.hash !== last.hash)) {
       // A crash between writing the line and the head leaves the head behind; catch it up.
       store.resetHead({ n: last.n, hash: last.hash });
     }
     const ledger = new Ledger(store, loaded.entries, chain, acknowledged, writable, options.now ?? (() => new Date()), permissions, keys, anchors, trust, options.ownerKey);
     ledger.repaired = repaired;
+    ledger.witness = witness;
+    if (writable && chain.ok && last && (witnessed?.n !== last.n || witnessed?.hash !== last.hash)) ledger.updateWitness();
     if (repaired && chain.ok && last) {
       // Leave a record in the ledger itself of what the repair did, when this device can sign it.
       try {
@@ -167,6 +189,7 @@ export class Ledger {
       ...(this.trust.owner ? { owner: this.trust.owner } : {}),
       ...(this.trust.ownerKeyReplaced ? { ownerKeyReplaced: { ...this.trust.ownerKeyReplaced } } : {}),
       ...(this.repaired ? { repaired: this.repaired } : {}),
+      ...(this.witnessProblem ? { witnessProblem: this.witnessProblem } : {}),
     };
     if (this.chain.ok) return { ok: true, ...base };
     return { ok: false, ...base, brokenAt: this.chain.firstBad, problem: this.chain.problem, detail: this.chain.detail };
@@ -482,6 +505,18 @@ export class Ledger {
     return { ownerKey: mine.keyId, recovered, code: next.code, codeEntry: next.entry };
   }
 
+  /** Records the head outside the project; a failure is shown in status, never thrown after a stored write. */
+  private updateWitness(): void {
+    const last = this.last();
+    if (!this.witness || !last) return;
+    try {
+      this.witness.write(this.list[0].hash, { n: last.n, hash: last.hash, entries: this.list.length });
+      this.witnessProblem = undefined;
+    } catch (error) {
+      this.witnessProblem = `could not update the copy of the head kept outside the project (${this.witness.description}): ${(error as Error).message}`;
+    }
+  }
+
   private writeOwnerEntry(draft: EntryDraft): LedgerEntry {
     this.writingOwnerEntry = true;
     try {
@@ -531,6 +566,7 @@ export class Ledger {
     }
     this.index.set(entry.n, this.list.length);
     this.list.push(entry);
+    this.updateWitness();
     if (entry.sig) markVerified(entry);
     if (entry.type.startsWith("key.") || entry.type.startsWith("owner.") || entry.type === "chain.acknowledged" || !this.chain.ok || this.trust.owner === undefined) {
       // A key change (or the first person entry) can change what checks out; re-check everything.
@@ -800,6 +836,14 @@ function assess(
 function pinsEntry(ack: LedgerEntry, entry: LedgerEntry): boolean {
   const pins = Array.isArray(ack.data?.pins) ? (ack.data.pins as { n?: unknown }[]) : [];
   return pins.some((pin) => pin.n === entry.n);
+}
+
+function readWitness(witness: HeadWitness, genesis: string) {
+  try {
+    return witness.read(genesis);
+  } catch {
+    return undefined;
+  }
 }
 
 function readAnchors(keys: KeyProvider | undefined): TrustedKey[] {

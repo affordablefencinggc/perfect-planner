@@ -302,7 +302,8 @@ which goes with the keychain. So the owner gets a one-time code instead:
   The methods belong on the person's own app session, never on an agent or
   MCP route.
 - The code must never reach the clipboard, a log, telemetry or an
-  evidence screenshot.
+  evidence screenshot. Recovery screens live under `OWNER_RECOVERY_PATH`
+  (`/owner-recovery`), which evidence capture refuses to screenshot.
 
 **Another device or a helper.** A second device of the same person is
 trusted by that person. A helper is enrolled by the owner. Each device also
@@ -325,8 +326,11 @@ pins the keys it needs to read the others, after the fingerprint is checked.
 - A same-user process can read the recovery code while it is shown or
   typed, and whoever holds the code can take over the project.
 - Recovery cannot detect a tail cut from the ledger before the new
-  computer reads it. The person's check of the head is the only guard.
-  Keeping a copy of the head hash outside the file is not built yet.
+  computer reads it. The person's check of the head is the only guard
+  there. On a computer that keeps its app data, the `witness` open option
+  (`FileHeadWitness`, a copy of the head in the app's data folder) shows a
+  cut tail or a rewritten last entry, even when HEAD was changed to match.
+  A same-user process can edit that copy too.
 - Anyone with write access to the files can append entries signed with
   keys nobody trusts. That stops writes until a person acknowledges the
   break. It is a nuisance, not a forgery: those entries never count.

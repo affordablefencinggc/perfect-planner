@@ -120,6 +120,8 @@ export interface LedgerStatus {
    * owner.recovered entry: this computer can no longer sign as the owner.
    */
   ownerKeyReplaced?: { n: string; keyId: string };
+  /** Set when the copy of the head kept outside the project could not be updated. */
+  witnessProblem?: string;
   /** Set when opening repaired a torn final line left by a crash mid-write. */
   repaired?: string;
 }

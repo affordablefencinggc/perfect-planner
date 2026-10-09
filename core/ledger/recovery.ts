@@ -14,6 +14,12 @@ import { LedgerError, type LedgerEntry } from "./types";
  */
 
 const INFO = "pp-owner-recovery-v1";
+
+/**
+ * Where the app mounts the screens that show or take a recovery code. Evidence
+ * capture (src/node/screenshotEvidence.mjs) refuses any address naming it.
+ */
+export const OWNER_RECOVERY_PATH = "/owner-recovery";
 const ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"; // Crockford base32: no I, L, O, U
 const CODE_BYTES = 16; // 128 bits
 const BODY_CHARS = 26;
