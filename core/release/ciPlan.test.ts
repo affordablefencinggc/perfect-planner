@@ -81,7 +81,8 @@ describe("mergeQueueWorkflowYaml", () => {
     expect(mergeQueueWorkflowYaml(ciPlanFor(), { nodeVersion: 24 })).toContain("node-version: 24");
   });
   it("committed template matches the generator", () => {
-    const file = readFileSync(new URL("./ci/merge-queue.yml", import.meta.url), "utf8");
+    // Windows checkouts may turn LF into CRLF; compare the text, not the line endings.
+    const file = readFileSync(new URL("./ci/merge-queue.yml", import.meta.url), "utf8").replace(/\r\n/g, "\n");
     expect(file).toBe(mergeQueueWorkflowYaml(ciPlanFor("balanced")));
   });
 });
