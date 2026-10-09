@@ -6,7 +6,7 @@ import { Ledger, LedgerError, MemoryStore, type Actor } from "../ledger/index";
 import { git } from "../worktrees/git";
 import { realDir } from "../worktrees/platform";
 import { commitAll, makeRepo, memoryLedger, writeFiles } from "../worktrees/testing";
-import { TestGate, deriveState, gateRule, isConclusiveFailure, nextAttemptId, runTestCommand, scrubbedEnv } from "./index";
+import { TestGate, commandExists, deriveState, gateRule, isConclusiveFailure, nextAttemptId, runTestCommand, scrubbedEnv } from "./index";
 
 const OWNER: Actor = { kind: "person", id: "owner" };
 const WORKER: Actor = { kind: "agent", id: "worker-1", model: "test-model" };
@@ -391,6 +391,19 @@ describe("runTestCommand", () => {
     expect(isConclusiveFailure({ ...base, exitCode: null, timedOut: true })).toBe(false);
     expect(isConclusiveFailure({ ...base, exitCode: process.platform === "win32" ? 9009 : 127 })).toBe(false);
     expect(isConclusiveFailure({ ...base, passed: true, exitCode: 0 })).toBe(false);
+  });
+
+  it("finds a missing program before running it, whatever language the shell speaks", async () => {
+    const dir = scratch();
+    const env = scrubbedEnv(process.env);
+    expect(commandExists("pp-no-such-command-anywhere --run", dir, env)).toBe(false);
+    expect(commandExists("./missing-script.sh", dir, env)).toBe(false);
+    expect(commandExists('node -e "1"', dir, env)).toBe(true);
+    expect(commandExists("echo hi && exit 1", dir, env)).toBe(true);
+    expect(commandExists("node env.mjs", dir, { ...env, PATH: "", Path: "" })).toBe(false);
+    const result = await runTestCommand("pp-no-such-command-anywhere", dir);
+    expect(result).toMatchObject({ passed: false, exitCode: null, outputTail: expect.stringContaining("command not found") });
+    expect(isConclusiveFailure(result)).toBe(false);
   });
 
   it("keeps only the last ~4 KB of output", async () => {
