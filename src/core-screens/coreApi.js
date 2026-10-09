@@ -73,7 +73,51 @@ async function send(path, project, { method = "GET", body, fetchImpl = globalThi
 }
 
 export const coreGet = (path, project, options) => call(path, project, options);
-export const corePost = (path, project, body, options) => call(path, project, { ...options, method: "POST", body: body ?? {} });
+export const corePost = async (path, project, body, options) => {
+  const result = await call(path, project, { ...options, method: "POST", body: body ?? {} });
+  if (PLAN_WRITES.has(path)) notifyCorePlanChanged(project);
+  return result;
+};
+
+// Plan approval has one source of truth: the core ledger's latest person-signed
+// plan.approved (GET /plan). Home, Build and the Plan page read it through
+// useCorePlanApproval; every approve (Deep planning or the Plan page) re-reads it.
+export const CORE_PLAN_CHANGED_EVENT = "perfect-planner:core-plan";
+const PLAN_WRITES = new Set(["/planning/approve", "/plan/approve"]);
+export function notifyCorePlanChanged(project) {
+  try { globalThis.dispatchEvent?.(new CustomEvent(CORE_PLAN_CHANGED_EVENT, { detail: { project } })); } catch { /* no window */ }
+}
+export const fetchCorePlanApproval = (project, options) => coreGet("/plan", project, options);
+export const approveCorePlan = (project, tasks, options) => corePost("/plan/approve", project, { tasks }, options);
+
+/**
+ * The core plan approval for an app project id: { approved, latest, count, tasks },
+ * or null while it is unknown (loading, or the local service is not reachable).
+ */
+export function useCorePlanApproval(projectId, { pollMs = 15000 } = {}) {
+  const project = projectId ? coreProjectKey(projectId) : null;
+  const [view, setView] = useState(null);
+  useEffect(() => {
+    setView(null);
+    if (!project) return undefined;
+    let live = true;
+    const load = () => fetchCorePlanApproval(project).then(
+      (result) => { if (live) setView(result && typeof result === "object" && typeof result.approved === "boolean" ? result : null); },
+      () => { /* keep what was read: an approval, once written, stays in the ledger */ },
+    );
+    load();
+    const timer = pollMs ? setInterval(load, pollMs) : null;
+    globalThis.addEventListener?.(CORE_PLAN_CHANGED_EVENT, load);
+    globalThis.addEventListener?.("focus", load);
+    return () => {
+      live = false;
+      if (timer) clearInterval(timer);
+      globalThis.removeEventListener?.(CORE_PLAN_CHANGED_EVENT, load);
+      globalThis.removeEventListener?.("focus", load);
+    };
+  }, [project, pollMs]);
+  return view;
+}
 
 /**
  * Reads one core resource. status is "loading" | "ready" | "empty" | "error".

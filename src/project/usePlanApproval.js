@@ -1,11 +1,27 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { taskDraftBinding } from "./taskDraftLedger.js";
 import { createTaskDraftStore } from "./taskDraftStore.js";
-import { digestPlanTasks, notePlanTaskDrift, recordPlanApproval, validPlanApproval } from "./planApproval.js";
+import { activePlanTasks, digestPlanTasks, notePlanTaskDrift, recordPlanApproval, validPlanApproval } from "./planApproval.js";
+import { approveCorePlan, CoreApiError, coreProjectKey } from "../core-screens/coreApi.js";
 
 let sharedStore;
 const defaultStore = () => (sharedStore ??= createTaskDraftStore());
 const bindingOf = (project) => { try { return taskDraftBinding(project); } catch { return null; } };
+
+/**
+ * The Plan page's approve writes the same person-signed plan.approved that Deep
+ * planning writes, so the core ledger stays the one plan approval. A refusal
+ * (e.g. a blocking planning question is open) stops the approval; only when the
+ * local service is not running at all does the approval stay on this device.
+ */
+async function approveInCoreLedger(projectId, tasks) {
+  try {
+    await approveCorePlan(coreProjectKey(projectId), activePlanTasks(tasks).map((task) => ({ id: task.id, title: String(task.title ?? "") })));
+  } catch (error) {
+    const unreachable = !(error instanceof CoreApiError) || ["OFFLINE", "BAD_RESPONSE"].includes(error.code) || error.status === 404 || error.status >= 500;
+    if (!unreachable) throw error;
+  }
+}
 
 /**
  * Reads the saved task drafts for an imported project and, when `watch` is on,
@@ -54,6 +70,7 @@ export function usePlanApproval(project, records, { store: providedStore, watch 
   const approve = useCallback(async () => {
     if (!store || !binding) throw new Error("Register your app folder before approving a plan.");
     const ledger = await store.read(binding);
+    await approveInCoreLedger(binding.projectId, ledger.tasks);
     const record = await recordPlanApproval(binding.projectId, { tasks: ledger.tasks, censusDigest: binding.censusDigest, source: "local-approval" });
     await read();
     return record;

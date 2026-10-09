@@ -2698,7 +2698,7 @@ function ProjectHomeWorkspace({
   const runHomeNextAction = (nextAction) => {
     setHomeActionError("");
     if (nextAction.id !== "confirm-project-ready") return onWorkspace(nextAction.workspace);
-    try { confirmProjectReady(activeProject.projectId); } catch (error) { setHomeActionError(error?.message ?? "The confirmation could not be saved."); }
+    try { confirmProjectReady(activeProject.projectId, { records: workRecords }); } catch (error) { setHomeActionError(error?.message ?? "The confirmation could not be saved."); }
   };
   if (!demoMode) {
     const { binding, blockers, mode, nextAction, project, stage, summary } =
