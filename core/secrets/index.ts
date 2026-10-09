@@ -210,8 +210,10 @@ export function isSecretName(name: string): boolean {
   const words = nameWords(name);
   const last = words[words.length - 1];
   if (last === undefined) return false;
-  // A lone "pass" is usually a result ("PASS: 18/18"); DB_PASS and userPass are secrets.
-  if (last === "pass") return words.length > 1;
+  // A lone upper-case "PASS" is usually a result ("PASS: 18/18"); a lower-case
+  // "pass:" key, DB_PASS and userPass are secrets. Whole words only, so
+  // passthrough and bypass never match.
+  if (last === "pass") return words.length > 1 || name === "pass";
   if (SECRET_WORDS.has(last)) return true;
   return last === "key" && words.length > 1 && KEY_PAIRS.has(words[words.length - 2]!);
 }
@@ -247,7 +249,8 @@ function isLiteralSecret(name: string, value: string, quoted: boolean, context: 
   // line is plainly configuration (DB_PASSWORD=<word>, or password: <word> in YAML).
   // On NAME=value lines a dotted value is a literal (API_KEY=blue.whale.sings.loud), not member access.
   if (context.envLine) return true;
-  if (context.configFile) return !value.includes(".") || /\d/.test(value);
+  // In config files and on lone `name: value` lines, a dotted value is a literal too (passphrase: a.b.c).
+  if (context.configFile || context.yamlLine) return true;
   // Redaction also hides identifiers with digits ("hunter2"); plain words stay
   // unless the line is a lone `name: value` (YAML in a log or a paste).
   if (context.mode !== "redact" || value.includes(".") || /^[_$]/.test(value) || /[a-z][A-Z]/.test(value) || SECRET_WORDS.has(value.toLowerCase())) return false;
@@ -260,6 +263,18 @@ function entropy(s: string): number {
   let bits = 0;
   for (const n of counts.values()) bits -= (n / s.length) * Math.log2(n / s.length);
   return bits;
+}
+
+// Content digests and embedded files, never credentials: Subresource Integrity
+// values ("integrity": "sha512-<base64>", as in package-lock.json) and data: URIs
+// (base64 images in generated evidence). Long runs inside them are skipped; any
+// other rule still applies to the rest of the line.
+const BENIGN_BLOBS = [/\bsha(?:256|384|512)-[A-Za-z0-9+/]{40,}={0,2}/g, /\bdata:[\w.+-]+\/[\w.+-]+(?:;[\w.+-]+=[\w.+-]+)*;base64,[A-Za-z0-9+/]+={0,2}/g];
+
+function benignRanges(line: string): Array<[number, number]> {
+  const ranges: Array<[number, number]> = [];
+  for (const pattern of BENIGN_BLOBS) for (const m of line.matchAll(pattern)) ranges.push([m.index ?? 0, (m.index ?? 0) + m[0].length]);
+  return ranges;
 }
 
 // Long mixed-case-and-digit runs with high entropy: generated tokens nobody named.
@@ -327,7 +342,10 @@ function scanLine(line: string, mode: Mode, file: string): SecretSpan[] {
     }
   }
   {
+    const benign = benignRanges(line);
     for (const m of line.matchAll(LONG_RUN)) {
+      const at = m.index ?? 0;
+      if (benign.some(([a, b]) => at >= a && at < b)) continue;
       if (looksGenerated(m[0])) add("high-entropy", "generated token", m.index ?? 0, (m.index ?? 0) + m[0].length);
     }
   }
