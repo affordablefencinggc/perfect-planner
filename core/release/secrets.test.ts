@@ -143,8 +143,9 @@ describe("secret rules", () => {
     expect(scanText(".env.production", "API_TOKEN=" + "abcdef123456789xyz").map((h) => h.rule)).toEqual(["generic-assignment-unquoted"]);
     expect(scanText("x.ini", "secret = " + "abcdefgh1234").map((h) => h.rule)).toEqual(["generic-assignment-unquoted"]);
     expect(scanText("x.yaml", "- password: " + "hunter2isnotsafe # note").map((h) => h.rule)).toEqual(["generic-assignment-unquoted"]);
-    expect(scanText("src/a.ts", yml)).toEqual([]);
-    expect(scanText("README.md", yml)).toEqual([]);
+    // the shared detector also catches a password with digits written as YAML in source or docs
+    expect(scanText("src/a.ts", yml)).toHaveLength(1);
+    expect(scanText("README.md", yml)).toHaveLength(1);
     // in a config file a password after other text is still a password
     expect(scanText("app.yml", "echo password: " + "hunter2isnotsafe")).toHaveLength(1);
     // placeholders stay quiet; in a config file even a short password is a password

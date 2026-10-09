@@ -11,11 +11,12 @@ const root = fileURLToPath(new URL("../..", import.meta.url));
 // Files whose fixtures still trip the scan, each with its owner. Pushing a
 // change to one of them is refused until it is fixed; remove the entry then.
 const PENDING: Record<string, string> = {
-  "core/jev/jev.test.ts": "#7 (core/jev owner): fixture literal at line 380",
+  "tests/component-authoring-context-ui241.test.mjs": "fixture sweep held for the user's go-ahead",
   "tests/document-registry.test.mjs": "fixture sweep held for the user's go-ahead",
   "tests/folder-contract-http.test.mjs": "fixture sweep held for the user's go-ahead",
   "tests/native-review-host-protocol.test.mjs": "fixture sweep held for the user's go-ahead",
   "tests/provider-review-gateway.test.mjs": "fixture sweep held for the user's go-ahead",
+  "tests/provider-review.test.mjs": "fixture sweep held for the user's go-ahead",
   "tests/windows-dpapi-secret-custody.test.mjs": "fixture sweep held for the user's go-ahead",
 };
 
