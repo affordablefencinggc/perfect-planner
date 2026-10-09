@@ -1,0 +1,23 @@
+{
+  "label": "windows-nsis",
+  "app": "C:\\Users\\runneradmin\\AppData\\Local\\Perfect Planner\\perfect-planner-desktop.exe",
+  "platform": "win32",
+  "checks": [
+    {
+      "name": "launch",
+      "pass": true,
+      "seen": "WebDriver session up after 707 ms"
+    },
+    {
+      "name": "first-run screen",
+      "pass": true,
+      "seen": "\"PP Perfect Planner v0.1 clean-room · Friday 9 October 2026 Home 01Define 02Coordinate 03Build 04Prove 05Release Index / Connect agent No project selected PURPOSE Choose a local app folder without inventing project facts.\""
+    },
+    {
+      "name": "smoke run",
+      "pass": false,
+      "seen": "POST /session/ec9fe72f9e38d3fb81662ad5275f8369/execute/sync -> 500 {\"error\":\"javascript error\",\"message\":\"javascript error: Invalid or unexpected token\\n  (Session info: MicrosoftEdge=153.0.4234.48)\",\"stacktrace\":\"\\tmsedgedriver!GetHandleVerifier [0x7ff76a061e55+4ca5]\\n\\tmsedgedriver!(No symbol) [0x7ff769fb29d4]\\n\\tmsedgedriver!GetHandleVerifier [0x7ff76a3e13af+3841ff]\\n\\tmsedgedriver!(No symbol) [0x7ff769d4a7d4]\\n\\tmsedgedriver!(No symbol) [0x7ff769d4cee5]\\n\\tms"
+    }
+  ],
+  "fatal": "POST /session/ec9fe72f9e38d3fb81662ad5275f8369/execute/sync -> 500 {\"error\":\"javascript error\",\"message\":\"javascript error: Invalid or unexpected token\\n  (Session info: MicrosoftEdge=153.0.4234.48)\",\"stacktrace\":\"\\tmsedgedriver!GetHandleVerifier [0x7ff76a061e55+4ca5]\\n\\tmsedgedriver!(No symbol) [0x7ff769fb29d4]\\n\\tmsedgedriver!GetHandleVerifier [0x7ff76a3e13af+3841ff]\\n\\tmsedgedriver!(No symbol) [0x7ff769d4a7d4]\\n\\tmsedgedriver!(No symbol) [0x7ff769d4cee5]\\n\\tms"
+}

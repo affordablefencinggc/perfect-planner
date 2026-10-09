@@ -1,0 +1,23 @@
+{
+  "label": "ubuntu-22.04-appimage",
+  "app": "/home/runner/work/perfect-planner/perfect-planner/installers/PerfectPlanner-dry-run-v0.1.0-726eb0d-linux-x64.AppImage",
+  "platform": "linux",
+  "checks": [
+    {
+      "name": "launch",
+      "pass": true,
+      "seen": "WebDriver session up after 415 ms"
+    },
+    {
+      "name": "first-run screen",
+      "pass": true,
+      "seen": "\"Perfect Planner Starting Perfect Planner…\""
+    },
+    {
+      "name": "smoke run",
+      "pass": false,
+      "seen": "POST /session/86f785b1-2850-46aa-a220-cdfb62a3bfa5/execute/sync -> 500 {\"error\":\"javascript error\",\"message\":\"Unexpected EOF\",\"stacktrace\":\"\"}"
+    }
+  ],
+  "fatal": "POST /session/86f785b1-2850-46aa-a220-cdfb62a3bfa5/execute/sync -> 500 {\"error\":\"javascript error\",\"message\":\"Unexpected EOF\",\"stacktrace\":\"\"}"
+}

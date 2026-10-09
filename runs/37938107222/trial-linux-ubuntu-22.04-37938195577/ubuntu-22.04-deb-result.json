@@ -1,0 +1,23 @@
+{
+  "label": "ubuntu-22.04-deb",
+  "app": "/usr/bin/perfect-planner-desktop",
+  "platform": "linux",
+  "checks": [
+    {
+      "name": "launch",
+      "pass": true,
+      "seen": "WebDriver session up after 333 ms"
+    },
+    {
+      "name": "first-run screen",
+      "pass": true,
+      "seen": "\"Perfect Planner Starting Perfect Planner…\""
+    },
+    {
+      "name": "smoke run",
+      "pass": false,
+      "seen": "POST /session/4af205f9-b236-45a2-b6a9-097fd349fa19/execute/sync -> 500 {\"error\":\"javascript error\",\"message\":\"Unexpected EOF\",\"stacktrace\":\"\"}"
+    }
+  ],
+  "fatal": "POST /session/4af205f9-b236-45a2-b6a9-097fd349fa19/execute/sync -> 500 {\"error\":\"javascript error\",\"message\":\"Unexpected EOF\",\"stacktrace\":\"\"}"
+}

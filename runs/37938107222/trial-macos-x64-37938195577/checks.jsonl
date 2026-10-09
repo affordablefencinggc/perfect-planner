@@ -1,0 +1,15 @@
+{"label":"macos-x64","name":"dmg contents","pass":true,"seen":"Applications Perfect Planner.app  (Applications shortcut: yes)"}
+{"label":"macos-x64","name":"install","pass":true,"seen":"/Applications/Perfect Planner.app; Mach-O 64-bit executable x86_64; LSMinimumSystemVersion 10.13"}
+{"label":"macos-x64","name":"installed files","pass":true,"seen":"Contents/MacOS: perfect-planner-desktop planner-agent-helper"}
+{"label":"macos-x64","name":"code signature","pass":true,"seen":"verify: ok; Signature=adhoc TeamIdentifier=not set"}
+{"label":"macos-x64","name":"gatekeeper (downloaded copy)","pass":false,"seen":"/var/folders/20/jp1_0n3n7kndh6rnbqb5344m0000gn/T/tmp.dvPJZlA78S/Perfect Planner.app: rejected  (not notarized: first open needs System Settings > Privacy & Security > Open Anyway)"}
+{"label":"macos-x64","name":"launch","pass":true,"seen":"pid 1980; still running after 12 s: yes"}
+{"label":"macos-x64","name":"window shown","pass":true,"seen":"windows: count=1 \"Perfect Planner\""}
+{"label":"macos-x64","name":"first-run screen","pass":true,"seen":"Perfect Planner | standard window group group Perfect Planner Open Perfect Planner home | Open Perfect Planner home Build stages | Build stages Home Define | Define Coordinate | Coordinate Build | Build Prove | Prove Rel"}
+{"label":"macos-x64","name":"settings opens","pass":false,"seen":"no element matching /^settings$/i among 52 labelled elements"}
+{"label":"macos-x64","name":"connect agent shows a line","pass":true,"seen":"line: claude mcp add --transport stdio --env PERFECT_PLANNER_REGISTRY_ROOT=\"<Perfect Planner app data>/com.perfectplanner.desktop/workspace-registry-v1\" perfect-planner -- node \"<path-to-perfect-planner>/mcp/perfectPlannerMcpServer.mjs\""}
+{"label":"macos-x64","name":"connect line runnable as copied","pass":false,"seen":"line still contains <Perfect Planner app data> <path-to-perfect-planner>"}
+{"label":"macos-x64","name":"open project folder","pass":false,"skipped":true,"seen":"native NSOpenPanel is not driven on macOS runners; covered on Windows and Linux"}
+{"label":"macos-x64","name":"quits cleanly","pass":true,"seen":"exited within 2 s"}
+{"label":"macos-x64","name":"uninstall program files","pass":true,"seen":"app bundle removed"}
+{"label":"macos-x64","name":"uninstall user data","pass":false,"seen":"~/Library/Application Support/com.perfectplanner.desktop (1 files);~/Library/Caches/com.perfectplanner.desktop (33 files);~/Library/WebKit/com.perfectplanner.desktop (16 files);~/Library/Logs/com.perfectplanner.desktop (1 files);"}
