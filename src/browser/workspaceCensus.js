@@ -1,6 +1,7 @@
 import { validateWorkspaceCensus, validateWorkspaceRegistration } from "../native/workspaceCensus.js";
 import { createImportedProjectId } from "../project/projectIds.js";
-import { findRememberedFolder, folderAccessState, loadRememberedFolder, rememberFolder, requestRememberedFolder } from "./folderAccess.js";
+import { findRememberedFolder, folderAccessState, lastRememberedFolder, loadRememberedFolder, rememberFolder, requestRememberedFolder } from "./folderAccess.js";
+import { createLaunchFolderHandle, describeLaunchFolder } from "./launchFolder.js";
 
 const handles = new Map();
 const encoder = new TextEncoder();
@@ -440,6 +441,7 @@ export const browserWorkspaceAdapter = Object.freeze({
       const handle = await runtime.showDirectoryPicker({ mode: "read" });
       return await selectDirectoryHandle(handle);
     } catch (error) {
+      if (error?.name === "SecurityError" || error?.name === "NotAllowedError") return unavailable("browser-folder-picker-needs-click");
       if (error?.name === "AbortError") return Object.freeze({ available: true, authoritative: true, schemaVersion: 1, commandRevision: 1, capabilities: Object.freeze(["workspace-folder-picker:select"]), selectionState: "cancelled", selectedPath: null });
       return unavailable(error instanceof Error ? error.message : "browser-folder-picker-failed");
     }
@@ -460,6 +462,19 @@ export const browserWorkspaceAdapter = Object.freeze({
     handles.set(`${workspaceId}:1`, { handle, registration });
     await rememberFolder({ projectId: createImportedProjectId(registration.rootIdentity), selectedPath: rootPath, handle });
     return registration;
+  },
+  // The folder npm start was launched for, when the local host offers one.
+  async launchFolder() {
+    return describeLaunchFolder();
+  },
+  async selectLaunchFolder() {
+    const launch = await describeLaunchFolder();
+    if (!launch) return unavailable("The local host is not offering a launch folder.");
+    try { return await selectDirectoryHandle(createLaunchFolderHandle({ name: launch.name })); }
+    catch { return unavailable("The launch folder could not be selected."); }
+  },
+  async lastFolder() {
+    return lastRememberedFolder();
   },
   // Reload recovery: what is remembered for a project, without asking for access.
   async rememberedFolder(projectId) {

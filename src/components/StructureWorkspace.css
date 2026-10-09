@@ -1730,3 +1730,115 @@
     grid-template-columns: minmax(0, 1fr) !important;
   }
 }
+
+/* One-click intake: picking the folder starts the scan; the old steps are a quiet trail. */
+.one-click-intake {
+  grid-template-columns: 1fr;
+  gap: 12px;
+}
+.one-click-intake .folder-drop-zone {
+  min-height: 170px;
+  gap: 12px;
+}
+.one-click-intake .folder-drop-zone > strong {
+  font: 800 11px var(--mono);
+}
+.folder-quick-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
+}
+.one-click-intake .choose-folder-button {
+  padding: 12px 22px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+}
+.one-click-intake .choose-folder-button svg {
+  width: 16px;
+  height: 16px;
+  color: inherit;
+}
+.one-click-intake .intake-process {
+  display: flex;
+  justify-content: center;
+  gap: 0;
+}
+.one-click-intake .intake-process li {
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  box-shadow: none;
+  color: #9aa19e;
+}
+.one-click-intake .intake-process li + li::before {
+  content: "·";
+  margin: 0 8px;
+  color: #b7bcba;
+}
+.one-click-intake .intake-process li.current {
+  border: 0;
+  background: none;
+  box-shadow: none;
+  color: var(--ink);
+}
+.one-click-intake .intake-process li.complete {
+  border: 0;
+  background: none;
+  color: var(--green);
+}
+.one-click-intake .folder-connect-form {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+}
+.one-click-intake .folder-connect-form label {
+  flex: 1;
+}
+.folder-intake-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 28px;
+}
+.folder-intake-status .folder-intake-message {
+  max-width: none;
+  font-size: 8px;
+}
+.one-click-intake .folder-scan-progress {
+  grid-template-columns: minmax(160px, 1fr) auto minmax(0, 1.2fr);
+}
+.folder-scan-progress progress {
+  width: 100%;
+  height: 8px;
+  appearance: none;
+  border: 0;
+  border-radius: 4px;
+  background: #e3e7e5;
+  overflow: hidden;
+}
+.folder-scan-progress progress::-webkit-progress-bar {
+  background: #e3e7e5;
+  border-radius: 4px;
+}
+.folder-scan-progress progress::-webkit-progress-value {
+  background: #3e9968;
+  border-radius: 4px;
+  transition: width 0.2s ease;
+}
+.folder-scan-progress progress::-moz-progress-bar {
+  background: #3e9968;
+}
+@media (max-width: 1100px) {
+  .one-click-intake .folder-scan-progress {
+    grid-template-columns: 1fr;
+  }
+}
+.one-click-intake .intake-process li {
+  gap: 0;
+  font-size: 8px;
+}

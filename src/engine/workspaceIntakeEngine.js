@@ -16,9 +16,9 @@ function blocked(reason, input = {}) {
 
 export function assessWorkspaceIntake({ selectedPath = "", registration = null, census = null, gaps = null, contractAssessment = null } = {}) {
   if (!selectedPath) return Object.freeze({ state: "idle", step: 0, reason: "Choose one app folder.", mutationAuthorized: false });
-  if (!registration) return Object.freeze({ state: "selected", step: 1, reason: "Selection grants no read access. Approve the bounded analysis separately.", mutationAuthorized: false });
+  if (!registration) return Object.freeze({ state: "selected", step: 1, reason: "Folder chosen. Starting the read-only scan.", mutationAuthorized: false });
   if (registration.authoritative !== true || registration.access !== "metadata-read-only") return blocked("Workspace registration is not authoritative metadata-only access.");
-  if (!census) return Object.freeze({ state: "scanning", step: 2, reason: "The approved folder is being indexed.", mutationAuthorized: false });
+  if (!census) return Object.freeze({ state: "scanning", step: 2, reason: "The chosen folder is being indexed.", mutationAuthorized: false });
   if (census.authoritative !== true || census.contentReturned !== false) return blocked("Workspace census is not authoritative metadata-only evidence.");
   if (census.workspaceId !== registration.workspaceId || census.registryRevision !== registration.registryRevision || census.rootIdentity !== registration.rootIdentity) return blocked("Workspace census does not match the exact registered folder.");
   if (!SHA256.test(census.digest ?? "") || census.fileCount !== census.files?.length) return blocked("Workspace census identity or counts are invalid.");

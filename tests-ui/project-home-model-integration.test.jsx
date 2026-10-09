@@ -178,40 +178,20 @@ afterEach(() => {
 });
 
 describe("project Home consumes the project-home model", () => {
-  test("empty Home shows unavailable evidence, its blocker, and one selector action", async () => {
+  test("empty Home is a short screen: headline, Choose app folder, and a demo link", async () => {
     const user = userEvent.setup();
     const { container } = renderShell(registryWith());
 
-    await screen.findByRole("heading", {
-      name: "Bring in a real app to begin",
-    });
-    expect(container.querySelector(".project-home-truth")?.dataset.homeMode).toBe(
-      "empty",
-    );
-    expect(
-      screen.getByLabelText("Current project stage").textContent,
-    ).toContain("No project selected");
-    const summary = screen.getByRole("region", {
-      name: "Project evidence summary",
-    });
-    expect(summary.textContent).toContain("Unavailable");
-    expect(summary.textContent).not.toMatch(/\b0 files\b/);
-    expect(
-      within(screen.getByRole("region", { name: "Project blockers" })).getByText(
-        "project-missing",
-      ),
-    ).toBeTruthy();
+    await screen.findByRole("heading", { name: "Bring in a real app to begin" });
+    expect(container.querySelector(".project-home-truth")?.dataset.homeMode).toBe("empty");
+    expect(screen.queryByRole("region", { name: "Project evidence summary" })).toBeNull();
+    expect(screen.queryByRole("region", { name: "Project blockers" })).toBeNull();
+    expect(container.querySelectorAll(".project-home-empty-body button")).toHaveLength(2);
+    expect(screen.getByRole("button", { name: "Try the demo" })).toBeTruthy();
 
-    const next = expectOnlyModelAction(
-      container,
-      "select-project",
-      "Choose an app folder",
-    );
-    await user.click(next);
+    await user.click(screen.getByRole("button", { name: /Choose app folder/ }));
     expect(
-      await screen.findByRole("region", {
-        name: "Strict folder contract workspace",
-      }),
+      await screen.findByRole("region", { name: "Strict folder contract workspace" }),
     ).toBeTruthy();
   });
 
