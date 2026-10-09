@@ -201,5 +201,5 @@ export function folderPlanHeadline(assessment, { imported = false } = {}) {
   }
   return assessment.ready
     ? { tone: "ready", verdict: assessment.verdict, detail: null, panelTitle: null, panelDetail: "Approval details" }
-    : { tone: "blocked", verdict: assessment.verdict, detail: `${assessment.blockers.length} blockers`, panelTitle: "Folder plan not ready for approval", panelDetail: `${assessment.blockers.length} blockers · open to review` };
+    : { tone: "blocked", verdict: assessment.verdict, detail: `${assessment.blockers.length} ${assessment.blockers.length === 1 ? "blocker" : "blockers"}`, panelTitle: "Folder plan not ready for approval", panelDetail: `${assessment.blockers.length} ${assessment.blockers.length === 1 ? "blocker" : "blockers"} · open to review` };
 }
