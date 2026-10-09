@@ -1,5 +1,6 @@
 export * from "./types";
 export * from "./profile";
+export * from "./repo";
 export * from "./packs";
 export * from "./research";
 export * from "./catcher";

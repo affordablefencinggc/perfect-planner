@@ -101,7 +101,10 @@ function walk(map: MindMap): MindNode[] {
  */
 export function buildRoadmap(map: MindMap, opts: { owner?: string } = {}): Roadmap {
   const owner = opts.owner ?? "unassigned";
-  const nodes = walk(map);
+  const all = walk(map);
+  // What the repo already has gets no build task; the roadmap names it instead.
+  const nodes = all.filter((n) => !n.existing);
+  const existing = all.filter((n) => n.existing).map((n) => ({ node: n.id, label: n.label }));
   const order = (n: MindNode) => PHASES.findIndex((p) => p.id === phaseOf(n));
   const ordered = nodes
     .map((n, i) => ({ n, i }))
@@ -148,7 +151,7 @@ export function buildRoadmap(map: MindMap, opts: { owner?: string } = {}): Roadm
   });
 
   const phases: RoadmapPhase[] = PHASES.map((p) => ({ id: p.id, title: p.title, tasks: tasks.filter((t) => t.phase === p.id) }));
-  return { phases };
+  return existing.length > 0 ? { phases, existing } : { phases };
 }
 
 /** All tasks of a roadmap in phase order. */
