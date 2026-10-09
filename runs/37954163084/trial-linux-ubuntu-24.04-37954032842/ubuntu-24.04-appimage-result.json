@@ -1,0 +1,43 @@
+{
+  "label": "ubuntu-24.04-appimage",
+  "app": "/home/runner/work/perfect-planner/perfect-planner/installers/PerfectPlanner-dry-run-v0.1.0-6a5c0a8-linux-x64.AppImage",
+  "platform": "linux",
+  "checks": [
+    {
+      "name": "launch",
+      "pass": true,
+      "seen": "WebDriver session up after 587 ms"
+    },
+    {
+      "name": "first-run screen",
+      "pass": true,
+      "seen": "\"Perfect Planner Starting Perfect Planner…\""
+    },
+    {
+      "name": "settings opens",
+      "pass": true,
+      "seen": "opened via \"Settings\""
+    },
+    {
+      "name": "open project folder",
+      "pass": false,
+      "seen": "dialog: xdg-desktop-portal-gtk (exit 2); app never showed \"trial-sample-app\" or a read-only scan step"
+    },
+    {
+      "name": "connect agent shows a line",
+      "pass": true,
+      "seen": "first line: \"'/tmp/.mount_PerfechpICod/usr/lib/Perfect Planner/desktop-host/node' '/tmp/.mount_PerfechpICod/usr/lib/Perfect Planner/desktop-host/core-host/connect.mjs' http://127.0.0.1:36699 '/home/runner/.local/share/com.perfectplanner.desktop/authorit\""
+    },
+    {
+      "name": "connect lines runnable as copied",
+      "pass": true,
+      "seen": "1 copyable block(s); none has placeholders"
+    },
+    {
+      "name": "close",
+      "pass": true,
+      "seen": "session closed in 48 ms"
+    }
+  ],
+  "fatal": null
+}

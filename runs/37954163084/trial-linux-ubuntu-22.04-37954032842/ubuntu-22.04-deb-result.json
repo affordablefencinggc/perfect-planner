@@ -1,0 +1,43 @@
+{
+  "label": "ubuntu-22.04-deb",
+  "app": "/usr/bin/perfect-planner-desktop",
+  "platform": "linux",
+  "checks": [
+    {
+      "name": "launch",
+      "pass": true,
+      "seen": "WebDriver session up after 311 ms"
+    },
+    {
+      "name": "first-run screen",
+      "pass": true,
+      "seen": "\"Perfect Planner Starting Perfect Planner…\""
+    },
+    {
+      "name": "settings opens",
+      "pass": true,
+      "seen": "opened via \"Settings\""
+    },
+    {
+      "name": "open project folder",
+      "pass": false,
+      "seen": "dialog: xdg-desktop-portal-gtk (exit 2); app never showed \"trial-sample-app\" or a read-only scan step"
+    },
+    {
+      "name": "connect agent shows a line",
+      "pass": true,
+      "seen": "first line: \"'/usr/lib/Perfect Planner/desktop-host/node' '/usr/lib/Perfect Planner/desktop-host/core-host/connect.mjs' http://127.0.0.1:33811 '/home/runner/.local/share/com.perfectplanner.desktop/authority/core/projects/default/.perfect-planner/tokens/\""
+    },
+    {
+      "name": "connect lines runnable as copied",
+      "pass": true,
+      "seen": "1 copyable block(s); none has placeholders"
+    },
+    {
+      "name": "close",
+      "pass": true,
+      "seen": "session closed in 46 ms"
+    }
+  ],
+  "fatal": null
+}

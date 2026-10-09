@@ -1,0 +1,39 @@
+Perfect Planner | standard window
+group
+group
+Perfect Planner
+Connect agent | Connect agent
+READ-ONLY PLANNING CONTEXT
+Connect agent
+Connect agent
+Close | Close
+Connect an agent | Connect an agent
+Connect an agent
+Connect an agent
+Give your coding agent its own way to check in. The first agent you connect becomes your main chat: it answers questions from the agents working on tasks.
+Open a terminal in the folder your agent will work in and paste this one line. It connects Claude Code to Perfect Planner for that folder and installs the Perfect Planner skill for every Claude Code session on this computer. Then start Claude Code there and say
+check in with Perfect Planner
+. Already in Claude Code? Paste the line into the chat; it shows you the line and runs it only after you say yes.
+Claude Code command
+Copy the Claude Code command | Copy the Claude Code command
+Claude Code command | Claude Code command
+'/Applications/Perfect Planner.app/Contents/Resources/desktop-host/node' '/Applications/Perfect Planner.app/Contents/Resources/desktop-host/core-host/connect.mjs' http://127.0.0.1:49185 '/Users/runner/Library/Application Support/com.perfectplanner.desktop/authority/core/projects/default/.perfect-planner/tokens/connect-C-14f9b2f7.token'
+Using another agent? Copy the settings instead
+Using another agent? Copy the settings instead
+The line holds no key: it names a file on this computer that only you can read. Disconnecting deletes that file.
+Waiting for the agent to check in…
+Install the skill only
+Install the skill only
+Hand your plan to the agent | Hand your plan to the agent
+Hand your plan to the agent
+Hand your plan to the agent
+Once your plan is approved, open Build and use 
+Copy brief
+ to paste the current task into your agent's chat.
+Open Build
+close button
+full screen button
+group
+group
+minimize button
+text | Perfect Planner

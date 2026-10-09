@@ -1,0 +1,13 @@
+{
+  "label": "windows-msi",
+  "app": "C:\\Users\\runneradmin\\AppData\\Local\\Perfect Planner\\perfect-planner-desktop.exe",
+  "platform": "win32",
+  "checks": [
+    {
+      "name": "smoke run",
+      "pass": false,
+      "seen": "fetch failed"
+    }
+  ],
+  "fatal": "fetch failed"
+}
