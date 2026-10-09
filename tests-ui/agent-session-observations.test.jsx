@@ -2,7 +2,8 @@ import {afterEach,test,expect,vi} from 'vitest';
 import {renderHook,act,cleanup}from'@testing-library/react';
 import{useAgentSessionObservations,agentRequest}from'../src/runtime/useAgentSessionObservations.js';
 const project={projectId:'pp_fixture',generation:1,registration:{workspaceId:'fixture',registryRevision:1,rootIdentity:'a'.repeat(64)}};
-const receipt=(p=project)=>({...agentRequest(p),executionAuthorized:false,stopped:false,sessions:[{sessionId:'b'.repeat(32),state:'reachable',observedAt:Date.now(),expiresAt:Date.now()+30000,workVerified:false}]});
+// One clock read: two Date.now() calls can straddle a millisecond, giving a 30001 ms window the hook rightly refuses.
+const receipt=(p=project,observedAt=Date.now())=>({...agentRequest(p),executionAuthorized:false,stopped:false,sessions:[{sessionId:'b'.repeat(32),state:'reachable',observedAt,expiresAt:observedAt+30000,workVerified:false}]});
 afterEach(()=>{cleanup();vi.useRealTimers();});
 test('recorded worker failure stays visible alongside a reachable session',()=>{
  const h=renderHook(()=>useAgentSessionObservations(project));const r=receipt();r.workers={poolId:'a'.repeat(64),activeWorkers:1,outcomes:[{workerId:1,state:'failed',code:'AGENT_PLAN_CHANNEL_REFUSED',workVerified:false}],omittedOutcomes:0,durable:false,workVerified:false};
