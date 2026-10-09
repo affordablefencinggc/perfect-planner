@@ -1,4 +1,4 @@
-import type { LedgerEntry } from "../ledger/index";
+import type { Ledger, LedgerEntry } from "../ledger/index";
 import { baseNumber, parseNumber } from "../numbering/index";
 import { claimsPeople, memberForActor, ownerOf, replayRoster, type MemberState, type Roster } from "./model";
 import { loadPhoto, photoDataUrl, type PhotoStore } from "./photos";
@@ -100,8 +100,8 @@ function toMember(m: MemberState, presence: Presence | undefined): Member {
 }
 
 /** Rebuilds who is on the project, where they are and what they share, from the ledger alone. */
-export function buildPeopleView(entries: readonly LedgerEntry[]): PeopleView {
-  const roster = replayRoster(entries);
+export function buildPeopleView(entries: readonly LedgerEntry[], options: { owner?: string } = {}): PeopleView {
+  const roster = replayRoster(entries, options.owner);
   const where = presences(roster, entries);
   const members = [...roster.members.values()]
     .sort((a, b) => Number(b.role === "owner") - Number(a.role === "owner"))
@@ -118,6 +118,12 @@ export function buildPeopleView(entries: readonly LedgerEntry[]): PeopleView {
   const head = entries[entries.length - 1]?.n;
   if (head) view.head = head;
   return view;
+}
+
+/** The view of an open ledger, with the owner the ledger verified from the pinned owner key. */
+export function peopleView(ledger: Pick<Ledger, "entries" | "owner">): PeopleView {
+  const owner = ledger.owner;
+  return buildPeopleView(ledger.entries(), owner === undefined ? {} : { owner });
 }
 
 /** Data URLs for members' photos, for the panel. Missing or altered photos are left out. */

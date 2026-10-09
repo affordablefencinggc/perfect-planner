@@ -12,12 +12,27 @@ import { APPROVAL_TYPES, type Approval } from "./types";
  * project that never adds helpers behaves exactly as before.
  */
 const installed = new WeakMap<Ledger, () => void>();
+const ownerPinned = new WeakSet<Ledger>();
 
-/** Idempotent: a ledger gets the people rules once. The write helpers in actions.ts call it. */
-export function installPeopleRules(ledger: Ledger): () => void {
+export interface PeopleRuleOptions {
+  /**
+   * The ledger was opened with the project's `ownerKey`. Only then may the
+   * first person entry claim ownership before `ledger.owner` is known (the
+   * ledger itself refuses a first person entry not signed by that key).
+   */
+  ownerPinned?: boolean;
+}
+
+/**
+ * Idempotent: a ledger gets the people rules once (a later call can still
+ * mark it owner-pinned). The write helpers in actions.ts call it;
+ * openPeopleLedger calls it with the open options.
+ */
+export function installPeopleRules(ledger: Ledger, options: PeopleRuleOptions = {}): () => void {
+  if (options.ownerPinned) ownerPinned.add(ledger);
   const existing = installed.get(ledger);
   if (existing) return existing;
-  const remove = ledger.addRule((draft, current) => peopleRefusal(draft, current.entries()));
+  const remove = ledger.addRule((draft, current) => peopleRefusal(draft, current.entries(), current.owner, ownerPinned.has(current)));
   const uninstall = () => {
     remove();
     installed.delete(ledger);
@@ -37,8 +52,8 @@ export interface PeopleViolation {
  * it was written, for entries appended by a process that never installed
  * them. A solo project's history (before the first member) is always clean.
  */
-export function auditPeople(entries: readonly LedgerEntry[]): PeopleViolation[] {
-  const roster = emptyRoster();
+export function auditPeople(entries: readonly LedgerEntry[], owner?: string): PeopleViolation[] {
+  const roster = emptyRoster(owner);
   const violations: PeopleViolation[] = [];
   for (const entry of entries) {
     const reason = claimsPeople(entry)
@@ -58,24 +73,29 @@ export function auditPeople(entries: readonly LedgerEntry[]): PeopleViolation[] 
  * STORED_VIOLATION) when any breaks the rules, so a project is never written
  * to on top of a roster it cannot trust. A read-only open (asked for, or
  * because another process holds the writer lock) still succeeds, so the app
- * can show `auditPeople(ledger.entries())`. The app opens project ledgers
+ * can show `auditPeople(ledger.entries(), ledger.owner)`. The app opens project ledgers
  * through this rather than `Ledger.open`.
  */
 export async function openPeopleLedger(store: LedgerStore, options: OpenOptions = {}): Promise<Ledger> {
   const ledger = await Ledger.open(store, options);
-  const violations = auditPeople(ledger.entries());
+  const violations = auditPeople(ledger.entries(), ledger.owner);
   if (violations.length > 0 && ledger.status.writable) {
     ledger.close();
     const [first] = violations;
     const more = violations.length > 1 ? ` (and ${violations.length - 1} more)` : "";
     throw new PeopleError("STORED_VIOLATION", `${first!.n} breaks the people rules: ${first!.reason}${more}`);
   }
-  installPeopleRules(ledger);
+  installPeopleRules(ledger, { ownerPinned: options.ownerKey !== undefined });
   return ledger;
 }
 
-export function peopleRefusal(draft: EntryDraft, entries: readonly LedgerEntry[]): string | null {
-  const roster = replayRoster(entries);
+/**
+ * `owner` is `ledger.owner`; `pinned` says the ledger was opened with the
+ * owner key, which lets the very first person entry claim the project.
+ */
+export function peopleRefusal(draft: EntryDraft, entries: readonly LedgerEntry[], owner?: string, pinned = false): string | null {
+  const roster = replayRoster(entries, owner);
+  if (pinned && roster.pinnedOwner === undefined && !entries.some((e) => e.actor?.kind === "person")) roster.ownerPending = true;
   if (claimsPeople(draft)) return peopleOpRefusal(draft, roster);
   return roleRefusal(draft, roster);
 }
