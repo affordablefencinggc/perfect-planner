@@ -58,6 +58,28 @@ function write(ledger: Ledger, actor: Actor, summary: string, reason: string, mv
   });
 }
 
+/**
+ * Whether a confirm entry was written by a person. This is the single place
+ * the MVP trusts an identity, so the ledger's actor verification plugs in here.
+ */
+export function confirmedByPerson(entry: LedgerEntry): boolean {
+  return entry.actor.kind === "person";
+}
+
+/**
+ * Ledger rule: refuse a confirm written by anyone but a person, so a forged
+ * one never reaches the ledger. Replay ignores one anyway.
+ */
+export function installMvpRules(ledger: Ledger): void {
+  ledger.addRule((draft) => {
+    const mvp = draft.data?.mvp as { kind?: unknown } | undefined;
+    if (draft.type === "decision.made" && mvp?.kind === "confirm" && draft.actor.kind !== "person") {
+      return "Only a person can confirm the MVP line";
+    }
+    return null;
+  });
+}
+
 /** Replay the ledger into the current board. */
 export function boardFromLedger(entries: readonly LedgerEntry[]): StageBoard {
   const board = emptyBoard();
@@ -89,6 +111,10 @@ export function boardFromLedger(entries: readonly LedgerEntry[]): StageBoard {
         break;
       }
       case "confirm":
+        // Only the entry's own actor counts, and only a person's. Anyone can
+        // append a decision.made carrying kind "confirm", so the payload
+        // proves nothing.
+        if (!confirmedByPerson(entry)) break;
         board.confirmed = true;
         board.confirmedBy = entry.actor.id;
         break;
