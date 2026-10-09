@@ -1683,7 +1683,7 @@ code {
   gap: 3px;
 }
 .index-entry-proof > small strong {
-  color: var(--green);
+  color: var(--ink);
   font: 700 9px var(--mono);
 }
 .index-entry-proof > small em {
