@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { ConnectAgentDrawer } from "../src/components/ConnectAgentDrawer.jsx";
@@ -116,6 +116,9 @@ describe("Connect agent drawer", () => {
     const dialog = await screen.findByRole("dialog", { name: "Connect agent" });
     expect(within(dialog).getByLabelText("Run once in a terminal setup text").textContent).toContain("perfectPlannerMcpServer.mjs");
     expect(window.location.search).toContain("workspace=structure");
+    // The drawer moves focus and installs its Escape listener in the same
+    // effect, which can run after findByRole resolves on a slow machine.
+    await waitFor(() => expect(dialog.contains(document.activeElement)).toBe(true));
     fireEvent.keyDown(document, { key: "Escape" });
     expect(screen.queryByRole("dialog", { name: "Connect agent" })).toBeNull();
 
