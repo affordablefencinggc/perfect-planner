@@ -17,6 +17,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { AGENT_KINDS, AGENTS, type AgentKind } from "./agentKinds";
+import { findExecutable, isNetworkPath, launchFor } from "./tokenFile";
 
 const SERVER = "perfect-planner-core";
 const SKILL = "perfect-planner-connect";
@@ -69,10 +70,11 @@ export function connectArgsProblem(argv: string[], platform: NodeJS.Platform = p
   const [bridgeUrl, tokenFile] = argv as [string, string];
   if (!/^http:\/\/127\.0\.0\.1:\d{1,5}$/.test(bridgeUrl)) return "The bridge address must be the app's loopback address, http://127.0.0.1:<port>.";
   if (/pp_[cw]_/.test(tokenFile)) return "That looks like a key. Never paste keys; copy the line from Connect agent, which names the token file instead.";
+  if (isNetworkPath(tokenFile, platform)) return "The token file must be on this computer, not a network share.";
   const absolute = platform === "win32" ? path.win32.isAbsolute(tokenFile) : path.posix.isAbsolute(tokenFile);
   if (!absolute || !tokenFile.endsWith(".token")) return "The second part must be the full path of the .token file the app wrote.";
   if (platform === "win32") {
-    // claude, gemini and codex are .cmd files on Windows, so it runs through cmd.exe, which expands % and splits on ".
+    // An unusual claude.cmd, gemini.cmd or codex.cmd still runs through cmd.exe, which expands % and splits on ".
     for (const bad of ["%", '"']) if (argv.some((arg) => arg.includes(bad))) return `The path contains ${bad}, which Windows would rewrite. Move Perfect Planner's data to a folder without it.`;
   }
   return null;
@@ -87,16 +89,27 @@ export function installSkill(plan: Pick<ConnectPlan, "skillFrom" | "skillTo">, h
   }
 }
 
-function run(cli: string, args: string[]) {
-  const windows = process.platform === "win32";
-  const quoted = windows ? args.map((arg) => (/[\s&|<>^()]/.test(arg) ? `"${arg}"` : arg)) : args;
-  return spawnSync(cli, quoted, { encoding: "utf8", shell: windows });
+/** Windows: never resolve a bare program name (node, git) from the current folder either. */
+const SAFE_ENV = { ...process.env, NoDefaultCurrentDirectoryInExePath: "1" };
+
+/**
+ * Runs the agent's CLI from the project folder (its mcp add registers that folder) without a shell, by
+ * the absolute path found on PATH, so a claude, gemini or codex (.cmd) planted in the repo never runs.
+ */
+function run(agent: AgentKind, args: string[]) {
+  const { cli, npmEntry } = AGENTS[agent];
+  const program = findExecutable(cli, process.env, process.cwd());
+  if (!program) return { error: Object.assign(new Error(`${cli} not found`), { code: "ENOENT" }), status: null, stdout: "", stderr: "" };
+  const launch = launchFor(program, args, npmEntry);
+  return spawnSync(launch.command, launch.args, {
+    encoding: "utf8",
+    windowsHide: true,
+    ...(launch.verbatim ? { windowsVerbatimArguments: true } : {}),
+    env: SAFE_ENV,
+  });
 }
 
-const installed = (agent: AgentKind) => {
-  const probe = run(AGENTS[agent].cli, ["--version"]);
-  return !probe.error && probe.status === 0;
-};
+const installed = (agent: AgentKind) => findExecutable(AGENTS[agent].cli, process.env, process.cwd()) !== null;
 
 /** The first agent CLI found on this computer, in the order Perfect Planner was built and proven with. */
 export function detectAgent(isInstalled: (agent: AgentKind) => boolean = installed): AgentKind | null {
@@ -109,7 +122,9 @@ export function detectAgent(isInstalled: (agent: AgentKind) => boolean = install
  * file is local to this checkout and changes nothing anyone else sees.
  */
 export function keepOutOfGit(folder: string): boolean {
-  const probe = spawnSync("git", ["rev-parse", "--git-path", "info/exclude"], { cwd: folder, encoding: "utf8" });
+  const git = findExecutable("git", process.env, folder);
+  if (!git) return false;
+  const probe = spawnSync(git, ["rev-parse", "--git-path", "info/exclude"], { cwd: folder, encoding: "utf8", windowsHide: true, env: SAFE_ENV });
   if (probe.error || probe.status !== 0) return false;
   const exclude = path.resolve(folder, probe.stdout.trim());
   const line = "/.gemini/settings.json";
@@ -177,8 +192,8 @@ function main(all: string[]): number {
     process.stderr.write(`Perfect Planner: could not install the skill (${(error as Error).message}). Connecting anyway.\n`);
   }
 
-  run(cli, plan.remove); // nothing to remove the first time; that is fine
-  const added = run(cli, plan.add);
+  run(agent, plan.remove); // nothing to remove the first time; that is fine
+  const added = run(agent, plan.add);
   if (added.error || added.status !== 0) {
     const missing = (added.error as NodeJS.ErrnoException | undefined)?.code === "ENOENT";
     process.stderr.write(

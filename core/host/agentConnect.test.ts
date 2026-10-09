@@ -67,6 +67,12 @@ describe("connect line", () => {
     expect(connectArgsProblem(["http://127.0.0.1:5555", "/data/tokens/C-1.token", "--extra"], "linux")).toMatch(/whole line/);
   });
 
+  it("refuses a token file on a network share, so nothing reaches out over SMB", () => {
+    expect(connectArgsProblem(["http://127.0.0.1:5555", "\\\\host\\share\\C-1.token"], "win32")).toMatch(/this computer/);
+    expect(connectArgsProblem(["http://127.0.0.1:5555", "//host/share/C-1.token"], "win32")).toMatch(/this computer/);
+    expect(connectArgsProblem(["http://127.0.0.1:5555", "//host/share/C-1.token"], "linux")).toMatch(/this computer/);
+  });
+
   it("refuses characters cmd.exe would expand or split on Windows", () => {
     expect(connectArgsProblem(["http://127.0.0.1:5555", "C:\\Users\\%USERNAME%\\C-1.token"], "win32")).toMatch(/%/);
     expect(connectArgsProblem(["http://127.0.0.1:5555", "C:\\Users\\a\"b\\C-1.token"], "win32")).toMatch(/"/);

@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -7,6 +7,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { bridgeCall, createAgentMcpServer } from "../../mcp/index";
 import { hostCall, startTestHost } from "../testing";
+import { icaclsPath } from "../tokenFile";
 import { agentEntryPath, setupFor } from "./agents";
 
 let base: string;
@@ -35,6 +36,7 @@ describe("agents routes", () => {
     expect(result.bridgeUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
     expect(result.token).toMatch(/^pp_c_/);
     if (process.platform !== "win32") expect(fs.statSync(result.tokenFile).mode & 0o077).toBe(0);
+    else expect(execFileSync(icaclsPath(), [result.tokenFile], { encoding: "utf8" })).not.toMatch(/Everyone|BUILTIN\\Users|Authenticated Users|\(I\)/i);
     const program = result.agentPath.replace(/agent\.mjs$/, "connect.mjs");
     if (process.platform !== "win32") {
       expect(result.claudeCode).toBe(`node '${program}' --agent claude ${result.bridgeUrl} '${result.tokenFile}'`);

@@ -10,6 +10,7 @@ import { bridgeCall } from "../../mcp/index";
 import { appendNumbered } from "../../numbering/index";
 import { asPersonRequest } from "../keys";
 import { hostCall, startTestHost } from "../testing";
+import { icaclsPath } from "../tokenFile";
 import { quoteFor, repoRefusal, workerCommands } from "./tasks";
 
 const git = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, encoding: "utf8", env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t.invalid", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t.invalid" } }).trim();
@@ -71,6 +72,7 @@ describe("tasks routes", () => {
     const token = fs.readFileSync(d.tokenFile, "utf8");
     expect(token).toMatch(/^pp_w_/);
     if (process.platform !== "win32") expect(fs.statSync(d.tokenFile).mode & 0o077).toBe(0);
+    else expect(execFileSync(icaclsPath(), [d.tokenFile], { encoding: "utf8" })).not.toMatch(/Everyone|BUILTIN\\Users|Authenticated Users|\(I\)/i);
     expect(fs.existsSync(d.worktree)).toBe(true);
     expect(d.brief).toContain("T-1");
     expect(d.brief).toContain("propose_test");
