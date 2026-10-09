@@ -27,5 +27,5 @@ export async function startTestHost(): Promise<{ host: CoreHost; base: string; d
 /** GET/POST against the test host; returns { status, body }. */
 export async function hostCall(base: string, method: "GET" | "POST", route: string, body?: unknown): Promise<{ status: number; body: { ok: boolean; result?: any; code?: string; message?: string } }> {
   const res = await fetch(`${base}${route}`, { method, ...(body === undefined ? {} : { headers: { "content-type": "application/json" }, body: JSON.stringify(body) }) });
-  return { status: res.status, body: await res.json() };
+  return { status: res.status, body: (await res.json()) as { ok: boolean; result?: any; code?: string; message?: string } };
 }
