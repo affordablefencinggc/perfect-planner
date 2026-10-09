@@ -132,6 +132,8 @@ describe("REASON_REQUIRED", () => {
         "task.reopened",
         "key.trusted",
         "key.retired",
+        "owner.recovery.set",
+        "owner.recovered",
       ].sort(),
     );
   });
@@ -149,7 +151,8 @@ describe("REASON_REQUIRED", () => {
     const ledger = open();
     ledger.append(draft({ summary: "seed" }));
     for (const type of REASON_REQUIRED_TYPES) {
-      if (type === "chain.acknowledged") continue;
+      // Written only by their own methods (tamper.test.ts, recovery.test.ts).
+      if (type === "chain.acknowledged" || type.startsWith("owner.")) continue;
       expect(() => ledger.append(draft({ type, subject: nextSubject(ledger, type), reason: "Because the owner said so", corrects: "L-000001", ...keyPayload(type, ledger) }))).not.toThrow();
     }
   });
@@ -177,7 +180,7 @@ describe("UNKNOWN_TYPE", () => {
     const ledger = open();
     ledger.append(draft({ summary: "seed" }));
     for (const type of ENTRY_TYPES) {
-      if (type === "task.done" || type === "chain.acknowledged") continue;
+      if (type === "task.done" || type === "chain.acknowledged" || type.startsWith("owner.")) continue;
       expect(() => ledger.append(draft({ type, subject: nextSubject(ledger, type), reason: "reason", corrects: "L-000001", data: { test: "npm test" }, ...keyPayload(type, ledger) }))).not.toThrow();
     }
   });

@@ -16,6 +16,8 @@ import { DEMO_ONLY_REASON, DemoOnlyReason } from "../demo/DemoSampleNotice.jsx";
 import { ArchitectureDraftPanel } from "./ArchitectureDraftPanel.jsx";
 import { inspectArchitecture } from "../runtime/architectureClient.js";
 import { useOptionalProject } from "../project/ProjectProvider.jsx";
+import { useProjectWorkRecords } from "../project/useProjectWorkRecords.js";
+import { deriveDiscoveryReview } from "../project/discoveryReviewModel.js";
 
 const gateStatus = (gate) => gate.status === "clear" ? "verified" : gate.status === "unknown" ? "queued" : "blocked";
 const statusLabel = { verified: "verified", blocked: "hard stop", queued: "unknown" };
@@ -59,6 +61,8 @@ function ImportedProjectBlueprint({ activeProject, onSelect, onOpenStructure }) 
   const [savedArchitecture, setSavedArchitecture] = useState(null);
   const [architectureError,setArchitectureError]=useState(false);
   const architectureRequest=useRef(0);
+  const workRecords=useProjectWorkRecords(activeProject.projectId);
+  const discoveryReview=useMemo(()=>deriveDiscoveryReview(activeProject,workRecords),[activeProject,workRecords]);
   const hasProvider=Boolean(projectContext);
   useEffect(() => {
     const request=++architectureRequest.current;
@@ -157,7 +161,7 @@ function ImportedProjectBlueprint({ activeProject, onSelect, onOpenStructure }) 
           </section>
         </aside>
       </div>
-      <ArchitectureDraftPanel key={activeProject.projectId} projectId={activeProject.projectId} onPublished={(receipt)=>{architectureRequest.current++;if(hasProvider){projectContext.refreshArchitecture?.(activeProject.projectId);}else{setSavedArchitecture(receipt);setArchitectureError(false);}}} />
+      <ArchitectureDraftPanel key={activeProject.projectId} projectId={activeProject.projectId} discoveryReview={discoveryReview} onPublished={(receipt)=>{architectureRequest.current++;if(hasProvider){projectContext.refreshArchitecture?.(activeProject.projectId);}else{setSavedArchitecture(receipt);setArchitectureError(false);}}} />
     </section>
   );
 }

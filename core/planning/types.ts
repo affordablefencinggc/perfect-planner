@@ -98,6 +98,8 @@ export interface PlanningAnswer {
   decision?: string;
   /** Set when the answer was deferred into a dated spike task. */
   spike?: { task: string; due: string; risk: string };
+  /** Read from the existing code (readRepoStack), so what it builds already exists. */
+  fromRepo?: boolean;
 }
 
 // ---------- Mind map and roadmap ----------
@@ -113,6 +115,8 @@ export interface MindNode {
   /** Sub-parts; a component with none is flagged by the depth check. */
   children: string[];
   note?: string;
+  /** The repo already has it: an answer that produced it was read from the code. Risks never are. */
+  existing?: boolean;
 }
 
 export interface MindLink {
@@ -150,4 +154,6 @@ export interface RoadmapPhase {
 
 export interface Roadmap {
   phases: RoadmapPhase[];
+  /** Parts the repo already has, which get no build task. */
+  existing?: { node: string; label: string }[];
 }
