@@ -7,6 +7,8 @@ import { PerfectPlannerShell } from "../src/PerfectPlannerShell.jsx";
 import { createDemoProjectSession } from "../src/demo/demoProject.js";
 import { createProjectEntityId } from "../src/project/projectIds.js";
 import { ProjectProvider } from "../src/project/ProjectProvider.jsx";
+import { nextDiscoveryReviewData } from "../src/project/discoveryReviewModel.js";
+import { workRecordsKey, writeSection } from "../src/project/projectWorkRecords.js";
 import { currentComponentPlanInput } from "../src/engine/componentPlanSeed.js";
 import { freezeComponentPlans } from "../src/engine/componentPlanEngine.js";
 import {
@@ -44,9 +46,21 @@ function discovery({ signals = 0, unanswered = 0 } = {}) {
       })),
     );
   }
+  // Like the engine, list all eight areas; the rest have clear (observed) findings.
+  const present = new Set(categories.map((category) => category.id));
+  const filled = ["A01", "A02", "A03", "A04", "A05", "A06", "A07", "A08"].filter(
+    (id) => !present.has(id),
+  );
+  categories.push(
+    ...filled.map((id) => ({
+      id,
+      state: "observed",
+      findings: [{ id: `S9${id.slice(1)}` }],
+    })),
+  );
   return {
     categories,
-    counts: { observed: 1, signals, unanswered },
+    counts: { observed: 1 + filled.length, signals, unanswered },
     generatedAt: FIXED_TIME,
     state: "generated",
   };
@@ -278,8 +292,9 @@ describe("project Home consumes the project-home model", () => {
     const summary = screen.getByRole("region", {
       name: "Project evidence summary",
     });
-    expect(summary.textContent).toContain("1 observed");
-    expect(summary.textContent).toContain("2 review signals");
+    // Counted in areas, like "Review what we found": 6 clear areas, 1 to check, 1 empty.
+    expect(summary.textContent).toContain("6 observed");
+    expect(summary.textContent).toMatch(/(^|\D)1 review signal/);
     expect(summary.textContent).toContain("1 unanswered");
     const blockerText = screen.getByRole("region", {
       name: "Project blockers",
@@ -287,6 +302,39 @@ describe("project Home consumes the project-home model", () => {
     expect(blockerText).toContain("discovery-signals-unreviewed");
     expect(blockerText).toContain("discovery-questions-unanswered");
     expectOnlyModelAction(container, "review-discovery", "Review discovery gaps");
+  });
+
+  test("answered discovery areas clear from Home's signal and unanswered counts", async () => {
+    const project = importedProject({
+      name: "Answered Discovery Home",
+      rootCharacter: "e",
+      digestCharacter: "5",
+      fileCount: 23,
+      discovery: discovery({ signals: 5, unanswered: 1 }),
+    });
+    let data = null;
+    for (const id of ["A02", "A03"])
+      data = nextDiscoveryReviewData(project, data, id, "confirmed", {
+        now: () => FIXED_TIME,
+      });
+    writeSection(project.projectId, "discoveryReview", data, {
+      now: () => FIXED_TIME,
+    });
+    try {
+      renderShell(registryWith(project), project);
+      await screen.findByRole("heading", { name: project.name });
+      const summary = screen.getByRole("region", {
+        name: "Project evidence summary",
+      });
+      expect(summary.textContent).toMatch(/(^|\D)0 review signal/);
+      expect(summary.textContent).toContain("0 unanswered");
+      expect(summary.textContent).not.toMatch(/(^|\D)5 review signal/);
+      expect(
+        screen.getByRole("region", { name: "Project blockers" }).textContent,
+      ).not.toContain("discovery-signals-unreviewed");
+    } finally {
+      window.localStorage.removeItem(workRecordsKey(project.projectId));
+    }
   });
 
   test("checked parent authorities cannot make a cached Plan ready without its own checked Ledger", async () => {
