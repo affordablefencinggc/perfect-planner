@@ -136,7 +136,8 @@ describe("planning answers come from a person", () => {
   it("refuses non-blocking planning answers from an agent too, and accepts a person", async () => {
     const { ledger } = await setup();
     const q = ask(ledger, { planning: true, blocking: false });
-    expect(refusal(() => appendNumbered(ledger, { actor: worker, type: "decision.made", summary: "No", reason: "Answer", data: { question: q, answer: "No" } }))).toMatch(/person/);
+    expect(() => appendNumbered(ledger, { actor: worker, type: "decision.made", summary: "No", reason: "Answer", data: { question: q, answer: "No" } })).toThrow(/person|may not write/);
+    expect(refusal(() => ledger.append({ actor: worker, type: "question.answered", subject: q, summary: "No", data: { answer: "No", via: "main" } }))).toMatch(/person/);
     const d = appendNumbered(ledger, { actor: person, type: "decision.made", summary: "No", reason: "Answer", data: { question: q, answer: "No" } });
     ledger.append({ actor: person, type: "question.answered", subject: q, summary: "No", data: { answer: "No", decision: d.subject, via: "main" } });
     expect(ledger.entries()).toHaveLength(3);
@@ -145,8 +146,7 @@ describe("planning answers come from a person", () => {
   it("still lets an agent answer relay questions", async () => {
     const { ledger } = await setup();
     const q = ask(ledger, { planning: false, blocking: true });
-    appendNumbered(ledger, { actor: worker, type: "decision.made", summary: "Use the helper", reason: "Answer", data: { question: q, answer: "Use the helper" } });
-    ledger.append({ actor: worker, type: "question.answered", subject: q, summary: "Use the helper", data: { answer: "Use the helper", via: "main" } });
-    expect(ledger.entries()).toHaveLength(3);
+    ledger.append({ actor: worker, type: "question.answered", subject: q, summary: "Use the helper", data: { answer: "Use the helper", via: "settled" } });
+    expect(ledger.entries()).toHaveLength(2);
   });
 });
