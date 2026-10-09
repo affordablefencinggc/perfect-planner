@@ -1,6 +1,6 @@
 import { createPrivateKey, createPublicKey, hkdfSync, randomBytes, sign as cryptoSign, verify as cryptoVerify } from "node:crypto";
 import { canonicalJson } from "./chain";
-import { keyIdOf, principalOf, signedBytes } from "./signing";
+import { keyFromData, keyIdOf, principalOf, signedBytes } from "./signing";
 import { LedgerError, type LedgerEntry } from "./types";
 
 /**
@@ -68,13 +68,14 @@ export interface RecoveryKey {
 }
 
 /**
- * The Ed25519 key a code derives for one ledger: HKDF-SHA256 with the
- * ledger's genesis hash as salt, so a code for one project means nothing in
- * another. The genesis entry's hash covers its time, author and signature,
- * so it identifies the project.
+ * The Ed25519 key a code derives for one project: HKDF-SHA256 salted with the
+ * project's root, which is the hash of the ledger's first person entry and the
+ * key that signed it (see OwnerChain.root). That entry is the owner's own,
+ * signed, and its hash covers everything before it, so a code means nothing
+ * in another project or in a ledger rewritten from that point under another key.
  */
-export function deriveRecoveryKey(secret: Buffer, genesis: string): RecoveryKey {
-  const seed = Buffer.from(hkdfSync("sha256", secret, Buffer.from(`pp-project:${genesis}`, "utf8"), Buffer.from(INFO, "utf8"), 32));
+export function deriveRecoveryKey(secret: Buffer, root: string): RecoveryKey {
+  const seed = Buffer.from(hkdfSync("sha256", secret, Buffer.from(`pp-project:${root}`, "utf8"), Buffer.from(INFO, "utf8"), 32));
   // PKCS8 wrapper for a raw Ed25519 seed (RFC 8410).
   const der = Buffer.concat([Buffer.from("302e020100300506032b657004220420", "hex"), seed]);
   seed.fill(0);
@@ -95,9 +96,9 @@ export function deriveRecoveryKey(secret: Buffer, genesis: string): RecoveryKey 
 }
 
 /** What the recovery key signs in owner.recovered: the project, the exact head it follows, and both keys. */
-export function recoveryStatement(data: { genesis: string; head: { n: string; hash: string }; newKeyId: string; recoveryKeyId: string }): Buffer {
+export function recoveryStatement(data: { root: string; head: { n: string; hash: string }; newKeyId: string; recoveryKeyId: string }): Buffer {
   return Buffer.from(
-    canonicalJson({ v: INFO, genesis: data.genesis, head: { n: data.head.n, hash: data.head.hash }, newKeyId: data.newKeyId, recoveryKeyId: data.recoveryKeyId }),
+    canonicalJson({ v: INFO, root: data.root, head: { n: data.head.n, hash: data.head.hash }, newKeyId: data.newKeyId, recoveryKeyId: data.recoveryKeyId }),
     "utf8",
   );
 }
@@ -105,28 +106,43 @@ export function recoveryStatement(data: { genesis: string; head: { n: string; ha
 export interface OwnerKeyStep {
   keyId: string;
   publicKey: string;
-  /** Index of the entry that made this the owner key (the first person entry, or an owner.recovered). */
+  /** Index of the entry that made this an owner key. */
   from: number;
-  /** Index of the owner.recovered that replaced it; nothing it signs after that counts. */
-  replacedAt?: { index: number; n: string };
+  /**
+   * The entry that stopped it: a key.retired (a rotation, or a lost key) or
+   * an owner.recovered (another computer took over). Nothing it signs after
+   * that counts.
+   */
+  replacedAt?: { index: number; n: string; by: "retired" | "recovered" };
 }
 
 export interface OwnerChain {
   principal: string;
-  genesis: string;
-  /** Owner keys in order; the last one is current. */
+  /** "<hash of the first person entry>/<the key id that signed it>": what a code is bound to. */
+  root: string;
+  /** Every key that was ever an owner key, in the order it became one. */
   keys: OwnerKeyStep[];
-  /** The latest recovery key the current owner key set, unless a recovery has used it since. */
+  /** Owner keys in force at the end of the ledger. */
+  active: string[];
+  /** The latest recovery key an owner key set, unless a recovery has used it since. */
   recovery?: { keyId: string; publicKey: string; n: string };
+  /** Each owner.recovered, in order. */
+  recoveries: { index: number; n: string; keyId: string }[];
 }
 
 /**
  * Follows ownership through the ledger from what the entries themselves
- * prove, before any device trust: the first person entry's key, recovery
- * keys that the then-current owner key set, and owner.recovered entries that
- * the latest unused recovery key signed for exactly the entry before them.
- * Anything else is ignored here (and fails as an untrusted signature later).
- * Which chain counts is decided by the app's pinned owner key (keyTrust).
+ * prove, before any device trust. The first person entry's key starts it.
+ * After that, an owner key in force may:
+ * - add an owner key (key.trusted for the owner, as in a rotation or a
+ *   second device);
+ * - retire one (key.retired), which stops it for good;
+ * - set the recovery key (owner.recovery.set).
+ * An owner.recovered that the latest unused recovery key signed for exactly
+ * the entry before it replaces every owner key in force with the new
+ * computer's key. Anything else is ignored here, and fails as an untrusted
+ * signature later. Which chain counts is decided by the app's pinned owner
+ * key (keyTrust).
  */
 export function ownerChain(entries: readonly LedgerEntry[]): OwnerChain | undefined {
   const firstIndex = entries.findIndex((entry) => entry.actor?.kind === "person" && typeof entry.actor.id === "string");
@@ -135,31 +151,48 @@ export function ownerChain(entries: readonly LedgerEntry[]): OwnerChain | undefi
   if (!selfSigned(first)) return undefined;
   const chain: OwnerChain = {
     principal: principalOf(first.actor),
-    genesis: entries[0].hash,
+    root: `${first.hash}/${first.sig!.key}`,
     keys: [{ keyId: first.sig!.key, publicKey: first.sig!.pub, from: firstIndex }],
+    active: [first.sig!.key],
+    recoveries: [],
+  };
+  const step = (keyId: unknown) => chain.keys.find((k) => k.keyId === keyId);
+  const stop = (keyId: string, index: number, n: string, by: "retired" | "recovered") => {
+    const k = step(keyId);
+    if (k && !k.replacedAt) k.replacedAt = { index, n, by };
+    chain.active = chain.active.filter((id) => id !== keyId);
   };
   for (let i = firstIndex + 1; i < entries.length; i += 1) {
     const entry = entries[i];
     if (entry.actor?.kind !== "person" || principalOf(entry.actor) !== chain.principal) continue;
-    const current = chain.keys[chain.keys.length - 1];
-    if (entry.type === "owner.recovery.set") {
-      const data = entry.data ?? {};
-      if (entry.sig?.key !== current.keyId || !selfSigned(entry)) continue;
-      if (data.genesis !== chain.genesis || typeof data.recoveryPublicKey !== "string" || !isEd25519(data.recoveryPublicKey)) continue;
+    const data = entry.data ?? {};
+    // Every change below except owner.recovered must be signed by an owner key in force.
+    const byOwner = typeof entry.sig?.key === "string" && chain.active.includes(entry.sig.key) && selfSigned(entry);
+    if (entry.type === "key.trusted") {
+      const key = keyFromData(data);
+      if (!byOwner || !key || key.principal !== chain.principal || step(key.keyId)) continue;
+      chain.keys.push({ keyId: key.keyId, publicKey: key.publicKey, from: i });
+      chain.active.push(key.keyId);
+    } else if (entry.type === "key.retired") {
+      if (!byOwner || typeof data.keyId !== "string" || !chain.active.includes(data.keyId)) continue;
+      stop(data.keyId, i, entry.n, "retired");
+    } else if (entry.type === "owner.recovery.set") {
+      if (!byOwner || data.root !== chain.root || typeof data.recoveryPublicKey !== "string" || !isEd25519(data.recoveryPublicKey)) continue;
       if (data.recoveryKeyId !== keyIdOf(data.recoveryPublicKey)) continue;
       chain.recovery = { keyId: data.recoveryKeyId, publicKey: data.recoveryPublicKey, n: entry.n };
     } else if (entry.type === "owner.recovered") {
-      const data = entry.data ?? {};
       const before = entries[i - 1];
       const head = data.head as { n?: unknown; hash?: unknown } | undefined;
-      if (!chain.recovery || data.recoveryKeyId !== chain.recovery.keyId || data.genesis !== chain.genesis) continue;
+      if (!chain.recovery || data.recoveryKeyId !== chain.recovery.keyId || data.root !== chain.root) continue;
       if (!head || head.n !== before.n || head.hash !== before.hash || entry.prev !== before.hash) continue;
       if (!selfSigned(entry) || entry.sig!.key !== data.newKeyId || entry.sig!.pub !== data.newPublicKey) continue;
-      if (chain.keys.some((k) => k.keyId === data.newKeyId) || typeof data.recoverySignature !== "string") continue;
-      const statement = recoveryStatement({ genesis: chain.genesis, head: { n: before.n, hash: before.hash }, newKeyId: data.newKeyId, recoveryKeyId: chain.recovery.keyId });
+      if (step(data.newKeyId) || typeof data.recoverySignature !== "string") continue;
+      const statement = recoveryStatement({ root: chain.root, head: { n: before.n, hash: before.hash }, newKeyId: data.newKeyId, recoveryKeyId: chain.recovery.keyId });
       if (!verifies(chain.recovery.publicKey, statement, data.recoverySignature)) continue;
-      current.replacedAt = { index: i, n: entry.n };
+      for (const keyId of [...chain.active]) stop(keyId, i, entry.n, "recovered");
       chain.keys.push({ keyId: data.newKeyId, publicKey: data.newPublicKey as string, from: i });
+      chain.active = [data.newKeyId];
+      chain.recoveries.push({ index: i, n: entry.n, keyId: data.newKeyId });
       chain.recovery = undefined; // single use
     }
   }
@@ -169,8 +202,8 @@ export function ownerChain(entries: readonly LedgerEntry[]): OwnerChain | undefi
 export interface RecoveryCheck {
   /** The project's owner, as the code proves it. */
   owner: string;
-  /** The owner key in force before recovery. */
-  ownerKey: string;
+  /** The owner keys in force before recovery. */
+  ownerKeys: string[];
   /**
    * The ledger as it is on this computer, for the person to confirm before
    * recovering: the code proves where the history starts, not that nothing
@@ -185,7 +218,7 @@ export function checkRecoveryCode(entries: readonly LedgerEntry[], typed: string
   try {
     const chain = ownerChain(entries);
     if (!chain) throw new LedgerError("RULE", "this ledger has no owner to recover");
-    const key = deriveRecoveryKey(secret, chain.genesis);
+    const key = deriveRecoveryKey(secret, chain.root);
     key.wipe();
     if (!chain.recovery || chain.recovery.keyId !== key.keyId) {
       throw new LedgerError(
@@ -196,7 +229,7 @@ export function checkRecoveryCode(entries: readonly LedgerEntry[], typed: string
     const last = entries[entries.length - 1];
     return {
       owner: chain.principal,
-      ownerKey: chain.keys[chain.keys.length - 1].keyId,
+      ownerKeys: [...chain.active],
       head: { entries: entries.length, n: last.n, hash: last.hash, at: last.at, summary: last.summary },
     };
   } finally {
@@ -244,13 +277,12 @@ function fromBase32(text: string): Buffer | undefined {
   return Buffer.from(value.toString(16).padStart(CODE_BYTES * 2, "0"), "hex");
 }
 
-/** Two characters (10 bits) from a hash of the code: a single typo slips through about once in a thousand. */
+/**
+ * Two characters holding the code's value mod 1021 (a prime below 32²): any
+ * single wrong character or swap of two neighbours changes it, so such typos
+ * are always caught.
+ */
 function checkChars(secret: Buffer): string {
-  const digest = createHashOf(secret);
-  const bits = (digest[0] << 2) | (digest[1] >> 6);
-  return ALPHABET[bits >> 5] + ALPHABET[bits & 31];
-}
-
-function createHashOf(secret: Buffer): Buffer {
-  return Buffer.from(hkdfSync("sha256", secret, Buffer.alloc(0), Buffer.from("pp-recovery-check", "utf8"), 2));
+  const value = Number(BigInt(`0x${secret.toString("hex")}`) % 1021n);
+  return ALPHABET[value >> 5] + ALPHABET[value & 31];
 }

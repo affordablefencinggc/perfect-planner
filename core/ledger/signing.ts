@@ -190,9 +190,11 @@ export function keyTrust(anchors: readonly TrustedKey[], entries: readonly Ledge
     if (chain && step >= 0 && anchors.some((k) => k.keyId === options.ownerKey)) {
       owner = chain.principal;
       ownerAnchors = chain.keys.map((k) => ({ keyId: k.keyId, principal: chain.principal, publicKey: k.publicKey }));
-      for (const k of chain.keys) if (k.replacedAt) ownerRetired.set(k.keyId, k.replacedAt);
+      for (const k of chain.keys) if (k.replacedAt) ownerRetired.set(k.keyId, { index: k.replacedAt.index, n: k.replacedAt.n });
+      // Another computer recovered the project after this device's owner key came in.
       const pinned = chain.keys[step];
-      if (pinned.replacedAt) ownerKeyReplaced = { n: pinned.replacedAt.n, keyId: chain.keys[chain.keys.length - 1].keyId };
+      const later = chain.recoveries.filter((r) => r.index > pinned.from).at(-1);
+      if (later) ownerKeyReplaced = { n: later.n, keyId: later.keyId };
     } else {
       const problem = signatureProblem(first, withoutOwner.trusted, withoutOwner.retired, firstIndex);
       if (problem) ownerProblem = { n: first.n, detail: `no owner: ${problem}` };
@@ -254,7 +256,8 @@ function replay(
       if (signer === key.principal) selfTrusted.set(key.keyId, key);
     } else if (entry.type === "key.retired") {
       const keyId = entry.data?.keyId;
-      if (typeof keyId !== "string" || retired.has(keyId)) return;
+      // A retirement already known from an earlier point stands; a seeded later one never delays this one.
+      if (typeof keyId !== "string" || (retired.get(keyId)?.index ?? Infinity) <= index) return;
       const key = trusted.get(keyId);
       if (!key) return;
       if (signatureProblem(entry, trusted, retired, index) !== undefined) return;

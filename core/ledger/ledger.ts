@@ -400,14 +400,13 @@ export class Ledger {
       throw new LedgerError("NOT_PERMITTED", "only the project's owner, on a computer that holds the owner key, can set a recovery code");
     }
     const chain = ownerChain(this.list)!;
-    const current = chain.keys[chain.keys.length - 1].keyId;
     const mine = this.keys?.trustedKeys().find((k) => k.principal === principal && !k.retired)?.keyId;
-    if (mine !== current) {
-      throw new LedgerError("NOT_PERMITTED", `this computer does not hold the current owner key ${current}, so it cannot set a recovery code`);
+    if (!mine || !chain.active.includes(mine)) {
+      throw new LedgerError("NOT_PERMITTED", `this computer's key ${mine ?? "(none)"} is not an owner key in force, so it cannot set a recovery code`);
     }
     const secret = newRecoverySecret();
     const code = formatRecoveryCode(secret);
-    const key = deriveRecoveryKey(secret, chain.genesis);
+    const key = deriveRecoveryKey(secret, chain.root);
     secret.fill(0);
     key.wipe();
     const entry = this.writeOwnerEntry({
@@ -416,7 +415,7 @@ export class Ledger {
       subject: key.keyId,
       summary: "Set a new owner recovery code (earlier codes no longer work)",
       reason,
-      data: { genesis: chain.genesis, recoveryKeyId: key.keyId, recoveryPublicKey: key.publicKey },
+      data: { root: chain.root, recoveryKeyId: key.keyId, recoveryPublicKey: key.publicKey },
     });
     return { code, entry };
   }
@@ -466,15 +465,27 @@ export class Ledger {
       keys.activateKey(principal, mine.keyId);
     }
     if (!mine) throw new LedgerError("NOT_SIGNED", `this computer has no key for ${principal} to take over as owner`);
-    if (mine.keyId === check.ownerKey) throw new LedgerError("RULE", "this computer already holds the owner key; there is nothing to recover");
     const chain = ownerChain(this.list)!;
+    if (check.ownerKeys.includes(mine.keyId)) throw new LedgerError("RULE", "this computer already holds an owner key; there is nothing to recover");
+    if (chain.keys.some((k) => k.keyId === mine!.keyId)) throw new LedgerError("RULE", `this computer's key ${mine.keyId} was an owner key that was stopped; make a new key first`);
+    // Check the whole ledger as the owner's keys would see it before spending the code: a problem
+    // the recovery cannot fix (a tampered entry further on) must not cost the person their code.
+    const asOwner = assess(
+      this.list,
+      this.permissions,
+      [...this.anchors, ...chain.keys.map((k) => ({ keyId: k.keyId, principal: chain.principal, publicKey: k.publicKey }))],
+      chain.keys[0].keyId,
+    );
+    if (!asOwner.chain.ok) {
+      throw new LedgerError("CHAIN_BROKEN", `the ledger has a problem the recovery would not fix, at ${asOwner.chain.firstBad} (${asOwner.chain.detail}); the code was not used`);
+    }
     const secret = parseRecoveryCode(typed);
-    const recoveryKey = deriveRecoveryKey(secret, chain.genesis);
+    const recoveryKey = deriveRecoveryKey(secret, chain.root);
     secret.fill(0);
     const head = { n: last.n, hash: last.hash };
     let recoverySignature: string;
     try {
-      recoverySignature = recoveryKey.sign(recoveryStatement({ genesis: chain.genesis, head, newKeyId: mine.keyId, recoveryKeyId: recoveryKey.keyId }));
+      recoverySignature = recoveryKey.sign(recoveryStatement({ root: chain.root, head, newKeyId: mine.keyId, recoveryKeyId: recoveryKey.keyId }));
     } finally {
       recoveryKey.wipe();
     }
@@ -490,7 +501,7 @@ export class Ledger {
         subject: mine.keyId,
         summary: `Recovered ownership on a new computer with the recovery code; owner key is now ${mine.keyId}`,
         reason,
-        data: { genesis: chain.genesis, head, newKeyId: mine.keyId, newPublicKey: mine.publicKey, recoveryKeyId: recoveryKey.keyId, recoverySignature },
+        data: { root: chain.root, head, newKeyId: mine.keyId, newPublicKey: mine.publicKey, recoveryKeyId: recoveryKey.keyId, recoverySignature },
       });
     } catch (error) {
       this.ownerKey = previousPin;
@@ -602,9 +613,9 @@ export class Ledger {
       this.trust = keyTrust(this.anchors, this.list, { ownerKey: this.ownerKey });
       this.trusted = this.trust.trusted;
     }
-    const replaced = this.trust.ownerKeyReplaced;
-    if (replaced && signed.keyId === this.ownerKey) {
-      throw new LedgerError("NOT_SIGNED", `this project was recovered on another computer at ${replaced.n}; this computer's owner key no longer signs. If that was not you, keep this copy read-only and start a new project from it`);
+    const stopped = unsigned.actor.kind === "person" ? ownerChain(this.list)?.keys.find((k) => k.keyId === signed.keyId)?.replacedAt : undefined;
+    if (stopped?.by === "recovered") {
+      throw new LedgerError("NOT_SIGNED", `this project was recovered on another computer at ${stopped.n}; this computer's owner key no longer signs. If that was not you, keep this copy read-only and start a new project from it`);
     }
     const pub = this.trusted.get(signed.keyId)?.publicKey;
     if (!pub) throw new LedgerError("NOT_SIGNED", `${principal} signed with key ${signed.keyId}, which this device does not trust`);

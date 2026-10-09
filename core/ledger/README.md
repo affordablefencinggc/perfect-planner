@@ -279,12 +279,18 @@ them, or a second device of their own.
 `specs/owner-key-recovery.md`). The fix above needs the app's owner-key pin,
 which goes with the keychain. So the owner gets a one-time code instead:
 
-- `setRecoveryCode(owner, reason)` makes a 128-bit code (28 characters,
-  the last two a typo check) and returns it once, for the app to show.
+- `setRecoveryCode(owner, reason)` makes a 128-bit code (28 characters;
+  the last two catch any one wrong character or swapped pair) and returns it once, for the app to show.
   Only a public key derived from it is written, in `owner.recovery.set`,
-  signed by the current owner key. A new code replaces the old one.
-  The derivation is HKDF-SHA256 with the ledger's genesis hash as salt, so a
-  code fits one project only.
+  signed by an owner key in force. A new code replaces the old one.
+  The derivation is HKDF-SHA256, salted with the project's root: the hash
+  of the ledger's first person entry and the key that signed it. So a code
+  fits one project only, and not a ledger rewritten under another key
+  from that point.
+- Owner keys follow the ledger (`ownerChain`). The first person entry's
+  key starts it. An owner key in force can add one (a rotation or a
+  second device) or retire one. Only the latest code set by a key in force
+  counts.
 - On a new computer, `checkRecoveryCode(code)` shows the owner and the
   ledger's head. The code proves where the history starts, not that its
   end is all there, so the person confirms the head first.
@@ -292,8 +298,11 @@ which goes with the keychain. So the owner gets a one-time code instead:
   `owner.recovered`. It is signed by this computer's key, which countersigns
   the entry, and it carries the code key's signature over the project, the
   confirmed head and both key ids. That key becomes the owner key, and the
-  app must pin `ownerKey` to it. The old owner key stops signing at that
-  entry. The code is spent, and a new one is returned.
+  app must pin `ownerKey` to it (the pin lives in app data, keyed by the
+  ledger's genesis hash). Every owner key in force stops signing at that
+  entry. The code is spent, and a new one is returned. Before spending the
+  code, the whole ledger is checked as the owner's keys would see it. A
+  problem the recovery would not fix stops it, and the code stays unused.
 - A computer still pinned to the old key opens with `status.ownerKeyReplaced`
   set and can no longer sign as the owner. The app shows a red "recovered on
   another computer" notice. If that was not the person, the old computer's

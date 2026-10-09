@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  keyTrust,
   Ledger,
   LedgerError,
   MemoryKeyProvider,
@@ -9,7 +10,7 @@ import {
   signedBytes,
   type LedgerEntry,
 } from "./index";
-import { deriveRecoveryKey, formatRecoveryCode, ownerChain, parseRecoveryCode, recoveryStatement } from "./recovery";
+import { deriveRecoveryKey, formatRecoveryCode, newRecoverySecret, ownerChain, parseRecoveryCode, recoveryStatement } from "./recovery";
 
 // specs/owner-key-recovery.md, option B, with the reviewer's six conditions
 // (REVIEW-2026-10-09.md): a code shown once proves the history on a new
@@ -98,16 +99,21 @@ describe("owner recovery code", () => {
     expect(deriveRecoveryKey(secret, "a".repeat(64)).keyId).not.toBe(deriveRecoveryKey(secret, "b".repeat(64)).keyId);
   });
 
-  it("catches a typo with its check characters and never repeats the code", () => {
+  it("catches every single wrong character and every swap of neighbours, and never repeats the code", () => {
     const { store, code } = project();
     const pc = newComputer(store);
-    const last = code.replace(/-/g, "").at(-3)!;
-    const typo = code.replace(/.(?=-?..$)/, last === "7" ? "8" : "7");
-    expect(typo).not.toBe(code);
-    const error = thrown(() => pc.ledger.checkRecoveryCode(typo));
-    expect(error.message).toMatch(/typo/);
-    expect(error.message).not.toContain(code.slice(0, 9));
-    expect(error.message).not.toContain(typo.slice(0, 9));
+    const plain = code.replace(/-/g, "");
+    for (let i = 0; i < plain.length; i += 1) {
+      const wrong = plain[i] === "7" ? "8" : "7";
+      const typo = plain.slice(0, i) + wrong + plain.slice(i + 1);
+      const error = thrown(() => pc.ledger.checkRecoveryCode(typo));
+      expect(error.message).toMatch(/typo|letters and digits/);
+      expect(error.message).not.toContain(plain.slice(0, 8));
+      if (i + 1 < plain.length && plain[i] !== plain[i + 1]) {
+        const swapped = plain.slice(0, i) + plain[i + 1] + plain[i] + plain.slice(i + 2);
+        expect(thrown(() => pc.ledger.checkRecoveryCode(swapped)).message).toMatch(/typo|letters and digits/);
+      }
+    }
     // Case, spaces and look-alike letters do not matter.
     expect(pc.ledger.checkRecoveryCode(code.toLowerCase().replace(/-/g, " ")).owner).toBe("person:owner");
   });
@@ -131,15 +137,15 @@ describe("owner recovery code", () => {
     const last = entries[entries.length - 1];
     const chain = ownerChain(entries)!;
     const secret = parseRecoveryCode(code);
-    const spent = deriveRecoveryKey(secret, chain.genesis);
+    const spent = deriveRecoveryKey(secret, chain.root);
     const head = { n: last.n, hash: last.hash };
     const data = {
-      genesis: chain.genesis,
+      root: chain.root,
       head,
       newKeyId: thiefKey.keyId,
       newPublicKey: thiefKey.publicKey,
       recoveryKeyId: spent.keyId,
-      recoverySignature: spent.sign(recoveryStatement({ genesis: chain.genesis, head, newKeyId: thiefKey.keyId, recoveryKeyId: spent.keyId })),
+      recoverySignature: spent.sign(recoveryStatement({ root: chain.root, head, newKeyId: thiefKey.keyId, recoveryKeyId: spent.keyId })),
     };
     const forged = handWritten(entries, thief, { type: "owner.recovered", subject: thiefKey.keyId, summary: "Mine", reason: "Stolen code", data });
     expect(ownerChain(forged)!.keys.map((k) => k.keyId)).not.toContain(thiefKey.keyId);
@@ -251,6 +257,121 @@ describe("owner recovery code", () => {
   });
 });
 
+// Review 2026-10-09 of #32 at 22a6d34 (HOLD): attacks A, C and D (high), B, E and F (medium).
+describe("owner recovery after the review of 22a6d34", () => {
+  /** The owner rotates their key on the first computer; a thief kept a copy of the old one. */
+  function rotated() {
+    const base = project();
+    const stolen = base.keys.copy();
+    const ledger = Ledger.openSync(base.store, { keys: base.keys, ownerKey: base.ownerKey });
+    const { retired } = ledger.rotateKey(owner, "Laptop stolen");
+    ledger.close();
+    return { ...base, stolen, retired };
+  }
+
+  it("A: a code does not validate a ledger rewritten after a kept non-person first entry", () => {
+    const keys = new MemoryKeyProvider({ autoCreate: false });
+    const ownerKey = keys.createKey("person:owner").keyId;
+    const store = new MemoryStore();
+    const ledger = Ledger.openSync(store, { keys, ownerKey, now: clock("2026-10-09T01:00:00Z") });
+    ledger.append({ actor: agent, type: "task.progress", subject: "T-1", summary: "An agent wrote first" });
+    ledger.append({ actor: owner, type: "decision.made", subject: "D-1", summary: "Real decision", reason: "Planned" });
+    const { code } = ledger.setRecoveryCode(owner, "Project created");
+    const real = ownerChain(ledger.entries())!.recovery!;
+    // Keep the agent's first entry, rewrite the rest under the attacker's key, copy the real recovery key.
+    const attacker = new MemoryKeyProvider({ autoCreate: false });
+    attacker.createKey("person:owner");
+    let forged = handWritten([ledger.entries()[0]], attacker, { type: "decision.made", subject: "D-1", summary: "Forged decision", reason: "x" });
+    forged = handWritten(forged, attacker, {
+      type: "owner.recovery.set",
+      subject: real.keyId,
+      summary: "copied",
+      reason: "x",
+      data: { root: ownerChain(forged)!.root, recoveryKeyId: real.keyId, recoveryPublicKey: real.publicKey },
+    });
+    expect(ownerChain(forged)!.recovery?.keyId).toBe(real.keyId);
+    const pc = newComputer(new MemoryStore(forged));
+    expect(thrown(() => pc.ledger.checkRecoveryCode(code)).message).toMatch(/does not open this project/);
+  });
+
+  it("C: a recovery never moves an earlier retirement later", () => {
+    const { store, code, stolen, retired } = rotated();
+    const pc = newComputer(store);
+    const result = recover(pc.ledger, code);
+    const oldKey = retired.data!.keyId as string;
+    // The thief signs with the retired key, after the recovery.
+    const forged = handWritten([...pc.store.load().entries], stolen, { type: "decision.made", subject: "D-9", summary: "Thief", reason: "x" });
+    const trust = keyTrust(pc.keys.trustedKeys(), forged, { ownerKey: result.ownerKey });
+    expect(trust.retired.get(oldKey)?.n).toBe(retired.n);
+    const ledger = Ledger.openSync(new MemoryStore(forged), { keys: pc.keys, ownerKey: result.ownerKey, readOnly: true });
+    expect(ledger.status).toMatchObject({ ok: false, problem: "signature", brokenAt: forged.at(-1)!.n });
+    expect(isAuthoritative(forged.at(-1)!)).toBe(false);
+  });
+
+  it("D: a retired owner key cannot set its own recovery code and take the project", () => {
+    const { keys, store, stolen } = rotated();
+    let entries = [...store.load().entries];
+    const chain = ownerChain(entries)!;
+    const secret = newRecoverySecret();
+    const thiefCode = formatRecoveryCode(secret);
+    const theirs = deriveRecoveryKey(secret, chain.root);
+    entries = handWritten(entries, stolen, {
+      type: "owner.recovery.set",
+      subject: theirs.keyId,
+      summary: "Thief's code",
+      reason: "x",
+      data: { root: chain.root, recoveryKeyId: theirs.keyId, recoveryPublicKey: theirs.publicKey },
+    });
+    expect(ownerChain(entries)!.recovery?.keyId).not.toBe(theirs.keyId);
+    const thiefPc = new MemoryKeyProvider({ autoCreate: false });
+    const thiefKey = thiefPc.createKey("person:owner");
+    entries = handWritten(entries, thiefPc, recoveredFor(entries, thiefCode, thiefKey, entries.at(-1)!, theirs.keyId));
+    expect(ownerChain(entries)!.keys.map((k) => k.keyId)).not.toContain(thiefKey.keyId);
+    // The owner's computer, pinned to its current key, does not see a recovery and refuses the entries.
+    const current = keys.trustedKeys().find((k) => k.principal === "person:owner" && !k.retired)!.keyId;
+    const ledger = Ledger.openSync(new MemoryStore(entries), { keys, ownerKey: current, readOnly: true });
+    expect(ledger.status.ok).toBe(false);
+    expect(ledger.status.ownerKeyReplaced).toBeUndefined();
+  });
+
+  it("B: the owner can set a new code after rotating their key", () => {
+    const { keys, store } = rotated();
+    const current = keys.trustedKeys().find((k) => k.principal === "person:owner" && !k.retired)!.keyId;
+    const ledger = Ledger.openSync(store, { keys, ownerKey: current });
+    const { code } = ledger.setRecoveryCode(owner, "After rotation");
+    ledger.close();
+    expect(newComputer(store).ledger.checkRecoveryCode(code).owner).toBe("person:owner");
+  });
+
+  it("E: a tamper the recovery cannot fix stops it before the code is spent", () => {
+    const { store, code } = project();
+    // Someone else's key signs an owner entry further on.
+    const outsider = new MemoryKeyProvider({ autoCreate: false });
+    outsider.createKey("person:owner");
+    const tampered = handWritten([...store.load().entries], outsider, { type: "decision.made", subject: "D-5", summary: "Inserted", reason: "x" });
+    const pc = newComputer(new MemoryStore(tampered));
+    const check = pc.ledger.checkRecoveryCode(code);
+    const error = thrown(() => pc.ledger.recoverOwner(owner, code, { n: check.head.n, hash: check.head.hash }, "New PC"));
+    expect(error.code).toBe("CHAIN_BROKEN");
+    expect(error.message).toMatch(/code was not used/);
+    expect(pc.ledger.entries()).toHaveLength(tampered.length);
+    expect(pc.ledger.checkRecoveryCode(code).owner).toBe("person:owner");
+  });
+
+  it.each(["old pin", "current pin"])("F: a rotated first computer (%s) stops signing once another computer recovers", (which) => {
+    const { keys, ownerKey, store, code } = rotated();
+    const pc = newComputer(store);
+    const result = recover(pc.ledger, code);
+    const current = keys.trustedKeys().find((k) => k.principal === "person:owner" && !k.retired)!.keyId;
+    const pin = which === "old pin" ? ownerKey : current;
+    const old = Ledger.openSync(new MemoryStore([...pc.store.load().entries]), { keys, ownerKey: pin });
+    expect(old.status.ownerKeyReplaced).toEqual({ n: result.recovered.n, keyId: result.ownerKey });
+    const error = thrown(() => old.append({ actor: owner, type: "decision.made", subject: "D-2", summary: "Still mine", reason: "x" }));
+    expect(error.code).toBe("NOT_SIGNED");
+    expect(error.message).toMatch(/recovered on another computer/);
+  });
+});
+
 /** Appends one owner-signed entry by hand, as malware with file access (and some key) would. */
 function handWritten(entries: LedgerEntry[], keys: MemoryKeyProvider, draft: Pick<LedgerEntry, "type" | "subject" | "summary"> & Partial<LedgerEntry>): LedgerEntry[] {
   const last = entries[entries.length - 1];
@@ -263,17 +384,18 @@ function handWritten(entries: LedgerEntry[], keys: MemoryKeyProvider, draft: Pic
 }
 
 /** An owner.recovered draft for `newKey`, signed with the code's key for the given head. */
-function recoveredFor(entries: LedgerEntry[], code: string, newKey: { keyId: string; publicKey: string }, headEntry: LedgerEntry) {
+function recoveredFor(entries: LedgerEntry[], code: string, newKey: { keyId: string; publicKey: string }, headEntry: LedgerEntry, expectKeyId?: string) {
   const chain = ownerChain(entries)!;
-  const key = deriveRecoveryKey(parseRecoveryCode(code), chain.genesis);
+  const key = deriveRecoveryKey(parseRecoveryCode(code), chain.root);
+  if (expectKeyId) expect(key.keyId).toBe(expectKeyId);
   const head = { n: headEntry.n, hash: headEntry.hash };
   const data = {
-    genesis: chain.genesis,
+    root: chain.root,
     head,
     newKeyId: newKey.keyId,
     newPublicKey: newKey.publicKey,
     recoveryKeyId: key.keyId,
-    recoverySignature: key.sign(recoveryStatement({ genesis: chain.genesis, head, newKeyId: newKey.keyId, recoveryKeyId: key.keyId })),
+    recoverySignature: key.sign(recoveryStatement({ root: chain.root, head, newKeyId: newKey.keyId, recoveryKeyId: key.keyId })),
   };
   return { type: "owner.recovered" as const, subject: newKey.keyId, summary: "Recovered", reason: "x", data };
 }
