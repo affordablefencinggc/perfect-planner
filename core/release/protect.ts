@@ -13,6 +13,13 @@ import type { CommandRunner } from "./types";
 // push. The rules cannot be switched off; the local pre-push scan can, but only
 // by a person's signed decision in the ledger (setPrePushScan).
 
+/**
+ * Every file the pre-push hook needs beside it in core/release/hooks/. A build that copies the hook
+ * elsewhere must copy all of these; the hook imports the other two. protect.test.ts checks this list
+ * against the hook's own imports.
+ */
+export const PRE_PUSH_HOOK_FILES: readonly string[] = ["pre-push.mjs", "secrets-detector.mjs", "git-exec.mjs"];
+
 /** The dependency-free pre-push scan this module ships; the hook shim runs it with node. */
 export const DEFAULT_PRE_PUSH_SCRIPT = fileURLToPath(new URL("./hooks/pre-push.mjs", import.meta.url));
 

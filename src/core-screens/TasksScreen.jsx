@@ -121,6 +121,8 @@ function TaskCard({ task, project, act, busy, notice, dispatchFor, onDispatched,
   const [diffError, setDiffError] = useState(null);
   const [sendBack, setSendBack] = useState(false);
   const [notes, setNotes] = useState("");
+  const [releasing, setReleasing] = useState(false);
+  const [releaseReason, setReleaseReason] = useState("");
   const stage = STAGE[task.stage] ?? { label: task.stage, tone: "" };
   const id = task.id;
   const working = busy === id;
@@ -137,6 +139,8 @@ function TaskCard({ task, project, act, busy, notice, dispatchFor, onDispatched,
     if (result) onDispatched(result);
   };
 
+  // A worker holds the task (claimed, or blocked while still holding it): the person can free it.
+  const canRelease = Boolean(task.owner) && (task.status === "claimed" || task.status === "blocked");
   const canStart = !["done", "ready-to-merge", "review-diff"].includes(task.stage) && task.status !== "claimed";
 
   return (
@@ -206,7 +210,19 @@ function TaskCard({ task, project, act, busy, notice, dispatchFor, onDispatched,
             )}
           </>
         )}
+        {canRelease && !releasing && (
+          <button type="button" className="core-button" onClick={() => setReleasing(true)} disabled={working}>Release claim</button>
+        )}
       </div>
+
+      {canRelease && releasing && (
+        <form className="core-tasks-sendback" aria-label={`Release ${task.label}`} onSubmit={async (e) => { e.preventDefault(); const ok = await run("release", `/tasks/${id}/release`, { owner: task.owner, ...(releaseReason.trim() ? { reason: releaseReason.trim() } : {}) }); if (ok) { setReleasing(false); setReleaseReason(""); } }}>
+          <p className="core-muted">Release this task so another worker can take it. Its worktree and commits are kept. {task.owner} can no longer work on it.</p>
+          <label>Why (optional)<input value={releaseReason} onChange={(e) => setReleaseReason(e.target.value)} autoComplete="off" /></label>
+          <button type="submit" className="core-button primary" disabled={working}>Release {task.label}</button>
+          <button type="button" className="core-button" onClick={() => setReleasing(false)}>Cancel</button>
+        </form>
+      )}
 
       {task.stage === "needs-test" && task.worktree && <OwnTestForm onSave={(body) => run("test", `/tasks/${id}/test`, body)} />}
 
@@ -237,6 +253,7 @@ const NOTICE = {
     : { tone: "bad", text: `${r.reason ?? "The test failed."}${r.output ? ` Output: ${r.output.slice(-300)}` : ""}` }),
   "approve-diff": () => ({ tone: "good", text: "Diff approved. Merging reruns the test on the merged code first." }),
   reject: (r) => ({ tone: "warn", text: `Reopened as ${r.reopenedAs}. Start a worker on it when you are ready.` }),
+  release: (r) => ({ tone: "warn", text: `Released ${r.released} from ${r.from}. Its worktree and commits are kept; start a worker on it when you are ready.` }),
   merge: (r) => ({ tone: "good", text: `Merged into ${r.into} at ${String(r.commit ?? "").slice(0, 12)}. The test passed on the merge and the task is done.` }),
 };
 

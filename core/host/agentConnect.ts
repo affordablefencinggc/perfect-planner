@@ -16,8 +16,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { findExecutable, isWithin, NO_CWD_SEARCH_ENV, registeredRoots } from "../exec/index";
 import { AGENT_KINDS, AGENTS, type AgentKind } from "./agentKinds";
-import { findExecutable, isNetworkPath, launchFor } from "./tokenFile";
+import { chosenRepoRoot, repoRefusal } from "./routes/tasks";
+import { isNetworkPath } from "./tokenFile";
 
 const SERVER = "perfect-planner-core";
 const SKILL = "perfect-planner-connect";
@@ -115,7 +117,7 @@ export function connectArgsProblem(argv: string[], platform: NodeJS.Platform = p
   const absolute = platform === "win32" ? path.win32.isAbsolute(tokenFile) : path.posix.isAbsolute(tokenFile);
   if (!absolute || !tokenFile.endsWith(".token")) return "The second part must be the full path of the .token file the app wrote.";
   if (platform === "win32") {
-    // An unusual claude.cmd, gemini.cmd or codex.cmd still runs through cmd.exe, which expands % and splits on ".
+    // cmd.exe and PowerShell read % and " differently; refusing them keeps the path the same in every shell.
     for (const bad of ["%", '"']) if (argv.some((arg) => arg.includes(bad))) return `The path contains ${bad}, which Windows would rewrite. Move Perfect Planner's data to a folder without it.`;
   }
   return null;
@@ -144,27 +146,104 @@ export function installSkill(plan: Pick<ConnectPlan, "skillFrom" | "skillTo">, h
   }
 }
 
-/** Windows: never resolve a bare program name (node, git) from the current folder either. */
-const SAFE_ENV = { ...process.env, NoDefaultCurrentDirectoryInExePath: "1" };
 
-/**
- * Runs the agent's CLI from the project folder (its mcp add registers that folder) without a shell, by
- * the absolute path found on PATH, so a claude, gemini or codex (.cmd) planted in the repo never runs.
- */
-function run(agent: AgentKind, args: string[]) {
-  const { cli, npmEntry } = AGENTS[agent];
-  const program = findExecutable(cli, process.env, process.cwd());
-  if (!program) return { error: Object.assign(new Error(`${cli} not found`), { code: "ENOENT" }), status: null, stdout: "", stderr: "" };
-  const launch = launchFor(program, args, npmEntry);
-  return spawnSync(launch.command, launch.args, {
-    encoding: "utf8",
-    windowsHide: true,
-    ...(launch.verbatim ? { windowsVerbatimArguments: true } : {}),
-    env: SAFE_ENV,
-  });
+export interface Launch {
+  command: string;
+  args: string[];
 }
 
-const installed = (agent: AgentKind) => findExecutable(AGENTS[agent].cli, process.env, process.cwd()) !== null;
+/**
+ * The folders no agent CLI may be started from: the current folder, the project folder that owns the
+ * token file (<project>/.perfect-planner/tokens/x.token) and the repo the person picked for it. Never found
+ * by walking up to .git.
+ */
+export function protectFor(tokenFile: string | null): string[] {
+  if (!tokenFile) return [];
+  const project = path.dirname(path.dirname(path.dirname(tokenFile)));
+  const repo = chosenRepoRoot(project);
+  // A whole drive or the home folder is never a protected root: it would hide ~/.local/bin/claude.
+  return [project, ...(repo ? [repo] : [])].filter((root) => !repoRefusal(root));
+}
+
+/**
+ * How to start an agent CLI (claude, gemini, codex) without a shell, by core/exec's finder, so one planted in the project,
+ * the picked repo or a PATH folder that links into either never runs. On Windows a claude.exe runs as
+ * itself; on macOS and Linux an npm-installed claude (a node script) runs under this Node, never
+ * through its `env node` shebang; an npm shim (claude.cmd) is never run: its package entry runs under this Node instead, and only
+ * when that entry also lies outside every protected folder. Null when no usable Claude Code is found.
+ */
+export function agentLaunch(
+  agent: AgentKind,
+  args: string[],
+  env: NodeJS.ProcessEnv,
+  cwd: string,
+  protect: readonly string[],
+  platform: NodeJS.Platform = process.platform,
+): Launch | null {
+  const { cli, npmEntry } = AGENTS[agent];
+  const program = findExecutable(cli, env, cwd, platform, protect, [".exe", ".cmd"]);
+  if (!program) return null;
+  if (platform !== "win32") return nodeScript(program) ? { command: process.execPath, args: [program, ...args] } : { command: program, args };
+  if (!/\.cmd$/i.test(program)) return { command: program, args };
+  // The npm package entry the shim (claude.cmd, gemini.cmd, codex.cmd) starts; it runs under this Node instead.
+  const entry = path.join(path.dirname(program), "node_modules", ...npmEntry.split("/"));
+  let real: string;
+  try {
+    if (!fs.statSync(entry).isFile()) return null;
+    real = fs.realpathSync.native(entry);
+  } catch {
+    return null;
+  }
+  const roots = [cwd, ...protect, ...registeredRoots()];
+  if (roots.some((root) => isWithin(root, entry) || isWithin(root, real) || isWithin(safeReal(root), real))) return null;
+  return { command: process.execPath, args: [entry, ...args] };
+}
+
+/** Claude Code's launch (kept for callers that only start Claude Code). */
+export function claudeLaunch(args: string[], env: NodeJS.ProcessEnv, cwd: string, protect: readonly string[], platform: NodeJS.Platform = process.platform): Launch | null {
+  return agentLaunch("claude", args, env, cwd, protect, platform);
+}
+
+/**
+ * True for an npm-installed agent CLI on macOS and Linux: a link to a .js file or a script starting
+ * `#!/usr/bin/env node`. Its shebang would look node up on PATH, where a planted node could sit, so
+ * it runs under this Node instead.
+ */
+function nodeScript(program: string): boolean {
+  try {
+    if (/\.[cm]?js$/i.test(fs.realpathSync.native(program))) return true;
+    const fd = fs.openSync(program, "r");
+    try {
+      const head = Buffer.alloc(128);
+      const read = fs.readSync(fd, head, 0, head.length, 0);
+      return /^#!\s*\S*\/env\s+(?:-S\s+)?node(?:\s|$)/.test(head.subarray(0, read).toString("utf8"));
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return false;
+  }
+}
+
+function safeReal(p: string): string {
+  try {
+    return fs.realpathSync.native(p);
+  } catch {
+    return path.resolve(p);
+  }
+}
+
+/** Windows: never resolve a bare program name (node, git) from the current folder either. */
+const SAFE_ENV = { ...process.env, ...NO_CWD_SEARCH_ENV };
+
+/** Runs the agent's CLI from the project folder (its mcp add registers that folder). */
+function run(agent: AgentKind, args: string[], tokenFile: string | null) {
+  const launch = agentLaunch(agent, args, process.env, process.cwd(), protectFor(tokenFile));
+  if (!launch) return { error: Object.assign(new Error(`${AGENTS[agent].cli} not found`), { code: "ENOENT" }), status: null, stdout: "", stderr: "" };
+  return spawnSync(launch.command, launch.args, { encoding: "utf8", windowsHide: true, env: SAFE_ENV });
+}
+
+const installed = (agent: AgentKind) => agentLaunch(agent, [], process.env, process.cwd(), []) !== null;
 
 /** The first agent CLI found on this computer, in the order Perfect Planner was built and proven with. */
 export function detectAgent(isInstalled: (agent: AgentKind) => boolean = installed): AgentKind | null {
@@ -177,7 +256,7 @@ export function detectAgent(isInstalled: (agent: AgentKind) => boolean = install
  * file is local to this checkout and changes nothing anyone else sees.
  */
 export function keepOutOfGit(folder: string): boolean {
-  const git = findExecutable("git", process.env, folder);
+  const git = findExecutable("git", process.env, folder, process.platform, []);
   if (!git) return false;
   const probe = spawnSync(git, ["rev-parse", "--git-path", "info/exclude"], { cwd: folder, encoding: "utf8", windowsHide: true, env: SAFE_ENV });
   if (probe.error || probe.status !== 0) return false;
@@ -247,8 +326,8 @@ function main(all: string[]): number {
     process.stderr.write(`Perfect Planner: could not install the skill (${(error as Error).message}). Connecting anyway.\n`);
   }
 
-  run(agent, plan.remove); // nothing to remove the first time; that is fine
-  const added = run(agent, plan.add);
+  run(agent, plan.remove, tokenFile); // nothing to remove the first time; that is fine
+  const added = run(agent, plan.add, tokenFile);
   if (added.error || added.status !== 0) {
     const missing = (added.error as NodeJS.ErrnoException | undefined)?.code === "ENOENT";
     process.stderr.write(

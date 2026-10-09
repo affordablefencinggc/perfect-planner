@@ -25,13 +25,23 @@ const isNetworkPath = (dir: string, platform: NodeJS.Platform) => platform === "
  * skipped. Paths are compared as written and as real paths, so a PATH entry or a program that
  * reaches `cwd` through a symlink or junction (on macOS every temp folder does: /var is
  * /private/var) is still recognised. On Windows only `.exe` counts, since a .cmd/.bat cannot be
- * started without a shell. Returns null when nothing qualifies.
+ * started without a shell. `protect` adds roots the host registered itself (the project folder,
+ * the repo's top level, worktrees it made), so a PATH entry at the repo root is skipped when cwd is
+ * a subfolder. `windowsExtensions` lets a caller that never hands the file to a shell also accept an
+ * npm shim (.cmd) to read, never to run. Returns null when nothing qualifies.
  */
-export function findExecutable(name: string, env: NodeJS.ProcessEnv, cwd: string, platform: NodeJS.Platform = process.platform): string | null {
+export function findExecutable(
+  name: string,
+  env: NodeJS.ProcessEnv,
+  cwd: string,
+  platform: NodeJS.Platform = process.platform,
+  protect: readonly string[] = [],
+  windowsExtensions: readonly string[] = [".exe"],
+): string | null {
   const windows = platform === "win32";
   const pathValue = Object.entries(env).find(([key]) => (windows ? key.toUpperCase() === "PATH" : key === "PATH"))?.[1] ?? "";
-  const roots = protectedRoots(cwd);
-  const extensions = windows ? [".exe"] : [""];
+  const roots = protectedRoots(cwd, protect);
+  const extensions = windows ? windowsExtensions : [""];
   for (const entry of pathValue.split(windows ? ";" : ":")) {
     const dir = entry.trim().replace(/^"(.*)"$/, "$1");
     if (!dir || !path.isAbsolute(dir) || isNetworkPath(dir, platform)) continue;
@@ -63,11 +73,43 @@ function realPath(p: string): string | undefined {
   }
 }
 
-/** The folder no program may be started from: `cwd`, as written and as a real path. */
-function protectedRoots(cwd: string): string[] {
-  const here = path.resolve(cwd);
-  const real = realPath(here);
-  return real && real !== here ? [here, real] : [here];
+/**
+ * The folders no program may be started from: `cwd`, plus any `protect` roots the host registered
+ * itself (the project folder, the repo's top level, worktrees it made), each as written and as a
+ * real path. Never derived by walking up from cwd: a home-folder dotfiles repo would then block ~/bin.
+ */
+function protectedRoots(cwd: string, protect: readonly string[] = []): string[] {
+  const roots = new Set<string>();
+  for (const root of [cwd, ...protect, ...registeredRoots()]) {
+    if (typeof root !== "string" || root === "") continue;
+    const here = path.resolve(root);
+    roots.add(here);
+    const real = realPath(here);
+    if (real) roots.add(real);
+  }
+  return [...roots];
+}
+
+const registered = new Map<number, readonly string[]>();
+let nextRegistration = 0;
+
+/**
+ * Registers roots the host itself chose (a project folder, the repo the person picked, worktrees the
+ * host made) as protected for every program this process starts, on top of each call's own `protect`:
+ * spawns deep inside other modules (worktrees, the ledger's ignore file, the release hook) are then
+ * covered without threading the list through every call. Returns a function that removes them again.
+ */
+export function protectRoots(roots: readonly string[]): () => void {
+  const id = nextRegistration++;
+  registered.set(id, roots.filter((root) => typeof root === "string" && root !== "" && path.isAbsolute(root)));
+  return () => {
+    registered.delete(id);
+  };
+}
+
+/** Every root currently registered with protectRoots. */
+export function registeredRoots(): string[] {
+  return [...new Set([...registered.values()].flat())];
 }
 
 function insideAny(roots: readonly string[], ...candidates: string[]): boolean {
@@ -87,17 +129,22 @@ let cached: { pathValue: string; file: string } | undefined;
 /**
  * The absolute git to run, resolved once from PATH (again only if PATH changes) and never from the
  * repo: spawn("git") with cwd set to a cloned repo would run a git.exe planted in it on Windows.
- * Refuses a git that sits inside `cwd`, as written or through a link. Use this for every git spawn, with NO_CWD_SEARCH_ENV in its env.
+ * Refuses a git that sits inside `cwd` or a `protect` root (see findExecutable), as written or through
+ * a link. Use this for every git spawn, with NO_CWD_SEARCH_ENV in its env.
  */
-export function gitExecutable(cwd: string = process.cwd()): string {
+export function gitExecutable(cwd: string = process.cwd(), protect: readonly string[] = []): string {
   const pathValue = process.env.PATH ?? process.env.Path ?? "";
   if (cached?.pathValue !== pathValue) {
     const file = findExecutable("git", process.env, cwd);
     if (!file) throw new ExecutableNotFoundError("git was not found on PATH (relative PATH entries and the repo folder are never searched). Install Git and restart Perfect Planner.");
     cached = { pathValue, file };
   }
-  if (insideAny(protectedRoots(cwd), path.resolve(cached.file), realPath(cached.file) ?? path.resolve(cached.file))) {
-    throw new ExecutableNotFoundError(`The git on PATH (${cached.file}) is inside ${cwd}, so it could be the repo's own; refusing to run it.`);
+  const roots = protectedRoots(cwd, protect);
+  if (insideAny(roots, path.resolve(cached.file), realPath(cached.file) ?? path.resolve(cached.file))) {
+    // The cached git sits inside a root protected for this call: look again with those roots.
+    const other = findExecutable("git", process.env, cwd, process.platform, protect);
+    if (other) return other;
+    throw new ExecutableNotFoundError(`The only git on PATH (${cached.file}) is inside ${[cwd, ...protect].join(" or ")}, so it could be the repo's own; refusing to run it.`);
   }
   return cached.file;
 }

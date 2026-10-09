@@ -7,11 +7,13 @@ import { LedgerError } from "../ledger/index";
 import { startBridge, ToolError, type Bridge } from "../mcp/index";
 import { PeopleError } from "../people/index";
 import { asPersonRequest, hostKeys, type HostKeys } from "./keys";
-import { excludePrivateFolder, openCoreProject, pinOwnerAfterWrite, projectKey, projectRootFor, type CoreProject, type OwnerKeySource } from "./project";
+import { excludePrivateFolder, ledgerIntegrity, openCoreProject, pinOwnerAfterWrite, projectKey, projectRootFor, type CoreProject, type OwnerKeySource } from "./project";
 import { HttpError, Router } from "./router";
 import { PersonSessions } from "./session";
 import { registerRoutes } from "./routes/index";
 import { syncJevPolicy } from "./routes/decisions";
+import { chosenRepoRoot } from "./routes/tasks";
+import { protectRoots } from "../exec/index";
 
 export const CORE_PREFIX = "/api/core";
 export { PERSON_COOKIE, CSRF_HEADER } from "./session";
@@ -55,6 +57,7 @@ export class CoreHost {
       ledger: project.ledger.status,
       keys: { description: this.keys.description, ...this.keys.state() },
       owner: { state: project.owner.state, ...(project.owner.reason ? { reason: project.owner.reason } : {}) },
+      integrity: ledgerIntegrity(project.ledger),
     }));
   }
 
@@ -101,8 +104,20 @@ export class CoreHost {
    * ledger's first file (its writer lock) is created, and every request waits until that is done.
    */
   async openProject(key: string): Promise<CoreProject> {
-    if (!this.projects.has(key)) await excludePrivateFolder(projectRootFor(this.options.root, key, this.options.projectRootOverride));
+    if (!this.projects.has(key)) {
+      // The project folder and the repo the person picked are protected before the first git run.
+      const root = projectRootFor(this.options.root, key, this.options.projectRootOverride);
+      const chosen = chosenRepoRoot(root);
+      const release = protectRoots([root, ...(chosen ? [chosen] : [])]);
+      try {
+        await excludePrivateFolder(root);
+      } finally {
+        release();
+      }
+    }
     const project = this.project(key);
+    const chosen = chosenRepoRoot(project.root);
+    if (chosen) project.protectRoots([chosen]);
     await project.ready;
     await syncJevPolicy(project);
     return project;
@@ -180,7 +195,10 @@ export class CoreHost {
     for (const bridge of this.bridges.values()) await (await bridge).close().catch(() => undefined);
     // Wait for the git runs started at open (exclude, protection) so none outlives the host in the project folder.
     for (const project of this.projects.values()) await Promise.allSettled([project.ready, project.protection]);
-    for (const project of this.projects.values()) project.ledger.close();
+    for (const project of this.projects.values()) {
+      project.ledger.close();
+      project.releaseRoots();
+    }
     this.bridges.clear();
     this.projects.clear();
   }

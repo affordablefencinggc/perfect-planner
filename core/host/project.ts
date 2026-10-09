@@ -8,6 +8,7 @@ import { installClauseRules } from "../lookup/index";
 import { TestGate, gateRule, type GatePolicy } from "../gate/index";
 import { AgentService } from "../mcp/index";
 import type { HostKeys } from "./keys";
+import { hostWitness } from "./witness";
 import { readOwnerPin, rememberedGenesis, rememberFolder, writeOwnerPin, type OwnerPin } from "./owner";
 import { DEFAULT_LOCAL_PERSON } from "./routes/people";
 import { installNumberingRules } from "../numbering/index";
@@ -15,7 +16,7 @@ import { installPeopleRules } from "../people/index";
 import { installPlanningRules } from "../planning/index";
 import { installReleaseRules, protectProject, type CommandRunner, type ProtectionReport } from "../release/index";
 import { ensureRequiredIgnores, PRIVATE_DIR } from "../worktrees/index";
-import { gitExecutable, NO_CWD_SEARCH_ENV } from "../exec/index";
+import { gitExecutable, NO_CWD_SEARCH_ENV, protectRoots } from "../exec/index";
 
 export interface CoreProject {
   /** Safe key from the client ("default" when none was given). */
@@ -35,6 +36,14 @@ export interface CoreProject {
   ready: Promise<void>;
   /** Shipping safety (core/release protectProject): release rules on the ledger, pre-push scan in the repo. */
   protection: Promise<ProtectionReport>;
+  /**
+   * Adds folders the host itself chose for this project (the repo the person picked, worktrees it made) to
+   * the roots no program is ever started from (core/exec protectRoots). The project folder is added at open.
+   * Never fed from a walk up to .git: a home-folder dotfiles repo must not block ~/bin.
+   */
+  protectRoots(roots: readonly string[]): void;
+  /** Removes this project's protected roots (the host calls it when it closes the project). */
+  releaseRoots(): void;
   /** Per-screen scratch state that is not ledger truth (e.g. a planning session in progress). */
   state: Map<string, unknown>;
   entries(): readonly LedgerEntry[];
@@ -160,12 +169,40 @@ function ownerFromSource(source: OwnerKeySource, key: string, root: string, keys
   return principal ? { state: "pinned", ownerKey, principal } : { state: "key-missing", ownerKey, reason: `The owner's key ${ownerKey} is not on this device.` };
 }
 
+export type IntegrityState =
+  /** The chain checks out and the head matches the copy kept outside the project. */
+  | "ok"
+  /** Entries this computer saw written are gone: an older copy of the ledger was put back, or its end was cut. */
+  | "rolled-back"
+  /** The ledger fails its fingerprint or signature check for another reason. */
+  | "damaged"
+  /** The chain checks out, but the head copy outside the project cannot be read or updated. */
+  | "witness-problem";
+
+export interface LedgerIntegrity {
+  state: IntegrityState;
+  reason?: string;
+  /** Whether the ledger accepts writes (a broken chain refuses them until a person acknowledges it). */
+  writesStopped: boolean;
+}
+
+/** What GET /status reports about the ledger's own integrity, in one place for the window's stop notice. */
+export function ledgerIntegrity(ledger: Ledger): LedgerIntegrity {
+  const status = ledger.status;
+  if (!status.ok) {
+    return { state: status.problem === "truncated" ? "rolled-back" : "damaged", ...(status.detail ? { reason: status.detail } : {}), writesStopped: true };
+  }
+  if (status.witnessProblem) return { state: "witness-problem", reason: status.witnessProblem, writesStopped: false };
+  return { state: "ok", writesStopped: false };
+}
+
 export function openCoreProject(baseRoot: string, key: string, override: string | undefined, keys: HostKeys, ownerKeyFor?: OwnerKeySource): CoreProject {
   const root = projectRootFor(baseRoot, key, override);
   fs.mkdirSync(root, { recursive: true });
   keys.ensureSystemKey();
   const owner = ownerKeyFor ? ownerFromSource(ownerKeyFor, key, root, keys) : ownerPinFor(baseRoot, root, keys);
-  const ledger = Ledger.openSync(new FileStore(root), { keys, ...(owner.ownerKey ? { ownerKey: owner.ownerKey } : {}) });
+  // The head copy outside the project folder (core/host/witness.ts): an older valid ledger put back reads as cut short.
+  const ledger = Ledger.openSync(new FileStore(root), { keys, witness: hostWitness(baseRoot, keys), ...(owner.ownerKey ? { ownerKey: owner.ownerKey } : {}) });
   // The same rules every core module assumes: numbering (D-/Q-/T-/R- subjects), clauses, people, planning gates.
   installNumberingRules(ledger);
   installClauseRules(ledger);
@@ -183,7 +220,20 @@ export function openCoreProject(baseRoot: string, key: string, override: string 
   // review, and the whole-branch secret scan runs before every push (a non-git folder is reported).
   // The host excludes .perfect-planner/ before it opens a project for a request (host.ts openProject);
   // this repeats it for direct callers, and every request waits for it.
+  const guarded = new Set<string>();
+  const releases: (() => void)[] = [];
+  const guard = (roots: readonly string[]) => {
+    const fresh = roots.filter((r) => typeof r === "string" && path.isAbsolute(r) && !guarded.has(r));
+    if (!fresh.length) return;
+    fresh.forEach((r) => guarded.add(r));
+    releases.push(protectRoots(fresh));
+  };
+  guard([root]);
+  const releaseRoots = () => {
+    releases.splice(0).forEach((release) => release());
+    guarded.clear();
+  };
   const ready = excludePrivateFolder(root).then(() => undefined);
   const protection = ready.then(() => protectRepository(ledger, root));
-  return { key, root, ledger, service, policy, owner, ready, protection, state: new Map(), entries: () => ledger.entries() };
+  return { key, root, ledger, service, policy, owner, ready, protection, protectRoots: guard, releaseRoots, state: new Map(), entries: () => ledger.entries() };
 }

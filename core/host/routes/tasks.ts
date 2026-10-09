@@ -63,6 +63,19 @@ function repoFile(project: CoreProject): string {
   return path.join(project.root, ".perfect-planner", REPO_FILE);
 }
 
+/**
+ * The repo folder the person picked for a project (kept in its .perfect-planner/), read without running
+ * anything, so the host can protect it before its first git run. Never a whole drive or the home folder.
+ */
+export function chosenRepoRoot(projectRoot: string): string | undefined {
+  try {
+    const root = (JSON.parse(fs.readFileSync(path.join(projectRoot, ".perfect-planner", REPO_FILE), "utf8")) as { root?: unknown }).root;
+    return typeof root === "string" && path.isAbsolute(root) && !repoRefusal(root) ? root : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 async function gitTop(dir: string): Promise<string | null> {
   if (!fs.existsSync(dir)) return null;
   const top = await runGit(dir, ["rev-parse", "--show-toplevel"]).catch(() => null);
@@ -82,7 +95,11 @@ export async function repoState(project: CoreProject): Promise<RepoState> {
   }
   const candidate = typeof chosen === "string" && chosen ? chosen : project.root;
   const top = await gitTop(candidate);
-  if (top) return { ok: true, root: top };
+  // git found the repo by walking up from the folder: a whole drive or the home folder (a dotfiles repo)
+  // is never the project's repo, so it is neither used nor protected.
+  const refusal = top ? repoRefusal(top) : null;
+  if (top && !refusal) return { ok: true, root: top };
+  if (refusal) return { ok: false, reason: refusal };
   return {
     ok: false,
     reason: chosen
@@ -110,6 +127,7 @@ export function repoRefusal(top: string, home = os.homedir()): string | null {
 async function requireRepo(project: CoreProject): Promise<string> {
   const repo = await repoState(project);
   if (!repo.ok || !repo.root) throw new HttpError(409, "NO_REPO", repo.reason ?? "Choose your project's git folder first.");
+  project.protectRoots([repo.root]);
   return repo.root;
 }
 
@@ -118,6 +136,7 @@ function manager(project: CoreProject, root: string): WorktreeManager {
   if (!current || current.repoRoot !== fs.realpathSync(root)) {
     current = new WorktreeManager({ repoRoot: root, ledger: project.ledger });
     project.state.set(MANAGER, current);
+    project.protectRoots([current.repoRoot, current.worktreeRoot]);
   }
   return current;
 }
@@ -325,6 +344,36 @@ async function dispatch(project: CoreProject, host: CoreHost, id: string, body: 
   };
 }
 
+async function releaseClaim(project: CoreProject, id: string, body: Record<string, unknown>) {
+  const task = findTask(project, id);
+  const label = attemptLabel(task);
+  if (!task.owner || (task.status !== "claimed" && task.status !== "blocked")) {
+    throw new HttpError(409, "NOT_CLAIMED", `${label} is not held by a worker, so there is nothing to release.`);
+  }
+  // Bound to the worker the person saw: if another worker took it meanwhile, that one is not released.
+  if (typeof body.owner === "string" && body.owner !== task.owner) throw stale(`${label} is now held by ${task.owner}. Look again before releasing it.`);
+  const raw = body.reason;
+  if (raw !== undefined && raw !== null && typeof raw !== "string") throw new HttpError(400, "INVALID", "The reason must be text.");
+  const reason = typeof raw === "string" && raw.trim() ? raw.trim().slice(0, 500) : undefined;
+  const owner = task.owner;
+  // The person's own signed entry: the board frees the task (a blocked task stays blocked, without its owner).
+  const entry = project.ledger.append({
+    actor: localPerson(project),
+    type: task.status === "blocked" ? "task.blocked" : "task.progress",
+    subject: label,
+    summary: `Released ${label} from ${owner}`,
+    ...(reason ? { reason } : {}),
+    evidence: [],
+    refs: [],
+    data: { released: true, from: owner, by: "person", worktreeKept: true },
+  });
+  revokeWorker(project, label);
+  project.service.tokens.revokeTask(task.id);
+  if (label !== task.id) project.service.tokens.revokeTask(label);
+  dispatches(project).delete(label);
+  return { released: label, from: owner, entry: entry.n, ...(await overview(project)) };
+}
+
 export function registerTaskRoutes(router: Router): void {
   router.get("/tasks", ({ project }) => overview(project));
 
@@ -445,6 +494,13 @@ export function registerTaskRoutes(router: Router): void {
     revokeWorker(project, label);
     return { reopenedAs: result.ok ? result.newTaskId : undefined, ...(await overview(project)) };
   });
+
+  /**
+   * POST /tasks/:id/release { reason?, owner? }: the person frees a task held by a worker that is gone.
+   * Writes the person's signed release, ends the worker's token, and leaves the worktree, its branch and
+   * its commits exactly where they are, so the next worker dispatched on the task carries on from them.
+   */
+  router.post("/tasks/:id/release", ({ project, params, body }) => releaseClaim(project, params.id!, bodyOf(body)));
 
   /**
    * POST /tasks/:id/merge: merge the worker's branch into the branch it started from. The gate merges
