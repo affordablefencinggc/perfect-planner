@@ -1,0 +1,61 @@
+/* Header search box: sits right after the stage tabs in the top bar, which
+   wraps whole groups onto a second row on narrow windows (src/styles/frame.css). */
+.ledger-search-box {
+  flex: 0 0 auto;
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: clamp(170px, 14vw, 260px);
+  height: 34px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 8px;
+  background: rgba(16, 20, 21, 0.22);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  color: #f4f6f5;
+}
+.ledger-search-box:focus-within {
+  border-color: rgba(255, 255, 255, 0.55);
+  background: rgba(16, 20, 21, 0.38);
+  box-shadow: var(--focus-ring);
+}
+.ledger-search-box .ledger-search-box-icon {
+  position: absolute;
+  left: 9px;
+  width: 15px;
+  height: 15px;
+  color: #c4cbce;
+  pointer-events: none;
+}
+.ledger-search-box input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  padding: 0 26px 0 30px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: var(--text-sm, 13px);
+}
+.ledger-search-box input::placeholder { color: #aeb8bc; }
+.ledger-search-box input:focus { outline: none; }
+.ledger-search-box input::-webkit-search-cancel-button { display: none; }
+.ledger-search-box .ledger-search-box-key {
+  position: absolute;
+  right: 7px;
+  min-width: 16px;
+  padding: 0 4px;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 4px;
+  color: #c4cbce;
+  font-family: var(--mono, monospace);
+  font-size: 11px;
+  line-height: 16px;
+  text-align: center;
+  pointer-events: none;
+}
+.ledger-search-box:focus-within .ledger-search-box-key { display: none; }
+@media (max-width: 720px) {
+  .ledger-search-box { display: none; }
+}
