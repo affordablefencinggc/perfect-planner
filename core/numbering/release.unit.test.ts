@@ -14,7 +14,7 @@ import {
 } from "./release";
 
 const owner = { kind: "person" as const, id: "owner" };
-const agent = { kind: "agent" as const, id: "claude-code", model: "m1" };
+const gate = { kind: "system" as const, id: "gate" };
 
 function open(): Ledger {
   const ledger = Ledger.openSync(new MemoryStore(), { now: () => new Date("2026-10-09T00:00:00Z") });
@@ -25,7 +25,7 @@ function open(): Ledger {
 /** Plan, task, proof and commit for one task, ending with task.done. */
 function finishTask(ledger: Ledger, change: "breaking" | "feature" | "fix", sha: string): string {
   const task = appendNumbered(ledger, {
-    actor: agent,
+    actor: gate,
     type: "task.created",
     summary: `work for ${sha}`,
     evidence: [],
@@ -35,9 +35,9 @@ function finishTask(ledger: Ledger, change: "breaking" | "feature" | "fix", sha:
   const t = task.subject;
   ledger.append({ actor: owner, type: "test.defined", subject: t, summary: "test defined", evidence: [], refs: [], data: { test: "npm test" } });
   ledger.append({ actor: owner, type: "test.approved", subject: t, summary: "test approved", evidence: [], refs: [], data: { test: "npm test" } });
-  ledger.append({ actor: agent, type: "commit.observed", subject: t, summary: "commit observed", evidence: [`commit:${sha}`], refs: [], data: { sha } });
-  ledger.append({ actor: agent, type: "test.passed", subject: t, summary: "test passed", evidence: [], refs: [], data: { test: "npm test" } });
-  ledger.append({ actor: agent, type: "task.done", subject: t, summary: "done", evidence: [], refs: [] });
+  ledger.append({ actor: gate, type: "commit.observed", subject: t, summary: "commit observed", evidence: [`commit:${sha}`], refs: [], data: { sha } });
+  ledger.append({ actor: gate, type: "test.passed", subject: t, summary: "test passed", evidence: [], refs: [], data: { test: "npm test" } });
+  ledger.append({ actor: gate, type: "task.done", subject: t, summary: "done", evidence: [], refs: [] });
   return t;
 }
 
@@ -59,7 +59,7 @@ describe("cutRelease", () => {
   it("cuts R-1 at v1.0.0 covering the ledger up to the cut, with the latest plan", () => {
     const ledger = open();
     appendNumbered(ledger, { actor: owner, type: "plan.approved", summary: "plan approved", evidence: [], refs: [] }); // L-000001, P-1
-    appendNumbered(ledger, { actor: agent, type: "task.created", summary: "first", evidence: [], refs: [] }); // L-000002, T-1
+    appendNumbered(ledger, { actor: gate, type: "task.created", summary: "first", evidence: [], refs: [] }); // L-000002, T-1
     const before = ledger.last()!.n;
     const cut = cutRelease(ledger, owner, { commit: "abc1234" });
 
@@ -113,7 +113,7 @@ describe("releaseRange / releaseStamp / currentStamp", () => {
   it("releaseRange returns the entries from..to of a release", () => {
     const ledger = open();
     appendNumbered(ledger, { actor: owner, type: "plan.approved", summary: "plan", evidence: [], refs: [] });
-    appendNumbered(ledger, { actor: agent, type: "task.created", summary: "task", evidence: [], refs: [] });
+    appendNumbered(ledger, { actor: gate, type: "task.created", summary: "task", evidence: [], refs: [] });
     cutRelease(ledger, owner, { commit: "abc1234" });
     const range = releaseRange(ledger.entries(), "R-1");
     expect(range.map((e) => e.n)).toEqual(["L-000001", "L-000002"]);
@@ -123,7 +123,7 @@ describe("releaseRange / releaseStamp / currentStamp", () => {
   it("formats the release stamp as R · version · plan · entry · commit", () => {
     const ledger = open();
     appendNumbered(ledger, { actor: owner, type: "plan.approved", summary: "plan", evidence: [], refs: [] });
-    appendNumbered(ledger, { actor: agent, type: "task.created", summary: "task", evidence: [], refs: [] });
+    appendNumbered(ledger, { actor: gate, type: "task.created", summary: "task", evidence: [], refs: [] });
     const cut = cutRelease(ledger, owner, { commit: "abc1234" });
     expect(releaseStamp(ledger.entries())).toBe(`R-1 · v1.0.0 · P-1 · ${cut.n} · abc1234`);
     expect(releaseStamp(ledger.entries(), "R-1")).toBe(`R-1 · v1.0.0 · P-1 · ${cut.n} · abc1234`);
@@ -139,7 +139,7 @@ describe("releaseRange / releaseStamp / currentStamp", () => {
   it("currentStamp starts with 'unreleased' when nothing has been released", () => {
     const ledger = open();
     appendNumbered(ledger, { actor: owner, type: "plan.approved", summary: "plan", evidence: [], refs: [] });
-    appendNumbered(ledger, { actor: agent, type: "task.created", summary: "task", evidence: [], refs: [] });
+    appendNumbered(ledger, { actor: gate, type: "task.created", summary: "task", evidence: [], refs: [] });
     const stamp = currentStamp(ledger.entries(), "abc1234");
     expect(stamp.startsWith("unreleased")).toBe(true);
     expect(stamp).toBe("unreleased · P-1 · L-000002 · abc1234");
