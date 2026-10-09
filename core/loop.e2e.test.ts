@@ -5,6 +5,7 @@
 // test itself), the agent service with per-task tokens, the one-chat relay and
 // the Jev reviewer. Only TypeSafe's HTTP endpoint is faked (fetch), and Jev's
 // key sits in an in-memory key provider instead of the OS key store.
+import { spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -116,9 +117,11 @@ function write(root: string, files: Record<string, string>): void {
   }
 }
 
+/** The worker's own commit, with the worker's own git: unlike the host's runner, it runs the worktree's hooks. */
 async function commit(cwd: string, message: string): Promise<{ code: number; stderr: string }> {
   await git(cwd, ["add", "-A"]);
-  return runGit(cwd, ["commit", "-q", "-m", message]);
+  const result = spawnSync("git", ["-c", "user.name=Worker", "-c", "user.email=worker@example.invalid", "-c", "commit.gpgSign=false", "commit", "-q", "-m", message], { cwd, encoding: "utf8" });
+  return { code: result.status ?? 1, stderr: result.stderr };
 }
 
 /** A fake TypeSafe System One endpoint: approves every test, rejects the diffs of `rejectDiff`, never settles a question. */

@@ -12,7 +12,9 @@ export function registerKeyRoutes(router: Router): void {
     const reason = (body as { reason?: unknown } | undefined)?.reason;
     if (typeof reason !== "string" || !reason.trim()) throw new HttpError(400, "INVALID", "Say why the key is being replaced (for example: new PC, or the old one may be stolen).");
     const person = localPerson(project);
-    const { trusted, retired } = project.ledger.rotateKey(person, reason.trim().slice(0, 300));
-    return { key: retired.sig?.key ?? null, retired: trusted.sig?.key ?? null, entries: [trusted.n, retired.n] };
+    const { trusted, retired, recovery } = project.ledger.rotateKey(person, reason.trim().slice(0, 300));
+    // Retiring the key that set the recovery code voids it, so the ledger makes a new one. It exists only
+    // in this answer: the person's window shows it once (never logged, stored or copied by the app).
+    return { key: retired.sig?.key ?? null, retired: trusted.sig?.key ?? null, entries: [trusted.n, retired.n], ...(recovery ? { recovery: { code: recovery.code, entry: recovery.entry.n } } : {}) };
   });
 }
