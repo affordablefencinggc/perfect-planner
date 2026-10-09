@@ -65,6 +65,32 @@ describe("over HTTP and the agent bridge", () => {
     expect(ctx.host.project("reach").entries().filter((e) => e.type === "review.verdict")).toEqual([]);
   });
 
+  it("only the person's window can release a worker's claim: an agent token or no session gets 401 and writes nothing", async () => {
+    const d = (await hostCall(ctx.base, "POST", `/tasks/T-1/dispatch${q}`, {})).body.result;
+    const token = fs.readFileSync(d.tokenFile, "utf8");
+    const before = ctx.host.project("reach").entries().length;
+    const bare = await hostCall(ctx.base, "POST", `/tasks/T-1/release${q}`, { reason: "x" }, { asAgent: true });
+    expect(bare.status).toBe(401);
+    const withToken = await fetch(`${ctx.base}/tasks/T-1/release${q}`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${token}`, origin: ctx.base.replace(/\/api\/core$/, "") }, body: JSON.stringify({ reason: "x" }) });
+    expect(withToken.status).toBe(401);
+    expect(ctx.host.project("reach").entries().length).toBe(before);
+    // The token was not revoked by the refused calls: the worker still works.
+    expect(fs.existsSync(d.tokenFile)).toBe(true);
+  });
+
+  it("no MCP tool, whatever it is sent, writes a person's release of a claim", async () => {
+    const d = (await hostCall(ctx.base, "POST", `/tasks/T-1/dispatch${q}`, {})).body.result;
+    const call = bridgeCall(d.bridgeUrl, fs.readFileSync(d.tokenFile, "utf8"));
+    const { agent } = (await call({ tool: "hello", args: { name: "Worker" } })) as { agent: string };
+    const args = { task: "T-1", reason: "release it", released: true, by: "person", owner: "someone" };
+    for (const tool of TOOL_NAMES) await call({ tool, args, agent }).catch(() => undefined);
+    const personReleases = ctx.host.project("reach").entries().filter((e) => e.data?.released === true && e.actor.kind === "person");
+    expect(personReleases).toEqual([]);
+    // And no MCP source reaches the person's release route.
+    const mcp = sources(path.join(CORE, "mcp")).map((file) => fs.readFileSync(file, "utf8")).join("\n");
+    expect(mcp).not.toMatch(/\/release\b|releaseClaim/);
+  });
+
   it("no MCP tool, whatever it is sent, writes a diff or merge approval", async () => {
     const d = (await hostCall(ctx.base, "POST", `/tasks/T-1/dispatch${q}`, {})).body.result;
     const call = bridgeCall(d.bridgeUrl, fs.readFileSync(d.tokenFile, "utf8"));

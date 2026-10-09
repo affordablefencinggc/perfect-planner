@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { bridgeCall } from "../../mcp/index";
+import { isAuthoritative } from "../../ledger/index";
 import { appendNumbered } from "../../numbering/index";
 import { asPersonRequest } from "../keys";
 import { hostCall, startTestHost } from "../testing";
@@ -56,7 +57,7 @@ describe("tasks routes", () => {
   });
 
   it("only the person's app window can dispatch, approve, check, approve a diff or merge", async () => {
-    for (const route of ["/tasks/T-1/dispatch", "/tasks/T-1/test", "/tasks/T-1/approve-test", "/tasks/T-1/check", "/tasks/T-1/approve-diff", "/tasks/T-1/merge"]) {
+    for (const route of ["/tasks/T-1/dispatch", "/tasks/T-1/test", "/tasks/T-1/approve-test", "/tasks/T-1/check", "/tasks/T-1/approve-diff", "/tasks/T-1/merge", "/tasks/T-1/release"]) {
       const res = await hostCall(ctx.base, "POST", `${route}${q}`, {}, { asAgent: true });
       expect(res.status, route).toBe(401);
     }
@@ -211,6 +212,56 @@ describe("approvals are bound to what the person saw", () => {
     expect(moved.body.code).toBe("STALE");
     const tip = git(d.worktree, "rev-parse", "HEAD");
     expect((await post("/tasks/T-1/approve-diff", { commit: tip })).body.code).toBe("STALE");
+  }, 60_000);
+});
+
+describe("releasing a dead worker's claim", () => {
+  it("writes the person's signed release, ends the worker's token, keeps the worktree and its commits, and lets a new worker take it", async () => {
+    expect((await post("/tasks/T-1/release")).body.code).toBe("NOT_CLAIMED");
+    const d = (await post("/tasks/T-1/dispatch", {})).body.result;
+    const token = fs.readFileSync(d.tokenFile, "utf8");
+    const call = bridgeCall(d.bridgeUrl, token);
+    const { agent } = (await call({ tool: "hello", args: { name: "Worker" } })) as { agent: string };
+    write(d.worktree, "tests/save.check.mjs", 'import { existsSync } from "node:fs";\nprocess.exit(existsSync("src/save.js") ? 0 : 1);\n');
+    git(d.worktree, "add", "-A");
+    git(d.worktree, "commit", "-q", "-m", "Test");
+    await call({ tool: "propose_test", args: { task: "T-1", command: "node tests/save.check.mjs", files: ["tests/save.check.mjs"] }, agent });
+    expect((await post("/tasks/T-1/approve-test", { test: (await tasks()).tasks[0].test.entry })).status).toBe(200);
+    await call({ tool: "claim_task", args: { task: "T-1" }, agent });
+    write(d.worktree, "src/half.js", "export const half = 1;\n");
+    git(d.worktree, "add", "-A");
+    git(d.worktree, "commit", "-q", "-m", "Half done");
+    const tip = git(d.worktree, "rev-parse", "HEAD");
+    const held = (await tasks()).tasks[0];
+    expect(held).toMatchObject({ status: "claimed", stage: "building" });
+
+    expect((await post("/tasks/T-1/release", { owner: "someone-else" })).body.code).toBe("STALE");
+    expect((await post("/tasks/T-1/release", { reason: 5 })).status).toBe(400);
+    const released = await post("/tasks/T-1/release", { owner: held.owner, reason: "The worker's window was closed" });
+    expect(released.status, JSON.stringify(released.body)).toBe(200);
+    expect(released.body.result).toMatchObject({ released: "T-1", from: held.owner });
+
+    // The release is the person's own signed entry, with the reason kept.
+    const project = ctx.host.project("loop");
+    const entry = project.entries().find((e) => e.n === released.body.result.entry)!;
+    expect(entry).toMatchObject({ type: "task.progress", subject: "T-1", reason: "The worker's window was closed", data: { released: true, from: held.owner } });
+    expect(isAuthoritative(entry, { personOnly: true })).toBe(true);
+    // The old worker is cut off.
+    expect(fs.existsSync(d.tokenFile)).toBe(false);
+    await expect(call({ tool: "report_progress", args: { task: "T-1", summary: "still here" }, agent })).rejects.toThrow();
+    // The work is kept: same worktree, same branch, same commit.
+    expect(fs.existsSync(d.worktree)).toBe(true);
+    expect(git(d.worktree, "rev-parse", "HEAD")).toBe(tip);
+    const free = (await tasks()).tasks[0];
+    expect(free).toMatchObject({ status: "open", owner: null, stage: "ready-to-claim", worktree: { path: d.worktree }, dispatch: null });
+
+    // A new worker is dispatched on the same worktree and can claim it.
+    const again = (await post("/tasks/T-1/dispatch", {})).body.result;
+    expect(again.worktree).toBe(d.worktree);
+    const call2 = bridgeCall(again.bridgeUrl, fs.readFileSync(again.tokenFile, "utf8"));
+    const second = (await call2({ tool: "hello", args: { name: "Worker 2" } })) as { agent: string };
+    expect(await call2({ tool: "claim_task", args: { task: "T-1" }, agent: second.agent })).toMatchObject({ status: "claimed" });
+    expect(git(again.worktree, "log", "--format=%s", "-1")).toBe("Half done");
   }, 60_000);
 });
 

@@ -163,11 +163,27 @@ export function entryCents(entry: LedgerEntry): number | null {
   return null;
 }
 
-/** Model spend this month: budget-style costs plus Jev's own review costs. */
+/** Model spend this month: budget-style costs plus Jev's own review costs. Only signed (authoritative) entries count. */
 export function spendThisMonth(entries: readonly LedgerEntry[], month: string): number {
+  const signed = entries.filter((e) => isAuthoritative(e));
   let jevDollars = 0;
-  for (const e of entries) if (e.at.slice(0, 7) === month && typeof e.data?.cost === "number") jevDollars += e.data.cost;
-  return Math.round(monthSpend(entries, month).modelCents + jevDollars * 100);
+  for (const e of signed) if (e.at.slice(0, 7) === month && typeof e.data?.cost === "number") jevDollars += e.data.cost;
+  return Math.round(monthSpend(signed, month).modelCents + jevDollars * 100);
+}
+
+/** Plan clauses from signed entries only: an unsigned clause line cannot steer a recommendation. */
+const signedClauses = (entries: readonly LedgerEntry[]) => clausesAt(entries.filter((e) => isAuthoritative(e)));
+
+/**
+ * Jev, when Jev produced this verdict. A Jev verdict counts only when Perfect Planner wrote
+ * and signed it (core/jev/reviewer) naming Jev in data.reviewer; an entry that merely
+ * names Jev as its actor, or an unsigned line written into the ledger file, never does.
+ */
+function jevReviewer(e: LedgerEntry): Actor | undefined {
+  if (e.type !== "review.verdict" || e.actor.kind !== "system" || !isAuthoritative(e)) return undefined;
+  const reviewer = e.data?.reviewer as Actor | string | undefined;
+  if (reviewer === "jev") return { kind: "jev", id: "jev" };
+  return reviewer && typeof reviewer === "object" && reviewer.kind === "jev" ? reviewer : undefined;
 }
 
 /** The question and recommendation as the person sees them. */
@@ -244,6 +260,7 @@ function askedQuestions(entries: readonly LedgerEntry[]): Map<string, Asked> {
       q.answered = e;
       if (typeof d.decision === "string") q.decision = decisions.get(d.decision);
     } else if (e.type === "review.verdict" && d.review === "question") {
+      if (!jevReviewer(e)) continue;
       for (const r of e.refs) {
         const q = out.get(r);
         if (q) q.jevVerdict = e;
@@ -303,7 +320,7 @@ export function offlineRecommendation(entries: readonly LedgerEntry[], q: Pick<A
   if (q.options.length === 0) return "This question has no options to choose between, so it needs your answer in your own words.";
   let best: { sim: number; e: LedgerEntry; option: { id: string; label: string } } | null = null;
   for (const e of entries) {
-    if (e.type !== "decision.made" || typeof e.data?.questionText !== "string" || e.data.question === q.q) continue;
+    if (e.type !== "decision.made" || !isAuthoritative(e) || typeof e.data?.questionText !== "string" || e.data.question === q.q) continue;
     const option = matchOption(q.options, String(e.data.answer ?? e.summary));
     if (!option) continue;
     const sim = similarity(q.question, e.data.questionText);
@@ -324,7 +341,7 @@ export function offlineRecommendation(entries: readonly LedgerEntry[], q: Pick<A
       cost: null,
     };
   }
-  const clauses = sortedClauses(clausesAt(entries)).filter((c) => c.status === "active");
+  const clauses = sortedClauses(signedClauses(entries)).filter((c) => c.status === "active");
   const named = q.options
     .map((o) => ({ o, hits: norm(o.label).length >= 3 ? clauses.filter((c) => ` ${norm(c.text)} `.includes(` ${norm(o.label)} `)) : [] }))
     .filter((x) => x.hits.length > 0);
@@ -432,8 +449,7 @@ function reviewCard(e: LedgerEntry, roster: Roster): DecisionCard {
   const cents = entryCents(e);
   const model = typeof d.jevModel === "string" ? d.jevModel : e.actor.model ?? null;
   // Jev's counted verdicts are written (signed) by Perfect Planner, naming Jev in data.reviewer.
-  const reviewer = d.reviewer as Actor | undefined;
-  const jevActor = e.actor.kind === "jev" ? e.actor : e.actor.kind === "system" && reviewer?.kind === "jev" ? reviewer : undefined;
+  const jevActor = jevReviewer(e);
   const by = who(jevActor ?? e.actor, roster);
   return {
     id: e.n,
@@ -474,6 +490,8 @@ export async function buildDecisionsView(project: CoreProject, now = new Date())
     (card.status === "open" ? open : decided).push(card);
   }
   for (const e of entries) {
+    // Only entries the ledger verified as written by a person or the system become cards.
+    if (!isAuthoritative(e)) continue;
     if (e.type === "decision.made" && !answeredDecisions.has(e.subject) && typeof e.data?.question !== "string") decided.push(decisionCard(e, roster));
     else if (e.type === "review.verdict" && e.data?.review !== "question") decided.push(reviewCard(e, roster));
   }
@@ -579,7 +597,7 @@ function askJev(project: CoreProject, q: string): void {
     if (!asked || asked.status !== "open" || asked.options.length < 2) return;
     const w = jevWiring();
     const reviewer = new JevReviewer({ ledger: project.ledger, transport: w.transport ?? createJevTransport({ keys: w.keys }) });
-    reviewer.planClauses = () => sortedClauses(clausesAt(project.entries())).filter((c) => c.status === "active").map((c) => ({ ref: `§${c.clause}`, text: c.text }));
+    reviewer.planClauses = () => sortedClauses(signedClauses(project.entries())).filter((c) => c.status === "active").map((c) => ({ ref: `§${c.clause}`, text: c.text }));
     // Jev's view is recorded as a review.verdict and shown as the recommendation; the person still decides.
     await reviewer.tryAnswer(asked);
   })().catch(() => undefined);

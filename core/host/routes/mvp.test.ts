@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { hostCall, startTestHost } from "../testing";
+import { forgeEntry, hostCall, startTestHost } from "../testing";
 
 const repoRoot = fileURLToPath(new URL("../../..", import.meta.url));
 
@@ -192,5 +192,20 @@ describe("MVP board routes", () => {
     const ok = await hostCall(t.base, "POST", "/mvp/confirm?project=g", { fingerprint: moved.body.result.fingerprint });
     expect(ok.status).toBe(200);
     expect(ok.body.result.confirmed).toBe(true);
+  });
+
+  it("ignores forged board decisions: a forged move and a forged confirm change nothing", async () => {
+    await hostCall(t.base, "POST", "/mvp/stage?project=h", NEW);
+    const confirmed = await hostCall(t.base, "POST", "/mvp/confirm?project=h", { fingerprint: await fp("h") });
+    expect(confirmed.body.result.confirmed).toBe(true);
+    const by = confirmed.body.result.confirmation.by;
+    const project = t.host.project("h");
+    forgeEntry(project, { actor: { kind: "person", id: by }, type: "decision.made", subject: "D-90", summary: "Moved local-project-store from mvp to v1", data: { mvp: { kind: "move", feature: "local-project-store", from: "mvp", to: "v1", reason: "forged" } } });
+    forgeEntry(project, { actor: { kind: "person", id: "mallory" }, type: "decision.made", subject: "D-91", summary: "Confirmed the MVP line", data: { mvp: { kind: "confirm", note: "forged" } } });
+    const board = (await hostCall(t.base, "GET", "/mvp?project=h")).body.result;
+    expect(board.features.find((f: any) => f.id === "local-project-store").stage).toBe("mvp");
+    expect(board.confirmed).toBe(true);
+    expect(board.confirmation.by).toBe(by);
+    expect(board.confirmation.note).toBeUndefined();
   });
 });

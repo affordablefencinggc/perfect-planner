@@ -325,6 +325,36 @@ async function dispatch(project: CoreProject, host: CoreHost, id: string, body: 
   };
 }
 
+async function releaseClaim(project: CoreProject, id: string, body: Record<string, unknown>) {
+  const task = findTask(project, id);
+  const label = attemptLabel(task);
+  if (!task.owner || (task.status !== "claimed" && task.status !== "blocked")) {
+    throw new HttpError(409, "NOT_CLAIMED", `${label} is not held by a worker, so there is nothing to release.`);
+  }
+  // Bound to the worker the person saw: if another worker took it meanwhile, that one is not released.
+  if (typeof body.owner === "string" && body.owner !== task.owner) throw stale(`${label} is now held by ${task.owner}. Look again before releasing it.`);
+  const raw = body.reason;
+  if (raw !== undefined && raw !== null && typeof raw !== "string") throw new HttpError(400, "INVALID", "The reason must be text.");
+  const reason = typeof raw === "string" && raw.trim() ? raw.trim().slice(0, 500) : undefined;
+  const owner = task.owner;
+  // The person's own signed entry: the board frees the task (a blocked task stays blocked, without its owner).
+  const entry = project.ledger.append({
+    actor: localPerson(project),
+    type: task.status === "blocked" ? "task.blocked" : "task.progress",
+    subject: label,
+    summary: `Released ${label} from ${owner}`,
+    ...(reason ? { reason } : {}),
+    evidence: [],
+    refs: [],
+    data: { released: true, from: owner, by: "person", worktreeKept: true },
+  });
+  revokeWorker(project, label);
+  project.service.tokens.revokeTask(task.id);
+  if (label !== task.id) project.service.tokens.revokeTask(label);
+  dispatches(project).delete(label);
+  return { released: label, from: owner, entry: entry.n, ...(await overview(project)) };
+}
+
 export function registerTaskRoutes(router: Router): void {
   router.get("/tasks", ({ project }) => overview(project));
 
@@ -445,6 +475,13 @@ export function registerTaskRoutes(router: Router): void {
     revokeWorker(project, label);
     return { reopenedAs: result.ok ? result.newTaskId : undefined, ...(await overview(project)) };
   });
+
+  /**
+   * POST /tasks/:id/release { reason?, owner? }: the person frees a task held by a worker that is gone.
+   * Writes the person's signed release, ends the worker's token, and leaves the worktree, its branch and
+   * its commits exactly where they are, so the next worker dispatched on the task carries on from them.
+   */
+  router.post("/tasks/:id/release", ({ project, params, body }) => releaseClaim(project, params.id!, bodyOf(body)));
 
   /**
    * POST /tasks/:id/merge: merge the worker's branch into the branch it started from. The gate merges
