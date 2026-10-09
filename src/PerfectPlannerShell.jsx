@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {useAgentSessionObservations} from './runtime/useAgentSessionObservations.js';
 import {DeveloperNotes} from './components/DeveloperNotes.jsx';
 import {BrowserInputMarkers,useBrowserInputMarkerControl} from './components/BrowserInputMarkers.jsx';
@@ -837,6 +837,17 @@ function TopBar({
                         <span>
                           <strong>Agent connection</strong>
                           <small>{demoMode ? "2 demo agents" : agentObservations.label}</small>
+                        </span>
+                        <ArrowRightIcon />
+                      </button>
+                      <button
+                        className="responsive-topbar-action"
+                        onClick={openAgentDrawer}
+                      >
+                        <PlugsConnectedIcon />
+                        <span>
+                          <strong>Connect agent</strong>
+                          <small>Read-only setup for your coding agent</small>
                         </span>
                         <ArrowRightIcon />
                       </button>
@@ -2680,6 +2691,39 @@ function ProjectHomeWorkspace({
     const { binding, blockers, mode, nextAction, project, stage, summary } =
       homeModel;
     const hasProject = mode !== "empty";
+    // No project yet: one focused start screen. The evidence cards below only describe a
+    // registered project, so they wait until one exists.
+    if (!hasProject) {
+      return (
+        <section
+          className="workspace project-home-workspace project-home-truth project-home-start"
+          aria-label="Project Home workspace"
+          data-home-mode={mode}
+          data-home-project-id=""
+          data-home-generation=""
+        >
+          <div className="project-home-start-card">
+            <span className="project-home-start-icon" aria-hidden="true"><FolderIcon weight="duotone" /></span>
+            <h1>Bring in a real app to begin</h1>
+            <p>Choose the folder of an app you are building. Perfect Planner reads it, maps every file and helps you plan the work. Nothing in the folder is changed.</p>
+            <div className="project-home-start-actions">
+              <button
+                className="primary-button project-home-start-primary"
+                data-home-next-action={nextAction.id}
+                onClick={() => runHomeNextAction(nextAction)}
+              >
+                <FolderIcon weight="bold" /> {nextAction.label} <ArrowRightIcon />
+              </button>
+              {homeActionError && <p role="alert">{homeActionError}</p>}
+              <button type="button" className="project-home-start-demo" onClick={onOpenDemo}>
+                Explore the Demo
+              </button>
+            </div>
+            <small className="project-home-start-note">Folder access works in Chrome, Edge and other Chromium browsers, and in the desktop app.</small>
+          </div>
+        </section>
+      );
+    }
     const unavailableValue = (value, state, suffix = "") => {
       if (value == null || state === "unavailable") return "Unavailable";
       const displayed = `${value}${suffix}`;
@@ -5491,6 +5535,27 @@ function OpsDock({
   );
 }
 
+// The header may wrap onto extra rows (narrow windows, long labels, large text). Publish its real
+// height so the workspace, drawers and scrims start below it instead of under a fixed guess.
+function useHeaderHeightVariable() {
+  const shellRef = useRef(null);
+  useLayoutEffect(() => {
+    const shell = shellRef.current;
+    const header = shell?.querySelector(":scope > .topbar");
+    if (!shell || !header) return undefined;
+    const publish = () => {
+      const height = Math.ceil(header.getBoundingClientRect().height);
+      if (height > 0) shell.style.setProperty("--app-header-height", `${height}px`);
+    };
+    publish();
+    if (typeof ResizeObserver !== "function") return undefined;
+    const observer = new ResizeObserver(publish);
+    observer.observe(header);
+    return () => observer.disconnect();
+  }, []);
+  return shellRef;
+}
+
 function PerfectPlannerShellCore({
   projectContext,
   runtimeCapabilityReceipts,
@@ -5498,6 +5563,7 @@ function PerfectPlannerShellCore({
   diagnosticSession,
 }) {
   const viewMode = useViewModeState();
+  const shellRef = useHeaderHeightVariable();
   const activeProject = projectContext.activeProject;
   const demoMode = isDemoProject(activeProject);
   const projectWorkflowReady = Boolean(activeProject) && !["stale", "unavailable"].includes(activeProject.state);
@@ -6003,6 +6069,7 @@ function PerfectPlannerShellCore({
   return (
     <ViewModeContext.Provider value={viewMode}>
     <div
+      ref={shellRef}
       className={`app-shell workspace-${workspace} ${opsOpen ? "ops-is-open" : ""}`}
       data-view-mode={viewMode.mode}
     >

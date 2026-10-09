@@ -9104,3 +9104,281 @@ code {
   color: var(--ink);
   font-size: 13px;
 }
+
+/* ==========================================================================
+   Global layout shell
+   One centred frame for every workspace, one spacing and type scale, a header
+   that wraps instead of clipping at any width, and visible keyboard focus.
+   Per-screen internals keep their own rules; this block only sets the frame.
+   ========================================================================== */
+:root {
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+  --space-8: 64px;
+  --type-page-title: clamp(24px, 1.5vw, 30px);
+  --type-section-title: clamp(16px, 0.95vw, 19px);
+  --type-body: clamp(14px, 0.6vw, 16px);
+  --type-caption: 12px;
+  /* Reading pages stop growing here; canvases (maps, blueprint, plan, evidence spine) may use the wide frame. */
+  --shell-max: 1560px;
+  --shell-max-wide: 2080px;
+  /* Never narrower than the 34px drawer handles that sit on the window edges. */
+  --shell-gutter: clamp(var(--space-7), 3vw, var(--space-8));
+  --shell-control-height: 36px;
+}
+
+/* Header: every row wraps, so a long label or a wide font adds a row instead of clipping. */
+.topbar {
+  height: auto;
+}
+.topbar-primary {
+  height: auto;
+  min-height: 64px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  column-gap: var(--space-4);
+  row-gap: var(--space-2);
+  padding: var(--space-2) var(--space-5);
+}
+.topbar-primary > .brand-lockup {
+  flex: 0 1 200px;
+  min-width: 150px;
+}
+.topbar-primary > .workspace-nav {
+  flex: 0 0 auto;
+  min-width: 0;
+  max-width: 100%;
+  overflow: visible;
+}
+.topbar-primary > .top-metrics {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-left: auto;
+  max-width: 100%;
+  overflow: visible;
+}
+.workspace-tab,
+.top-metric-button,
+.topbar .icon-button {
+  min-height: var(--shell-control-height);
+  white-space: nowrap;
+}
+.top-metric-button {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.workspace-context {
+  height: auto;
+  min-height: 54px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  column-gap: var(--space-5);
+  row-gap: var(--space-2);
+  padding: var(--space-2) var(--space-5);
+}
+.workspace-context > .project-tab-system {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+.workspace-context > .workspace-intent {
+  flex: 1 1 480px;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-4);
+}
+/* Context copy wraps; it is never cut off mid-sentence. */
+.workspace-context .workspace-intent span {
+  overflow: visible;
+  white-space: normal;
+  text-overflow: clip;
+  line-height: 1.35;
+}
+.workspace-context > .workspace-route-controls {
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  margin-left: auto;
+  gap: var(--space-3);
+}
+@media (max-width: 1500px) {
+  .workspace-context > .workspace-intent {
+    display: none;
+  }
+}
+
+/* Workspaces: one centred frame with the same gutters on both sides. */
+:is(
+  .project-home-workspace,
+  .blueprint-workspace,
+  .structure-workspace,
+  .component-plans-workspace,
+  .collision-workspace,
+  .allocation-workspace,
+  .build-workspace,
+  .integrity-workspace,
+  .ledger-workspace,
+  .index-workspace
+) {
+  padding-inline: var(--shell-gutter) !important;
+}
+:is(
+    .project-home-workspace,
+    .component-plans-workspace,
+    .collision-workspace,
+    .allocation-workspace,
+    .build-workspace,
+    .integrity-workspace,
+    .ledger-workspace,
+    .index-workspace
+  )
+  > * {
+  width: min(100%, var(--shell-max));
+  margin-inline: auto;
+}
+:is(.blueprint-workspace, .structure-workspace) > * {
+  width: min(100%, var(--shell-max-wide));
+  margin-inline: auto;
+}
+.project-unavailable-workspace {
+  padding-inline: var(--shell-gutter);
+}
+
+/* Coordinate pages: canvas and page rail are centred together, not pushed left by a 10% right pad. */
+.workspace-stage-coordinate {
+  grid-template-columns: minmax(0, var(--shell-max-wide)) 115px;
+  justify-content: center;
+  column-gap: var(--space-5);
+  padding-inline: var(--shell-gutter);
+}
+@media (max-width: 980px) {
+  .workspace-stage-coordinate {
+    grid-template-columns: minmax(0, 1fr);
+    padding-inline: 0;
+  }
+}
+.evidence-workspace > * {
+  max-width: var(--shell-max-wide);
+  margin-inline: auto;
+}
+
+/* Type scale for the frame: page title, section title, body, caption. */
+.workspace-stage .workspace h1 {
+  font-size: var(--type-page-title);
+  line-height: 1.2;
+}
+.workspace-stage .workspace h2 {
+  font-size: var(--type-section-title);
+  line-height: 1.3;
+}
+
+/* Visible keyboard focus everywhere, including on the dark header. */
+:is(button, a[href], select, textarea, summary, [role="tab"], [tabindex]:not([tabindex="-1"])):focus-visible {
+  outline: 2px solid var(--blue-focus);
+  outline-offset: 2px;
+}
+.topbar :is(button, a[href], [tabindex]:not([tabindex="-1"])):focus-visible {
+  outline-color: #9dbcff;
+}
+.workspace-stage .imported-workflow-requirement:focus-visible {
+  outline: 2px solid var(--blue-focus);
+  outline-offset: 2px;
+}
+:is(.component-search, .imported-workflow-search, .project-index-search):focus-within {
+  outline: 2px solid var(--blue-focus);
+  outline-offset: 2px;
+}
+
+/* Empty Project Home: one focused start card instead of a wall of unavailable evidence. */
+.project-home-workspace.project-home-start {
+  display: grid;
+  align-content: start;
+  justify-items: center;
+  padding-top: clamp(var(--space-7), 12vh, 140px) !important;
+}
+.project-home-start > .project-home-start-card {
+  width: min(100%, 640px);
+  padding: var(--space-7) var(--space-6);
+  display: grid;
+  justify-items: center;
+  gap: var(--space-4);
+  border: 1px solid var(--chrome-dark);
+  border-radius: 14px;
+  background: var(--paper);
+  box-shadow: var(--chrome-panel-shadow-raised);
+  text-align: center;
+}
+.project-home-start-icon {
+  display: grid;
+  place-items: center;
+  width: 56px;
+  height: 56px;
+  border: 1px solid var(--chrome-dark);
+  border-radius: 14px;
+  background: var(--paper-strong);
+  color: var(--green);
+}
+.project-home-start-icon svg {
+  width: 30px;
+  height: 30px;
+}
+.project-home-start-card h1 {
+  margin: 0;
+  font: 700 var(--type-page-title) / 1.2 var(--mono);
+}
+.project-home-start-card > p {
+  max-width: 52ch;
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--type-body) !important;
+  line-height: 1.55 !important;
+}
+.project-home-start-actions {
+  display: grid;
+  justify-items: center;
+  gap: var(--space-3);
+  margin-top: var(--space-2);
+}
+.project-home-start-actions [role="alert"] {
+  margin: 0;
+  color: var(--red);
+}
+.project-home-start-primary {
+  min-height: 52px;
+  padding: 0 var(--space-6);
+  gap: var(--space-2);
+  border-radius: 10px;
+  font-size: 16px !important;
+  font-weight: 700;
+}
+.project-home-start-primary svg {
+  width: 18px;
+  height: 18px;
+}
+.project-home-start-demo {
+  padding: var(--space-1) var(--space-2);
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+.project-home-start-demo:hover {
+  color: var(--green);
+}
+.project-home-start-note {
+  color: var(--muted);
+  font-size: var(--type-caption) !important;
+}
