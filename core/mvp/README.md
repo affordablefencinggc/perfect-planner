@@ -51,7 +51,7 @@ Status rules (`classify`):
 Tests are paths under `tests/`, `tests-ui/`, `__tests__/` or `e2e/`, files
 named `*.test.*` / `*.spec.*`, and journey scripts named `e2e-*`. Every status
 carries evidence: one `{ file, line?, note }` per file present, file missing
-and marker, with repo-relative forward-slash paths on every OS.
+and marker, with repo-relative forward-slash paths on every OS. A declared file that resolves (through a symlink) outside the repository counts as missing and is never read, and a marker's evidence keeps only the comment text, never the code on that line.
 
 ## The board (`board.ts`)
 

@@ -206,3 +206,38 @@ describe("findMarkers", () => {
     expect(findMarkers(text)).toEqual([]);
   });
 });
+
+describe("symlinks and marker text", () => {
+  it("does not follow a symlink that points outside the repository", () => {
+    const outside = tmp({ "secret.js": "// TODO: leaked outside text\n" });
+    const root = tmp({ "tests/a.test.mjs": "" });
+    fs.mkdirSync(path.join(root, "src"), { recursive: true });
+    try {
+      fs.symlinkSync(path.join(outside, "secret.js"), path.join(root, "src", "a.js"), "file");
+    } catch {
+      return; // the OS refused to create a symlink (Windows without privilege); nothing to escape through
+    }
+    const r = scanFeatures(root, { sources: [plannedSource([feat(["src/a.js", "tests/a.test.mjs"])])] });
+    const f = r.features[0];
+    expect(f.evidence.some((e) => e.note.includes("leaked"))).toBe(false);
+    expect(f.evidence.find((e) => e.file === "src/a.js")?.note).toBe("declared but missing");
+  });
+
+  it("keeps a symlink that stays inside the repository", () => {
+    const root = tmp({ "src/real.js": "export const a = 1;\n", "tests/a.test.mjs": "" });
+    try {
+      fs.symlinkSync(path.join(root, "src", "real.js"), path.join(root, "src", "a.js"), "file");
+    } catch {
+      return;
+    }
+    const r = scanFeatures(root, { sources: [plannedSource([feat(["src/a.js", "tests/a.test.mjs"])])] });
+    expect(r.features[0].status).toBe("done");
+  });
+
+  it("records only the comment text of a marker, not the code on its line", () => {
+    const [m] = findMarkers('const apiKey = "sk-live-123"; // TODO rotate this');
+    expect(m.kind).toBe("TODO");
+    expect(m.text).not.toContain("sk-live");
+    expect(m.text).toContain("TODO rotate this");
+  });
+});

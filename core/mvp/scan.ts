@@ -67,7 +67,9 @@ export function findMarkers(text: string): Marker[] {
     if (m) kind = m[1];
     else if (/throw new Error\(["'`]Not implemented/i.test(l) || (comment !== null && /not implemented/i.test(comment))) kind = "Not implemented";
     else if (comment !== null && /\bstub\b/i.test(comment)) kind = "stub";
-    if (kind) out.push({ line: i + 1, kind, text: l.trim().slice(0, 80) });
+    // Keep only the comment, so code on the same line (a key, a token) never
+    // lands in evidence.
+    if (kind) out.push({ line: i + 1, kind, text: (comment ?? l).trim().slice(0, 80) });
   }
   return out;
 }
@@ -116,8 +118,20 @@ export function classify(feature: DeclaredFeature, facts: Facts): Classification
 
 // ------------------------------------------------------------ file helpers
 
-function isFile(abs: string): boolean {
+/** True when abs resolves (through any symlinks) to a path inside root. */
+function insideRoot(root: string, abs: string): boolean {
   try {
+    const realRoot = fs.realpathSync(root);
+    const real = fs.realpathSync(abs);
+    return real === realRoot || real.startsWith(realRoot + path.sep);
+  } catch {
+    return false;
+  }
+}
+
+function isFile(abs: string, root?: string): boolean {
+  try {
+    if (root !== undefined && !insideRoot(root, abs)) return false;
     return fs.statSync(abs).isFile();
   } catch {
     return false;
@@ -143,6 +157,8 @@ function factFor(root: string, rel: string): FileFact {
   if (!norm) return { path: toPosix(rel), exists: false, markers: [] };
   const abs = path.join(root, ...norm.split("/"));
   let size = 0;
+  // A symlink pointing outside the repository counts as missing and is never read.
+  if (!insideRoot(root, abs)) return { path: norm, exists: false, markers: [] };
   try {
     const st = fs.statSync(abs);
     if (!st.isFile()) return { path: norm, exists: false, markers: [] };
@@ -352,7 +368,8 @@ function unique<T>(xs: T[]): T[] {
 
 function packageScriptFiles(root: string): Set<string> {
   const out = new Set<string>();
-  const text = readTextSafe(path.join(root, "package.json"));
+  const pkg = path.join(root, "package.json");
+  const text = insideRoot(root, pkg) ? readTextSafe(pkg) : null;
   if (!text) return out;
   try {
     const scripts = (JSON.parse(text) as { scripts?: Record<string, unknown> }).scripts ?? {};
@@ -373,7 +390,7 @@ export function registrySource(relPath = "src/engine/appMapRegistry.js"): Featur
   return {
     name: `registry:${rel}`,
     load(root: string): DeclaredFeature[] | null {
-      if (!isFile(path.join(root, ...rel.split("/")))) return null;
+      if (!isFile(path.join(root, ...rel.split("/")), root)) return null;
       const found = new Map<string, DeclaredFeature>();
       const extras: Record<string, string[]> = {};
       const seen = new Set<string>();
@@ -390,7 +407,7 @@ export function registrySource(relPath = "src/engine/appMapRegistry.js"): Featur
         for (const imp of relativeImports(text)) {
           const base = path.posix.normalize(path.posix.join(path.posix.dirname(cur), imp));
           for (const cand of [base, `${base}.js`, `${base}.mjs`, `${base}.ts`]) {
-            if (isFile(path.join(root, ...cand.split("/")))) { queue.push(cand); break; }
+            if (isFile(path.join(root, ...cand.split("/")), root)) { queue.push(cand); break; }
           }
         }
       }
@@ -436,7 +453,8 @@ export function folderSource(): FeatureSource {
     load(root: string): DeclaredFeature[] | null {
       const roots = ["src/components", "src/pages", "src/features", "app/routes"];
       const present = roots.filter((r) => {
-        try { return fs.statSync(path.join(root, ...r.split("/"))).isDirectory(); } catch { return false; }
+        const abs = path.join(root, ...r.split("/"));
+        try { return insideRoot(root, abs) && fs.statSync(abs).isDirectory(); } catch { return false; }
       });
       if (present.length === 0) return null;
       const testFiles = [...walk(root, "tests"), ...walk(root, "tests-ui"), ...walk(root, "__tests__")];
