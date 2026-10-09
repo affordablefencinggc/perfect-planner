@@ -17,7 +17,8 @@ import type { CoreProject } from "../project";
 import { HttpError, type Router } from "../router";
 import { writeOwnerOnlyFile } from "../tokenFile";
 import { localPersonId } from "./people";
-import { chosenRepoRoot, repoState } from "./tasks";
+import { repoState } from "./tasks";
+import { chosenRepoRoot, rootsFileFor } from "../protectedRoots";
 
 export const AGENT_SERVER_NAME = "perfect-planner-core";
 const PERSON = /^[a-z0-9][a-z0-9._-]{0,63}$/i;
@@ -137,9 +138,7 @@ export function tokenFilePath(project: CoreProject, name: string): string {
 }
 
 /** Next to each token file: the folders the host protects for that project, for connect.mjs to read. */
-export function rootsFilePath(tokenFile: string): string {
-  return tokenFile.replace(/\.token$/, ".roots.json");
-}
+export const rootsFilePath = rootsFileFor;
 
 /**
  * The folders this host chose for the project and never starts a program from: the project folder, the

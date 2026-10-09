@@ -14,7 +14,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { findExecutable, isWithin, NO_CWD_SEARCH_ENV, registeredRoots } from "../exec/index";
-import { chosenRepoRoot, repoRefusal } from "./routes/tasks";
+import { childEnv, protectFor } from "./protectedRoots";
 import { isNetworkPath } from "./tokenFile";
 
 const SERVER = "perfect-planner-core";
@@ -126,28 +126,6 @@ export interface Launch {
 }
 
 /**
- * The folders no agent CLI may be started from, beyond the current folder: the project folder that owns
- * the token file (<project>/.perfect-planner/tokens/x.token), the repo the person picked for it, and the
- * folders the host recorded beside the token (x.roots.json: the repo git found, the worktree folders).
- * Never found by walking up to .git.
- */
-export function protectFor(tokenFile: string | null): string[] {
-  if (!tokenFile) return [];
-  const project = path.dirname(path.dirname(path.dirname(tokenFile)));
-  const repo = chosenRepoRoot(project);
-  let recorded: unknown[] = [];
-  try {
-    const roots = (JSON.parse(fs.readFileSync(tokenFile.replace(/\.token$/, ".roots.json"), "utf8")) as { roots?: unknown }).roots;
-    if (Array.isArray(roots)) recorded = roots;
-  } catch {
-    // an older app wrote no roots file
-  }
-  const roots = [project, ...(repo ? [repo] : []), ...recorded].filter((root): root is string => typeof root === "string" && path.isAbsolute(root));
-  // A whole drive or the home folder is never a protected root: it would hide ~/.local/bin/claude.
-  return [...new Set(roots)].filter((root) => !repoRefusal(root));
-}
-
-/**
  * How to start Claude Code without a shell, by core/exec's finder, so a claude planted in the project,
  * the picked repo or a PATH folder that links into either never runs. On Windows a claude.exe runs as
  * itself; on macOS and Linux an npm-installed claude (a node script) runs under this Node, never
@@ -207,17 +185,6 @@ function safeReal(p: string): string {
   }
 }
 
-/**
- * The environment for Claude Code: PATH starts with this Node's own folder, so a wrapper script (a
- * /bin/sh claude that calls `node`) gets this Node rather than one planted further along PATH.
- */
-export function childEnv(env: NodeJS.ProcessEnv, platform: NodeJS.Platform = process.platform, execPath = process.execPath): NodeJS.ProcessEnv {
-  const p = platform === "win32" ? path.win32 : path.posix;
-  const key = Object.keys(env).find((name) => (platform === "win32" ? name.toUpperCase() === "PATH" : name === "PATH")) ?? "PATH";
-  const rest = env[key];
-  return { ...env, [key]: rest ? `${p.dirname(execPath)}${p.delimiter}${rest}` : p.dirname(execPath) };
-}
-
 /** Where connect.mjs runs: the terminal's folder and environment, and where it writes. */
 export interface ConnectIo {
   cwd: string;
@@ -231,14 +198,16 @@ export interface ConnectIo {
 
 /** Runs Claude Code from the project folder (claude mcp add -s local registers that folder). */
 function claude(args: string[], tokenFile: string | null, io: ConnectIo) {
-  const launch = claudeLaunch(args, io.env, io.cwd, protectFor(tokenFile));
+  const protect = protectFor(tokenFile);
+  const launch = claudeLaunch(args, io.env, io.cwd, protect);
   if (!launch) return { error: Object.assign(new Error("claude not found"), { code: "ENOENT" }), status: null, stdout: "", stderr: "" };
   return spawnSync(launch.command, launch.args, {
     cwd: io.cwd,
     encoding: "utf8",
     windowsHide: true,
-    // Windows: never resolve a bare program name (node, git) from the current folder either.
-    env: { ...childEnv(io.env), ...NO_CWD_SEARCH_ENV },
+    // Claude's own lookups (git, node) see only PATH folders outside the protected roots; on Windows
+    // nothing is ever resolved from the current folder either.
+    env: { ...childEnv(io.env, { cwd: io.cwd, protect }), ...NO_CWD_SEARCH_ENV },
   });
 }
 

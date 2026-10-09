@@ -3,8 +3,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { bundledNodePath, childEnv, claudeLaunch, runConnect, connectArgsProblem, protectFor, connectLineProblem, validateConnectLine, connectPlan, installSkill, SKILL_NODE_PLACEHOLDER, SKILL_PROGRAM_PLACEHOLDER } from "./agentConnect";
+import { bundledNodePath, claudeLaunch, runConnect, connectArgsProblem, connectLineProblem, validateConnectLine, connectPlan, installSkill, SKILL_NODE_PLACEHOLDER, SKILL_PROGRAM_PLACEHOLDER } from "./agentConnect";
 import { connectLine } from "./routes/agents";
+import { childEnv, protectFor } from "./protectedRoots";
 
 describe("connect line", () => {
   it("replaces this folder's registration and adds the server with the token file, never the token", () => {
@@ -269,9 +270,19 @@ describe("finding Claude Code", () => {
     }
   });
 
-  it("puts this Node's folder first on PATH, so a wrapper script that calls node gets this Node", () => {
-    expect(childEnv({ PATH: "/usr/bin" }, "linux", "/app/node/bin/node").PATH).toBe("/app/node/bin:/usr/bin");
-    expect(childEnv({ Path: "C:\\Windows" }, "win32", "C:\\app\\node.exe").Path).toBe("C:\\app;C:\\Windows");
+  it("gives the agent a PATH with this Node first and no folder inside a protected root, as written or through a link", () => {
+    const project = temp();
+    const outside = temp();
+    const node = path.join(outside, "node-home", "bin");
+    for (const dir of [path.join(project, "tools"), path.join(outside, "usr-bin"), node]) fs.mkdirSync(dir, { recursive: true });
+    link(path.join(project, "tools"), path.join(outside, "to-project"));
+    const cwd = temp();
+    const PATH = [".", "", "relative/bin", path.join(project, "tools"), path.join(outside, "to-project"), path.join(outside, "missing"), path.join(outside, "usr-bin"), path.join(cwd)].join(sep);
+    // Windows keeps one PATH variable whatever its case; the agent gets it as Path.
+    const env = childEnv({ PATH, OTHER: "kept" }, { cwd, protect: [project], execPath: path.join(node, windows ? "node.exe" : "node") });
+    expect(env[windows ? "Path" : "PATH"]).toBe([node, path.join(outside, "usr-bin")].join(sep));
+    expect(env.OTHER).toBe("kept");
+    if (windows) expect(env.PATH).toBeUndefined();
   });
 
   it("returns null when Claude Code is not installed", () => {
