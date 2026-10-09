@@ -4,6 +4,7 @@ import { registerAgentRoutes } from "./agents";
 import { registerDecisionRoutes } from "./decisions";
 import { registerMvpRoutes } from "./mvp";
 import { registerPeopleRoutes } from "./people";
+import { registerPlanRoutes } from "./plan";
 import { registerPlanningRoutes } from "./planning";
 import { registerSearchRoutes } from "./search";
 
@@ -14,4 +15,5 @@ export function registerRoutes(router: Router): void {
   registerPeopleRoutes(router);
   registerSearchRoutes(router);
   registerAgentRoutes(router);
+  registerPlanRoutes(router);
 }
