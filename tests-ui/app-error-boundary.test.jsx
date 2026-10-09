@@ -28,7 +28,7 @@ describe("AppErrorBoundary", () => {
     const onReload = vi.fn(), onSafeStart = vi.fn();
     render(<AppErrorBoundary onReload={onReload} onSafeStart={onSafeStart}><Thrower /></AppErrorBoundary>);
     const alert = screen.getByRole("alert");
-    expect(screen.getByRole("heading", { name: "Something went wrong showing this project" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Something went wrong showing the planner" })).toBeTruthy();
     const details = alert.querySelector("details");
     expect(details).toBeTruthy();
     expect(details.open).toBe(false);
@@ -40,10 +40,31 @@ describe("AppErrorBoundary", () => {
     expect(onSafeStart).toHaveBeenCalledTimes(1);
   });
 
-  test("hides the safe-start action when already running without saved projects", () => {
-    render(<AppErrorBoundary safeStart onReload={() => {}}><Thrower /></AppErrorBoundary>);
+  test("in safe start, offers the way back to saved projects instead of the safe-start action (xcut-11)", async () => {
+    const onLeaveSafeStart = vi.fn();
+    render(<AppErrorBoundary safeStart onReload={() => {}} onLeaveSafeStart={onLeaveSafeStart}><Thrower /></AppErrorBoundary>);
     expect(screen.getByRole("button", { name: "Reload" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Open without saved projects" })).toBeNull();
+    expect(screen.getByRole("alert").textContent).toContain("not caused by them");
+    await userEvent.setup().click(screen.getByRole("button", { name: "Show saved projects" }));
+    expect(onLeaveSafeStart).toHaveBeenCalledTimes(1);
+  });
+
+  test("moves focus to the fallback heading when a first render crashes (xcut-11)", () => {
+    render(<AppErrorBoundary onReload={() => {}}><Thrower /></AppErrorBoundary>);
+    const heading = screen.getByRole("heading", { level: 1 });
+    expect(document.activeElement).toBe(heading);
+    expect(heading.getAttribute("tabindex")).toBe("-1");
+  });
+
+  test("moves focus to the fallback heading when a later render crashes, and never claims a project exists (xcut-11)", () => {
+    function MaybeThrow({ crash }) { if (crash) throw new Error("later"); return <button type="button">Focused control</button>; }
+    const { rerender } = render(<AppErrorBoundary onReload={() => {}}><MaybeThrow crash={false} /></AppErrorBoundary>);
+    screen.getByRole("button", { name: "Focused control" }).focus();
+    rerender(<AppErrorBoundary onReload={() => {}}><MaybeThrow crash /></AppErrorBoundary>);
+    const heading = screen.getByRole("heading", { level: 1 });
+    expect(document.activeElement).toBe(heading);
+    expect(heading.textContent).not.toMatch(/this project/i);
   });
 });
 

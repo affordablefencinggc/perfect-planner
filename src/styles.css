@@ -34,7 +34,7 @@
   --red: #bd4b45;
   --red-soft: #f8dfdc;
   --blue-focus: #3c6ee8;
-  --mono: "IBM Plex Mono", "Cascadia Mono", Consolas, monospace;
+  --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, "DejaVu Sans Mono", "Liberation Mono", monospace;
   --app-header-height: 118px;
 }
 
@@ -3004,7 +3004,7 @@ code {
 }
 .eyebrow {
   color: var(--muted);
-  font: 8px var(--mono);
+  font: 11px var(--mono);
   letter-spacing: 0.13em;
   text-transform: uppercase;
 }
@@ -9004,9 +9004,13 @@ code {
 
 .app-safe-start-notice {
   position: fixed;
-  right: 16px;
-  bottom: 16px;
-  z-index: 1000;
+  /* Centred above the 42px Operations dock (under it when its panel opens), clear of the
+     Demo badge (bottom left) and Developer notes (bottom right); phones stack it above both. */
+  left: 50%;
+  bottom: calc(42px + 12px);
+  transform: translateX(-50%);
+  width: max-content;
+  z-index: 34;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -9018,6 +9022,9 @@ code {
   background: var(--amber-soft);
   color: var(--ink);
   font-size: 13px;
+}
+@media (max-width: 1100px) {
+  .app-safe-start-notice { bottom: calc(42px + 64px); }
 }
 
 .journey-calendar-rail button:disabled,
