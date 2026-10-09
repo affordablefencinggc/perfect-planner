@@ -16,6 +16,9 @@ export function createBoard() {
     budgetWarnings: [],
     control: { paused: false, pausedAt: null, pausedBy: null },
     sequence: { P: 0, T: 0, Q: 0, D: 0, R: 0 },
+    // Lines on disk that failed the chain check (hash, prev or sequence). They are
+    // never applied to the board; see noteRejectedEntries.
+    integrity: { rejected: [] },
     entryCount: 0,
     lastEntry: null,
     lastHash: null,
@@ -38,12 +41,33 @@ function bumpSequence(board, id) {
   if (parsed && board.sequence[parsed.series] < parsed.number) board.sequence[parsed.series] = parsed.number;
 }
 
+// Only entry types that create a numbered thing advance its series (§3: numbers are
+// never skipped). Any other entry that merely mentions an id leaves the series alone.
+const CREATES = { "task.created": "T", "question.asked": "Q", "decision.made": "D", "release.cut": "R", "plan.approved": "P" };
+
 function noteSequences(board, entry) {
-  const task = parseTaskId(entry.subject);
-  if (task) bumpSequence(board, task.id);
-  else bumpSequence(board, entry.subject);
-  const clause = parseClauseSubject(entry.subject);
-  if (clause) bumpSequence(board, clause.plan);
+  const series = CREATES[entry.type];
+  if (series) {
+    const parsed = parseSeriesId(entry.subject);
+    if (parsed && parsed.series === series) bumpSequence(board, entry.subject);
+    return;
+  }
+  if (entry.type === "clause.added" || entry.type === "clause.changed" || entry.type === "clause.withdrawn") {
+    const clause = parseClauseSubject(entry.subject);
+    if (clause) bumpSequence(board, clause.plan);
+  }
+}
+
+/**
+ * Records chain-rejected lines on the board without applying them. Their creating
+ * ids still reserve numbers so a forged or damaged line can never cause reuse.
+ */
+export function noteRejectedEntries(board, rejected) {
+  for (const item of rejected ?? []) {
+    board.integrity.rejected.push({ n: item.entry?.n ?? item.firstBad, reason: item.reason, file: item.file, line: item.line, acknowledged: Boolean(item.acknowledged) });
+    if (item.entry && typeof item.entry === "object") noteSequences(board, item.entry);
+  }
+  return board;
 }
 
 function newTask(id, entry) {
@@ -56,7 +80,9 @@ function newTask(id, entry) {
     createdAt: entry.at,
     createdEntry: entry.n,
     claimedBy: null,
+    claimedModel: null,
     claimedAt: null,
+    releasedAt: null,
     test: {
       command: null,
       approved: false,
@@ -128,21 +154,32 @@ function applyTaskEntry(board, entry, data) {
     case "task.claimed":
       task.state = "claimed";
       task.claimedBy = entry.actor?.id ?? null;
+      task.claimedModel = entry.actor?.model ?? null;
       task.claimedAt = entry.at;
+      task.releasedAt = null;
       task.blockedReason = null;
       break;
     case "task.progress":
-      if (task.state !== "done") task.state = "in-progress";
       task.lastProgressAt = entry.at;
       task.lastProgress = entry.summary;
       task.blockedReason = null;
-      if (data.released) task.claimedBy = null;
+      if (data.released) {
+        // release_task: the worker gives the task back; it becomes claimable again.
+        task.state = "released";
+        task.claimedBy = null;
+        task.claimedModel = null;
+        task.releasedAt = entry.at;
+      } else if (task.state !== "done") task.state = "in-progress";
       break;
     case "task.blocked":
       task.state = "blocked";
       task.blockedReason = entry.reason ?? null;
       task.lastProgressAt = entry.at;
-      if (data.released) task.claimedBy = null;
+      if (data.released) {
+        task.claimedBy = null;
+        task.claimedModel = null;
+        task.releasedAt = entry.at;
+      }
       break;
     case "task.proof":
       task.state = "proof";
@@ -159,6 +196,7 @@ function applyTaskEntry(board, entry, data) {
       task.attemptId = taskAttemptId(id, task.attempt);
       task.state = "reopened";
       task.claimedBy = null;
+      task.claimedModel = null;
       task.reopenedEntry = entry.n;
       task.doneAt = null;
       task.doneEntry = null;

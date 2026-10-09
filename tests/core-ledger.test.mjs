@@ -143,7 +143,7 @@ test("refuses malformed entries and missing reasons", async () => {
   await expectRule(ledger.append({ actor: worker, type: "task.claimed", subject: id, summary: "double claim" }), "task-state");
   await expectRule(ledger.append({ actor: jev, type: "task.done", subject: id, summary: "Jev cannot finish" }), "jev-scope");
   await expectRule(ledger.append({ actor: jev, type: "merge.done", subject: id, summary: "Jev cannot merge" }), "jev-scope");
-  await ledger.append({ actor: jev, type: "review.verdict", subject: id, summary: "Test review: approve", reason: "covers clause", data: { verdict: "approve", cost: 0.01, confidence: 0.9 } });
+  await ledger.append({ actor: jev, type: "review.verdict", subject: id, summary: "Test review: approve", reason: "covers clause", data: { verdict: "approve", cost: 0.01, confidence: 0.9, provider: "TypeSafe", model: "jev-latest" } });
   await expectRule(ledger.append({ actor: owner, type: "correction", subject: "L-000001", summary: "fix", reason: "typo", corrects: "L-000099" }), "corrects-future");
   await ledger.append({ actor: owner, type: "correction", subject: "L-000001", summary: "Title typo fixed", reason: "typo in title", corrects: "L-000001" });
   assert.equal(ledger.board().corrections[0].corrects, "L-000001");
@@ -222,6 +222,9 @@ test("reopening bumps the attempt suffix and demands a fresh pass", async () => 
   await ledger.append({ actor: worker, type: "task.claimed", subject: "T-1.a2", summary: "Reclaimed attempt 2" });
   await expectRule(ledger.append({ actor: system, type: "task.done", subject: id, summary: "old pass" }), "task-done-gate");
   await ledger.append({ actor: system, type: "test.passed", subject: id, summary: "Passed again" });
+  await expectRule(ledger.append({ actor: system, type: "task.done", subject: id, summary: "not merged" }), "task-done-gate");
+  await ledger.append({ actor: system, type: "merge.done", subject: id, summary: "Merged attempt 2", data: { commit: "abc9999", into: "pp/integration" } });
+  await ledger.append({ actor: system, type: "test.passed", subject: id, summary: "Passed on integration", data: { where: "integration" } });
   await ledger.append({ actor: system, type: "task.done", subject: "T-1.a2", summary: "Done on attempt 2" });
   await ledger.append({ actor: owner, type: "task.reopened", subject: id, summary: "Regression found", reason: "owner found a regression" });
   task = ledger.board().tasks[id];
@@ -266,7 +269,7 @@ test("replay covers every entry type and is deterministic", async () => {
   await add({ actor: owner, type: "collision.resolved", subject: "src/shared.mjs", summary: "T-2 waits" });
   await add({ actor: system, type: "test.passed", subject: id, summary: "Passed" });
   await add({ actor: system, type: "merge.done", subject: id, summary: "Merged", data: { commit: "2222222" } });
-  await add({ actor: system, type: "test.passed", subject: id, summary: "Passed on integration" });
+  await add({ actor: system, type: "test.passed", subject: id, summary: "Passed on integration", data: { where: "integration" } });
   await add({ actor: system, type: "task.done", subject: id, summary: "Done" });
   await add({ actor: system, type: "worktree.removed", subject: id, summary: "Worktree removed" });
   await expectRule(ledger.append({ actor: system, type: "worktree.removed", subject: id, summary: "again" }), "worktree-missing");
@@ -346,7 +349,12 @@ test("tampering with a line on disk is detected at that entry and blocks writes 
   assert.equal(reopened.verify().firstBad, "L-000003");
   await assert.rejects(reopened.append({ actor: owner, type: "task.created", subject: "T-6", summary: "x" }), (error) => error.code === "LEDGER_CHAIN_BROKEN");
   await assert.rejects(reopened.acknowledgeBreak(""), (error) => error.code === "LEDGER_RULE");
+  assert.equal(reopened.board().tasks["T-3"], undefined, "a tampered line never reaches the board");
+  assert.equal(reopened.entries().some((entry) => entry.n === "L-000003"), false);
+  assert.deepEqual(reopened.board().integrity.rejected.map((item) => [item.n, item.reason]), [["L-000003", "hash-mismatch"]]);
   const correction = await reopened.acknowledgeBreak("Owner confirmed the edit was a manual mistake", { actor: owner });
+  assert.equal(reopened.board().tasks["T-3"], undefined, "acknowledging a break does not make the tampered line count");
+  assert.equal(reopened.nextId("T"), "T-6", "the rejected line's number stays reserved");
   assert.equal(correction.type, "correction");
   assert.equal(correction.corrects, "L-000003");
   assert.equal(correction.n, "L-000006");
@@ -357,6 +365,8 @@ test("tampering with a line on disk is detected at that entry and blocks writes 
 
   const third = await openLedger(repo);
   const final = third.verify();
+  assert.equal(third.board().tasks["T-3"], undefined);
+  assert.equal(third.board().integrity.rejected[0].acknowledged, true);
   assert.equal(final.ok, true);
   assert.equal(final.breaks.length, 1);
   assert.equal(final.breaks[0].acknowledged, true);
@@ -560,5 +570,242 @@ test("performance: 10k entries open, verify and replay quickly", async () => {
   assert.ok(openMs < 5000, `open + chain verification took ${openMs.toFixed(0)}ms`);
   await ledger.append({ actor: owner, type: "task.created", subject: "T-2001", summary: "One more" });
   assert.equal(ledger.nextId("T"), "T-2002");
+  ledger.close();
+});
+
+// ------------------------------------------------------------ review fixes
+
+async function doneReadyTask(ledger) {
+  const id = await readyTask(ledger);
+  await ledger.append({ actor: system, type: "commit.observed", subject: id, summary: "Commit", data: { sha: "aaa1111", files: ["src/a.mjs"] } });
+  await ledger.append({ actor: system, type: "test.passed", subject: id, summary: "Passed in worktree", data: { where: "worktree" } });
+  return id;
+}
+
+test("a released task can be claimed again by another worker", async () => {
+  const repo = await tempRepo();
+  const { ledger } = await open(repo);
+  const id = await readyTask(ledger);
+  await ledger.append({ actor: worker, type: "task.progress", subject: id, summary: "Working" });
+  await ledger.append({ actor: worker, type: "task.progress", subject: id, summary: "Released back to the pool", data: { released: true } });
+  let task = ledger.board().tasks[id];
+  assert.equal(task.state, "released");
+  assert.equal(task.claimedBy, null);
+  await expectRule(ledger.append({ actor: worker, type: "task.progress", subject: id, summary: "still working?" }), "task-state");
+  await expectRule(ledger.append({ actor: system, type: "task.done", subject: id, summary: "done?" }), "task-state");
+  const other = { kind: "agent", id: "worker-2", model: "other-model" };
+  await ledger.append({ actor: other, type: "task.claimed", subject: id, summary: "Claimed by worker-2" });
+  task = ledger.board().tasks[id];
+  assert.equal(task.state, "claimed");
+  assert.equal(task.claimedBy, "worker-2");
+  assert.equal(task.claimedModel, "other-model");
+  ledger.close();
+  const reopened = await openLedger(repo);
+  assert.equal(reopened.board().tasks[id].claimedBy, "worker-2");
+  reopened.close();
+});
+
+test("only creating entries advance a number series; mentioning an id never skips numbers", async () => {
+  const repo = await tempRepo();
+  const { ledger } = await open(repo);
+  await ledger.append({ actor: owner, type: "task.created", subject: "T-1", summary: "Task" });
+  await ledger.append({ actor: owner, type: "correction", subject: "T-99", summary: "Mentions T-99", reason: "probe" });
+  await ledger.append({ actor: system, type: "budget.warning", subject: "Q-50", summary: "Mentions Q-50" });
+  await ledger.append({ actor: owner, type: "correction", subject: "D-7", summary: "Mentions D-7", reason: "probe" });
+  await ledger.append({ actor: owner, type: "correction", subject: "R-3", summary: "Mentions R-3", reason: "probe" });
+  await ledger.append({ actor: owner, type: "correction", subject: "P-4", summary: "Mentions P-4", reason: "probe" });
+  assert.equal(ledger.nextId("T"), "T-2");
+  assert.equal(ledger.nextId("Q"), "Q-1");
+  assert.equal(ledger.nextId("D"), "D-1");
+  assert.equal(ledger.nextId("R"), "R-1");
+  assert.equal(ledger.nextId("P"), "P-1");
+  await ledger.append({ actor: owner, type: "task.created", subject: "T-2", summary: "Next task is T-2" });
+  await expectRule(ledger.append({ actor: owner, type: "clause.added", subject: "P-3 §1", summary: "skips P-1" }), "number-sequence");
+  await expectRule(ledger.append({ actor: owner, type: "clause.changed", subject: "P-1 §1", summary: "no such clause" }), "clause-unknown");
+  ledger.close();
+  const reopened = await openLedger(repo);
+  assert.equal(reopened.nextId("T"), "T-3");
+  assert.equal(reopened.nextId("Q"), "Q-1");
+  reopened.close();
+});
+
+test("actor kinds are limited to the entry types they may write", async () => {
+  const repo = await tempRepo();
+  const { ledger } = await open(repo);
+  await ledger.append({ actor: owner, type: "task.created", subject: "T-1", summary: "Task" });
+  await ledger.append({ actor: worker, type: "test.defined", subject: "T-1", summary: "Proposed test", data: { command: "node --test tests/z.test.mjs" } });
+  await expectRule(ledger.append({ actor: worker, type: "test.approved", subject: "T-1", summary: "self-approve" }), "actor-not-permitted");
+  await expectRule(ledger.append({ actor: jev, type: "test.approved", subject: "T-1", summary: "jev approve" }), "jev-scope");
+  await ledger.append({ actor: system, type: "test.approved", subject: "T-1", summary: "Approved after Jev review" });
+  await ledger.append({ actor: worker, type: "task.claimed", subject: "T-1", summary: "Claimed" });
+  for (const type of ["test.passed", "test.failed", "commit.observed", "worktree.created", "collision.detected", "budget.warning"]) {
+    await expectRule(ledger.append({ actor: worker, type, subject: "T-1", summary: `agent ${type}` }), "actor-not-permitted");
+    await expectRule(ledger.append({ actor: owner, type, subject: "T-1", summary: `person ${type}` }), "actor-not-permitted");
+  }
+  await expectRule(ledger.append({ actor: worker, type: "merge.done", subject: "T-1", summary: "self-merge" }), "actor-not-permitted");
+  await expectRule(ledger.append({ actor: worker, type: "task.done", subject: "T-1", summary: "self-done" }), "actor-not-permitted");
+  await expectRule(ledger.append({ actor: worker, type: "task.reopened", subject: "T-1", summary: "reopen", reason: "x" }), "actor-not-permitted");
+  await expectRule(ledger.append({ actor: worker, type: "plan.approved", subject: "P-1", summary: "approve plan" }), "actor-not-permitted");
+  await expectRule(ledger.append({ actor: system, type: "plan.approved", subject: "P-1", summary: "approve plan" }), "actor-not-permitted");
+  await expectRule(ledger.append({ actor: worker, type: "clause.added", subject: "P-1 §1", summary: "agent clause" }), "actor-not-permitted");
+  await expectRule(ledger.append({ actor: worker, type: "decision.made", subject: "D-1", summary: "agent decides", reason: "x" }), "actor-not-permitted");
+  await expectRule(ledger.append({ actor: worker, type: "release.cut", subject: "R-1", summary: "agent release" }), "actor-not-permitted");
+  await expectRule(ledger.append({ actor: worker, type: "correction", subject: "L-000001", summary: "agent correction", reason: "x" }), "actor-not-permitted");
+  await expectRule(ledger.append({ actor: worker, type: "review.verdict", subject: "T-1", summary: "self review", reason: "x", data: { verdict: "approve" } }), "actor-not-permitted");
+  assert.equal(ledger.entries().length, 4, "refusals write nothing");
+  ledger.close();
+});
+
+test("task.done requires a merge and an integration pass after it", async () => {
+  const repo = await tempRepo();
+  const { ledger } = await open(repo);
+  const id = await doneReadyTask(ledger);
+  await expectRule(ledger.append({ actor: system, type: "task.done", subject: id, summary: "no merge" }), "task-done-gate");
+  await ledger.append({ actor: system, type: "merge.done", subject: id, summary: "Merged", data: { commit: "bbb2222", into: "pp/integration" } });
+  await expectRule(ledger.append({ actor: system, type: "task.done", subject: id, summary: "pass predates merge" }), "task-done-gate");
+  await ledger.append({ actor: system, type: "test.passed", subject: id, summary: "Passed in worktree again", data: { where: "worktree" } });
+  await expectRule(ledger.append({ actor: system, type: "task.done", subject: id, summary: "not on integration" }), "task-done-gate");
+  await ledger.append({ actor: system, type: "test.failed", subject: id, summary: "Failed on integration", data: { where: "integration" } });
+  await expectRule(ledger.append({ actor: system, type: "task.done", subject: id, summary: "failed on integration" }), "task-done-gate");
+  await ledger.append({ actor: system, type: "test.passed", subject: id, summary: "Passed on integration", data: { where: "integration" } });
+  const done = await ledger.append({ actor: system, type: "task.done", subject: id, summary: "Done" });
+  assert.equal(done.type, "task.done");
+  ledger.close();
+});
+
+test("review.verdict records model, provider, cost, confidence and reason; rejects explain why", async () => {
+  const repo = await tempRepo();
+  const { ledger } = await open(repo);
+  const id = await readyTask(ledger);
+  const full = { verdict: "approve", model: "jev-latest", provider: "TypeSafe", cost: 0.01, confidence: 0.9 };
+  const verdict = (data, extra = {}) => ledger.append({ actor: jev, type: "review.verdict", subject: id, summary: "Diff review", reason: "covers the clause", data, ...extra });
+  await expectRule(ledger.append({ actor: jev, type: "review.verdict", subject: id, summary: "bare verdict" }), "verdict-shape");
+  await expectRule(verdict({ ...full }, { reason: undefined }), "reason-required");
+  await expectRule(verdict({ ...full, verdict: "maybe" }), "verdict-shape");
+  await expectRule(verdict({ ...full, model: undefined }), "verdict-model");
+  await expectRule(verdict({ ...full, provider: undefined }), "verdict-provider");
+  await expectRule(verdict({ ...full, cost: "cheap" }), "verdict-cost");
+  await expectRule(verdict({ ...full, cost: -1 }), "verdict-cost");
+  await expectRule(verdict({ ...full, confidence: 2 }), "verdict-confidence");
+  await expectRule(verdict({ ...full, confidence: undefined }), "verdict-confidence");
+  await expectRule(verdict({ ...full, model: "builder-model" }), "verdict-same-model");
+  await expectRule(ledger.append({ actor: owner, type: "review.verdict", subject: id, summary: "Owner rejects", data: { verdict: "reject" } }), "reason-required");
+  await verdict(full);
+  await ledger.append({ actor: owner, type: "review.verdict", subject: id, summary: "Owner rejects", reason: "wrong approach", data: { verdict: "reject" } });
+  const reviews = ledger.board().tasks[id].reviews;
+  assert.deepEqual(reviews.map((review) => [review.verdict, review.model, review.provider, review.cost, review.confidence]), [["approve", "jev-latest", "TypeSafe", 0.01, 0.9], ["reject", null, null, null, null]]);
+  ledger.close();
+});
+
+test("a failed write blocks the ledger until acknowledged and never glues lines together", async () => {
+  const repo = await tempRepo();
+  const { ledger } = await open(repo);
+  await ledger.append({ actor: owner, type: "task.created", subject: "T-1", summary: "Task 1" });
+  const realWriteSync = fs.writeSync;
+  fs.writeSync = (fd, buffer, offset, length) => {
+    realWriteSync(fd, buffer, offset, Math.min(length, 20));
+    const error = new Error("no space left on device");
+    error.code = "ENOSPC";
+    throw error;
+  };
+  try {
+    await assert.rejects(ledger.append({ actor: owner, type: "task.created", subject: "T-2", summary: "Task 2" }), (error) => error.code === "LEDGER_WRITE_FAILED" && error.cause.code === "ENOSPC");
+  } finally {
+    fs.writeSync = realWriteSync;
+  }
+  assert.equal(ledger.entries().length, 1, "the failed entry is not in memory");
+  await assert.rejects(ledger.append({ actor: owner, type: "task.created", subject: "T-2", summary: "Task 2" }), (error) => error.code === "LEDGER_CHAIN_BROKEN" && error.reason === "write-failed");
+  const correction = await ledger.acknowledgeBreak("Disk filled up during a write");
+  assert.equal(correction.n, "L-000002");
+  await ledger.append({ actor: owner, type: "task.created", subject: "T-2", summary: "Task 2" });
+  ledger.close();
+
+  const lines = fs.readFileSync(ledgerFiles(repo)[0], "utf8").split("\n").filter(Boolean);
+  assert.equal(lines.length, 4, "entry, fragment on its own line, correction, entry");
+  const reopened = await openLedger(repo);
+  assert.equal(reopened.verify().ok, true);
+  assert.deepEqual(reopened.entries().map((entry) => entry.n), ["L-000001", "L-000002", "L-000003"]);
+  assert.equal(reopened.board().tasks["T-2"].title, "Task 2");
+  reopened.close();
+});
+
+test("stale lock takeover is atomic and survives pid reuse after a reboot", async () => {
+  const { takeOverStaleLock } = await import("../src/core/ledger/storage.mjs");
+  const repo = await tempRepo();
+  const directory = ledgerDirectory(repo);
+  fs.mkdirSync(directory, { recursive: true });
+  const lockPath = path.join(directory, "ledger.lock");
+  const sideFiles = () => fs.readdirSync(directory).filter((name) => name.endsWith(".stale"));
+
+  // A lock that was replaced after it was judged stale is put back, not deleted.
+  const fresh = JSON.stringify({ pid: process.ppid, hostname: os.hostname(), startedAt: new Date().toISOString(), token: "fresh" });
+  fs.writeFileSync(lockPath, fresh);
+  assert.equal(takeOverStaleLock(lockPath, "{\"token\":\"the-old-one\"}"), false);
+  assert.equal(fs.readFileSync(lockPath, "utf8"), fresh);
+  assert.deepEqual(sideFiles(), []);
+  assert.equal(takeOverStaleLock(path.join(directory, "missing.lock"), "x"), false);
+
+  // A live pid that holds the lock is respected...
+  await assert.rejects(openLedger(repo), (error) => error.code === "LEDGER_LOCKED");
+  // ...unless the owner explicitly overrides it.
+  const forced = await openLedger(repo, { overrideLock: true });
+  assert.equal(JSON.parse(fs.readFileSync(lockPath, "utf8")).pid, process.pid);
+  forced.close();
+
+  // A lock written before this machine booted is stale even if its pid is alive again.
+  fs.writeFileSync(lockPath, JSON.stringify({ pid: process.ppid, hostname: os.hostname(), startedAt: "2000-01-01T00:00:00.000Z", token: "pre-boot" }));
+  const ledger = await openLedger(repo);
+  assert.equal(JSON.parse(fs.readFileSync(lockPath, "utf8")).pid, process.pid);
+  assert.deepEqual(sideFiles(), []);
+  ledger.close();
+
+  // Two racers judging the same stale lock: only one removes it.
+  const stale = JSON.stringify({ pid: 0, hostname: os.hostname(), startedAt: "2000-01-01T00:00:00.000Z", token: "dead" });
+  fs.writeFileSync(lockPath, stale);
+  assert.equal(takeOverStaleLock(lockPath, stale), true);
+  assert.equal(takeOverStaleLock(lockPath, stale), false);
+  assert.equal(fs.existsSync(lockPath), false);
+});
+
+test("entries that look like they carry a secret are refused", async () => {
+  const repo = await tempRepo();
+  const { ledger } = await open(repo);
+  const { randomBytes } = await import("node:crypto");
+  let token;
+  do token = randomBytes(30).toString("base64url"); while (!/[A-Z]/.test(token) || !/[a-z]/.test(token) || !/[0-9]/.test(token));
+  const samples = [
+    ["summary", `key is ${"sk-" + "ant-" + "x".repeat(30)}`],
+    ["summary", `token ${"gh" + "p_" + "A1".repeat(20)}`],
+    ["reason", `aws ${"AK" + "IA" + "ABCDEFGHIJKLMNOP"}`],
+    ["evidence", ["-----BEGIN " + "RSA PRIVATE KEY-----"]],
+    ["data", { env: { API_KEY: token } }],
+  ];
+  for (const [field, value] of samples) {
+    const input = { actor: owner, type: "decision.made", subject: "D-1", summary: "Use the key", reason: "needed" };
+    input[field] = value;
+    await expectRule(ledger.append(input), "secret-detected");
+  }
+  assert.equal(ledger.entries().length, 0);
+  // Hashes, shas, paths and ordinary prose are fine.
+  await ledger.append({ actor: owner, type: "task.created", subject: "T-1", summary: "Wire src/core/ledger/storage.mjs into the AppShellCoordinatorProvider", data: { sha: "9f3c2e1d0c9f3c2e1d0c9f3c2e1d0c9f3c2e1d0c", lineSha: "a".repeat(64) } });
+  ledger.close();
+});
+
+test("an approved plan is immutable; clause changes start a new plan version", async () => {
+  const repo = await tempRepo();
+  const { ledger } = await open(repo);
+  await ledger.append({ actor: owner, type: "clause.added", subject: "P-1 §1", summary: "Goals" });
+  await ledger.append({ actor: owner, type: "clause.added", subject: "P-1 §2", summary: "Ledger" });
+  await ledger.append({ actor: owner, type: "plan.approved", subject: "P-1", summary: "Plan v1" });
+  await expectRule(ledger.append({ actor: owner, type: "clause.added", subject: "P-1 §3", summary: "late clause" }), "plan-approved-immutable");
+  await expectRule(ledger.append({ actor: owner, type: "clause.changed", subject: "P-1 §1", summary: "edit in place" }), "plan-approved-immutable");
+  await expectRule(ledger.append({ actor: owner, type: "clause.withdrawn", subject: "P-1 §2", summary: "withdraw in place" }), "plan-approved-immutable");
+  await expectRule(ledger.append({ actor: owner, type: "clause.changed", subject: "P-2 §9", summary: "not inherited" }), "clause-unknown");
+  await ledger.append({ actor: owner, type: "clause.changed", subject: "P-2 §1", summary: "Sharper goals" });
+  const board = ledger.board();
+  assert.equal(board.plans["P-1"].clauses["§1"].text, "Goals");
+  assert.equal(board.plans["P-2"].state, "draft");
+  assert.equal(board.plans["P-2"].clauses["§1"].text, "Sharper goals");
+  assert.equal(board.plans["P-2"].clauses["§2"].text, "Ledger");
   ledger.close();
 });

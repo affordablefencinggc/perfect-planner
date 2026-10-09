@@ -18,6 +18,83 @@ const APPEND_KEYS = new Set(["actor", "type", "subject", "summary", "reason", "e
 // Jev reviews and recommends; it never writes code, merges or changes the plan (§6).
 const JEV_TYPES = new Set(["review.verdict", "question.asked"]);
 
+// Which actor kinds may write which entry types (§5, §6). Perfect Planner itself
+// (system) runs tests, observes commits and worktrees and records results; an agent
+// is never trusted to approve its own test, record its own pass or mark itself done.
+// Only a person shapes or approves the plan.
+const PERSON = "person";
+const AGENT = "agent";
+const JEV = "jev";
+const SYSTEM = "system";
+export const ACTOR_PERMISSIONS = Object.freeze({
+  "plan.approved": [PERSON],
+  "clause.added": [PERSON],
+  "clause.changed": [PERSON],
+  "clause.withdrawn": [PERSON],
+  "task.created": [PERSON, AGENT, SYSTEM],
+  "task.claimed": [PERSON, AGENT, SYSTEM],
+  "task.progress": [PERSON, AGENT, SYSTEM],
+  "task.blocked": [PERSON, AGENT, SYSTEM],
+  "task.proof": [PERSON, AGENT, SYSTEM],
+  "task.done": [PERSON, SYSTEM],
+  "task.reopened": [PERSON, SYSTEM],
+  "question.asked": [PERSON, AGENT, JEV, SYSTEM],
+  "question.answered": [PERSON, SYSTEM],
+  "decision.made": [PERSON, SYSTEM],
+  "worktree.created": [SYSTEM],
+  "worktree.removed": [SYSTEM],
+  "commit.observed": [SYSTEM],
+  "collision.detected": [SYSTEM],
+  "collision.resolved": [PERSON, SYSTEM],
+  "merge.done": [PERSON, SYSTEM],
+  "test.defined": [PERSON, AGENT, SYSTEM],
+  "test.approved": [PERSON, SYSTEM],
+  "test.passed": [SYSTEM],
+  "test.failed": [SYSTEM],
+  "review.verdict": [JEV, PERSON],
+  "release.cut": [PERSON, SYSTEM],
+  "release.rollback": [PERSON, SYSTEM],
+  "correction": [PERSON, SYSTEM],
+  "budget.warning": [SYSTEM],
+});
+
+// Keys never go into the ledger (§6). Patterns for common credential shapes plus a
+// generic long, mixed-alphabet, high-entropy token check. Pure hex (hashes, shas)
+// is deliberately not treated as a secret.
+const SECRET_PATTERNS = [
+  /\bsk-(?:ant-|proj-)?[A-Za-z0-9_-]{20,}/,
+  /\bgh[pousr]_[A-Za-z0-9]{30,}/,
+  /\bgithub_pat_[A-Za-z0-9_]{22,}/,
+  /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/,
+  /\bxox[abposr]-[A-Za-z0-9-]{10,}/,
+  /\bAIza[0-9A-Za-z_-]{35}\b/,
+  /-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----/,
+];
+const TOKEN_CANDIDATE_RE = /[A-Za-z0-9_+=-]{32,}/g;
+
+function shannonEntropy(text) {
+  const counts = new Map();
+  for (const char of text) counts.set(char, (counts.get(char) ?? 0) + 1);
+  let entropy = 0;
+  for (const count of counts.values()) {
+    const p = count / text.length;
+    entropy -= p * Math.log2(p);
+  }
+  return entropy;
+}
+
+/** Returns a short description of the first secret-looking value in text, or null. */
+export function findSecret(text) {
+  if (typeof text !== "string" || text.length === 0) return null;
+  for (const pattern of SECRET_PATTERNS) if (pattern.test(text)) return "a known credential pattern";
+  for (const token of text.match(TOKEN_CANDIDATE_RE) ?? []) {
+    if (/^[0-9a-fA-F]+$/.test(token)) continue;
+    if (!/[A-Z]/.test(token) || !/[a-z]/.test(token) || !/[0-9]/.test(token)) continue;
+    if (shannonEntropy(token) >= 4.2) return "a long high-entropy token";
+  }
+  return null;
+}
+
 const TASK_SUBJECT_TYPES = new Set([
   "task.created", "task.claimed", "task.progress", "task.blocked", "task.proof", "task.done", "task.reopened",
   "test.defined", "test.approved", "test.passed", "test.failed", "review.verdict",
@@ -25,12 +102,12 @@ const TASK_SUBJECT_TYPES = new Set([
 ]);
 
 const ALLOWED_FROM = {
-  "task.claimed": ["created", "reopened", "blocked"],
+  "task.claimed": ["created", "reopened", "blocked", "released"],
   "task.progress": ["claimed", "in-progress", "blocked", "proof"],
-  "task.blocked": ["created", "claimed", "in-progress", "proof", "reopened"],
+  "task.blocked": ["created", "claimed", "in-progress", "proof", "reopened", "released"],
   "task.proof": ["claimed", "in-progress", "proof"],
   "task.done": ["claimed", "in-progress", "proof", "blocked"],
-  "task.reopened": ["claimed", "in-progress", "blocked", "proof", "done"],
+  "task.reopened": ["claimed", "in-progress", "blocked", "proof", "done", "released"],
 };
 
 export function ledgerError(code, message, extra = {}) {
@@ -41,6 +118,13 @@ export function ledgerError(code, message, extra = {}) {
 }
 
 const refuse = (rule, message) => { throw ledgerError("LEDGER_RULE", message, { rule }); };
+
+function collectStrings(value, out) {
+  if (typeof value === "string") out.push(value);
+  else if (Array.isArray(value)) for (const item of value) collectStrings(item, out);
+  else if (value && typeof value === "object") for (const key of Object.keys(value)) { out.push(key); collectStrings(value[key], out); }
+  return out;
+}
 
 export function requiresReason(type) {
   return type === "decision.made" || type === "correction" || /\.(blocked|reopened|rejected)$/.test(type);
@@ -91,6 +175,10 @@ export function normalizeAppendInput(input) {
     corrects,
   };
   if (input.data !== undefined) normalized.data = JSON.parse(JSON.stringify(input.data));
+  for (const text of collectStrings(normalized, [])) {
+    const found = findSecret(text);
+    if (found) refuse("secret-detected", `entry looks like it contains a secret (${found}); keys never go into the ledger`);
+  }
   return normalized;
 }
 
@@ -116,12 +204,44 @@ export function doneBlocker(task) {
   if (commit !== null && result < commit) return `${task.id} test must pass after its last observed commit (${task.lastCommitEntry})`;
   const reopened = numberOf(task.reopenedEntry);
   if (reopened !== null && result < reopened) return `${task.id} test must pass again after it was reopened`;
+  const merged = numberOf(task.merged?.entry);
+  if (merged === null) return `${task.id} has not been merged; its test must pass after merge`;
+  if (result < merged) return `${task.id} test must pass after its merge (${task.merged.entry})`;
+  if (task.test.lastRunWhere !== "integration") return `${task.id} passing run after merge must be on the integration branch (data.where = "integration")`;
   return null;
+}
+
+function latestPlanId(board) {
+  let best = null;
+  for (const id of Object.keys(board.plans)) {
+    const parsed = parseSeriesId(id);
+    if (parsed && (!best || parsed.number > best.number)) best = parsed;
+  }
+  return best ? best.id : null;
+}
+
+const VERDICTS = new Set(["approve", "reject"]);
+
+/** §6: every Jev call records model, provider, cost, confidence and reason; a reject always says why. */
+function validateVerdict(entry, task) {
+  const data = entry.data ?? {};
+  if (data.verdict !== undefined && !VERDICTS.has(data.verdict)) refuse("verdict-shape", 'review.verdict data.verdict must be "approve" or "reject"');
+  if (data.verdict === "reject" && !nonEmpty(entry.reason)) refuse("reason-required", "a reject verdict requires a non-empty reason");
+  if (entry.actor.kind !== "jev") return;
+  if (!VERDICTS.has(data.verdict)) refuse("verdict-shape", 'Jev review.verdict requires data.verdict "approve" or "reject"');
+  if (!nonEmpty(entry.reason)) refuse("reason-required", "Jev review.verdict requires a non-empty reason");
+  if (!nonEmpty(data.model)) refuse("verdict-model", "Jev review.verdict requires data.model");
+  if (!nonEmpty(data.provider)) refuse("verdict-provider", "Jev review.verdict requires data.provider");
+  if (typeof data.cost !== "number" || !Number.isFinite(data.cost) || data.cost < 0) refuse("verdict-cost", "Jev review.verdict requires a non-negative numeric data.cost");
+  if (typeof data.confidence !== "number" || !(data.confidence >= 0 && data.confidence <= 1)) refuse("verdict-confidence", "Jev review.verdict requires data.confidence between 0 and 1");
+  if (task.claimedModel && data.model === task.claimedModel) refuse("verdict-same-model", `Jev must not review with the builder's model (${data.model})`);
 }
 
 export function validateEntry(board, entry) {
   const { type, subject, actor } = entry;
   if (actor.kind === "jev" && !JEV_TYPES.has(type)) refuse("jev-scope", `Jev may only write ${[...JEV_TYPES].join(", ")}; refused ${type}`);
+  const permitted = ACTOR_PERMISSIONS[type];
+  if (permitted && !permitted.includes(actor.kind)) refuse("actor-not-permitted", `${type} may only be written by ${permitted.join(" or ")}; refused for ${actor.kind} ${actor.id}`);
 
   if (entry.corrects !== null) {
     const target = parseEntryNumber(entry.corrects);
@@ -172,6 +292,9 @@ export function validateEntry(board, entry) {
       case "merge.done":
         if (!task.test.approved) refuse("test-undefined", `${parsed.id} cannot merge without an approved test`);
         break;
+      case "review.verdict":
+        validateVerdict(entry, task);
+        break;
       default:
         break;
     }
@@ -194,10 +317,18 @@ export function validateEntry(board, entry) {
       if (!parsed) refuse("subject-clause", `${type} subject must look like "P-2 §3.1"; got "${subject}"`);
       const plan = board.plans[parsed.plan];
       if (!plan) {
-        if (type !== "clause.added") refuse("plan-unknown", `${parsed.plan} does not exist`);
-        requireNewId(board, parsed.plan, "P", type);
+        // A clause entry naming the next plan number starts a new draft version that
+        // inherits the previous version's clauses (see replay ensurePlan).
+        if (parseSeriesId(parsed.plan).number !== board.sequence.P + 1) refuse(type === "clause.added" ? "number-sequence" : "plan-unknown", `${parsed.plan} does not exist; a new plan version must be ${nextSeriesId(board, "P")}`);
+        if (type !== "clause.added") {
+          const basedOn = entry.data?.basedOn === null ? null : entry.data?.basedOn ?? latestPlanId(board);
+          const inherited = basedOn ? board.plans[basedOn]?.clauses[parsed.clause] : null;
+          if (!inherited) refuse("clause-unknown", `${subject} does not exist in ${basedOn ?? "any earlier plan"}`);
+          if (inherited.state === "withdrawn") refuse("clause-withdrawn", `${subject} is withdrawn`);
+        }
         return;
       }
+      if (plan.state === "approved") refuse("plan-approved-immutable", `${parsed.plan} is approved and cannot change; start a new plan version (${nextSeriesId(board, "P")})`);
       const clause = plan.clauses[parsed.clause];
       if (type === "clause.added" && clause) refuse("clause-exists", `${subject} is already published; numbers never move (insert as a sub-clause such as ${parsed.clause}.1)`);
       if (type !== "clause.added" && !clause) refuse("clause-unknown", `${subject} does not exist`);

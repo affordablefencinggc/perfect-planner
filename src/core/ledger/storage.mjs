@@ -40,7 +40,10 @@ function isEntryShape(value) {
 
 /**
  * Reads every month file in order and re-checks the whole chain.
- * Returns { entries, breaks, last, files, lastFileNeedsNewline }.
+ * Returns { entries, breaks, rejected, last, files, lastFileNeedsNewline }.
+ * `entries` holds only lines that pass every check; a parseable line that fails
+ * the hash, prev or sequence check is listed in `rejected` ({ entry, ...break })
+ * and is never replayed, acknowledged or not (a forged line must not reach the board).
  * A break is { firstBad, reason, file, line, lineSha, acknowledged }.
  * Acknowledged breaks are those named by a later, valid correction entry's
  * data.acknowledgedBreaks ({ firstBad, lineSha }).
@@ -49,6 +52,7 @@ export function readChain(directory) {
   const files = listMonthFiles(directory);
   const entries = [];
   const breaks = [];
+  const rejectedEntries = new Map(); // break -> parsed entry
   const acknowledgements = new Set();
   let last = null; // { n: number, hash, at }
   let lastFileNeedsNewline = false;
@@ -79,17 +83,25 @@ export function readChain(directory) {
       if (entryHash(parsed) !== parsed.hash) problems.push("hash-mismatch");
       if (parsed.prev !== (last ? last.hash : null)) problems.push("prev-mismatch");
       if (number !== expected) problems.push("number-out-of-sequence");
-      if (problems.length) breaks.push({ firstBad: parsed.n, reason: problems.join("+"), ...where });
-      else if (parsed.type === "correction" && Array.isArray(parsed.data?.acknowledgedBreaks)) {
+      // The chain position still advances past a rejected line (the next line's prev
+      // names its stored hash), so one bad line is reported once, not cascaded.
+      last = { n: number, hash: parsed.hash, at: parsed.at };
+      if (problems.length) {
+        const item = { firstBad: parsed.n, reason: problems.join("+"), ...where };
+        breaks.push(item);
+        rejectedEntries.set(item, parsed);
+        return;
+      }
+      if (parsed.type === "correction" && Array.isArray(parsed.data?.acknowledgedBreaks)) {
         for (const ack of parsed.data.acknowledgedBreaks) if (ack && ack.firstBad && ack.lineSha) acknowledgements.add(`${ack.firstBad}|${ack.lineSha}`);
       }
       entries.push(parsed);
-      last = { n: number, hash: parsed.hash, at: parsed.at };
     });
   });
 
   for (const item of breaks) item.acknowledged = acknowledgements.has(`${item.firstBad}|${item.lineSha}`);
-  return { entries, breaks, last, files, lastFileNeedsNewline };
+  const rejected = [...rejectedEntries].map(([item, entry]) => ({ ...item, entry }));
+  return { entries, breaks, rejected, last, files, lastFileNeedsNewline };
 }
 
 export function chainStatus(breaks) {
@@ -157,7 +169,11 @@ export function isProcessAlive(pid) {
   try { process.kill(pid, 0); return true; } catch (error) { return error.code === "EPERM"; }
 }
 
-export function inspectLock(lockPath, { unparseableStaleMs = 10_000, now = Date.now() } = {}) {
+function bootTimeMs() {
+  return Date.now() - os.uptime() * 1000;
+}
+
+export function inspectLock(lockPath, { unparseableStaleMs = 10_000, now = Date.now(), bootSlackMs = 60_000 } = {}) {
   let text;
   let stat;
   try { text = fs.readFileSync(lockPath, "utf8"); stat = fs.statSync(lockPath); } catch (error) { if (error.code === "ENOENT") return { state: "missing" }; throw error; }
@@ -165,12 +181,16 @@ export function inspectLock(lockPath, { unparseableStaleMs = 10_000, now = Date.
   try { holder = JSON.parse(text); } catch { holder = null; }
   if (!holder || typeof holder !== "object") {
     // A holder may be mid-write; only treat an unreadable lock as stale once it is old.
-    return { state: now - stat.mtimeMs > unparseableStaleMs ? "stale" : "held", holder: null };
+    return { state: now - stat.mtimeMs > unparseableStaleMs ? "stale" : "held", holder: null, raw: text };
   }
   const summary = { pid: holder.pid ?? null, hostname: holder.hostname ?? null, startedAt: holder.startedAt ?? null };
-  if (holder.hostname && holder.hostname !== os.hostname()) return { state: "held", holder: summary, foreignHost: true };
-  if (holder.pid === process.pid) return { state: "held", holder: summary };
-  return { state: isProcessAlive(holder.pid) ? "held" : "stale", holder: summary };
+  if (holder.hostname && holder.hostname !== os.hostname()) return { state: "held", holder: summary, foreignHost: true, raw: text };
+  if (holder.pid === process.pid) return { state: "held", holder: summary, raw: text };
+  // A lock written before this machine last booted cannot have a live holder, even
+  // when its pid has since been reused by an unrelated process.
+  const started = Date.parse(holder.startedAt ?? "");
+  if (Number.isFinite(started) && started < bootTimeMs() - bootSlackMs) return { state: "stale", holder: summary, raw: text, beforeBoot: true };
+  return { state: isProcessAlive(holder.pid) ? "held" : "stale", holder: summary, raw: text };
 }
 
 function releaseLockFile(lockPath, token) {
@@ -181,7 +201,31 @@ function releaseLockFile(lockPath, token) {
   heldLocks.delete(lockPath);
 }
 
-/** Acquires the exclusive single-writer lock or throws LEDGER_LOCKED. */
+/**
+ * Removes a stale lock atomically: the lock is renamed to a unique side name (only
+ * one racer can win the rename) and deleted only if it is still the exact lock that
+ * was judged stale. If another writer replaced it in between, it is put back when the
+ * slot is still free. Returns true when the stale lock was removed by this call.
+ */
+export function takeOverStaleLock(lockPath, staleText) {
+  const aside = `${lockPath}.${randomUUID()}.stale`;
+  try { fs.renameSync(lockPath, aside); } catch (error) { if (error.code === "ENOENT") return false; throw error; }
+  let text = null;
+  try { text = fs.readFileSync(aside, "utf8"); } catch { text = null; }
+  if (text === staleText) {
+    try { fs.unlinkSync(aside); } catch { /* best effort */ }
+    return true;
+  }
+  try { fs.linkSync(aside, lockPath); } catch { /* the slot was taken again; the live writer re-checks its token */ }
+  try { fs.unlinkSync(aside); } catch { /* best effort */ }
+  return false;
+}
+
+/**
+ * Acquires the exclusive single-writer lock or throws LEDGER_LOCKED.
+ * options.override: true takes over a lock on this host even when its pid looks
+ * alive (owner-confirmed recovery when a crashed writer's pid was reused).
+ */
 export function acquireLock(directory, options = {}) {
   const lockPath = path.join(directory, LOCK_FILE);
   const token = randomUUID();
@@ -195,11 +239,10 @@ export function acquireLock(directory, options = {}) {
       if (error.code !== "EEXIST") throw error;
       const inspection = inspectLock(lockPath, options);
       if (inspection.state === "missing") continue;
-      if (inspection.state === "held") {
+      if (inspection.state === "held" && !(options.override === true && !inspection.foreignHost && inspection.holder?.pid !== process.pid)) {
         throw ledgerError("LEDGER_LOCKED", `ledger is locked by another writer (pid ${inspection.holder?.pid ?? "unknown"}${inspection.foreignHost ? ` on ${inspection.holder.hostname}` : ""})`, { holder: inspection.holder ?? null, lockPath });
       }
-      try { fs.unlinkSync(lockPath); } catch (unlinkError) { if (unlinkError.code !== "ENOENT") throw unlinkError; }
-      staleCleared = inspection.holder ?? { pid: null };
+      if (takeOverStaleLock(lockPath, inspection.raw)) staleCleared = inspection.holder ?? { pid: null };
       continue;
     }
     try { fs.writeSync(fd, body); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }

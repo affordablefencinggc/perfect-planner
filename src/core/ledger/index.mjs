@@ -6,20 +6,23 @@
 //   ledger.entries() / ledger.board() / ledger.nextId("T") / ledger.verify()
 //   ledger.subscribe(fn) / ledger.acknowledgeBreak(reason) / ledger.close()
 //
+// openLedger(repoRoot, { overrideLock: true }) is an owner-confirmed recovery that
+// takes over a same-host lock whose pid still looks alive (pid reuse after a crash).
+//
 // `data` is an optional structured payload (hashed with the entry) that replay
 // reads for fields a one-line summary cannot carry (test command, question
 // options, commit sha/files, release version...). See replay.mjs for fallbacks.
 import fs from "node:fs";
 import { canonicalJson, entryHash } from "./canonical.mjs";
 import { formatEntryNumber, parseEntryNumber, SERIES } from "./ids.mjs";
-import { applyEntry, replay } from "./replay.mjs";
+import { applyEntry, noteRejectedEntries, replay } from "./replay.mjs";
 import { ledgerError, normalizeAppendInput, validateEntry } from "./rules.mjs";
 import { acquireLock, chainStatus, ledgerDirectory, LedgerWriter, readChain } from "./storage.mjs";
 
 export { canonicalJson, entryHash } from "./canonical.mjs";
-export { replay, createBoard, applyEntry } from "./replay.mjs";
+export { replay, createBoard, applyEntry, noteRejectedEntries } from "./replay.mjs";
 export { formatStamp, formatEntryNumber, parseEntryNumber, parseTaskId, parseSeriesId, parseClauseSubject, taskAttemptId, SERIES } from "./ids.mjs";
-export { ENTRY_TYPES, ACTOR_KINDS, requiresReason, doneBlocker, validateEntry, normalizeAppendInput } from "./rules.mjs";
+export { ENTRY_TYPES, ACTOR_KINDS, ACTOR_PERMISSIONS, requiresReason, doneBlocker, validateEntry, normalizeAppendInput, findSecret } from "./rules.mjs";
 export { ledgerDirectory, readChain } from "./storage.mjs";
 
 const SYSTEM_ACTOR = Object.freeze({ kind: "system", id: "perfect-planner" });
@@ -64,7 +67,7 @@ class Ledger {
 
   #load(chain) {
     this.#entries = chain.entries.map(deepFreeze);
-    this.#board = replay(this.#entries);
+    this.#board = noteRejectedEntries(replay(this.#entries), chain.rejected);
     this.#last = chain.last;
     this.#status = chainStatus(chain.breaks);
     this.#writer?.close();
@@ -108,7 +111,16 @@ class Ledger {
     if (normalized.data !== undefined) candidate.data = normalized.data;
     validateEntry(this.#board, candidate);
     candidate.hash = entryHash(candidate);
-    this.#writer.write(canonicalJson(candidate), at);
+    try {
+      this.#writer.write(canonicalJson(candidate), at);
+    } catch (cause) {
+      // Part of the line may already be on disk. Block further writes so the next
+      // line is never glued onto a partial one; acknowledgeBreak() reloads from disk
+      // (keeping any fragment on its own line) and unblocks.
+      this.#status = { ok: false, firstBad: candidate.n, reason: "write-failed", breaks: [] };
+      this.#writer.close();
+      throw ledgerError("LEDGER_WRITE_FAILED", `writing ${candidate.n} failed (${cause?.code ?? cause?.message ?? cause}); writes are blocked until acknowledgeBreak(reason)`, { cause, firstBad: candidate.n });
+    }
     const entry = deepFreeze(candidate);
     this.#entries.push(entry);
     applyEntry(this.#board, entry);
@@ -164,7 +176,7 @@ class Ledger {
         return this.#appendNow({ actor, type: "correction", subject: chain.entries.at(-1)?.n ?? "ledger", summary: "Reloaded a ledger that changed outside the single writer", reason, data: { acknowledgedBreaks: [] } }, { allowBroken: true });
       }
       const first = open[0];
-      const knownEntry = chain.entries.some((entry) => entry.n === first.firstBad);
+      const knownEntry = [...chain.entries, ...chain.rejected.map((item) => item.entry)].some((entry) => entry.n === first.firstBad);
       const entry = this.#appendNow({
         actor,
         type: "correction",
@@ -198,11 +210,11 @@ class Ledger {
   }
 }
 
-export async function openLedger(repoRoot, { now = () => new Date(), clock } = {}) {
+export async function openLedger(repoRoot, { now = () => new Date(), clock, overrideLock = false } = {}) {
   if (typeof repoRoot !== "string" || repoRoot.trim() === "") throw new TypeError("openLedger(repoRoot) requires a repository path");
   const directory = ledgerDirectory(repoRoot);
   fs.mkdirSync(directory, { recursive: true });
-  const lock = acquireLock(directory);
+  const lock = acquireLock(directory, { override: overrideLock === true });
   try {
     const chain = readChain(directory);
     return new Ledger({ directory, lock, now: resolveClock(now, clock), chain });
