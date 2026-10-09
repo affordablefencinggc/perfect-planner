@@ -2654,7 +2654,7 @@ function WorkspaceContextBar({
           <CaretRightIcon />
           <strong>{workspaceLabels[workspace] ?? "Project Home"}</strong>
         </div>
-        {subpages.length > 1 && stage.id !== "coordinate" && (
+        {subpages.length > 1 && (
           <WorkspacePageNavigation stage={stage} workspace={workspace} onWorkspace={onWorkspace} />
         )}
       </div>
@@ -6046,8 +6046,7 @@ function PerfectPlannerShellCore({
       />
       <main className="app-main">
         {demoMode && <DemoSampleBadge />}
-        <div className={`workspace-stage${stageForWorkspace(workspace)?.id === "coordinate" ? " workspace-stage-coordinate" : ""}`} key={workspace}>
-          {stageForWorkspace(workspace)?.id === "coordinate" && <WorkspacePageNavigation stage={stageForWorkspace(workspace)} workspace={workspace} onWorkspace={navigateWorkspace} />}
+        <div className="workspace-stage" key={workspace}>
           {workspace === "home" && (
             <ProjectHomeWorkspace
               collisionGate={collisionGate}

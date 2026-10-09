@@ -12,6 +12,7 @@ import "./styles/polish/collision-allocation.css";
 import "./styles/polish/build.css";
 import "./styles/polish/prove.css";
 import "./styles/polish/release-index.css";
+import "./styles/polish/structure.css";
 
 function LocalAgentation() {
   const [Toolbar, setToolbar] = React.useState(null);
