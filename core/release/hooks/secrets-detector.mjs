@@ -36,9 +36,13 @@ export function isPlaceholder(value) {
     return PLACEHOLDER.test(value);
 }
 export const SENTINEL = /^(?:do[-_]?not|must[-_]?not|never|not[-_]a|fake|dummy|sample|example|placeholder|redacted)(?:[-_][a-z]+)+$/i;
-export const WORD_PHRASE = /^[a-z]+(?:[-_.][a-z]+){2,}$/;
 export function isStandIn(value) {
-    return isPlaceholder(value) || SENTINEL.test(value) || WORD_PHRASE.test(value);
+    return isPlaceholder(value) || SENTINEL.test(value);
+}
+export const WORD_PHRASE = /^[a-z]+(?:[-_.][a-z]+){2,}$/;
+const ENV_LINE = /^\s*(?:export\s+|set\s+|setx\s+)?[A-Za-z_][A-Za-z0-9_]*=/;
+function phraseExempt(name, value, line) {
+    return WORD_PHRASE.test(value) && !(name !== undefined && isSecretName(name)) && !ENV_LINE.test(line);
 }
 export function minValueLength(name) {
     return /password|passwd|secret/i.test(name) ? 8 : 12;
@@ -77,6 +81,8 @@ export function findSecrets(file, line, options = {}) {
                 continue;
             if (isStandIn(value) || !/[A-Za-z]/.test(value))
                 continue;
+            if (rule.nameGroup !== undefined && phraseExempt(m[rule.nameGroup], value, line))
+                continue;
             found.push({ rule: rule.id, description: rule.description, start: valueStart, end: valueStart + value.length, value, ...(rule.nameGroup !== undefined ? { name: m[rule.nameGroup] } : {}) });
         }
     }
@@ -106,7 +112,7 @@ export function isSecretName(name) {
     if (last === undefined)
         return false;
     if (last === "pass")
-        return words.length > 1;
+        return words.length > 1 || name === "pass";
     if (SECRET_WORDS.has(last))
         return true;
     return last === "key" && words.length > 1 && KEY_PAIRS.has(words[words.length - 2]);
@@ -116,9 +122,7 @@ const CODE_START = /^(?:[-+!~(\[{`/<>=?:&|*@\\]|\$\{|\$[A-Za-z_(]|%[A-Za-z_]|pro
 const CODE_CHARS = /=>|[[\](){}<>]/;
 const CODE_WORDS = new Set(["string", "number", "boolean", "bigint", "symbol", "object", "unknown", "any", "void", "never", "null", "undefined", "true", "false", "none", "nil", "await", "new", "this", "self", "typeof", "function", "async", "return", "const", "let", "var", "str", "int", "bytes", "buffer", "uint8array", "readonly", "optional"]);
 const IDENTIFIER_CHAIN = /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*$/;
-const ENV_LINE = /^\s*(?:export\s+|set\s+|setx\s+)?[A-Za-z_][A-Za-z0-9_]*=/;
 const YAML_LINE = /^\s*(?:-\s+)?["']?[A-Za-z_][\w.-]*["']?\s*:\s*[^\s,;{}()]+\s*(?:#.*)?$/;
-const SHELL_FILE = /\.(?:sh|bash|zsh|ps1|psm1|bat|cmd|envrc)$|(?:^|\/)\.envrc$/i;
 function isLiteralSecret(name, value, quoted, context) {
     if (value.length < 3 || value.includes(REDACTED) || isStandIn(value) || !/[A-Za-z0-9]/.test(value))
         return false;
@@ -133,8 +137,10 @@ function isLiteralSecret(name, value, quoted, context) {
         return false;
     if (!IDENTIFIER_CHAIN.test(value))
         return true;
-    if (context.envLine || context.configFile)
-        return !value.includes(".") || /\d/.test(value);
+    if (context.envLine)
+        return true;
+    if (context.configFile || context.yamlLine)
+        return true;
     if (context.mode !== "redact" || value.includes(".") || /^[_$]/.test(value) || /[a-z][A-Z]/.test(value) || SECRET_WORDS.has(value.toLowerCase()))
         return false;
     return /\d/.test(value) || context.yamlLine;
@@ -147,6 +153,14 @@ function entropy(s) {
     for (const n of counts.values())
         bits -= (n / s.length) * Math.log2(n / s.length);
     return bits;
+}
+const BENIGN_BLOBS = [/\bsha(?:256|384|512)-[A-Za-z0-9+/]{40,}={0,2}/g, /\bdata:[\w.+-]+\/[\w.+-]+(?:;[\w.+-]+=[\w.+-]+)*;base64,[A-Za-z0-9+/]+={0,2}/g];
+function benignRanges(line) {
+    const ranges = [];
+    for (const pattern of BENIGN_BLOBS)
+        for (const m of line.matchAll(pattern))
+            ranges.push([m.index ?? 0, (m.index ?? 0) + m[0].length]);
+    return ranges;
 }
 const LONG_RUN = /[A-Za-z0-9+_-]{32,}={0,2}/g;
 const LABELLED_HEX = /^[A-Za-z]{0,16}(?:[0-9a-f]{32,}|[0-9A-F]{32,})$/;
@@ -165,8 +179,7 @@ function scanLine(line, mode, file) {
             spans.push({ rule, description, start, end });
     };
     const configFile = isConfigLikeFile(file);
-    const envLine = ENV_LINE.test(line) || (SHELL_FILE.test(file.replace(/\\/g, "/")) && /^\s*(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*=/.test(line));
-    const context = { mode, envLine, configFile, yamlLine: YAML_LINE.test(line) };
+    const context = { mode, envLine: false, configFile, yamlLine: YAML_LINE.test(line) };
     for (const f of findSecrets(file, line, { everywhere: mode === "redact" })) {
         if (f.name !== undefined && !isSecretName(f.name))
             continue;
@@ -185,7 +198,8 @@ function scanLine(line, mode, file) {
         const [, name, dq, sq, bare] = m;
         const value = dq ?? sq ?? bare ?? "";
         const secretName = isSecretName(name) || (bare !== undefined && ENV_KEY_NAME.test(name));
-        if (!secretName || !isLiteralSecret(name, value, bare === undefined, context))
+        const envLine = ENV_LINE.test(line.slice(m.index ?? 0)) && /^\s*(?:(?:export|set|setx)\s+)?$/.test(line.slice(0, m.index ?? 0));
+        if (!secretName || !isLiteralSecret(name, value, bare === undefined, { ...context, envLine }))
             continue;
         const start = (m.index ?? 0) + m[0].lastIndexOf(value);
         add("secret-assignment", `value assigned to ${name}`, start, start + value.length);
@@ -202,8 +216,12 @@ function scanLine(line, mode, file) {
             add("cookie", "cookie value", start, start + value.length);
         }
     }
-    if (mode === "redact") {
+    {
+        const benign = benignRanges(line);
         for (const m of line.matchAll(LONG_RUN)) {
+            const at = m.index ?? 0;
+            if (benign.some(([a, b]) => at >= a && at < b))
+                continue;
             if (looksGenerated(m[0]))
                 add("high-entropy", "generated token", m.index ?? 0, (m.index ?? 0) + m[0].length);
         }
