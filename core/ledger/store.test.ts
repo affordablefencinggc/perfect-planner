@@ -2,7 +2,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { FileStore, Ledger, LedgerError, verifyChain, type EntryDraft, type LedgerEntry } from "./index";
+import { FileStore, Ledger, LedgerError, verifyChain, type EntryDraft, type LedgerEntry, MemoryKeyProvider } from "./index";
+
+/** One device's keys, shared by every open in this file. */
+const keys = new MemoryKeyProvider();
 
 const person = { kind: "person" as const, id: "owner" };
 const times = [
@@ -57,7 +60,7 @@ function readLines(file: string): string[] {
 }
 
 function writeFour(root: string): LedgerEntry[] {
-  const ledger = Ledger.openSync(new FileStore(root), { now: clockFrom(times) });
+  const ledger = Ledger.openSync(new FileStore(root), { keys, now: clockFrom(times) });
   for (const summary of ["one", "two", "three", "four"]) ledger.append(draft({ summary }));
   const written = ledger.entries().map((entry) => ({ ...entry }));
   ledger.close();
@@ -94,7 +97,7 @@ describe("FileStore layout", () => {
 
   it("removes the writer lock on close", () => {
     const root = tempRoot();
-    const ledger = Ledger.openSync(new FileStore(root), { now: clockFrom(times) });
+    const ledger = Ledger.openSync(new FileStore(root), { keys, now: clockFrom(times) });
     ledger.append(draft());
     expect(fs.existsSync(lockPath(root))).toBe(true);
     ledger.close();
@@ -103,7 +106,7 @@ describe("FileStore layout", () => {
 
   it("opens an empty project with no entries and a writer", () => {
     const root = tempRoot();
-    const ledger = Ledger.openSync(new FileStore(root));
+    const ledger = Ledger.openSync(new FileStore(root), { keys });
     expect(ledger.status).toMatchObject({ ok: true, writable: true, entries: 0 });
     ledger.close();
   });
@@ -114,7 +117,7 @@ describe("FileStore reopening", () => {
     const root = tempRoot();
     const written = writeFour(root);
 
-    const reopened = Ledger.openSync(new FileStore(root));
+    const reopened = Ledger.openSync(new FileStore(root), { keys });
     expect(reopened.status).toMatchObject({ ok: true, writable: true, entries: 4, head: "L-000004" });
     expect(reopened.entries()).toEqual(written);
     expect(verifyChain(reopened.entries())).toEqual({ ok: true });
@@ -125,23 +128,23 @@ describe("FileStore reopening", () => {
     const root = tempRoot();
     writeFour(root);
 
-    const ledger = Ledger.openSync(new FileStore(root), { now: clockFrom(["2026-10-01T00:05:00Z"]) });
+    const ledger = Ledger.openSync(new FileStore(root), { keys, now: clockFrom(["2026-10-01T00:05:00Z"]) });
     const entry = ledger.append(draft({ summary: "five" }));
     ledger.close();
 
     expect(entry.n).toBe("L-000005");
     expect(readLines(path.join(ledgerDir(root), "2026-10.jsonl"))).toHaveLength(3);
-    expect(Ledger.openSync(new FileStore(root)).status).toMatchObject({ ok: true, entries: 5 });
+    expect(Ledger.openSync(new FileStore(root), { keys }).status).toMatchObject({ ok: true, entries: 5 });
   });
 });
 
 describe("FileStore writer lock", () => {
   it("a second open while the first holds the lock is not writable", () => {
     const root = tempRoot();
-    const first = Ledger.openSync(new FileStore(root), { now: clockFrom(times) });
+    const first = Ledger.openSync(new FileStore(root), { keys, now: clockFrom(times) });
     first.append(draft({ summary: "from first" }));
 
-    const second = Ledger.openSync(new FileStore(root));
+    const second = Ledger.openSync(new FileStore(root), { keys });
     expect(second.status.writable).toBe(false);
     expect(second.entries().map((e) => e.summary)).toEqual(["from first"]);
     expect(thrown(() => second.append(draft())).code).toBe("READ_ONLY");
@@ -153,12 +156,12 @@ describe("FileStore writer lock", () => {
 
   it("after close() the lock is free and a new open is writable", () => {
     const root = tempRoot();
-    const first = Ledger.openSync(new FileStore(root), { now: clockFrom(times) });
+    const first = Ledger.openSync(new FileStore(root), { keys, now: clockFrom(times) });
     first.append(draft());
     first.close();
     expect(first.status.writable).toBe(false);
 
-    const next = Ledger.openSync(new FileStore(root), { now: clockFrom(["2026-10-01T00:09:00Z"]) });
+    const next = Ledger.openSync(new FileStore(root), { keys, now: clockFrom(["2026-10-01T00:09:00Z"]) });
     expect(next.status.writable).toBe(true);
     expect(next.append(draft({ summary: "later" })).n).toBe("L-000002");
     next.close();
@@ -172,7 +175,7 @@ describe("FileStore writer lock", () => {
       JSON.stringify({ pid: 2147483646, host: os.hostname(), since: "2026-10-01T00:00:00Z" }),
     );
 
-    const ledger = Ledger.openSync(new FileStore(root), { now: clockFrom(times) });
+    const ledger = Ledger.openSync(new FileStore(root), { keys, now: clockFrom(times) });
     expect(ledger.status.writable).toBe(true);
     ledger.append(draft());
     const lock = JSON.parse(fs.readFileSync(lockPath(root), "utf8"));
@@ -186,7 +189,7 @@ describe("FileStore writer lock", () => {
     fs.mkdirSync(ledgerDir(root), { recursive: true });
     fs.writeFileSync(lockPath(root), JSON.stringify({ pid: process.ppid, host: os.hostname(), since: "2026-10-01T00:00:00Z" }));
 
-    const ledger = Ledger.openSync(new FileStore(root));
+    const ledger = Ledger.openSync(new FileStore(root), { keys });
     expect(ledger.status.writable).toBe(false);
     expect(JSON.parse(fs.readFileSync(lockPath(root), "utf8")).pid).toBe(process.ppid);
   });
@@ -199,7 +202,7 @@ describe("FileStore writer lock", () => {
       JSON.stringify({ pid: 2147483646, host: `${os.hostname()}-elsewhere`, since: "2026-10-01T00:00:00Z" }),
     );
 
-    expect(Ledger.openSync(new FileStore(root)).status.writable).toBe(false);
+    expect(Ledger.openSync(new FileStore(root), { keys }).status.writable).toBe(false);
   });
 });
 
@@ -215,7 +218,7 @@ describe("FileStore tamper detection", () => {
     lines[1] = JSON.stringify(entry);
     fs.writeFileSync(file, `${lines.join("\n")}\n`);
 
-    const reopened = Ledger.openSync(new FileStore(root));
+    const reopened = Ledger.openSync(new FileStore(root), { keys });
     expect(reopened.status).toMatchObject({ ok: false, brokenAt: "L-000002", problem: "hash", writable: true });
     expect(thrown(() => reopened.append(draft())).code).toBe("CHAIN_BROKEN");
   });
@@ -225,8 +228,8 @@ describe("fixed source bug", () => {
   it("a second Ledger on the same FileStore instance is not writable while the first holds the lock", () => {
     const root = tempRoot();
     const store = new FileStore(root);
-    const first = Ledger.openSync(store, { now: clockFrom(times) });
-    const second = Ledger.openSync(store);
+    const first = Ledger.openSync(store, { keys, now: clockFrom(times) });
+    const second = Ledger.openSync(store, { keys });
     expect(second.status.writable).toBe(false);
     first.close();
     second.close();
