@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { bundledNodePath, claudeLaunch, connectArgsProblem, protectFor, connectLineProblem, validateConnectLine, connectPlan, installSkill, SKILL_NODE_PLACEHOLDER, SKILL_PROGRAM_PLACEHOLDER } from "./agentConnect";
+import { bundledNodePath, childEnv, claudeLaunch, runConnect, connectArgsProblem, protectFor, connectLineProblem, validateConnectLine, connectPlan, installSkill, SKILL_NODE_PLACEHOLDER, SKILL_PROGRAM_PLACEHOLDER } from "./agentConnect";
 import { connectLine } from "./routes/agents";
 
 describe("connect line", () => {
@@ -228,6 +228,50 @@ describe("finding Claude Code", () => {
     expect(run.stdout).toBe("safe mcp list");
     expect(fs.existsSync(marker)).toBe(false);
     expect(claudeLaunch([], { PATH: path.dirname(plain) }, project, [])).toEqual({ command: process.execPath, args: [plain] });
+  });
+
+  it("connect.mjs started from a task worktree or from repo/src never runs a claude reached through a PATH link into the repo or the worktree", () => {
+    // Claude Code's npm layout, whose package entry runs under this Node on every OS.
+    const npmClaude = (dir: string, body: string) => {
+      const cli = path.join(dir, "node_modules", "@anthropic-ai", "claude-code", "cli.js");
+      fs.mkdirSync(path.dirname(cli), { recursive: true });
+      fs.writeFileSync(cli, `#!/usr/bin/env node\n${body}\n`, { mode: 0o755 });
+      if (windows) fs.writeFileSync(path.join(dir, "claude.cmd"), "@echo off\r\n");
+      else fs.symlinkSync(cli, path.join(dir, "claude"));
+    };
+    const project = temp(); // the app's project folder, where the token file lives
+    const repo = temp(); // the person's repo, with no repo.json pointing at it
+    const outside = temp();
+    const worktree = path.join(repo, ".perfect-planner", "worktrees", "T-1");
+    fs.mkdirSync(path.join(repo, "src"), { recursive: true });
+    fs.mkdirSync(worktree, { recursive: true });
+    const tokenFile = path.join(project, ".perfect-planner", "tokens", "T-1.token");
+    fs.mkdirSync(path.dirname(tokenFile), { recursive: true });
+    fs.writeFileSync(tokenFile, "");
+    // What the host records beside the token: the repo git found and the worktree folders.
+    fs.writeFileSync(tokenFile.replace(/\.token$/, ".roots.json"), JSON.stringify({ roots: [project, repo, path.join(repo, ".perfect-planner", "worktrees")] }));
+    const marker = path.join(outside, "planted-ran");
+    const plant = `require("fs").writeFileSync(${JSON.stringify(marker)}, "x");`;
+    npmClaude(path.join(repo, "tools"), plant);
+    npmClaude(path.join(worktree, "bin"), plant);
+    link(path.join(repo, "tools"), path.join(outside, "to-repo"));
+    link(path.join(worktree, "bin"), path.join(outside, "to-worktree"));
+    const ran = path.join(outside, "safe-ran");
+    npmClaude(path.join(outside, "safe"), `require("fs").appendFileSync(${JSON.stringify(ran)}, process.argv.slice(2).join(" ") + "\\n");`);
+    const PATH = [path.join(outside, "to-repo"), path.join(outside, "to-worktree"), path.join(outside, "safe"), process.env.PATH ?? ""].join(sep);
+    for (const cwd of [worktree, path.join(repo, "src")]) {
+      fs.rmSync(ran, { force: true });
+      const output: string[] = [];
+      const code = runConnect(["http://127.0.0.1:5555", tokenFile], { cwd, env: { ...process.env, PATH, Path: PATH }, home: temp(), here: path.join(outside, "core-host"), out: (t) => output.push(t), err: (t) => output.push(t) });
+      expect(code, output.join("")).toBe(0);
+      expect(fs.existsSync(marker)).toBe(false);
+      expect(fs.readFileSync(ran, "utf8")).toContain("mcp add perfect-planner-core -s local");
+    }
+  });
+
+  it("puts this Node's folder first on PATH, so a wrapper script that calls node gets this Node", () => {
+    expect(childEnv({ PATH: "/usr/bin" }, "linux", "/app/node/bin/node").PATH).toBe("/app/node/bin:/usr/bin");
+    expect(childEnv({ Path: "C:\\Windows" }, "win32", "C:\\app\\node.exe").Path).toBe("C:\\app;C:\\Windows");
   });
 
   it("returns null when Claude Code is not installed", () => {

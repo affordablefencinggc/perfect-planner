@@ -55,8 +55,13 @@ describe("agents routes", () => {
 
   it("disconnecting deletes the connection's token file", async () => {
     const { connection, tokenFile } = await connect();
+    const roots = tokenFile.replace(/\.token$/, ".roots.json");
+    // Beside the token: the folders connect.mjs must never start a program from, starting with the project folder.
+    const recorded = JSON.parse(fs.readFileSync(roots, "utf8")).roots as string[];
+    expect(recorded[0]).toBe(path.dirname(path.dirname(path.dirname(tokenFile))));
     expect((await hostCall(base, "POST", "/agents/revoke?project=demo", { connection })).status).toBe(200);
     expect(fs.existsSync(tokenFile)).toBe(false);
+    expect(fs.existsSync(roots)).toBe(false);
   });
 
   it("full loop: connect, hello through the bridge over MCP, then GET agents shows the main chat", async () => {

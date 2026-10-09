@@ -17,6 +17,7 @@ import type { CoreProject } from "../project";
 import { HttpError, type Router } from "../router";
 import { writeOwnerOnlyFile } from "../tokenFile";
 import { localPersonId } from "./people";
+import { chosenRepoRoot, repoState } from "./tasks";
 
 export const AGENT_SERVER_NAME = "perfect-planner-core";
 const PERSON = /^[a-z0-9][a-z0-9._-]{0,63}$/i;
@@ -135,10 +136,30 @@ export function tokenFilePath(project: CoreProject, name: string): string {
   return path.join(project.root, ".perfect-planner", "tokens", `${name}.token`);
 }
 
-/** The token waits in a file only this OS user can read (0600, or an owner-only ACL on Windows); the agent program reads it at start. */
-export function writeTokenFile(project: CoreProject, name: string, token: string): string {
+/** Next to each token file: the folders the host protects for that project, for connect.mjs to read. */
+export function rootsFilePath(tokenFile: string): string {
+  return tokenFile.replace(/\.token$/, ".roots.json");
+}
+
+/**
+ * The folders this host chose for the project and never starts a program from: the project folder, the
+ * repo the person picked, and the worktree manager's repo and worktree folders. connect.mjs runs in its
+ * own process, where none of these are registered, so they are written down for it.
+ */
+export function projectRoots(project: CoreProject, extra: readonly (string | undefined)[] = []): string[] {
+  const manager = project.state.get("tasks.worktrees") as { repoRoot?: unknown; worktreeRoot?: unknown } | undefined;
+  const roots = [project.root, chosenRepoRoot(project.root), manager?.repoRoot, manager?.worktreeRoot, ...extra];
+  return [...new Set(roots.filter((root): root is string => typeof root === "string" && path.isAbsolute(root)))];
+}
+
+/**
+ * The token waits in a file only this OS user can read (0600, or an owner-only ACL on Windows); the agent
+ * program reads it at start. The project's protected folders are written beside it (see projectRoots).
+ */
+export function writeTokenFile(project: CoreProject, name: string, token: string, extraRoots: readonly (string | undefined)[] = []): string {
   const file = tokenFilePath(project, name);
   writeOwnerOnlyFile(file, token);
+  writeOwnerOnlyFile(rootsFilePath(file), JSON.stringify({ roots: projectRoots(project, extraRoots) }));
   return file;
 }
 
@@ -195,7 +216,9 @@ export function registerAgentRoutes(router: Router): void {
     project.state.set(BRIDGE_URL, bridge.url);
     const token = project.service.tokens.issue({ role: "connect", person });
     const id = `C-${randomBytes(4).toString("hex")}`;
-    const tokenFile = writeTokenFile(project, `connect-${id}`, token);
+    // The repo git finds for the project folder (when none was picked) is protected too.
+    const repo = await repoState(project).catch(() => null);
+    const tokenFile = writeTokenFile(project, `connect-${id}`, token, [repo?.ok ? repo.root : undefined]);
     const conn: Connection = { id, person, issuedAt: new Date().toISOString(), token, tokenFile, revoked: false };
     connections(project).set(conn.id, conn);
     const entry = agentEntryPath();
@@ -229,6 +252,7 @@ export function registerAgentRoutes(router: Router): void {
       conn.revoked = true;
     }
     fs.rmSync(conn.tokenFile, { force: true });
+    fs.rmSync(rootsFilePath(conn.tokenFile), { force: true });
     return { connection: conn.id, revoked: true };
   });
 }

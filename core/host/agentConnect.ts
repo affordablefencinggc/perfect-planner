@@ -126,16 +126,25 @@ export interface Launch {
 }
 
 /**
- * The folders no agent CLI may be started from: the current folder, the project folder that owns the
- * token file (<project>/.perfect-planner/tokens/x.token) and the repo the person picked for it. Never found
- * by walking up to .git.
+ * The folders no agent CLI may be started from, beyond the current folder: the project folder that owns
+ * the token file (<project>/.perfect-planner/tokens/x.token), the repo the person picked for it, and the
+ * folders the host recorded beside the token (x.roots.json: the repo git found, the worktree folders).
+ * Never found by walking up to .git.
  */
 export function protectFor(tokenFile: string | null): string[] {
   if (!tokenFile) return [];
   const project = path.dirname(path.dirname(path.dirname(tokenFile)));
   const repo = chosenRepoRoot(project);
+  let recorded: unknown[] = [];
+  try {
+    const roots = (JSON.parse(fs.readFileSync(tokenFile.replace(/\.token$/, ".roots.json"), "utf8")) as { roots?: unknown }).roots;
+    if (Array.isArray(roots)) recorded = roots;
+  } catch {
+    // an older app wrote no roots file
+  }
+  const roots = [project, ...(repo ? [repo] : []), ...recorded].filter((root): root is string => typeof root === "string" && path.isAbsolute(root));
   // A whole drive or the home folder is never a protected root: it would hide ~/.local/bin/claude.
-  return [project, ...(repo ? [repo] : [])].filter((root) => !repoRefusal(root));
+  return [...new Set(roots)].filter((root) => !repoRefusal(root));
 }
 
 /**
@@ -198,65 +207,89 @@ function safeReal(p: string): string {
   }
 }
 
+/**
+ * The environment for Claude Code: PATH starts with this Node's own folder, so a wrapper script (a
+ * /bin/sh claude that calls `node`) gets this Node rather than one planted further along PATH.
+ */
+export function childEnv(env: NodeJS.ProcessEnv, platform: NodeJS.Platform = process.platform, execPath = process.execPath): NodeJS.ProcessEnv {
+  const p = platform === "win32" ? path.win32 : path.posix;
+  const key = Object.keys(env).find((name) => (platform === "win32" ? name.toUpperCase() === "PATH" : name === "PATH")) ?? "PATH";
+  const rest = env[key];
+  return { ...env, [key]: rest ? `${p.dirname(execPath)}${p.delimiter}${rest}` : p.dirname(execPath) };
+}
+
+/** Where connect.mjs runs: the terminal's folder and environment, and where it writes. */
+export interface ConnectIo {
+  cwd: string;
+  env: NodeJS.ProcessEnv;
+  home: string;
+  /** The folder connect.mjs (and skill/SKILL.md) sits in. */
+  here: string;
+  out(text: string): void;
+  err(text: string): void;
+}
+
 /** Runs Claude Code from the project folder (claude mcp add -s local registers that folder). */
-function claude(args: string[], tokenFile: string | null) {
-  const launch = claudeLaunch(args, process.env, process.cwd(), protectFor(tokenFile));
+function claude(args: string[], tokenFile: string | null, io: ConnectIo) {
+  const launch = claudeLaunch(args, io.env, io.cwd, protectFor(tokenFile));
   if (!launch) return { error: Object.assign(new Error("claude not found"), { code: "ENOENT" }), status: null, stdout: "", stderr: "" };
   return spawnSync(launch.command, launch.args, {
+    cwd: io.cwd,
     encoding: "utf8",
     windowsHide: true,
     // Windows: never resolve a bare program name (node, git) from the current folder either.
-    env: { ...process.env, ...NO_CWD_SEARCH_ENV },
+    env: { ...childEnv(io.env), ...NO_CWD_SEARCH_ENV },
   });
 }
 
-function main(argv: string[]): number {
-  const here = path.dirname(fileURLToPath(import.meta.url));
+/** connect.mjs itself: `<bridge url> <token file>`, or `--skill-only`. Returns the exit code. */
+export function runConnect(argv: string[], io: ConnectIo): number {
+  const { here } = io;
   if (argv.length === 1 && argv[0] === "--skill-only") {
-    const plan = connectPlan({ bridgeUrl: "", tokenFile: "", here, home: os.homedir() });
+    const plan = connectPlan({ bridgeUrl: "", tokenFile: "", here, home: io.home });
     try {
       installSkill(plan, here);
     } catch (error) {
-      process.stderr.write(`Perfect Planner: could not install the skill (${(error as Error).message}).\n`);
+      io.err(`Perfect Planner: could not install the skill (${(error as Error).message}).\n`);
       return 1;
     }
-    process.stdout.write(`Installed the ${SKILL} skill for every Claude Code session on this computer (${plan.skillTo}).\n`);
+    io.out(`Installed the ${SKILL} skill for every Claude Code session on this computer (${plan.skillTo}).\n`);
     return 0;
   }
   const problem = connectArgsProblem(argv) ?? (process.platform === "win32" && /[%"]/.test(here + process.execPath) ? "Perfect Planner or Node.js is installed in a folder whose name has % or \", which Windows would rewrite." : null);
   if (problem) {
-    process.stderr.write(`Perfect Planner: ${problem}\n`);
+    io.err(`Perfect Planner: ${problem}\n`);
     return 2;
   }
   const [bridgeUrl, tokenFile] = argv as [string, string];
   if (!fs.existsSync(tokenFile)) {
-    process.stderr.write("Perfect Planner: the token file is gone (the app restarted, or you disconnected). Click Connect agent again for a fresh line.\n");
+    io.err("Perfect Planner: the token file is gone (the app restarted, or you disconnected). Click Connect agent again for a fresh line.\n");
     return 2;
   }
-  const plan = connectPlan({ bridgeUrl, tokenFile, here, home: os.homedir() });
+  const plan = connectPlan({ bridgeUrl, tokenFile, here, home: io.home });
 
   let skill = false;
   try {
     installSkill(plan, here);
     skill = true;
   } catch (error) {
-    process.stderr.write(`Perfect Planner: could not install the skill (${(error as Error).message}). Connecting anyway.\n`);
+    io.err(`Perfect Planner: could not install the skill (${(error as Error).message}). Connecting anyway.\n`);
   }
 
-  claude(plan.remove, tokenFile); // nothing to remove the first time; that is fine
-  const added = claude(plan.add, tokenFile);
+  claude(plan.remove, tokenFile, io); // nothing to remove the first time; that is fine
+  const added = claude(plan.add, tokenFile, io);
   if (added.error || added.status !== 0) {
     const missing = (added.error as NodeJS.ErrnoException | undefined)?.code === "ENOENT";
-    process.stderr.write(
+    io.err(
       missing
         ? "Perfect Planner: Claude Code (the claude command) is not installed here. For another agent, use the MCP settings from Connect agent instead.\n"
         : `Perfect Planner: claude mcp add failed.\n${added.stderr || added.stdout}\n`,
     );
     return 1;
   }
-  process.stdout.write(
+  io.out(
     [
-      `Connected this folder (${process.cwd()}) to Perfect Planner.`,
+      `Connected this folder (${io.cwd}) to Perfect Planner.`,
       skill ? `Installed the ${SKILL} skill for every Claude Code session on this computer.` : "",
       "Next: start Claude Code in this folder and say: check in with Perfect Planner",
     ]
@@ -264,6 +297,17 @@ function main(argv: string[]): number {
       .join("\n") + "\n",
   );
   return 0;
+}
+
+function main(argv: string[]): number {
+  return runConnect(argv, {
+    cwd: process.cwd(),
+    env: process.env,
+    home: os.homedir(),
+    here: path.dirname(fileURLToPath(import.meta.url)),
+    out: (text) => process.stdout.write(text),
+    err: (text) => process.stderr.write(text),
+  });
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) process.exit(main(process.argv.slice(2)));
