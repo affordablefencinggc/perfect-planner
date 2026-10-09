@@ -7,7 +7,8 @@ const KNOWN_STATES = new Set(["empty", "demo", "imported", "generated", "authori
 const TECHNICAL_ROWS = new Set(["Project ID", "Generation", "Entity", "Digest", "Schema", "Revision", "Adapter"]);
 const ROW_LABEL_OVERRIDES = { Generation: "Scan", Digest: "Fingerprint", "Authority reason": "Approval reason" };
 const WINDOWS_PATH = /(?:[a-zA-Z]:[\\/]|\\\\)[^\n\r]*/g;
-const POSIX_PATH = /(^|[\s("'=])\/(?!\/)[^\n\r]*/g;
+// A slash followed by a space is prose ("To-do / Ledger"), not the start of a path.
+const POSIX_PATH = /(^|[\s("'=])\/(?![\s/])[^\n\r]*/g;
 
 function safeText(value) {
   if (value === null || value === undefined || value === "") return "Not available";
