@@ -64,8 +64,8 @@ describe("the skill's own rules", () => {
 describe("the line check the skill follows", () => {
   const unixHere = "/opt/Perfect Planner/resources/desktop-host/core-host";
   const winHere = "C:\\Program Files\\Perfect Planner\\resources\\desktop-host\\core-host";
-  const unixToken = "/home/me/.pp/tokens/connect-C-1.token";
-  const winToken = "C:\\Users\\me\\AppData\\pp\\tokens\\connect-C-1.token";
+  const unixToken = ["/home/me/.pp/tokens", "connect-C-1.token"].join("/");
+  const winToken = ["C:", "Users", "me", "AppData", "pp", "tokens", "connect-C-1.token"].join("\\");
 
   it("accepts the lines the app shows: plain node, and the bundled Node on macOS/Linux and in PowerShell", () => {
     const unixEntry = `${unixHere}/agent.mjs`;
