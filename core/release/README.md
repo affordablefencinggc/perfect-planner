@@ -40,8 +40,9 @@ ones:
 
 Verdict is `ready`, `held` (size, budget, missing reviewer) or `blocked`
 (secret, failing tests, rejected review). Skipped checks are reported as
-skipped, never as passed. `recordPipeline(ledger, actor, "T-14", result)`
-writes it as `review.verdict` with `data.stage = "cheap-first"`.
+skipped, never as passed. `recordPipeline(ledger, gate, "T-14", result)`
+writes it as `review.verdict` with `data.stage = "cheap-first"`; the actor is
+the system gate (or Jev), since agents may not write verdicts.
 
 Sensitive areas (`areasOf`): auth, payments, migrations, secrets handling,
 CI and build config, and anything over the planned size.
@@ -97,8 +98,9 @@ saving against "full suite on every push".
 
 Spend rides on ledger entries as `data.cost = { cents, kind: "ci" | "model" }`
 (`recordSpend`). The budget is a person's `decision.made` with
-`data.topic = "budget"` (`setBudget`). `checkBudget` writes one
-`budget.warning` at 80% and one at 100% per month (again after a raise is
+`data.topic = "budget"` (`setBudget`). `checkBudget(ledger, system, now)` writes one
+`budget.warning` (as a system actor; the ledger only lets a person or system
+write it) at 80% and one at 100% per month (again after a raise is
 crossed). `installBudgetRule(ledger)` refuses new runs (`task.claimed`,
 `worktree.created`) at 100%; proof, done, releases and raising the budget
 still go through, so work in flight can finish.

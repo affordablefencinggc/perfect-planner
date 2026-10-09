@@ -9,12 +9,13 @@ import type { ChangeSet } from "./types";
 
 const owner = { kind: "person" as const, id: "owner" };
 const agent = { kind: "agent" as const, id: "claude-code", model: "m1" };
+const system = { kind: "system" as const, id: "gate" };
 const NOW = new Date("2026-10-09T00:00:00Z");
 
 function open(): Ledger {
   const ledger = Ledger.openSync(new MemoryStore(), { now: () => NOW });
   installNumberingRules(ledger);
-  appendNumbered(ledger, { actor: agent, type: "task.created", summary: "first task", evidence: [], refs: [] });
+  appendNumbered(ledger, { actor: system, type: "task.created", summary: "first task", evidence: [], refs: [] });
   return ledger;
 }
 
@@ -167,7 +168,7 @@ describe("cheap-first pipeline", () => {
   it("records its outcome as a review.verdict entry", async () => {
     const ledger = open();
     const result = await runCheapFirst(small, {});
-    const entry = recordPipeline(ledger, agent, "T-1", result);
+    const entry = recordPipeline(ledger, system, "T-1", result);
     expect(entry.type).toBe("review.verdict");
     expect(entry.data).toMatchObject({ stage: "cheap-first", preset: "balanced", verdict: "ready", deep: false, risk: "low" });
   });
