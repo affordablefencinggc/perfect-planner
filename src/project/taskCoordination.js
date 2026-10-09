@@ -72,9 +72,10 @@ export function evaluateTaskCollisions(ledger) {
   for (const item of result.collisions) {
     const a = item.left.taskId, b = item.right.taskId, key = pairKey(a, b);
     if (!groups.has(key)) groups.set(key, { key, tasks: [a, b].sort(), files: new Map() });
-    const files = groups.get(key).files, paths = [...new Set([item.left.surface, item.right.surface])].sort();
-    const fileKey = paths.join("|"), prior = files.get(fileKey);
-    files.set(fileKey, { path: item.surface, paths, severity: prior?.severity === "hard-stop" ? "hard-stop" : item.severity });
+    // Comparison is case-insensitive; displayed paths keep the author's letter case.
+    const files = groups.get(key).files, paths = [...new Set([item.left.displaySurface, item.right.displaySurface])].sort();
+    const fileKey = [...new Set([item.left.surface, item.right.surface])].sort().join("|"), prior = files.get(fileKey);
+    files.set(fileKey, { path: item.displaySurface, paths, severity: prior?.severity === "hard-stop" ? "hard-stop" : item.severity });
   }
   const collisions = [...groups.values()].map((group) => {
     const [a, b] = group.tasks;
@@ -83,7 +84,9 @@ export function evaluateTaskCollisions(ledger) {
     // Dependencies already decide the order; otherwise the earlier task goes first.
     const suggestedFirst = ancestors(b).has(a) ? a : ancestors(a).has(b) ? b : a;
     const dependencyOrdered = ancestors(b).has(a) || ancestors(a).has(b);
-    return { key: group.key, tasks: group.tasks, titles: { [a]: titles[a], [b]: titles[b] }, severity, files, suggestedFirst, dependencyOrdered, signature: canonicalize({ severity, files }) };
+    // The signature ignores letter case so earlier decisions keep matching.
+    const signatureFiles = files.map((file) => ({ path: file.path.toLowerCase(), paths: [...new Set(file.paths.map((path) => path.toLowerCase()))].sort(), severity: file.severity })).sort((x, y) => x.path.localeCompare(y.path) || x.paths.join().localeCompare(y.paths.join()));
+    return { key: group.key, tasks: group.tasks, titles: { [a]: titles[a], [b]: titles[b] }, severity, files, suggestedFirst, dependencyOrdered, signature: canonicalize({ severity, files: signatureFiles }) };
   }).sort((x, y) => (x.severity === y.severity ? 0 : x.severity === "hard-stop" ? -1 : 1) || x.key.localeCompare(y.key));
   return {
     checkedTaskIds: manifests.map((manifest) => manifest.planId),
