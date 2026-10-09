@@ -365,6 +365,7 @@ export async function mapRegisteredWorkspace(registryRoot, workspaceId, options 
       maxFiles: boundedInteger(options.maxFiles, MCP_OPERATION_LIMITS.maxFiles, 1, MCP_OPERATION_LIMITS.maxFiles),
       maxFileBytes: MCP_OPERATION_LIMITS.maxFileBytes, maxDirectories: options.maxDirectories,
       maxEntries: options.maxEntries, maxScanDepth: options.maxScanDepth, onProgress: options.onProgress,
+      allowPartial: options.allowPartial !== false,
     }, operation);
     const appName = path.basename(workspace.canonicalRoot);
     const discovery = buildWorkspaceDiscovery(census, { appName });
@@ -376,7 +377,7 @@ export async function mapRegisteredWorkspace(registryRoot, workspaceId, options 
       schemaVersion: 1, workspace,
       census: Object.freeze({
         generatedAt: census.generatedAt, fileCount: census.fileCount, totalBytesHashed: census.totalBytesHashed,
-        summary: census.summary, skipped: census.skipped, digest: census.digest, scope: census.scope,
+        summary: census.summary, skipped: census.skipped, digest: census.digest, scope: census.scope, partial: census.partial,
       }),
       discovery,
       structure: Object.freeze({ directoryCount: tree.directoryCount, fileCount: tree.fileCount, nodeCount: tree.nodeCount, ...compact }),

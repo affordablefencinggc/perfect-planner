@@ -2705,6 +2705,7 @@ function ProjectHomeWorkspace({
   onWorkspace,
   activeProject,
   onOpenDemo,
+  onChooseFolder,
 }) {
   const projectContext = useOptionalProject();
   const architectureRefresh = projectContext?.architectureRefreshStatus;
@@ -2728,6 +2729,33 @@ function ProjectHomeWorkspace({
     const { binding, blockers, mode, nextAction, project, stage, summary } =
       homeModel;
     const hasProject = mode !== "empty";
+    if (!hasProject) {
+      return (
+        <section
+          className="workspace project-home-workspace project-home-truth project-home-empty"
+          aria-label="Project Home workspace"
+          data-home-mode={mode}
+          data-home-project-id=""
+          data-home-generation=""
+        >
+          <div className="project-home-empty-body">
+            <h1>Bring in a real app to begin</h1>
+            <p>Pick the folder your app lives in. Nothing is changed.</p>
+            <button
+              type="button"
+              className="primary-button project-home-empty-action"
+              data-home-next-action="choose-app-folder"
+              onClick={onChooseFolder}
+            >
+              Choose app folder <ArrowRightIcon />
+            </button>
+            <button type="button" className="link-button project-home-empty-demo" onClick={onOpenDemo}>
+              Try the demo
+            </button>
+          </div>
+        </section>
+      );
+    }
     const unavailableValue = (value, state, suffix = "") => {
       if (value == null || state === "unavailable") return "Unavailable";
       const displayed = `${value}${suffix}`;
@@ -5579,6 +5607,7 @@ function PerfectPlannerShellCore({
   const demoMode = isDemoProject(activeProject);
   const projectWorkflowReady = Boolean(activeProject) && !["stale", "unavailable"].includes(activeProject.state);
   const [workspace, setWorkspace] = useState(() => readInitialWorkspace(appSettings.settings));
+  const [autoStartIntakeToken, setAutoStartIntakeToken] = useState(0);
   const startupLocationApplied=useRef(false);
   const [leftOpen, setLeftOpen] = useState(false);
   const [rightOpen, setRightOpen] = useState(false);
@@ -5774,13 +5803,15 @@ function PerfectPlannerShellCore({
     const captureError = (event) =>
       recordDiagnostic(
         "runtime",
-        "error",
+        // The browser's benign layout notice is not an application failure.
+        /^ResizeObserver loop/.test(event.message ?? "") ? "info" : "error",
         event.message || "Unknown application error",
       );
     const captureRejection = (event) =>
       recordDiagnostic(
         "promise",
-        "error",
+        // A cancelled request (for example an abandoned folder scan) is expected, not a failure.
+        event.reason?.name === "AbortError" ? "info" : "error",
         event.reason?.message ||
           String(event.reason || "Unhandled promise rejection"),
       );
@@ -5894,6 +5925,11 @@ function PerfectPlannerShellCore({
     recordDiagnostic("route", "info", `${workspace} → ${nextWorkspace}`);
     setWorkspace(nextWorkspace);
     window.requestAnimationFrame(resetWorkspaceScroll);
+  };
+
+  const chooseAppFolder = () => {
+    setAutoStartIntakeToken((token) => token + 1);
+    navigateWorkspace("structure");
   };
 
   const selectProject = (projectId) => {
@@ -6134,6 +6170,7 @@ function PerfectPlannerShellCore({
               onWorkspace={navigateWorkspace}
               activeProject={activeProject}
               onOpenDemo={openDemoProject}
+              onChooseFolder={chooseAppFolder}
             />
           )}
           {workspace === "blueprint" &&
@@ -6163,6 +6200,7 @@ function PerfectPlannerShellCore({
               onProjectCaptured={registerCapturedProject}
               onProjectUnavailable={markCapturedProjectUnavailable}
               onDiagnostic={recordDiagnostic}
+              autoStartIntakeToken={autoStartIntakeToken}
             /></Suspense>
           )}
           {workspace === "components" && (
