@@ -185,3 +185,13 @@ describe("PlanningSession.startWithResearch", () => {
     expect(withSources).toHaveLength(researched);
   });
 });
+
+describe("PlanningSession and ledger permissions", () => {
+  it("an agent may ask and decide, but a spike task or roadmap needs a person", async () => {
+    const { ledger, session } = await setup();
+    session.ask(agent, storeQ);
+    expect(() => session.answer(agent, "Q-1", { text: "TBD", spike: { due: "2026-10-16", risk: "A wrong store choice forces a migration." } })).toThrow(/may not write/i);
+    expect(ledger.entries()).toHaveLength(1);
+    expect(session.answer(agent, "Q-1", { choice: "postgres" }).status).toBe("decided");
+  });
+});

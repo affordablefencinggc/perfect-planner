@@ -111,6 +111,11 @@ line by line in a plan. A deferral must become a decision, or a spike:
 
 Relay questions (no `data.planning`) are untouched.
 
+Who writes what follows the ledger's permissions table: an agent may ask
+questions and record decisions, but spike tasks and roadmap tasks are
+`task.created`, so a person (or the system) writes them, and `plan.approved`
+comes from a person.
+
 ## Views (`state.ts`)
 
 `planningQuestions(entries)`, `openBlockers(entries, scope?)`,

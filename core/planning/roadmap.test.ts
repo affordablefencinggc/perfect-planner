@@ -27,7 +27,8 @@ const ANSWERS: PlanningAnswer[] = [
   ans("platforms", "targets", "Desktop and web"),
 ];
 
-const actor: Actor = { kind: "agent", id: "claude-code", model: "claude-test" };
+// task.created comes from a person or the system, never an agent (ledger "Who may write what").
+const actor: Actor = { kind: "person", id: "looplet-spare" };
 const map = buildMindMap("A planner", ANSWERS);
 
 describe("buildRoadmap", () => {
