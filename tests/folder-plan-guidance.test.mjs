@@ -20,3 +20,10 @@ test('an imported project with no proposed folders reads as optional, not blocke
  const headline=folderPlanHeadline(named,{imported:true});
  assert.equal(headline.tone,'blocked');assert.match(headline.detail,/blockers/);
 });
+// Trial define-11: field paths read as sentences naming the folder.
+test('field-path blockers become plain sentences naming the folder',()=>{
+ const nodes=[{path:'src'},{path:'src*'}];
+ const guidance=folderPlanGuidance(['nodes[1].path contains a wildcard or a character folders cannot use (* ? [ ] { } < > : " |).','nodes[0] requires purpose, owner, and taskId.','nodes[0].owner is an unresolved placeholder.','nodes[1] is missing planned parent folder lib.','nodes[0].taskId must be a task number such as T0001 or B01, not free text.'],nodes);
+ assert.deepEqual(guidance,['Folder 2 (src*): the path contains a wildcard or a character folders cannot use (* ? [ ] { } < > : " |).','Folder 1 (src): fill in its purpose, owner and task ID.','Folder 1 (src): replace the placeholder owner with a real answer.','Folder 2 (src*): add its parent folder lib to the plan first.','Folder 1 (src): the task ID must be a task number such as T0001 or B01, not free text.']);
+ assert.ok(guidance.every(line=>!/nodes\[/.test(line)));
+});

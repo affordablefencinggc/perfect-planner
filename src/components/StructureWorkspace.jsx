@@ -1912,7 +1912,7 @@ export function StructureWorkspace({
             ) : (
               <div>
                 <p>These checks apply to the proposed folder plan, not permission to scan or view your existing app.</p>
-                {folderPlanGuidance(assessment.blockers).map((blocker) => (
+                {folderPlanGuidance(assessment.blockers, draft.nodes).map((blocker) => (
                   <p key={blocker}>{blocker}</p>
                 ))}
                 <details><summary>Technical approval checks</summary>{assessment.blockers.map(blocker => <p key={blocker}>{blocker}</p>)}</details>
