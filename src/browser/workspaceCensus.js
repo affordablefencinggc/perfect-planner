@@ -39,6 +39,42 @@ function unavailable(reason) {
 
 class FileReadTimeout extends Error {}
 
+// A small .gitignore reader: plain names, folder names ("dist/"), anchored paths ("/public/generated/")
+// and simple "*.ext" patterns. Negations and complex globs are ignored (those files are scanned).
+async function readGitignore(handle, prefix, context) {
+  let text = "";
+  try {
+    const file = await withTimeout(handle.getFile(), context.limits.fileReadTimeoutMs);
+    if (file.size > 256_000) return [];
+    text = new TextDecoder().decode(await withTimeout(file.arrayBuffer(), context.limits.fileReadTimeoutMs));
+  } catch { return []; }
+  const rules = [];
+  for (const raw of text.split(/\r?\n/)) {
+    let line = raw.trim();
+    if (!line || line.startsWith("#") || line.startsWith("!")) continue;
+    const directoryOnly = line.endsWith("/");
+    line = line.replace(/\/+$/, "");
+    const anchored = line.startsWith("/") || line.includes("/");
+    line = line.replace(/^\/+/, "");
+    if (!line) continue;
+    if (/^\*\.[^*?[\]/]+$/.test(line)) { rules.push({ base: prefix, extension: line.slice(1).toLowerCase(), directoryOnly: false }); continue; }
+    if (/[*?[\]]/.test(line)) continue;
+    rules.push({ base: prefix, pattern: line, anchored, directoryOnly });
+  }
+  return rules;
+}
+
+function isGitignored(rules, path, name, isDirectory) {
+  for (const rule of rules) {
+    if (rule.base && path !== rule.base && !path.startsWith(`${rule.base}/`)) continue;
+    if (rule.directoryOnly && !isDirectory) continue;
+    const relative = rule.base ? path.slice(rule.base.length + 1) : path;
+    if (rule.extension) { if (!isDirectory && name.toLowerCase().endsWith(rule.extension)) return true; continue; }
+    if (rule.anchored ? relative === rule.pattern : name === rule.pattern) return true;
+  }
+  return false;
+}
+
 // One stalled file (locked, on a sleeping network drive, or virtualised) must never hang the whole scan.
 function withTimeout(promise, ms) {
   let timer;
@@ -219,11 +255,18 @@ async function walkDirectory(directory, prefix, context, depth = 0) {
   if (context.directoriesVisited > context.limits.maxDirectories)
     throw new CensusInterruption("maximum-directory-count-reached", prefix || ".");
   const entries = await sortedEntries(directory, prefix, context);
+  const gitignore = entries.find(([name, handle]) => name === ".gitignore" && handle?.kind === "file");
+  if (gitignore) context.ignoreRules.push(...await readGitignore(gitignore[1], prefix, context));
   for (const [name, handle] of entries) {
     throwIfInterrupted(context);
     const path = prefix ? `${prefix}/${name}` : name;
     if (path.length > context.limits.maxPathLength)
       throw new CensusInterruption("maximum-path-length-reached", path);
+    if (isGitignored(context.ignoreRules, path, name, handle?.kind === "directory")) {
+      context.skipped.push({ path, reason: "ignored-by-gitignore", size: null });
+      await checkpoint(context, path);
+      continue;
+    }
     if (handle?.kind === "directory") {
       if (ignoredDirectories.has(name.toLowerCase())) {
         context.skipped.push({ path, reason: "generated-or-dependency-directory-excluded", size: null });
@@ -268,7 +311,12 @@ async function walkDirectory(directory, prefix, context, depth = 0) {
       await checkpoint(context, path);
       continue;
     }
-    if (context.totalBytesHashed + file.size > context.limits.maxTotalBytes) throw new CensusInterruption("maximum-total-bytes-reached", path, file.size);
+    // Past the content budget, remaining files are listed as skipped rather than failing the whole scan.
+    if (context.totalBytesHashed + file.size > context.limits.maxTotalBytes) {
+      context.skipped.push({ path, reason: "scan-size-budget-reached", size: file.size });
+      await checkpoint(context, path);
+      continue;
+    }
 
     let bytes;
     try {
@@ -473,6 +521,7 @@ export const browserWorkspaceAdapter = Object.freeze({
       files: [],
       fileSnapshots: [],
       skipped: [],
+      ignoreRules: [],
       directorySnapshots: [],
       directoriesVisited: 0,
       entriesVisited: 0,

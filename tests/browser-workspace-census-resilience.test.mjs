@@ -137,19 +137,13 @@ test("AbortSignal cancellation stops between batches and never exposes a partial
   assert.equal(progress.at(-1).authoritative, false);
 });
 
-test("file-count and aggregate-byte ceilings fail closed while oversized files are recorded and skipped", async () => {
+test("the file-count ceiling fails closed while oversized files are recorded and skipped", async () => {
   const cases = [
     {
       workspaceId: "limit_files",
       entries: [["a.js", fileHandle("a.js", "aa")], ["b.js", fileHandle("b.js", "bb")]],
       limits: { maxFiles: 1 },
       reason: "maximum-file-count-reached",
-    },
-    {
-      workspaceId: "limit_total_size",
-      entries: [["a.js", fileHandle("a.js", "aa")], ["b.js", fileHandle("b.js", "bb")]],
-      limits: { maxTotalBytes: 3 },
-      reason: "maximum-total-bytes-reached",
     },
   ];
 
@@ -393,5 +387,33 @@ test("a stalled read, a huge file, an unreadable sub-folder and archive folders 
     ["locked-dir", "folder-unreadable"],
     ["node_modules", "generated-or-dependency-directory-excluded"],
     ["stalled.bin", "file-read-timed-out"],
+  ]);
+});
+
+test(".gitignore entries are skipped and listed, and the content budget skips instead of failing", async () => {
+  const root = directoryHandle("gitignore-root", [
+    [".gitignore", fileHandle(".gitignore", "# comment\n/public/generated/\n*.log\nsecrets\n!keep.log\n")],
+    ["app.js", fileHandle("app.js", "a")],
+    ["debug.log", fileHandle("debug.log", "x")],
+    ["secrets", directoryHandle("secrets", [["k.txt", fileHandle("k.txt", "k")]])],
+    ["public", directoryHandle("public", [
+      ["generated", directoryHandle("generated", [["big.json", fileHandle("big.json", "{}")]])],
+      ["index.html", fileHandle("index.html", "<p>")],
+    ])],
+    ["zz-large.js", fileHandle("zz-large.js", "y".repeat(20))],
+  ]);
+  const registration = await register(root, "gitignore_app");
+  const census = await browserWorkspaceAdapter.censusRegisteredWorkspace({
+    workspaceId: "gitignore_app",
+    registryRevision: registration.registryRevision,
+    maxTotalBytes: 70,
+  });
+  assert.equal(census.authoritative, true);
+  assert.deepEqual(census.files.map((file) => file.path), [".gitignore", "app.js", "public/index.html"]);
+  assert.deepEqual(census.skipped.map(({ path, reason }) => [path, reason]), [
+    ["debug.log", "ignored-by-gitignore"],
+    ["public/generated", "ignored-by-gitignore"],
+    ["secrets", "ignored-by-gitignore"],
+    ["zz-large.js", "scan-size-budget-reached"],
   ]);
 });
