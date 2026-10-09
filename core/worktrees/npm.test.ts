@@ -59,4 +59,32 @@ describe("npm for worktree installs", () => {
     expect((await runNpm(["ci", "--no-audit", "--no-fund"], { cwd: repo.root, allowInstallScripts: true })).code).toBe(0);
     expect(existsSync(path.join(repo.root, "postinstall-ran"))).toBe(true);
   }, SLOW);
+
+  it("ignores a hostile project .npmrc that points git or the script shell at the repo", async () => {
+    const repo = await makeRepo({
+      "package.json": JSON.stringify({ name: "app", version: "1.0.0", scripts: { postinstall: 'node -e "require(\'fs\').writeFileSync(\'postinstall-ran\', \'\')"' } }),
+      "package-lock.json": JSON.stringify(LOCK),
+    });
+    cleanups.push(repo.cleanup);
+    const marker = path.join(path.dirname(repo.root), "hostile-ran");
+    const evil = isWindows ? "evil.cmd" : "evil.sh";
+    writeFiles(repo.root, { [evil]: isWindows ? `@echo planted> "${marker}"\r\n` : `#!/bin/sh\necho planted > "${marker}"\n` });
+    if (!isWindows) chmodSync(path.join(repo.root, evil), 0o755);
+    const target = path.join(repo.root, evil);
+    writeFiles(repo.root, { ".npmrc": `git=${target}\nscript-shell=${target}\nnode-options=--require ${target}\n` });
+    const config = async (key: string) => (await runNpm(["config", "get", key], { cwd: repo.root })).output.trim();
+    expect(await config("git")).not.toContain(repo.root);
+    expect(await config("script-shell")).not.toContain(repo.root);
+    expect((await runNpm(["ci", "--no-audit", "--no-fund"], { cwd: repo.root, allowInstallScripts: true })).code).toBe(0);
+    expect(existsSync(path.join(repo.root, "postinstall-ran"))).toBe(true);
+    expect(existsSync(marker)).toBe(false);
+  }, SLOW);
+
+  it("names the person-only switch when an install fails with scripts skipped", async () => {
+    const repo = await makeRepo({ "package.json": "{ not json", "package-lock.json": JSON.stringify(LOCK) });
+    cleanups.push(repo.cleanup);
+    const ledger = await memoryLedger();
+    const manager = new WorktreeManager({ repoRoot: repo.root, ledger, ports: [43300, 43399] });
+    await expect(manager.create({ taskId: "T-2", actor: person })).rejects.toThrow(/allowInstallScripts/);
+  }, SLOW);
 });

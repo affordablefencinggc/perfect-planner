@@ -1,7 +1,8 @@
 import { spawn } from "node:child_process";
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
-import { findExecutable, isWithin, NO_CWD_SEARCH_ENV, registeredRoots } from "../exec/index";
+import { findExecutable, gitExecutable, isWithin, NO_CWD_SEARCH_ENV, registeredRoots } from "../exec/index";
 
 export class NpmNotFoundError extends Error {}
 
@@ -55,14 +56,40 @@ export interface NpmRunOptions {
   allowInstallScripts?: boolean;
 }
 
-/** Run npm (e.g. ["ci", ...]) through Node with no shell. Adds --ignore-scripts unless allowed. Resolves to the exit code. */
+/** Said when an install fails with scripts skipped, so the person knows the switch exists and that it is theirs. */
+export const INSTALL_SCRIPTS_HINT = "Install scripts were skipped; only a person can allow them (allowInstallScripts).";
+
+/**
+ * Run npm (e.g. ["ci", ...]) through Node with no shell. Adds --ignore-scripts unless allowed. The
+ * project's own .npmrc is agent-controlled, so every setting that names a program is fixed on the
+ * command line (which outranks every config file): git is core/exec's, the script shell is the
+ * system's. User and global config come from an empty file, and inherited npm_config_* variables are
+ * dropped. Resolves to the exit code.
+ */
 export function runNpm(args: readonly string[], options: NpmRunOptions): Promise<{ code: number; output: string }> {
   const cli = npmCliPath(options.cwd, options.protect);
-  const finalArgs = [cli, ...args, ...(options.allowInstallScripts ? [] : ["--ignore-scripts"])];
-  return new Promise((resolve, reject) => {
+  const protect = options.protect ?? [];
+  const configDir = mkdtempSync(path.join(os.tmpdir(), "pp-npmrc-"));
+  // npm refuses one file as both user and global config.
+  const userConfig = path.join(configDir, "user.npmrc");
+  const globalConfig = path.join(configDir, "global.npmrc");
+  writeFileSync(userConfig, "");
+  writeFileSync(globalConfig, "");
+  const shell = process.platform === "win32" ? path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "cmd.exe") : "/bin/sh";
+  let git: string;
+  try {
+    git = gitExecutable(options.cwd, protect);
+  } catch (error) {
+    rmSync(configDir, { recursive: true, force: true });
+    return Promise.reject(error);
+  }
+  const fixed = [`--git=${git}`, `--script-shell=${shell}`, `--userconfig=${userConfig}`, `--globalconfig=${globalConfig}`, "--node-options=", "--editor=", "--browser=false"];
+  const finalArgs = [cli, ...args, ...fixed, ...(options.allowInstallScripts ? [] : ["--ignore-scripts"])];
+  const inherited = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^npm_config_/i.test(key)));
+  return new Promise<{ code: number; output: string }>((resolve, reject) => {
     const child = spawn(process.execPath, finalArgs, {
       cwd: options.cwd,
-      env: { ...process.env, ...options.env, ...NO_CWD_SEARCH_ENV },
+      env: { ...inherited, ...options.env, ...NO_CWD_SEARCH_ENV },
       shell: false,
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],
@@ -85,5 +112,5 @@ export function runNpm(args: readonly string[], options: NpmRunOptions): Promise
       clearTimeout(timer);
       resolve({ code: code ?? -1, output: Buffer.concat(chunks).toString("utf8") });
     });
-  });
+  }).finally(() => rmSync(configDir, { recursive: true, force: true }));
 }
