@@ -1,0 +1,248 @@
+Perfect Planner | standard window
+group
+group
+Perfect Planner
+Open Perfect Planner home | Open Perfect Planner home
+Build stages | Build stages
+Home
+Define | Define
+Coordinate | Coordinate
+Build | Build
+Prove | Prove
+Release | Release
+Index
+Ledger search | Ledger search
+Find a plan clause, release, task or ledger entry | Find a plan clause, release, task or ledger entry
+Find P-12 §3.2, R-5…
+Connect agent
+More actions | More actions
+Current workspace context | Current workspace context
+Open project folders | Open project folders
+Open projects | Open projects
+No project selected
+PURPOSE
+Choose a local app folder without inventing project facts.
+REQUIRED OUTCOME
+One stable project identity and a redacted census receipt.
+UNLOCK NEXT
+Add a project folder or open the clearly labelled Demo.
+View detail level | View detail level
+Simple
+Advanced
+PROJECT
+Project Home
+Settings | Settings
+Back
+Settings
+Settings
+Fine-tune every stage and feature. Changes apply immediately and are saved on this device. Safety rules (collision gates, proof, review) are never relaxed from here.
+Settings sections | Settings sections
+Display
+Start & navigation
+01 Define
+02 Coordinate
+03 Build
+04 Prove
+05 Release
+Agents & Jev
+Index
+Panels & notices
+Reset
+DISPLAY | DISPLAY
+DISPLAY
+DISPLAY
+How Perfect Planner looks on this device.
+Detail level
+Simple shows plain outcomes and next actions. Advanced also shows IDs, fingerprints, revisions and scan numbers. Both read the same data.
+Detail level | Detail level
+Detail level | Detail level
+Simple
+Advanced
+Theme
+Warm ledger is the standard look. High contrast darkens text and borders for readability. A dark theme is not available yet.
+Theme | Theme
+Theme | Theme
+Warm ledger
+High contrast
+Dark (not available yet)
+Text size
+Scales the whole interface.
+Text size | Text size
+Text size | Text size
+Standard
+Large
+Larger
+Reduce motion
+Stops the planner worker laps and other animations.
+Reduce motion | Reduce motion
+Reduce motion | Reduce motion
+Off
+START & NAVIGATION | START & NAVIGATION
+START & NAVIGATION
+START & NAVIGATION
+Where the app opens and where each stage button lands.
+Open the app on
+Last page reopens the page you were on when you closed the app.
+Open the app on | Open the app on
+Open the app on | Open the app on
+Project Home
+Last page
+01 DEFINE | 01 DEFINE
+01 DEFINE
+01 DEFINE
+Blueprint, folder structure and component contracts.
+Define button opens
+Which page opens when you press Define in the top bar.
+Define button opens | Define button opens
+Define button opens | Define button opens
+Blueprint
+Structure
+Components
+Open Blueprint
+Open Structure
+Open Components
+02 COORDINATE | 02 COORDINATE
+02 COORDINATE
+02 COORDINATE
+Plan order, collision checks and owner allocation.
+Coordinate button opens
+Which page opens when you press Coordinate in the top bar.
+Coordinate button opens | Coordinate button opens
+Coordinate button opens | Coordinate button opens
+Plan
+Collisions
+Allocation
+Open Plan
+Open Collisions
+Open Allocation
+03 BUILD | 03 BUILD
+03 BUILD
+03 BUILD
+The guarded conveyor where claimed work is built.
+Worktree mode
+Isolated gives each task its own worktree. Shared runs one task at a time in your working copy.
+Worktree mode | Worktree mode
+Worktree mode | Worktree mode
+Isolated per task
+Shared, one at a time
+Open Build
+04 PROVE | 04 PROVE
+04 PROVE
+04 PROVE
+Integrity verdict and screenshot-led evidence.
+Prove button opens
+Which page opens when you press Prove in the top bar.
+Prove button opens | Prove button opens
+Prove button opens | Prove button opens
+Integrity
+Evidence
+Review preset
+Standard: one reviewer, checks and screenshot proof
+Review preset | Review preset
+Review preset | Review preset
+Quick
+Standard
+Strict
+Fixed rule: green only ever means verified. Integrity stays fail-closed whatever preset you choose.
+Open Integrity
+Open Evidence
+05 RELEASE | 05 RELEASE
+05 RELEASE
+05 RELEASE
+Close the ledger and prepare the handover.
+Fixed rule: a release needs every required proof accepted. That gate cannot be turned off.
+Open To-do / Ledger
+AGENTS & JEV | AGENTS & JEV
+AGENTS & JEV
+AGENTS & JEV
+Defaults you hand to a connected agent. They are preferences in the brief you copy, not permissions: Planner gates still decide what may run.
+Orchestration rounds
+The most review-and-revise rounds a lead model runs before stopping.
+Orchestration rounds | Orchestration rounds
+Orchestration rounds | Orchestration rounds
+1
+2
+3
+4
+5
+Budget cap per run
+Leave empty for no cap. Agents are told to stop and ask before going over it.
+Budget cap per run | Budget cap per run
+AUD
+Budget cap per run in AUD | Budget cap per run in AUD
+Use Jev as a reviewer
+Records that you want Jev as a reviewer and adds that request to the agent brief you copy. Perfect Planner does not run Jev reviews itself yet.
+Use Jev as a reviewer | Use Jev as a reviewer
+Use Jev as a reviewer | Use Jev as a reviewer
+Off
+Jev API key
+Saved only to the Windows keychain (Credential Manager). Perfect Planner never shows it again, never writes it to a file, and never sends it to an agent brief. Once the key is saved, Jev must review each task's test before work on that task starts.
+DESKTOP APP ONLY
+Jev API key | Jev API key
+Jev API key | Jev API key | Paste key
+Save to keychain
+Remove
+Agent defaults preview | Agent defaults preview
+Perfect Planner agent defaults (user preferences, not permissions):
+- Worktree mode: one isolated worktree per task
+- Review preset: Standard: one reviewer, checks and screenshot proof
+- Orchestration rounds: at most 2
+- Budget cap per run: none set
+- Jev as reviewer: no
+Planner gates (collisions, proof, review) still apply and are not relaxed by these settings.
+Copy agent defaults
+INDEX | INDEX
+INDEX
+INDEX
+The searchable index of everything in the project. It opens over any page.
+Open Index
+PANELS & NOTICES | PANELS & NOTICES
+PANELS & NOTICES
+PANELS & NOTICES
+The bottom operations console, developer notes and pop-up notices.
+Open the operations console on launch
+Otherwise it starts collapsed at the bottom.
+Open the operations console on launch | Open the operations console on launch
+Open the operations console on launch | Open the operations console on launch
+Off
+Console opens on
+The tab shown first when the console opens.
+Console opens on | Console opens on
+Console opens on | Console opens on | Logs
+Show Developer Notes
+The notes button for prompts, replies and errors exchanged with agents.
+Show Developer Notes | Show Developer Notes
+Show Developer Notes | Show Developer Notes
+On
+Notices stay for
+How long pop-up notices stay before closing themselves.
+Notices stay for | Notices stay for
+Notices stay for | Notices stay for
+3 s
+6 s
+10 s
+Until closed
+RESET | RESET
+RESET
+RESET
+Put every setting on this page back to its default. Your projects, plans and proof are not touched, and the Jev key stays in the keychain.
+Reset all settings
+Project Home workspace | Project Home workspace
+Bring in a real app to begin
+Bring in a real app to begin
+Pick the folder your app lives in. Nothing is changed.
+Choose app folder
+Try the demo
+Open Repositories | Open Repositories
+Settings
+Operations no diagnostic errors
+collision check not connected
+task outcomes unverified
+branches unavailable
+queue unavailable
+close button
+full screen button
+group
+group
+minimize button
+text | Perfect Planner

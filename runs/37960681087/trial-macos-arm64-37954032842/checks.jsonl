@@ -1,0 +1,9 @@
+{"label":"macos-arm64","name":"dmg contents","pass":true,"seen":"Applications Perfect Planner.app  (Applications shortcut: yes)"}
+{"label":"macos-arm64","name":"install","pass":true,"seen":"/Applications/Perfect Planner.app; Mach-O 64-bit executable arm64; LSMinimumSystemVersion 10.13"}
+{"label":"macos-arm64","name":"installed files","pass":true,"seen":"Contents/MacOS: perfect-planner-desktop planner-agent-helper"}
+{"label":"macos-arm64","name":"code signature","pass":true,"seen":"verify: ok; Signature=adhoc TeamIdentifier=not set"}
+{"label":"macos-arm64","name":"gatekeeper (downloaded copy)","pass":false,"seen":"/var/folders/36/tjdph2t965j8snz9_vkdnw0r0000gn/T/tmp.69f0myf5i0/Perfect Planner.app: rejected  (not notarized: first open needs System Settings > Privacy & Security > Open Anyway)"}
+{"label":"macos-arm64","name":"launch","pass":true,"seen":"pid 1508; still running after 12 s: yes"}
+{"label":"macos-arm64","name":"window shown","pass":true,"seen":"windows: count=1 \"Perfect Planner\""}
+{"label":"macos-arm64","name":"first-run screen","pass":true,"seen":"Perfect Planner | standard window group group Perfect Planner Open Perfect Planner home | Open Perfect Planner home Build stages | Build stages Home Define | Define Coordinate | Coordinate Build | Build Prove | Prove Rel"}
+{"label":"macos-arm64","name":"settings opens","pass":true,"seen":"pressed /^settings$/i (first of 1)"}
