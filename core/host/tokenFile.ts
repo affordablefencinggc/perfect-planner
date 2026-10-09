@@ -8,6 +8,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { isWithin, registeredRoots } from "../exec/index";
 
 /** UNC (\\host\share), device (\\?\, \\.\) and //host paths: anything that is not a plain local path. */
 export function isNetworkPath(value: string, platform: NodeJS.Platform = process.platform): boolean {
@@ -54,17 +55,38 @@ export function findExecutable(name: string, env: NodeJS.ProcessEnv, cwd: string
   const windows = platform === "win32";
   const p = path; // the running system's paths; platform only picks the PATH separator and PATHEXT
   const pathValue = env.PATH ?? env.Path ?? env.path ?? "";
-  const here = p.resolve(cwd);
+  // The current folder and every root the host protects (project folder, picked repo, worktrees), as
+  // written and as real paths: a PATH entry inside one of them, or a program that links into one, is skipped.
+  const roots = new Set<string>();
+  for (const root of [cwd, ...registeredRoots()]) {
+    roots.add(p.resolve(root));
+    try {
+      roots.add(fs.realpathSync.native(root));
+    } catch {
+      // not resolvable: the written path still counts
+    }
+  }
+  const inside = (...candidates: string[]) => [...roots].some((root) => candidates.some((c) => isWithin(root, c)));
+  const real = (file: string) => {
+    try {
+      return fs.realpathSync.native(file);
+    } catch {
+      return undefined;
+    }
+  };
   const exts = windows ? (env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean) : [""];
   for (const entry of pathValue.split(windows ? ";" : ":")) {
     const dir = entry.trim().replace(/^"(.*)"$/, "$1");
     if (!dir || !p.isAbsolute(dir) || isNetworkPath(dir, platform)) continue;
-    if (p.resolve(dir) === here) continue;
+    const realDir = real(dir);
+    if (!realDir || inside(p.resolve(dir), realDir)) continue;
     for (const ext of exts) {
       const candidate = p.join(dir, `${name}${ext.toLowerCase()}`);
       try {
         const stat = fs.statSync(candidate);
         if (!stat.isFile()) continue;
+        const realFile = real(candidate);
+        if (!realFile || inside(realFile)) continue;
         if (!windows) fs.accessSync(candidate, fs.constants.X_OK);
         return candidate;
       } catch {

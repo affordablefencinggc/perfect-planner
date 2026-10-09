@@ -15,7 +15,7 @@ import { installPeopleRules } from "../people/index";
 import { installPlanningRules } from "../planning/index";
 import { installReleaseRules, protectProject, type CommandRunner, type ProtectionReport } from "../release/index";
 import { ensureRequiredIgnores, PRIVATE_DIR } from "../worktrees/index";
-import { gitExecutable, NO_CWD_SEARCH_ENV } from "../exec/index";
+import { gitExecutable, NO_CWD_SEARCH_ENV, protectRoots } from "../exec/index";
 
 export interface CoreProject {
   /** Safe key from the client ("default" when none was given). */
@@ -35,6 +35,14 @@ export interface CoreProject {
   ready: Promise<void>;
   /** Shipping safety (core/release protectProject): release rules on the ledger, pre-push scan in the repo. */
   protection: Promise<ProtectionReport>;
+  /**
+   * Adds folders the host itself chose for this project (the repo the person picked, worktrees it made) to
+   * the roots no program is ever started from (core/exec protectRoots). The project folder is added at open.
+   * Never fed from a walk up to .git: a home-folder dotfiles repo must not block ~/bin.
+   */
+  protectRoots(roots: readonly string[]): void;
+  /** Removes this project's protected roots (the host calls it when it closes the project). */
+  releaseRoots(): void;
   /** Per-screen scratch state that is not ledger truth (e.g. a planning session in progress). */
   state: Map<string, unknown>;
   entries(): readonly LedgerEntry[];
@@ -183,7 +191,20 @@ export function openCoreProject(baseRoot: string, key: string, override: string 
   // review, and the whole-branch secret scan runs before every push (a non-git folder is reported).
   // The host excludes .perfect-planner/ before it opens a project for a request (host.ts openProject);
   // this repeats it for direct callers, and every request waits for it.
+  const guarded = new Set<string>();
+  const releases: (() => void)[] = [];
+  const guard = (roots: readonly string[]) => {
+    const fresh = roots.filter((r) => typeof r === "string" && path.isAbsolute(r) && !guarded.has(r));
+    if (!fresh.length) return;
+    fresh.forEach((r) => guarded.add(r));
+    releases.push(protectRoots(fresh));
+  };
+  guard([root]);
+  const releaseRoots = () => {
+    releases.splice(0).forEach((release) => release());
+    guarded.clear();
+  };
   const ready = excludePrivateFolder(root).then(() => undefined);
   const protection = ready.then(() => protectRepository(ledger, root));
-  return { key, root, ledger, service, policy, owner, ready, protection, state: new Map(), entries: () => ledger.entries() };
+  return { key, root, ledger, service, policy, owner, ready, protection, protectRoots: guard, releaseRoots, state: new Map(), entries: () => ledger.entries() };
 }

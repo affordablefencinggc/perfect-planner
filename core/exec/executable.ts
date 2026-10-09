@@ -78,7 +78,7 @@ function realPath(p: string): string | undefined {
  */
 function protectedRoots(cwd: string, protect: readonly string[] = []): string[] {
   const roots = new Set<string>();
-  for (const root of [cwd, ...protect]) {
+  for (const root of [cwd, ...protect, ...registeredRoots()]) {
     if (typeof root !== "string" || root === "") continue;
     const here = path.resolve(root);
     roots.add(here);
@@ -86,6 +86,28 @@ function protectedRoots(cwd: string, protect: readonly string[] = []): string[] 
     if (real) roots.add(real);
   }
   return [...roots];
+}
+
+const registered = new Map<number, readonly string[]>();
+let nextRegistration = 0;
+
+/**
+ * Registers roots the host itself chose (a project folder, the repo the person picked, worktrees the
+ * host made) as protected for every program this process starts, on top of each call's own `protect`:
+ * spawns deep inside other modules (worktrees, the ledger's ignore file, the release hook) are then
+ * covered without threading the list through every call. Returns a function that removes them again.
+ */
+export function protectRoots(roots: readonly string[]): () => void {
+  const id = nextRegistration++;
+  registered.set(id, roots.filter((root) => typeof root === "string" && root !== "" && path.isAbsolute(root)));
+  return () => {
+    registered.delete(id);
+  };
+}
+
+/** Every root currently registered with protectRoots. */
+export function registeredRoots(): string[] {
+  return [...new Set([...registered.values()].flat())];
 }
 
 function insideAny(roots: readonly string[], ...candidates: string[]): boolean {

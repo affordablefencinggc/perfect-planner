@@ -63,6 +63,19 @@ function repoFile(project: CoreProject): string {
   return path.join(project.root, ".perfect-planner", REPO_FILE);
 }
 
+/**
+ * The repo folder the person picked for a project (kept in its .perfect-planner/), read without running
+ * anything, so the host can protect it before its first git run. Never a whole drive or the home folder.
+ */
+export function chosenRepoRoot(projectRoot: string): string | undefined {
+  try {
+    const root = (JSON.parse(fs.readFileSync(path.join(projectRoot, ".perfect-planner", REPO_FILE), "utf8")) as { root?: unknown }).root;
+    return typeof root === "string" && path.isAbsolute(root) && !repoRefusal(root) ? root : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 async function gitTop(dir: string): Promise<string | null> {
   if (!fs.existsSync(dir)) return null;
   const top = await runGit(dir, ["rev-parse", "--show-toplevel"]).catch(() => null);
@@ -82,7 +95,11 @@ export async function repoState(project: CoreProject): Promise<RepoState> {
   }
   const candidate = typeof chosen === "string" && chosen ? chosen : project.root;
   const top = await gitTop(candidate);
-  if (top) return { ok: true, root: top };
+  // git found the repo by walking up from the folder: a whole drive or the home folder (a dotfiles repo)
+  // is never the project's repo, so it is neither used nor protected.
+  const refusal = top ? repoRefusal(top) : null;
+  if (top && !refusal) return { ok: true, root: top };
+  if (refusal) return { ok: false, reason: refusal };
   return {
     ok: false,
     reason: chosen
@@ -110,6 +127,7 @@ export function repoRefusal(top: string, home = os.homedir()): string | null {
 async function requireRepo(project: CoreProject): Promise<string> {
   const repo = await repoState(project);
   if (!repo.ok || !repo.root) throw new HttpError(409, "NO_REPO", repo.reason ?? "Choose your project's git folder first.");
+  project.protectRoots([repo.root]);
   return repo.root;
 }
 
@@ -118,6 +136,7 @@ function manager(project: CoreProject, root: string): WorktreeManager {
   if (!current || current.repoRoot !== fs.realpathSync(root)) {
     current = new WorktreeManager({ repoRoot: root, ledger: project.ledger });
     project.state.set(MANAGER, current);
+    project.protectRoots([current.repoRoot, current.worktreeRoot]);
   }
   return current;
 }
