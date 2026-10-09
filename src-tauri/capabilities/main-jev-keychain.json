@@ -1,0 +1,17 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main-jev-keychain",
+  "description": "Main Windows window may store, clear, or check for the Jev reviewer key in Windows Credential Manager. No command returns the key; no file, network, or process capability is granted.",
+  "windows": [
+    "main"
+  ],
+  "platforms": [
+    "windows"
+  ],
+  "local": true,
+  "permissions": [
+    "allow-jev-key-status",
+    "allow-jev-key-save",
+    "allow-jev-key-clear"
+  ]
+}
