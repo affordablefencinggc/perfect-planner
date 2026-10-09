@@ -20,6 +20,7 @@ function run(argv) {
   }
   const seen = [];
   const matches = [];
+  const loose = []; // labelled non-button elements, e.g. the text inside a WebView button
   const re = pattern ? new RegExp(pattern, "i") : null;
   const visit = (el, depth) => {
     if (depth > 40 || seen.length > 4000) return;
@@ -30,7 +31,7 @@ function run(argv) {
     try { const v = el.value(); value = typeof v === "string" ? v : ""; } catch (e) {}
     const label = [name, desc, value].filter(Boolean).join(" | ");
     if (label) seen.push(label);
-    if (re && /button|link|menuitem/i.test(role) && (re.test(name.trim()) || re.test(desc.trim()))) matches.push(el);
+    if (re && (re.test(name.trim()) || re.test(desc.trim()) || re.test(value.trim()))) (/button|link|menuitem/i.test(role) ? matches : loose).push(el);
     let kids = [];
     try { kids = el.uiElements(); } catch (e) {}
     for (const kid of kids) visit(kid, depth + 1);
@@ -38,6 +39,7 @@ function run(argv) {
   for (const w of proc.windows()) visit(w, 0);
   if (command === "text") return seen.join("\n");
   if (command === "press") {
+    if (!matches.length) matches.push(...loose);
     if (!matches.length) return `no element matching /${pattern}/i among ${seen.length} labelled elements`;
     const el = which === "last" ? matches[matches.length - 1] : matches[0];
     proc.frontmost = true;

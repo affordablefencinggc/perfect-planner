@@ -58,9 +58,12 @@ if echo "$windows" | grep -q '^windows:'; then
   echo "$text" > "$out/$label-ax-text.txt"
   if echo "$text" | grep -qiE 'Bring in your existing app|Drop your app|Choose app folder|Local Collaboration Workspace|Add project|Choose a local folder|Project Home'; then check "first-run screen" pass "$(echo "$text" | tr '\n' ' ' | head -c 220)"
   else check "first-run screen" fail "AX text: $(echo "$text" | tr '\n' ' ' | head -c 220)"; fi
-  r="$(ax press "$bundle_id" '^settings$' )"; sleep 2; screencapture -x "$out/$label-02-settings.png" || true
-  t="$(ax text "$bundle_id")"
-  if echo "$r" | grep -q pressed && echo "$t" | grep -qiE 'keychain|reviewer key|preferences'; then check "settings opens" pass "$r"; else check "settings opens" fail "$r"; fi
+  r="$(ax press "$bundle_id" '^settings$' )"; t=""
+  # "Opening settings…" is the loading placeholder; give the page up to 15 s to replace it.
+  for i in $(seq 1 15); do sleep 1; t="$(ax text "$bundle_id")"; echo "$t" | grep -qi 'opening settings' || break; done
+  screencapture -x "$out/$label-02-settings.png" || true; echo "$t" > "$out/$label-ax-settings.txt"
+  if echo "$r" | grep -q pressed && ! echo "$t" | grep -qi 'opening settings' && echo "$t" | grep -qiE 'keychain|reviewer key|api key|theme|preferences|appearance'; then check "settings opens" pass "$r"
+  else check "settings opens" fail "$r; page shows: $(echo "$t" | grep -iE -m3 'settings|opening' | tr '\n' ' ' | head -c 200)"; fi
   ax key "$bundle_id" escape >/dev/null
   # The drawer opens on the toolbar button; the drawer's own "Connect agent" button (the last match) shows the line.
   r="$(ax press "$bundle_id" '^connect agent$')"; sleep 3

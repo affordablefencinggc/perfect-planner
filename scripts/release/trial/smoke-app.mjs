@@ -149,26 +149,36 @@ async function main() {
   if (settingsLabel) {
     settingsText = await waitFor(async () => {
       const text = await bodyText();
-      return /settings/i.test(text) && /key|keychain|agent|reviewer|model|theme|preferences/i.test(text) ? text : null;
+      // "Opening settings…" is the loading placeholder, not the page; wait it out.
+      return /settings/i.test(text) && !/opening settings/i.test(text) && /keychain|reviewer key|api key|theme|preferences|appearance/i.test(text) ? text : null;
     }, 10_000);
   }
   await shot("02-settings");
   record("settings opens", Boolean(settingsLabel && settingsText),
-    settingsLabel ? (settingsText ? `opened via "${settingsLabel}"` : `clicked "${settingsLabel}" but no settings page appeared`) : "no Settings control in the top bar or More actions");
+    settingsLabel ? (settingsText ? `opened via "${settingsLabel}": ${JSON.stringify(settingsText.slice(settingsText.search(/settings/i), settingsText.search(/settings/i) + 160).replace(/\s+/g, " "))}` : `clicked "${settingsLabel}" but no settings page appeared within the wait; page shows ${JSON.stringify((await bodyText()).replace(/\s+/g, " ").slice(0, 200))}`) : "no Settings control in the top bar or More actions");
   await pressEscape();
   await clickText("^open perfect planner home$");
   await sleep(500);
 
   // 3. A project folder can be opened through the native picker.
   // Reach the Structure page's "Choose app folder" by whichever route this build offers.
-  let chooser = await clickText("^choose app folder$");
+  // Home's "Choose app folder" only navigates to Structure; the picker opens from Structure's own
+  // button, which sits under "Drop your app folder here". Click until we are on that page.
+  const onStructure = async () => /drop (your|the) app folder/i.test(await bodyText());
+  let chooser = null;
+  for (let i = 0; i < 3 && !chooser; i++) {
+    const there = await onStructure();
+    const hit = await clickText("^choose app folder$");
+    if (hit && there) chooser = hit;
+    else await sleep(1500);
+  }
   const route = [];
   for (const step of ["drop your app|review intake|^add project$", "^(0?1\\s*)?define$", "^structure$"]) {
     if (chooser) break;
     const hit = await clickText(step);
     if (hit) route.push(hit);
     await sleep(1000);
-    chooser = await clickText("^choose app folder$");
+    if (await onStructure()) chooser = await clickText("^choose app folder$");
   }
   const toStructure = route.join(" > ") || null;
   let folderOk = false;
@@ -183,7 +193,11 @@ async function main() {
     }, 30_000);
     folderOk = answer.status === 0 && Boolean(after);
     if (after) folderSeen += `; app shows: ${JSON.stringify(after.slice(Math.max(0, after.indexOf(base) - 60), after.indexOf(base) + 120).replace(/\s+/g, " "))}`;
-    else folderSeen += `; app never showed "${base}" or a read-only scan step`;
+    else {
+      const text = await bodyText();
+      const err = text.split("\n").filter((l) => /error|couldn't|could not|failed|denied|blocked/i.test(l)).slice(0, 4).join(" / ");
+      folderSeen += `; app never showed "${base}" or a read-only scan step${err ? `; page says: ${JSON.stringify(err.slice(0, 240))}` : ""}`;
+    }
   }
   await shot("03-folder-opened");
   record("open project folder", folderOk, folderSeen);
