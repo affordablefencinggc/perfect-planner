@@ -6,16 +6,31 @@
 // when a previous numbered version is supplied, matched clauses keep their ids,
 // inserted clauses become sub-clauses of the preceding published clause, and
 // removed clauses stay in the list with status "withdrawn".
+//
+// Inserted content nests like a fresh plan: an inserted heading takes the inserted
+// clauses after it as its children, and an inserted list item takes deeper items.
+// Document order is the order of the returned clauses array. An inserted id is
+// allocated after the existing siblings, so it can sort after a later published
+// sibling (for example §1.1.2 appears before §1.1.1 when §1.1.1 was already taken).
+// Ids are never reused, and withdrawn clauses keep their numbers.
 
 export const CLAUSE_ID_PATTERN = /^§(?:0(?:\.[1-9]\d*)+|[1-9]\d*(?:\.[1-9]\d*)*)$/;
 
 const KINDS = new Set(["heading", "paragraph", "item"]);
-const HEADING_LINE = /^(#{1,6})\s+(.*?)\s*#*\s*$/;
+// ATX headings: up to three leading spaces, optional closing hashes that need a space before them.
+const HEADING_LINE = /^ {0,3}(#{1,6})(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$/;
 const ITEM_LINE = /^(\s*)([-*+]|\d+[.)])(?:\s+(.*))?$/;
 const FENCE_LINE = /^\s*(```|~~~)/;
 const THEMATIC_LINE = /^\s{0,3}([-*_])(\s*\1){2,}\s*$/;
 // Above this many cells the exact LCS table is too large; a greedy match is used instead.
-const LCS_CELL_LIMIT = 40_000_000;
+// A Uint32Array of 4M cells is 16 MB, which keeps each plan approval light.
+const LCS_CELL_LIMIT = 4_000_000;
+// Above this many cells the old/new pairing inside one changed gap falls back to position.
+const GAP_CELL_LIMIT = 1_000_000;
+// Token overlap (Jaccard) at or above which a rewritten clause keeps the old clause's id.
+const SIMILARITY_THRESHOLD = 0.5;
+// Weight for a same-kind pair that is not similar: only used when nothing better is available.
+const POSITIONAL_WEIGHT = 0.001;
 
 export function normalizeText(text) {
   return String(text ?? "").replace(/\s+/g, " ").trim();
@@ -29,7 +44,7 @@ function indentWidth(whitespace) {
 
 // Splits plan markdown into ordered blocks: headings, paragraphs and list items.
 // Fenced code is kept as one paragraph. Blank lines, thematic breaks and empty
-// items contribute no clause.
+// items or headings contribute no clause.
 export function parsePlanBlocks(markdown) {
   if (typeof markdown !== "string") throw new TypeError("Plan markdown must be a string.");
   const lines = markdown.replace(/\r\n?/g, "\n").split("\n");
@@ -75,7 +90,7 @@ export function parsePlanBlocks(markdown) {
     const heading = HEADING_LINE.exec(line);
     if (heading) {
       flush();
-      const text = normalizeText(heading[2]);
+      const text = normalizeText(heading[2] ?? "");
       if (text) blocks.push({ kind: "heading", level: heading[1].length, indent: 0, text });
       continue;
     }
@@ -146,9 +161,10 @@ function normalizePrevious(previous) {
   throw new TypeError("previous must be plan markdown, a clause array, or a numbering result with clauses.");
 }
 
-// Exact LCS over key arrays, with a greedy fallback for very large plans.
+// Exact LCS over key arrays, with a greedy fallback for very large inputs.
 // Returns increasing [indexInA, indexInB] pairs.
-export function matchKeys(a, b) {
+// options.cellLimit overrides the exact-table limit (used by tests and callers with tighter budgets).
+export function matchKeys(a, b, { cellLimit = LCS_CELL_LIMIT } = {}) {
   let start = 0;
   while (start < a.length && start < b.length && a[start] === b[start]) start += 1;
   let endA = a.length;
@@ -162,7 +178,7 @@ export function matchKeys(a, b) {
 
   const n = endA - start;
   const m = endB - start;
-  if (n > 0 && m > 0 && n * m <= LCS_CELL_LIMIT) {
+  if (n > 0 && m > 0 && n * m <= cellLimit) {
     const width = m + 1;
     const table = new Uint32Array((n + 1) * width);
     for (let i = n - 1; i >= 0; i -= 1) {
@@ -212,6 +228,68 @@ export function matchKeys(a, b) {
   return pairs;
 }
 
+function tokenSet(text) {
+  return new Set(String(text).toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean));
+}
+
+// Jaccard overlap of word tokens, 0 when either side has no words.
+function similarity(a, b) {
+  const left = tokenSet(a);
+  const right = tokenSet(b);
+  if (left.size === 0 || right.size === 0) return 0;
+  let shared = 0;
+  for (const token of left) if (right.has(token)) shared += 1;
+  return shared / (left.size + right.size - shared);
+}
+
+// Pairs the old active clauses and the new blocks inside one changed gap, in order.
+// A pair needs the same kind. Similar pairs (above SIMILARITY_THRESHOLD) are preferred
+// over positional ones, so a clause keeps the id of the old clause it resembles.
+// Returns Map(newIndex -> oldIndex), both relative to the gap.
+function pairGap(olds, news) {
+  const result = new Map();
+  const n = olds.length;
+  const m = news.length;
+  if (n === 0 || m === 0) return result;
+  if (n * m > GAP_CELL_LIMIT) {
+    for (let k = 0; k < Math.min(n, m); k += 1) {
+      if (olds[k].kind !== news[k].kind) break;
+      result.set(k, k);
+    }
+    return result;
+  }
+  const weight = (i, j) => {
+    if (olds[i].kind !== news[j].kind) return 0;
+    const score = similarity(olds[i].text, news[j].text);
+    return score >= SIMILARITY_THRESHOLD ? 1 + score : POSITIONAL_WEIGHT;
+  };
+  const width = m + 1;
+  const best = new Float64Array((n + 1) * width);
+  for (let i = n - 1; i >= 0; i -= 1) {
+    for (let j = m - 1; j >= 0; j -= 1) {
+      let value = Math.max(best[(i + 1) * width + j], best[i * width + j + 1]);
+      const w = weight(i, j);
+      if (w > 0) value = Math.max(value, w + best[(i + 1) * width + j + 1]);
+      best[i * width + j] = value;
+    }
+  }
+  let i = 0;
+  let j = 0;
+  while (i < n && j < m) {
+    const w = weight(i, j);
+    if (w > 0 && best[i * width + j] === w + best[(i + 1) * width + j + 1]) {
+      result.set(j, i);
+      i += 1;
+      j += 1;
+    } else if (best[(i + 1) * width + j] >= best[i * width + j + 1]) {
+      i += 1;
+    } else {
+      j += 1;
+    }
+  }
+  return result;
+}
+
 function nextChildId(parentId, used) {
   const prefix = `${parentId}.`;
   let max = 0;
@@ -237,33 +315,54 @@ function renumber(blocks, previous) {
 
   const clauses = [];
   const changes = [];
-  const state = { anchorId: null, runParent: null, insideRun: false };
+  // Inserted clauses in one run nest under the anchor, using the same rules as a fresh plan.
+  const state = { anchorId: null, insideRun: false, runBase: "§0", runStack: [] };
+  const endRun = () => {
+    state.insideRun = false;
+    state.runStack = [];
+  };
 
   const insertClause = (block) => {
-    const parent = state.insideRun ? state.runParent : (state.anchorId ?? "§0");
+    if (!state.insideRun) {
+      state.insideRun = true;
+      state.runBase = state.anchorId ?? "§0";
+      state.runStack = [];
+    }
+    const stack = state.runStack;
+    const top = () => stack[stack.length - 1];
+    if (block.kind === "heading") {
+      while (stack.length > 0 && !(top().kind === "heading" && top().level < block.level)) stack.pop();
+    } else if (block.kind === "item") {
+      while (stack.length > 0 && top().kind === "item" && top().indent >= block.indent) stack.pop();
+    } else {
+      while (stack.length > 0 && top().kind === "item") stack.pop();
+    }
+    const parent = stack.length > 0 ? top().id : state.runBase;
     const id = nextChildId(parent, used);
     used.add(id);
-    state.runParent = parent;
-    state.insideRun = true;
+    if (block.kind !== "paragraph") {
+      stack.push({ kind: block.kind, level: block.level, indent: block.indent, id });
+    }
     clauses.push({ id, text: block.text, kind: block.kind, status: "active" });
     changes.push({ type: "clause.added", clause: id, newText: block.text });
   };
   const anchorClause = (id, block) => {
     state.anchorId = id;
-    state.insideRun = false;
+    endRun();
     clauses.push({ id, text: block.text, kind: block.kind, status: "active" });
   };
   const emitGap = (oldStart, oldEnd, newStart, newEnd) => {
     const oldActive = [];
     for (let i = oldStart; i < oldEnd; i += 1) if (previous[i].status === "active") oldActive.push(i);
+    const pairing = pairGap(
+      oldActive.map((index) => previous[index]),
+      blocks.slice(newStart, newEnd),
+    );
     const paired = new Map();
     const pairedOld = new Set();
-    for (let k = 0; k < Math.min(oldActive.length, newEnd - newStart); k += 1) {
-      const oldIndex = oldActive[k];
-      const newIndex = newStart + k;
-      if (previous[oldIndex].kind !== blocks[newIndex].kind) break;
-      paired.set(newIndex, oldIndex);
-      pairedOld.add(oldIndex);
+    for (const [newOffset, oldOffset] of pairing) {
+      paired.set(newStart + newOffset, oldActive[oldOffset]);
+      pairedOld.add(oldActive[oldOffset]);
     }
     for (let j = newStart; j < newEnd; j += 1) {
       const block = blocks[j];
@@ -277,7 +376,7 @@ function renumber(blocks, previous) {
         changes.push({ type: "clause.changed", clause: old.id, oldText: old.text, newText: block.text });
       }
       state.anchorId = old.id;
-      state.insideRun = false;
+      endRun();
     }
     for (let i = oldStart; i < oldEnd; i += 1) {
       if (pairedOld.has(i)) continue;

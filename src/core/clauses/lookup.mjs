@@ -22,8 +22,15 @@ function resolveClause(parsed, plans) {
   return { planId: parsed.plan ?? null, text: null };
 }
 
+// Every reference an entry makes: its refs, the entry it corrects, and its evidence items.
+// Evidence links that are not ledger or clause refs parse to null and are ignored.
 function entryRefs(entry) {
-  return Array.isArray(entry?.refs) ? entry.refs : [];
+  const refs = Array.isArray(entry?.refs) ? [...entry.refs] : [];
+  if (typeof entry?.corrects === "string") refs.push(entry.corrects);
+  if (Array.isArray(entry?.evidence)) {
+    for (const item of entry.evidence) if (typeof item === "string") refs.push(item);
+  }
+  return refs;
 }
 
 // Does a parsed reference (from an entry's refs or subject) point at the target?

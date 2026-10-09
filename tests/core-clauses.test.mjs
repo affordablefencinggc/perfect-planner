@@ -284,7 +284,7 @@ test("ids stay unique and published when a whole section is rewritten", () => {
   ]);
 });
 
-test("a large plan with many distinct clauses still keeps numbers stable through the greedy matcher", () => {
+test("a large plan keeps published numbers when one clause is edited (single-gap path, not the greedy matcher)", () => {
   const lines = ["# Big"];
   for (let i = 0; i < 7000; i += 1) lines.push(`Clause text number ${i}.`, "");
   const markdown = lines.join("\n");
@@ -557,4 +557,135 @@ test("lookup accepts missing entries and plans and returns null for invalid refs
 test("lookup of a clause with no matching plan map or plan clauses returns null text", () => {
   const result = lookup("§3", { entries, plans: { "P-3": { clauses: "not-an-array" } } });
   assert.equal(result.text, null);
+});
+
+test("lookup cites an entry through its corrects field and its evidence items", () => {
+  const extended = [
+    ...entries,
+    { n: "L-000011", type: "fact.corrected", subject: "T-14", summary: "Correction", refs: [], corrects: "L-000002" },
+    { n: "L-000012", type: "evidence.attached", subject: "T-14", summary: "Run evidence", refs: [], evidence: ["P-2 §3.1", "https://example.com/run/1", 7] },
+  ];
+  const entry = lookup("L-000002", { entries: extended, plans });
+  assert.deepEqual(entry.citedBy.map((item) => item.n), ["L-000011"]);
+  assert.deepEqual(entry.history.map((item) => item.n), ["L-000002"]);
+
+  const clause = lookup("P-2 §3.1", { entries: extended, plans });
+  assert.deepEqual(clause.citedBy.map((item) => item.n), ["L-000002", "L-000005", "L-000006", "L-000012"]);
+});
+
+test("lookup ignores a corrects value or evidence list that is malformed", () => {
+  const odd = [{ n: "L-000013", type: "note.added", subject: "T-14", summary: "Odd", refs: "not-a-list", corrects: 5, evidence: "P-2 §3.1" }];
+  assert.deepEqual(lookup("P-2 §3.1", { entries: odd, plans }).citedBy, []);
+});
+
+test("matchKeys uses the exact table exactly up to the cell limit and the greedy match above it", () => {
+  const a = ["x", "y", "z"];
+  const b = ["y", "z", "x"];
+  // 3 x 3 = 9 cells: exact LCS of length 2.
+  assert.equal(matchKeys(a, b, { cellLimit: 9 }).length, 2);
+  // Over the limit: greedy takes the first x and stops, which is still an increasing match.
+  assert.deepEqual(matchKeys(a, b, { cellLimit: 8 }), [[0, 2]]);
+});
+
+test("greedy matchKeys output is strictly increasing on both sides and only pairs equal keys", () => {
+  const a = ["p", "q", "p", "r", "q", "s", "p"];
+  const b = ["q", "p", "s", "r", "p", "q", "p"];
+  const pairs = matchKeys(a, b, { cellLimit: 0 });
+  assert.ok(pairs.length > 0);
+  for (let k = 0; k < pairs.length; k += 1) {
+    assert.equal(a[pairs[k][0]], b[pairs[k][1]]);
+    if (k > 0) {
+      assert.ok(pairs[k][0] > pairs[k - 1][0]);
+      assert.ok(pairs[k][1] > pairs[k - 1][1]);
+    }
+  }
+});
+
+test("a rewritten clause keeps the id of the old clause it resembles, not the one in its position", () => {
+  const previous = numberPlan([
+    "# Plan",
+    "",
+    "Alpha clause about saving plans locally.",
+    "",
+    "Beta clause about syncing the ledger cloud.",
+    "",
+  ].join("\n"));
+  // Alpha is removed and Beta is reworded: Beta keeps §1.2, and Alpha is withdrawn.
+  const next = numberPlan("# Plan\n\nBeta clause about syncing the ledger to cloud storage.\n", previous);
+  assert.deepEqual(next.clauses.map((clause) => [clause.id, clause.status]), [
+    ["§1", "active"],
+    ["§1.2", "active"],
+    ["§1.1", "withdrawn"],
+  ]);
+  assert.equal(next.clauses[1].text, "Beta clause about syncing the ledger to cloud storage.");
+  assert.deepEqual(next.changes.map((change) => [change.type, change.clause]), [
+    ["clause.changed", "§1.2"],
+    ["clause.withdrawn", "§1.1"],
+  ]);
+});
+
+test("a same-kind clause with no similar partner falls back to position, so the published id is still kept", () => {
+  const previous = numberPlan("# Plan\n\nOne.\n\nTwo.\n");
+  const next = numberPlan("# Plan\n\nEntirely new.\n", previous);
+  assert.equal(next.clauses.find((clause) => clause.text === "Entirely new.").id, "§1.1");
+});
+
+test("content inserted under a new heading nests under that heading, as in a fresh plan", () => {
+  const previous = numberPlan("# Plan\n\n## Three\n\nAlpha.\n");
+  assert.deepEqual(previous.clauses.map((clause) => clause.id), ["§1", "§1.1", "§1.1.1"]);
+  const next = numberPlan("# Plan\n\n## Three\n\n## Inserted\n\nBody of inserted.\n\nAlpha.\n", previous);
+  assert.deepEqual(next.clauses.map((clause) => [clause.id, clause.text]), [
+    ["§1", "Plan"],
+    ["§1.1", "Three"],
+    ["§1.1.2", "Inserted"],
+    ["§1.1.2.1", "Body of inserted."],
+    ["§1.1.1", "Alpha."],
+  ]);
+  assert.deepEqual(next.changes.map((change) => [change.type, change.clause]), [
+    ["clause.added", "§1.1.2"],
+    ["clause.added", "§1.1.2.1"],
+  ]);
+});
+
+test("ATX headings with up to three leading spaces or a closing hash count as headings, bare # does not add text", () => {
+  const result = numberPlan("#\n\n   # Indented heading\n\n#tag stays text\n\n# C#\n");
+  assert.deepEqual(result.clauses.map((clause) => [clause.id, clause.kind, clause.text]), [
+    ["§1", "heading", "Indented heading"],
+    ["§1.1", "paragraph", "#tag stays text"],
+    ["§2", "heading", "C#"],
+  ]);
+});
+
+test("entry numbers past six digits are valid when they have no leading zero", () => {
+  assert.deepEqual(parseRef("L-1000000"), { kind: "entry", id: "L-1000000" });
+  assert.deepEqual(parseRef("L-10000000"), { kind: "entry", id: "L-10000000" });
+  assert.equal(parseRef("L-01000000"), null);
+});
+
+test("parseImplements gives a parenthesised task to the earlier refs on the same line that have none", () => {
+  assert.deepEqual(parseImplements("Implements: P-2 §3.1, P-2 §3.2 (T-14)"), [
+    { ref: "P-2 §3.1", task: "T-14" },
+    { ref: "P-2 §3.2", task: "T-14" },
+  ]);
+});
+
+test("parseImplements lets a bare clause inherit the plan named earlier on the same line", () => {
+  assert.deepEqual(parseImplements("Implements: P-2 §3.1, §3.2 (T-14)"), [
+    { ref: "P-2 §3.1", task: "T-14" },
+    { ref: "P-2 §3.2", task: "T-14" },
+  ]);
+});
+
+test("parseImplements does not carry a task forward past a later ref that has none", () => {
+  assert.deepEqual(parseImplements("Implements: P-2 §3.1 (T-14), P-2 §4.2"), [
+    { ref: "P-2 §3.1", task: "T-14" },
+    { ref: "P-2 §4.2", task: null },
+  ]);
+});
+
+test("parseImplements groups within one line only", () => {
+  assert.deepEqual(parseImplements("Implements: P-2 §3.1\nImplements: P-2 §3.2 (T-14)"), [
+    { ref: "P-2 §3.1", task: null },
+    { ref: "P-2 §3.2", task: "T-14" },
+  ]);
 });

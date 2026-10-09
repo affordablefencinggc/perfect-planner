@@ -7,7 +7,8 @@ const PLAN_CLAUSE = /^(P-[1-9]\d*)\s+(§(?:0(?:\.[1-9]\d*)+|[1-9]\d*(?:\.[1-9]\d
 const TASK = /^T-([1-9]\d*)(?:\.a([2-9]|[1-9]\d+))?$/;
 const SERIES = { P: "plan", Q: "question", D: "decision", R: "release" };
 const SERIES_ID = /^([PQDR])-([1-9]\d*)$/;
-const ENTRY = /^L-(\d{6})$/;
+// Six digits (zero-padded), or seven or more digits with no leading zero.
+const ENTRY = /^L-(\d{6}|[1-9]\d{6,})$/;
 
 // parseRef(str) -> { kind, plan?, clause?, id, attempt? } or null.
 //   "§3.1"        -> { kind: "clause", clause: "§3.1", id: "§3.1" }
@@ -52,19 +53,27 @@ export function canonicalRef(parsed) {
 
 // parseImplements(commitMessage) -> [{ ref: "P-2 §3.1", task: "T-14" | null }]
 // Reads lines of the form "Implements: P-2 §3.1 (T-14)". Several refs may be
-// comma-separated. Items that are not clause refs, or whose task is invalid, are skipped.
+// comma-separated, and each line is read on its own.
+// Grouping rules within one line:
+//   - A parenthesised task applies to itself and to the earlier refs that have no task
+//     since the previous task, so "P-2 §3.1, P-2 §3.2 (T-14)" gives both refs T-14.
+//   - A bare "§3.2" after "P-2 §3.1" inherits the plan P-2 from that earlier ref.
+//   - A bare "§x" with no earlier plan on the line stays bare.
+// Items that are not clause refs, or whose task is invalid, are skipped.
 export function parseImplements(commitMessage) {
   if (typeof commitMessage !== "string") return [];
   const results = [];
   for (const rawLine of commitMessage.split(/\r?\n/)) {
     const line = /^\s*implements:\s*(.*?)\s*$/i.exec(rawLine);
     if (!line) continue;
+    const lineResults = [];
+    let pending = [];
+    let linePlan = null;
     for (const part of line[1].split(",")) {
       const item = part.trim();
       if (!item) continue;
       const withTask = /^(.*?)\s*\(([^()]*)\)$/.exec(item);
-      const refText = withTask ? withTask[1] : item;
-      const parsed = parseRef(refText);
+      const parsed = parseRef(withTask ? withTask[1] : item);
       if (!parsed || (parsed.kind !== "clause" && parsed.kind !== "plan-clause")) continue;
       let task = null;
       if (withTask) {
@@ -72,8 +81,19 @@ export function parseImplements(commitMessage) {
         if (!taskRef || taskRef.kind !== "task") continue;
         task = taskRef.id;
       }
-      results.push({ ref: parsed.id, task });
+      let ref = parsed.id;
+      if (parsed.kind === "plan-clause") linePlan = parsed.plan;
+      else if (linePlan) ref = `${linePlan} ${parsed.clause}`;
+
+      const index = lineResults.push({ ref, task }) - 1;
+      if (task) {
+        for (const earlier of pending) lineResults[earlier].task = task;
+        pending = [];
+      } else {
+        pending.push(index);
+      }
     }
+    results.push(...lineResults);
   }
   return results;
 }
