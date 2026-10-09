@@ -47,6 +47,9 @@ export function shellWords(line) {
 
 /** node, connect.mjs, bridge address and token file (plus any options such as --agent claude). */
 export function parseConnectLine(line) {
+  // A line with a placeholder left in it (<path-to-...>, {{...}}) cannot run as copied.
+  const placeholder = String(line).match(/<[^>]*>|\{\{[^}]*\}\}/);
+  if (placeholder) throw new Error(`The line still has a placeholder (${placeholder[0]}), so it cannot run as copied.`);
   const words = shellWords(line);
   const [node, connect, bridgeUrl, tokenFile, ...options] = words;
   if (!/connect\.mjs$/.test(connect ?? "") || !/^http:\/\/127\.0\.0\.1:\d+$/.test(bridgeUrl ?? "") || !/\.token$/.test(tokenFile ?? "")) {
@@ -111,7 +114,8 @@ export async function checkAgentConnect(line) {
   mkdirSync(work, { recursive: true });
   fakeClaude(bin, record);
   const home = path.join(dir, "home");
-  const env = { ...process.env, HOME: home, USERPROFILE: home, PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}` };
+  const pathKey = Object.keys(process.env).find((k) => k.toUpperCase() === "PATH") ?? "PATH";
+  const env = { ...process.env, HOME: home, USERPROFILE: home, [pathKey]: `${bin}${path.delimiter}${process.env[pathKey] ?? ""}` };
   delete env.NODE_OPTIONS;
   try {
     const steps = {};
@@ -122,10 +126,14 @@ export async function checkAgentConnect(line) {
     steps.skillAcceptsLine = validateConnectLine(line, { connectProgram: parsed.connect });
     if (steps.skillAcceptsLine !== null) throw new Error(`The skill's rule refuses this line: ${steps.skillAcceptsLine}`);
     steps.skillAcceptsLine = true;
-    const run = spawnSync(parsed.node, [parsed.connect, parsed.bridgeUrl, parsed.tokenFile, ...parsed.options], { cwd: work, env, encoding: "utf8", timeout: 60_000 });
+    // Exactly as copied, in the shell the app says to paste it into (PowerShell on Windows).
+    const run = process.platform === "win32"
+      ? spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", line], { cwd: work, env, encoding: "utf8", timeout: 60_000 })
+      : spawnSync("/bin/sh", ["-c", line], { cwd: work, env, encoding: "utf8", timeout: 60_000 });
     steps.connectExit = run.status;
     steps.connectSaid = String(run.stdout).trim();
     if (run.status !== 0) throw new Error(`The connect line failed (${run.status}): ${String(run.stderr)}`);
+    steps.ranAsCopied = true;
     steps.skillInstalled = existsSync(path.join(home, ".claude", "skills", "perfect-planner-connect", "SKILL.md"));
     const calls = readFileSync(record, "utf8").trim().split("\n").map((l) => JSON.parse(l));
     const add = calls.find((args) => args[0] === "mcp" && args[1] === "add");

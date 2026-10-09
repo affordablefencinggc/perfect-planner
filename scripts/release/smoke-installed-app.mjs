@@ -129,8 +129,10 @@ export async function smokeInstalledApp({ installer, out, installDir = "C:\\PP S
     const line = await until("the connect line", () => client.evaluate(`document.querySelector("[data-connect-command]")?.innerText?.trim() || ""`), 30_000);
     summary.lineUsesBundledNode = line.startsWith(`& '${installDir}\\desktop-host\\node.exe'`);
     await client.screenshot(path.join(out, "2-connect-line.png"));
+    // Anything a person might copy from the drawer must be ready to run; report leftover placeholders.
+    summary.drawerPlaceholders = await client.evaluate(`[...new Set((document.querySelector(".core-screen-connect")?.closest("[role=dialog], aside, section")?.innerText ?? document.body.innerText).match(/<[^>\\n]{1,80}>|\\{\\{[^}]*\\}\\}/g) ?? [])]`);
     const agent = await checkAgentConnect(line);
-    summary.agent = { skillAcceptsLine: agent.skillAcceptsLine, checkedInAs: agent.checkedInAs, registeredWithBundledNode: agent.registered.usesLineNode, skillInstalled: agent.skillInstalled };
+    summary.agent = { ranAsCopied: agent.ranAsCopied, skillAcceptsLine: agent.skillAcceptsLine, checkedInAs: agent.checkedInAs, registeredWithBundledNode: agent.registered.usesLineNode, skillInstalled: agent.skillInstalled };
     await until("the window to say the agent connected", () => client.evaluate(`document.querySelector(".core-screen-connect")?.innerText?.includes("Connected:")`), 30_000);
     await client.screenshot(path.join(out, "3-agent-connected.png"));
     summary.windowSaysConnected = true;

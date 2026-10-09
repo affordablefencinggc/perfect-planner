@@ -256,7 +256,7 @@ export async function checkDesktopHost(folder = path.join(projectRoot, "dist", "
     child.stdin.end();
     const stopped = await Promise.race([exited, new Promise((resolve) => setTimeout(() => resolve(null), 10_000))]);
     if (!stopped) throw new Error("The service did not stop when its stdin closed.");
-    return { ok: true, target: manifest.target, node: manifest.node.version, origin: ready.origin, launchLink: true, refusedWithoutTheWindow: { before, after }, agent: { skillAcceptsLine: agent.skillAcceptsLine, usesBundledNode: agent.registered.usesLineNode, checkedInAs: agent.checkedInAs, skillInstalled: agent.skillInstalled }, appListsAgent: true, loop, stoppedWithStdin: true };
+    return { ok: true, target: manifest.target, node: manifest.node.version, origin: ready.origin, launchLink: true, refusedWithoutTheWindow: { before, after }, agent: { ranAsCopied: agent.ranAsCopied, skillAcceptsLine: agent.skillAcceptsLine, usesBundledNode: agent.registered.usesLineNode, checkedInAs: agent.checkedInAs, skillInstalled: agent.skillInstalled }, appListsAgent: true, loop, stoppedWithStdin: true };
   } finally {
     if (child.exitCode === null) child.kill();
     rmSync(data, { recursive: true, force: true });
