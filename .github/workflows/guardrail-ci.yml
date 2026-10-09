@@ -14,10 +14,15 @@ concurrency:
 
 jobs:
   web-and-contracts:
-    name: Web, contracts, MCP, and Sites
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
+    name: Web, contracts, MCP, and Sites (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
+      - run: git config --global core.autocrlf false
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
