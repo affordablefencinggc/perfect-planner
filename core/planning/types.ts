@@ -1,5 +1,6 @@
 // Shared shapes for deep planning ("Deep planning: the hard questions first").
 // Everything here is plain data so the app, the MCP tools and Jev can read it.
+import type { DescriptionFact, RuledOut } from "./description";
 
 /** The ten areas whose decisions sink projects when they come late. */
 export const AREAS = [
@@ -40,6 +41,10 @@ export interface IdeaProfile {
   known: Record<string, string>;
   /** "solo" (one person plus helpers) or "team". */
   team: "solo" | "team";
+  /** Questions the person's own description settles (also in `known`), with their words. */
+  described?: DescriptionFact[];
+  /** What the description rules out for the whole idea ("no accounts", "no cloud sync", ...). */
+  ruledOut?: RuledOut[];
 }
 
 export interface QuestionOption {
