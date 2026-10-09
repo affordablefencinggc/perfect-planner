@@ -483,9 +483,9 @@ describe("the whole core loop", () => {
     expect([...kindOf.get("question.asked")!]).toEqual(["agent"]);
     expect([...kindOf.get("test.approved")!]).toEqual(["person"]);
     // Jev's counted verdicts are signed by Perfect Planner and name Jev; merges are the person's own signed approval.
-    expect([...kindOf.get("review.verdict")!].sort()).toEqual(["jev", "person", "system"]);
+    expect([...kindOf.get("review.verdict")!].sort()).toEqual(["person", "system"]);
     for (const e of entries().filter((v) => v.type === "review.verdict")) {
-      if (e.actor.kind === "system" && e.evidence.some((x) => x.startsWith("scope:"))) expect(e.data?.reviewer, e.n).toMatchObject({ kind: "jev" });
+      if (e.actor.kind === "system" && e.evidence.includes("verdict:approve")) expect(e.data?.reviewer, e.n).toMatchObject({ kind: "jev" });
       if (e.actor.kind === "person") expect(e.evidence, e.n).toContain("scope:merge");
     }
     for (const type of ["test.passed", "test.failed", "commit.observed", "collision.detected", "collision.resolved", "worktree.created", "task.reopened"]) {
