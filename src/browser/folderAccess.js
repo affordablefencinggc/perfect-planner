@@ -116,6 +116,18 @@ export async function loadRememberedFolder(projectId) {
   } catch { return null; }
 }
 
+// The most recently saved folder in this browser, for a one-click "Use last folder".
+export async function lastRememberedFolder() {
+  const store = getFolderHandleStore();
+  if (!store) return null;
+  let records;
+  try { records = await store.list(); } catch { return null; }
+  const latest = records.filter(validRecord).sort((left, right) => String(right.savedAt ?? "").localeCompare(String(left.savedAt ?? "")))[0];
+  if (!latest) return null;
+  loaded.set(latest.projectId, latest);
+  return Object.freeze({ projectId: latest.projectId, name: latest.name ?? latest.handle.name, savedAt: latest.savedAt ?? null });
+}
+
 export function folderAccessState(projectId) {
   const record = loaded.get(projectId) ?? null;
   return Object.freeze({ remembered: Boolean(record), open: openThisSession.has(projectId), name: record?.name ?? null, savedAt: record?.savedAt ?? null });
