@@ -7,7 +7,17 @@ import path from "node:path";
  */
 export const NO_CWD_SEARCH_ENV = { NoDefaultCurrentDirectoryInExePath: "1" } as const;
 
-const isNetworkPath = (dir: string, platform: NodeJS.Platform) => platform === "win32" && /^[\\/]{2}/.test(dir);
+/**
+ * On Windows, true only for a local drive-letter path (C:\ or C:/). Refuses every network and device
+ * spelling: \\server, //server, mixed slashes, \\?\UNC\, \??\UNC\, \\.\ and drive-relative \dir.
+ * Use it for any path the core will run or trust on Windows.
+ */
+export function isLocalWindowsPath(file: string): boolean {
+  return /^[A-Za-z]:[\\/]/.test(file);
+}
+
+/** On Windows anything but a local drive-letter path counts as network (or device) and is never used. */
+const isNetworkPath = (dir: string, platform: NodeJS.Platform) => platform === "win32" && !isLocalWindowsPath(dir);
 
 /**
  * Absolute path of `name` from PATH, never from the current folder: relative and empty PATH
