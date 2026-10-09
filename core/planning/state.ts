@@ -1,7 +1,9 @@
 // Planning state is a view of the ledger: replaying question.asked,
 // decision.made, question.answered and spike task.created entries rebuilds it.
-// Nothing here keeps state of its own.
-import type { LedgerEntry } from "../ledger/index";
+// Nothing here keeps state of its own. A planning question counts as
+// answered only by an entry a person wrote (isAuthoritative, personOnly);
+// an agent's or Jev's answer is information, never the user's decision.
+import { isAuthoritative, type LedgerEntry } from "../ledger/index";
 import type { Area, PlanningAnswer, QuestionOption, Recommendation } from "./types";
 
 /** The `data.planning` payload on a question.asked written by deep planning. */
@@ -50,7 +52,7 @@ export function allQuestions(entries: readonly LedgerEntry[]): Map<string, AnyQu
       questions.set(e.subject, { q: e.subject, blocking: e.data?.blocking === true, open: true, planning: planningMeta(e) });
     } else if (e.type === "question.answered") {
       const q = questions.get(e.subject);
-      if (q) q.open = false;
+      if (q && (!q.planning || isAuthoritative(e, { personOnly: true }))) q.open = false;
     }
   }
   return questions;
@@ -76,13 +78,13 @@ export function planningQuestions(entries: readonly LedgerEntry[]): PlanningQues
       });
     } else if (e.type === "decision.made" && typeof d.question === "string") {
       const q = byQ.get(d.question);
-      if (!q) continue;
+      if (!q || q.status !== "open" || !isAuthoritative(e, { personOnly: true })) continue;
       q.decision = e.subject;
       q.answer = String(d.answer ?? e.summary);
       if (typeof d.choice === "string") q.choice = d.choice;
     } else if (e.type === "question.answered") {
       const q = byQ.get(e.subject);
-      if (!q) continue;
+      if (!q || q.status !== "open" || !isAuthoritative(e, { personOnly: true })) continue;
       q.answer = String(d.answer ?? e.summary);
       const spike = d.spike as PlanningQuestionState["spike"] | undefined;
       if (d.via === "spike" && spike) {
