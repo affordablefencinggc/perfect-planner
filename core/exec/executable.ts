@@ -27,7 +27,8 @@ const isNetworkPath = (dir: string, platform: NodeJS.Platform) => platform === "
  * /private/var) is still recognised. On Windows only `.exe` counts, since a .cmd/.bat cannot be
  * started without a shell. `protect` adds roots the host registered itself (the project folder,
  * the repo's top level, worktrees it made), so a PATH entry at the repo root is skipped when cwd is
- * a subfolder. Returns null when nothing qualifies.
+ * a subfolder. `windowsExtensions` lets a caller that never hands the file to a shell also accept an
+ * npm shim (.cmd) to read, never to run. Returns null when nothing qualifies.
  */
 export function findExecutable(
   name: string,
@@ -35,11 +36,12 @@ export function findExecutable(
   cwd: string,
   platform: NodeJS.Platform = process.platform,
   protect: readonly string[] = [],
+  windowsExtensions: readonly string[] = [".exe"],
 ): string | null {
   const windows = platform === "win32";
   const pathValue = Object.entries(env).find(([key]) => (windows ? key.toUpperCase() === "PATH" : key === "PATH"))?.[1] ?? "";
   const roots = protectedRoots(cwd, protect);
-  const extensions = windows ? [".exe"] : [""];
+  const extensions = windows ? windowsExtensions : [""];
   for (const entry of pathValue.split(windows ? ";" : ":")) {
     const dir = entry.trim().replace(/^"(.*)"$/, "$1");
     if (!dir || !path.isAbsolute(dir) || isNetworkPath(dir, platform)) continue;

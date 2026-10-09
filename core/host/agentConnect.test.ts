@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
-import { bundledNodePath, connectArgsProblem, connectLineProblem, validateConnectLine, connectPlan, installSkill, SKILL_NODE_PLACEHOLDER, SKILL_PROGRAM_PLACEHOLDER } from "./agentConnect";
+import { afterEach, describe, expect, it } from "vitest";
+import { bundledNodePath, claudeLaunch, connectArgsProblem, protectFor, connectLineProblem, validateConnectLine, connectPlan, installSkill, SKILL_NODE_PLACEHOLDER, SKILL_PROGRAM_PLACEHOLDER } from "./agentConnect";
 import { connectLine } from "./routes/agents";
 
 describe("connect line", () => {
@@ -121,5 +121,88 @@ describe("the line check the skill follows", () => {
       expect(connectLineProblem(`node '${unixHere}/connect.mjs' http://127.0.0.1:5555 '/tmp/a${bad}b.token'`, unixHere, "linux")).toMatch(/shell character/);
     }
     expect(connectLineProblem(line(winToken), winHere, "win32")).toBeNull();
+  });
+});
+
+describe("finding Claude Code", () => {
+  const windows = process.platform === "win32";
+  const exe = windows ? "claude.exe" : "claude";
+  const sep = windows ? ";" : ":";
+  const made: string[] = [];
+  const temp = () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pp-claude-"));
+    made.push(dir);
+    return dir;
+  };
+  const program = (file: string) => {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, "");
+    fs.chmodSync(file, 0o755);
+    return file;
+  };
+  // A folder link any user can make: a junction on Windows, a symlink elsewhere.
+  const link = (target: string, at: string) => fs.symlinkSync(target, at, windows ? "junction" : "dir");
+  afterEach(() => {
+    for (const dir of made.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("never runs a claude planted in the project through a PATH folder that links into it", () => {
+    const project = temp();
+    const outside = temp();
+    program(path.join(project, "bin", exe)); // planted
+    const safe = program(path.join(outside, "safe", exe));
+    const linked = path.join(outside, "linked-bin");
+    link(path.join(project, "bin"), linked);
+    const launch = claudeLaunch(["mcp", "list"], { PATH: [".", "relative", linked, path.join(outside, "safe")].join(sep) }, project, []);
+    expect(launch).toEqual({ command: safe, args: ["mcp", "list"] });
+    // Only the planted one on PATH: nothing runs.
+    expect(claudeLaunch([], { PATH: linked }, project, [])).toBeNull();
+  });
+
+  it("never runs a claude from the picked repo or the project folder when the agent works in another folder", () => {
+    const project = temp();
+    const repo = temp();
+    const worktree = temp();
+    const outside = temp();
+    const tokenFile = path.join(project, ".perfect-planner", "tokens", "T-1.token");
+    fs.mkdirSync(path.dirname(tokenFile), { recursive: true });
+    fs.writeFileSync(path.join(project, ".perfect-planner", "repo.json"), JSON.stringify({ root: repo }));
+    expect(protectFor(tokenFile)).toEqual([project, repo]);
+    program(path.join(repo, "node_modules", ".bin", exe)); // planted in the repo
+    program(path.join(project, "tools", exe)); // planted in the project folder
+    const linked = path.join(outside, "linked-bin");
+    link(path.join(repo, "node_modules", ".bin"), linked);
+    const PATH = [path.join(repo, "node_modules", ".bin"), path.join(project, "tools"), linked].join(sep);
+    expect(claudeLaunch([], { PATH }, worktree, protectFor(tokenFile))).toBeNull();
+    const safe = program(path.join(outside, "safe", exe));
+    expect(claudeLaunch([], { PATH: `${PATH}${sep}${path.dirname(safe)}` }, worktree, protectFor(tokenFile))?.command).toBe(safe);
+  });
+
+  it("never protects the home folder, so a claude in ~/.local/bin still runs", () => {
+    expect(protectFor(path.join(os.homedir(), ".perfect-planner", "tokens", "C-1.token"))).toEqual([]);
+  });
+
+  it.runIf(windows)("runs an npm shim's package entry with Node, never the .cmd, and only outside protected folders", () => {
+    const project = temp();
+    const outside = temp();
+    const npm = path.join(outside, "npm");
+    program(path.join(npm, "claude.cmd"));
+    const entry = program(path.join(npm, "node_modules", "@anthropic-ai", "claude-code", "cli.js"));
+    expect(claudeLaunch(["mcp", "list"], { Path: npm }, project, [])).toEqual({ command: process.execPath, args: [entry, "mcp", "list"] });
+    // A .cmd that is not Claude Code's npm shim is never run at all.
+    const other = path.join(outside, "other");
+    program(path.join(other, "claude.cmd"));
+    expect(claudeLaunch([], { Path: other }, project, [])).toBeNull();
+    // A shim whose package entry links into the project is refused.
+    const sneaky = path.join(outside, "sneaky");
+    program(path.join(sneaky, "claude.cmd"));
+    fs.mkdirSync(path.join(sneaky, "node_modules", "@anthropic-ai"), { recursive: true });
+    program(path.join(project, "pkg", "cli.js"));
+    link(path.join(project, "pkg"), path.join(sneaky, "node_modules", "@anthropic-ai", "claude-code"));
+    expect(claudeLaunch([], { Path: sneaky }, project, [])).toBeNull();
+  });
+
+  it("returns null when Claude Code is not installed", () => {
+    expect(claudeLaunch([], { PATH: path.join(temp(), "empty") }, temp(), [])).toBeNull();
   });
 });

@@ -6,11 +6,11 @@ export function isLocalWindowsPath(file) {
     return /^[A-Za-z]:[\\/]/.test(file);
 }
 const isNetworkPath = (dir, platform) => platform === "win32" && !isLocalWindowsPath(dir);
-export function findExecutable(name, env, cwd, platform = process.platform) {
+export function findExecutable(name, env, cwd, platform = process.platform, protect = [], windowsExtensions = [".exe"]) {
     const windows = platform === "win32";
     const pathValue = Object.entries(env).find(([key]) => (windows ? key.toUpperCase() === "PATH" : key === "PATH"))?.[1] ?? "";
-    const roots = protectedRoots(cwd);
-    const extensions = windows ? [".exe"] : [""];
+    const roots = protectedRoots(cwd, protect);
+    const extensions = windows ? windowsExtensions : [""];
     for (const entry of pathValue.split(windows ? ";" : ":")) {
         const dir = entry.trim().replace(/^"(.*)"$/, "$1");
         if (!dir || !path.isAbsolute(dir) || isNetworkPath(dir, platform))
@@ -44,10 +44,30 @@ function realPath(p) {
         return undefined;
     }
 }
-function protectedRoots(cwd) {
-    const here = path.resolve(cwd);
-    const real = realPath(here);
-    return real && real !== here ? [here, real] : [here];
+function protectedRoots(cwd, protect = []) {
+    const roots = new Set();
+    for (const root of [cwd, ...protect, ...registeredRoots()]) {
+        if (typeof root !== "string" || root === "")
+            continue;
+        const here = path.resolve(root);
+        roots.add(here);
+        const real = realPath(here);
+        if (real)
+            roots.add(real);
+    }
+    return [...roots];
+}
+const registered = new Map();
+let nextRegistration = 0;
+export function protectRoots(roots) {
+    const id = nextRegistration++;
+    registered.set(id, roots.filter((root) => typeof root === "string" && root !== "" && path.isAbsolute(root)));
+    return () => {
+        registered.delete(id);
+    };
+}
+export function registeredRoots() {
+    return [...new Set([...registered.values()].flat())];
 }
 function insideAny(roots, ...candidates) {
     return roots.some((root) => candidates.some((candidate) => isWithin(root, candidate)));
@@ -59,7 +79,7 @@ export function isWithin(root, candidate) {
 export class ExecutableNotFoundError extends Error {
 }
 let cached;
-export function gitExecutable(cwd = process.cwd()) {
+export function gitExecutable(cwd = process.cwd(), protect = []) {
     const pathValue = process.env.PATH ?? process.env.Path ?? "";
     if (cached?.pathValue !== pathValue) {
         const file = findExecutable("git", process.env, cwd);
@@ -67,8 +87,12 @@ export function gitExecutable(cwd = process.cwd()) {
             throw new ExecutableNotFoundError("git was not found on PATH (relative PATH entries and the repo folder are never searched). Install Git and restart Perfect Planner.");
         cached = { pathValue, file };
     }
-    if (insideAny(protectedRoots(cwd), path.resolve(cached.file), realPath(cached.file) ?? path.resolve(cached.file))) {
-        throw new ExecutableNotFoundError(`The git on PATH (${cached.file}) is inside ${cwd}, so it could be the repo's own; refusing to run it.`);
+    const roots = protectedRoots(cwd, protect);
+    if (insideAny(roots, path.resolve(cached.file), realPath(cached.file) ?? path.resolve(cached.file))) {
+        const other = findExecutable("git", process.env, cwd, process.platform, protect);
+        if (other)
+            return other;
+        throw new ExecutableNotFoundError(`The only git on PATH (${cached.file}) is inside ${[cwd, ...protect].join(" or ")}, so it could be the repo's own; refusing to run it.`);
     }
     return cached.file;
 }

@@ -13,7 +13,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { findExecutable, isNetworkPath, launchFor } from "./tokenFile";
+import { findExecutable, isWithin, NO_CWD_SEARCH_ENV, registeredRoots } from "../exec/index";
+import { chosenRepoRoot, repoRefusal } from "./routes/tasks";
+import { isNetworkPath } from "./tokenFile";
 
 const SERVER = "perfect-planner-core";
 const SKILL = "perfect-planner-connect";
@@ -88,7 +90,7 @@ export function connectArgsProblem(argv: string[], platform: NodeJS.Platform = p
   const absolute = platform === "win32" ? path.win32.isAbsolute(tokenFile) : path.posix.isAbsolute(tokenFile);
   if (!absolute || !tokenFile.endsWith(".token")) return "The second part must be the full path of the .token file the app wrote.";
   if (platform === "win32") {
-    // An unusual claude.cmd still runs through cmd.exe, which expands % and splits on ".
+    // cmd.exe and PowerShell read % and " differently; refusing them keeps the path the same in every shell.
     for (const bad of ["%", '"']) if (argv.some((arg) => arg.includes(bad))) return `The path contains ${bad}, which Windows would rewrite. Move Perfect Planner's data to a folder without it.`;
   }
   return null;
@@ -115,20 +117,73 @@ export function installSkill(plan: Pick<ConnectPlan, "skillFrom" | "skillTo">, h
   fs.writeFileSync(plan.skillTo, text);
 }
 
+/** The npm package entry an npm shim (claude.cmd) starts; Perfect Planner runs it with Node itself. */
+const NPM_ENTRY = ["node_modules", "@anthropic-ai", "claude-code", "cli.js"];
+
+export interface Launch {
+  command: string;
+  args: string[];
+}
+
 /**
- * Runs Claude Code from the project folder (claude mcp add -s local registers that folder) without a
- * shell, by the absolute path found on PATH, so a claude or claude.cmd planted in the repo never runs.
+ * The folders no agent CLI may be started from: the current folder, the project folder that owns the
+ * token file (<project>/.perfect-planner/tokens/x.token) and the repo the person picked for it. Never found
+ * by walking up to .git.
  */
-function claude(args: string[]) {
-  const program = findExecutable("claude", process.env, process.cwd());
-  if (!program) return { error: Object.assign(new Error("claude not found"), { code: "ENOENT" }), status: null, stdout: "", stderr: "" };
-  const launch = launchFor(program, args, "@anthropic-ai/claude-code/cli.js");
+export function protectFor(tokenFile: string | null): string[] {
+  if (!tokenFile) return [];
+  const project = path.dirname(path.dirname(path.dirname(tokenFile)));
+  const repo = chosenRepoRoot(project);
+  // A whole drive or the home folder is never a protected root: it would hide ~/.local/bin/claude.
+  return [project, ...(repo ? [repo] : [])].filter((root) => !repoRefusal(root));
+}
+
+/**
+ * How to start Claude Code without a shell, by core/exec's finder, so a claude planted in the project,
+ * the picked repo or a PATH folder that links into either never runs. On Windows a claude.exe runs as
+ * itself; an npm shim (claude.cmd) is never run: its package entry runs under this Node instead, and only
+ * when that entry also lies outside every protected folder. Null when no usable Claude Code is found.
+ */
+export function claudeLaunch(
+  args: string[],
+  env: NodeJS.ProcessEnv,
+  cwd: string,
+  protect: readonly string[],
+  platform: NodeJS.Platform = process.platform,
+): Launch | null {
+  const program = findExecutable("claude", env, cwd, platform, protect, [".exe", ".cmd"]);
+  if (!program) return null;
+  if (platform !== "win32" || !/\.cmd$/i.test(program)) return { command: program, args };
+  const entry = path.join(path.dirname(program), ...NPM_ENTRY);
+  let real: string;
+  try {
+    if (!fs.statSync(entry).isFile()) return null;
+    real = fs.realpathSync.native(entry);
+  } catch {
+    return null;
+  }
+  const roots = [cwd, ...protect, ...registeredRoots()];
+  if (roots.some((root) => isWithin(root, entry) || isWithin(root, real) || isWithin(safeReal(root), real))) return null;
+  return { command: process.execPath, args: [entry, ...args] };
+}
+
+function safeReal(p: string): string {
+  try {
+    return fs.realpathSync.native(p);
+  } catch {
+    return path.resolve(p);
+  }
+}
+
+/** Runs Claude Code from the project folder (claude mcp add -s local registers that folder). */
+function claude(args: string[], tokenFile: string | null) {
+  const launch = claudeLaunch(args, process.env, process.cwd(), protectFor(tokenFile));
+  if (!launch) return { error: Object.assign(new Error("claude not found"), { code: "ENOENT" }), status: null, stdout: "", stderr: "" };
   return spawnSync(launch.command, launch.args, {
     encoding: "utf8",
     windowsHide: true,
-    ...(launch.verbatim ? { windowsVerbatimArguments: true } : {}),
     // Windows: never resolve a bare program name (node, git) from the current folder either.
-    env: { ...process.env, NoDefaultCurrentDirectoryInExePath: "1" },
+    env: { ...process.env, ...NO_CWD_SEARCH_ENV },
   });
 }
 
@@ -165,8 +220,8 @@ function main(argv: string[]): number {
     process.stderr.write(`Perfect Planner: could not install the skill (${(error as Error).message}). Connecting anyway.\n`);
   }
 
-  claude(plan.remove); // nothing to remove the first time; that is fine
-  const added = claude(plan.add);
+  claude(plan.remove, tokenFile); // nothing to remove the first time; that is fine
+  const added = claude(plan.add, tokenFile);
   if (added.error || added.status !== 0) {
     const missing = (added.error as NodeJS.ErrnoException | undefined)?.code === "ENOENT";
     process.stderr.write(
