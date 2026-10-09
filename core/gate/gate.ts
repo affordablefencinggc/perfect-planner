@@ -383,7 +383,7 @@ export class TestGate {
       actor: approver,
       subject: taskId,
       summary: oneLine(`Done-when test for ${taskId} approved: ${definition.command}`),
-      evidence: [`test:${definition.command}`, `definition:${definition.n}`, `baseline:${state.baseline.n}`, ...(verdict ? [`review:${verdict.n}`] : [])],
+      evidence: [`test:${definition.command}`, `definition:${definition.n}`, `baseline:${state.baseline.n}`, ...(verdict ? [`review:${verdict.n}`] : state.jev ? [`review:${state.jev.n}`] : [])],
       data: { test: definition.command, definition: definition.n },
     });
     return { ok: true, entry, verdict };
