@@ -30,9 +30,9 @@ export function registerRelayTools(server, getRelay, z) {
   };
   const tool = (name, description, inputSchema, annotations, fn) => server.registerTool(name, { title: name, description, inputSchema, annotations }, wrap(fn));
 
-  tool('hello', 'Register this agent and receive a session token. The first agent becomes the main chat; others are workers.',
-    { agent: z.string().min(1).max(80), model: z.string().max(120).optional(), role: z.enum(['main', 'worker']).optional() }, writes,
-    (r, { agent, model, role }) => r.hello({ agent, model, role }));
+  tool('hello', 'Register this agent and receive a session token. Without PP_MAIN_AGENT the first agent becomes the main chat; others are workers. After a restart pass your previous token as resume to get your name, role and claimed task back.',
+    { agent: z.string().min(1).max(80), model: z.string().max(120).optional(), role: z.enum(['main', 'worker']).optional(), resume: z.string().min(8).max(200).optional() }, writes,
+    (r, { agent, model, role, resume }) => r.hello({ agent, model, role, resume }));
   tool('list_tasks', 'List ledger tasks with state and whether they can be claimed.', { token }, reads,
     (r, a) => ({ tasks: r.listTasks(a.token) }));
   tool('claim_task', 'Claim one task (worker). Binds your token to exactly that task. Refused until its acceptance test is approved.', { token, task }, writes,
@@ -52,12 +52,12 @@ export function registerRelayTools(server, getRelay, z) {
     (r, a) => r.answer(a.token, a.question, a.text, a.reason));
   tool('lookup', 'Look up a reference (§3.1, P-2 §3.1, T-14, D-3, R-1, L-000231, Q-2): text, history and everything citing it.', { token, ref: z.string().min(1).max(200) }, reads,
     (r, a) => r.lookup(a.token, a.ref));
-  tool('release_task', 'Give your task back with a reason. blocked=true (default) records task.blocked; false records task.progress.', { token, task, reason: z.string().min(1).max(2000), blocked: z.boolean().default(true) }, writes,
-    (r, a) => r.releaseTask(a.token, a.task, a.reason, { blocked: a.blocked }));
+  tool('release_task', 'Give your task back with a reason. Records task.blocked and frees the task for another worker.', { token, task, reason: z.string().min(1).max(2000) }, writes,
+    (r, a) => r.releaseTask(a.token, a.task, a.reason));
   tool('pause_all', 'Main chat only: pause every worker (recorded in the ledger).', { token, reason: z.string().min(1).max(2000) }, writes,
     (r, a) => r.pauseAll(a.token, a.reason));
   tool('resume_all', 'Main chat only: resume all workers (recorded in the ledger).', { token, reason: z.string().min(1).max(2000) }, writes,
     (r, a) => r.resumeAll(a.token, a.reason));
-  tool('stop_worker', 'Main chat only: stop one worker; its task is recorded as blocked and released.', { token, agent: z.string().min(1).max(90), reason: z.string().min(1).max(2000) }, writes,
+  tool('stop_worker', 'Main chat only: stop one worker by name (connected or not). Recorded as a ledger decision; its task is recorded as blocked and released, and the name cannot reconnect.', { token, agent: z.string().min(1).max(90), reason: z.string().min(1).max(2000) }, writes,
     (r, a) => r.stopWorker(a.token, a.agent, a.reason));
 }

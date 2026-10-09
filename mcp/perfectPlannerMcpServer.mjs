@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import path from "node:path";
 import * as z from "zod/v4";
 import {preparePlannerDraft} from './plannerDraftBridge.mjs';
 
@@ -122,12 +123,14 @@ if (writeConfig.write) {
   let relayPromise = null;
   let openedLedger = null;
   const getRelay = () => (relayPromise ??= (async () => {
-    const [{ openLedger }, { createRelay }] = await Promise.all([
+    const [{ openLedger }, { createRelay, createFileSessionStore }] = await Promise.all([
       import("../src/core/ledger/index.mjs"),
       import("../src/core/relay/index.mjs"),
     ]);
     openedLedger = await openLedger(writeConfig.ledgerRoot, {});
-    return createRelay({ ledger: openedLedger });
+    // Only sha256 hashes of session tokens are stored, next to the ledger, so agents can resume after a restart.
+    const sessionStore = createFileSessionStore(path.join(writeConfig.ledgerRoot, ".perfect-planner", "relay", "sessions.json"));
+    return createRelay({ ledger: openedLedger, sessionStore, mainAgent: process.env.PP_MAIN_AGENT?.trim() || null });
   })().catch((error) => { relayPromise = null; throw error; }));
   registerRelayTools(server, getRelay, z);
   const closeLedger = () => { try { openedLedger?.close(); } catch { /* best effort on exit */ } };
