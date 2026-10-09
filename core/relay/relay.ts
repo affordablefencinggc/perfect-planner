@@ -9,7 +9,9 @@
 // the worker that asked, by Q number. A blocking question pauses only that
 // worker.
 import type { Actor, EntryDraft, Ledger, LedgerEntry } from "../ledger/index";
-import { nextNumber } from "../numbering/index";
+import { isAuthoritative } from "../ledger/index";
+import { appendNumbered } from "../numbering/index";
+import { redactSecrets } from "../jev/redact";
 
 export interface QuestionInput {
   task: string;
@@ -78,6 +80,8 @@ export function questionKey(question: string, options: readonly string[] = []): 
   return opts.length ? `${norm(question)} :: ${opts.join(" | ")}` : norm(question);
 }
 
+const decisionKey = (person: string, key: string) => `${person}\u0000${key}`;
+
 const SYSTEM: Actor = { kind: "system", id: "perfect-planner" };
 
 export interface RelayOptions {
@@ -89,12 +93,14 @@ export class Relay {
   private readonly ledger: Ledger;
   private readonly settled: SettledAnswerer | null;
   private readonly questions = new Map<string, Question>();
-  /** decision key -> { D number, answer } */
+  /** person + question key -> { D number, answer }: one person's decisions never answer another's workers */
   private readonly decisions = new Map<string, { d: string; answer: string }>();
   /** person -> auto-answered Q numbers their main chat has already been shown */
   private readonly shownAuto = new Map<string, Set<string>>();
   private readonly waiters = new Map<string, ((q: Question) => void)[]>();
   private pausedAll: { reason: string } | null = null;
+  /** Tasks Pause all blocked; Resume all unblocks exactly these, owned or not. */
+  private pausedTasks = new Set<string>();
   private readonly unsubscribe: () => void;
 
   constructor(options: RelayOptions) {
@@ -135,12 +141,16 @@ export class Relay {
       q.answeredVia = (d.via as Question["answeredVia"]) ?? "main";
       if (typeof d.decision === "string") q.decision = d.decision;
       this.notify(q);
-    } else if (e.type === "decision.made" && typeof d.key === "string") {
-      this.decisions.set(d.key, { d: e.subject, answer: String(d.answer ?? e.summary) });
+    } else if (e.type === "decision.made" && typeof d.key === "string" && isAuthoritative(e)) {
+      // Only a person's (or the system's) decision may answer later questions.
+      const person = typeof d.person === "string" ? d.person : typeof d.question === "string" ? this.questions.get(d.question)?.person : undefined;
+      if (person !== undefined) this.decisions.set(decisionKey(person, d.key), { d: e.subject, answer: String(d.answer ?? e.summary) });
     } else if (e.type === "task.blocked" && d.pauseAll === true) {
       this.pausedAll = { reason: e.reason ?? "Paused" };
+      this.pausedTasks.add(e.subject);
     } else if (e.type === "task.progress" && d.resumeAll === true) {
       this.pausedAll = null;
+      this.pausedTasks.delete(e.subject);
     }
   }
 
@@ -154,21 +164,20 @@ export class Relay {
    * decision or the settled-answer source answers it, also question.answered.
    */
   async ask(worker: Actor, person: string, input: QuestionInput): Promise<AskResult> {
-    const question = input.question.trim();
+    // Agents paste logs and configs; nothing secret goes into the ledger or the digest.
+    const question = redactSecrets(input.question.trim());
     if (!question) throw new Error("A question needs some words.");
-    const options = (input.options ?? []).map((o) => o.trim()).filter(Boolean);
+    const options = (input.options ?? []).map((o) => redactSecrets(o.trim())).filter(Boolean);
     const blocking = input.blocking === true;
-    const q = nextNumber(this.ledger.entries(), "Q");
-    this.write({
+    const q = appendNumbered(this.ledger, {
       actor: worker,
       type: "question.asked",
-      subject: q,
       summary: question.length > 140 ? `${question.slice(0, 137)}...` : question,
       refs: [input.task],
       data: { task: input.task, person, question, options, blocking },
-    });
+    }).subject;
 
-    const prior = this.decisions.get(questionKey(question, options));
+    const prior = this.decisions.get(decisionKey(person, questionKey(question, options)));
     if (prior) {
       this.write({
         actor: SYSTEM,
@@ -229,34 +238,43 @@ export class Relay {
     };
   }
 
-  /** The main chat answers. Writes decision.made and question.answered, then routes to the asker. */
-  answer(main: Actor, person: string, q: string, text: string): { q: string; decision: string; worker: string } {
-    const answer = text.trim();
+  /**
+   * Answer Q and route the answer to the worker that asked.
+   *
+   * A person (or the system on their behalf) makes a decision: decision.made
+   * gets a D number, and identical questions later are answered from it. The
+   * main chat is an agent, so its answer is a question.answered entry only:
+   * information for the worker, never a decision (only a person decides).
+   */
+  answer(by: Actor, person: string, q: string, text: string): { q: string; decision: string | null; worker: string } {
+    const answer = redactSecrets(text.trim());
     if (!answer) throw new Error("An answer needs some words.");
     const asked = this.questions.get(q);
     if (!asked) throw new Error(`${q} is not a question in this project.`);
     if (asked.person !== person) throw new Error(`${q} belongs to another person's main chat.`);
     if (asked.status === "answered") throw new Error(`${q} was already answered: ${asked.answer}`);
-    const d = nextNumber(this.ledger.entries(), "D");
+    const deciding = by.kind === "person" || by.kind === "system";
+    const d = deciding
+      ? appendNumbered(this.ledger, {
+          actor: by,
+          type: "decision.made",
+          summary: answer,
+          reason: `Answer to ${q} from ${asked.task}`,
+          refs: [q, asked.task],
+          data: { key: questionKey(asked.question, asked.options), person: asked.person, question: q, questionText: asked.question, answer },
+        }).subject
+      : null;
     this.write({
-      actor: main,
-      type: "decision.made",
-      subject: d,
-      summary: answer,
-      reason: `Answer to ${q} from ${asked.task}`,
-      refs: [q, asked.task],
-      data: { key: questionKey(asked.question, asked.options), question: q, questionText: asked.question, answer },
-    });
-    this.write({
-      actor: main,
+      actor: by,
       type: "question.answered",
       subject: q,
       summary: answer,
-      refs: [d, asked.task],
-      data: { answer, decision: d, via: "main" },
+      refs: d ? [d, asked.task] : [asked.task],
+      data: { answer, ...(d ? { decision: d } : {}), via: "main" },
     });
     return { q, decision: d, worker: asked.askedBy };
   }
+
 
   /** Answers waiting for one worker; marks them delivered. */
   answersFor(worker: string): Question[] {
@@ -298,15 +316,20 @@ export class Relay {
     return this.pausedAll;
   }
 
-  /** Pause every worker (spec §4.5): one task.blocked entry per active task, marked pauseAll. */
-  pauseAll(by: Actor, reason: string, activeTasks: string[]): void {
-    for (const task of activeTasks.length ? activeTasks : ["ALL"]) {
+  /**
+   * Pause every worker (spec §4.5): one task.blocked entry per given task,
+   * marked pauseAll. Every entry needs a real task number, so the caller passes
+   * the open tasks too when nothing is being worked on.
+   */
+  pauseAll(by: Actor, reason: string, tasks: string[]): void {
+    if (!tasks.length) throw new Error("There are no tasks to pause.");
+    for (const task of tasks) {
       this.write({ actor: by, type: "task.blocked", subject: task, summary: "Paused by Pause all", reason, data: { pauseAll: true } });
     }
   }
 
-  resumeAll(by: Actor, activeTasks: string[]): void {
-    for (const task of activeTasks.length ? activeTasks : ["ALL"]) {
+  resumeAll(by: Actor): void {
+    for (const task of [...this.pausedTasks]) {
       this.write({ actor: by, type: "task.progress", subject: task, summary: "Resumed after Pause all", data: { resumeAll: true } });
     }
   }

@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { git, runGit } from "../worktrees/git";
 import { lines, realDir, samePath } from "../worktrees/platform";
+import { isAuthoritative } from "../ledger/index";
 import { GATE_ACTOR, evidenceValue, type Actor, type EntryDraft, type LedgerEntry, type LedgerPort } from "../worktrees/ports";
 import { TASK_ID } from "../worktrees/types";
 import { DEFAULT_TIMEOUT_MS, isConclusiveFailure, runTestCommand, type TestRunResult, type TestRunner } from "./run";
@@ -63,7 +64,7 @@ export interface MergeOptions {
 export interface ApproveOptions {
   /** Jev's review of the test: "approve", or the gaps it found (which refuse approval). */
   jevVerdict?: "approve" | string[];
-  /** The Jev actor writing the verdict; required with jevVerdict (the ledger needs its model). */
+  /** Jev, with its model; required with jevVerdict. The gate writes the verdict as itself (so the ledger signs it) and names Jev in data.reviewer. */
   jev?: Actor;
 }
 
@@ -180,7 +181,9 @@ export function deriveState(entries: readonly LedgerEntry[], taskId: string): Ga
         break;
       }
       case "review.verdict": {
-        if (evidenceValue(entry, "scope") !== "test" || !forCurrent) break;
+        // Only a verdict the ledger signed for the app counts (core/jev writes them as the system);
+        // an entry that merely names Jev as its actor neither approves a test nor blocks one.
+        if (evidenceValue(entry, "scope") !== "test" || !forCurrent || !isAuthoritative(entry)) break;
         const verdict = evidenceValue(entry, "verdict") === "approve" ? "approve" : "gaps";
         const gaps = entry.evidence.filter((item) => item.startsWith("gap:")).map((item) => item.slice(4));
         state.jev = { n: entry.n, verdict, gaps };
@@ -357,23 +360,23 @@ export class TestGate {
         if (!gaps.length) throw new GateError('A Jev verdict is "approve" or a non-empty list of gaps.');
         verdict = this.ledger.append({
           type: "review.verdict",
-          actor: options.jev,
+          actor: GATE_ACTOR,
           subject: taskId,
           summary: `Jev found ${gaps.length} gap${gaps.length === 1 ? "" : "s"} in ${taskId}'s done-when test`,
           reason: oneLine(gaps.join("; "), 500),
           evidence: ["scope:test", "verdict:gaps", `definition:${definition.n}`, ...gaps.map((gap) => `gap:${gap}`)],
-          data: { scope: "test", verdict: "gaps", test: definition.command, definition: definition.n, gaps },
+          data: { scope: "test", verdict: "gaps", test: definition.command, definition: definition.n, gaps, reviewer: options.jev },
         });
         return { ok: false, reason: `Jev found gaps in the test: ${gaps.join("; ")}`, verdict };
       }
       if (jev !== "approve") throw new GateError('A Jev verdict is "approve" or a list of gaps.');
       verdict = this.ledger.append({
         type: "review.verdict",
-        actor: options.jev,
+        actor: GATE_ACTOR,
         subject: taskId,
         summary: `Jev found no gaps in ${taskId}'s done-when test`,
         evidence: ["scope:test", "verdict:approve", `definition:${definition.n}`],
-        data: { scope: "test", verdict: "approve", test: definition.command, definition: definition.n },
+        data: { scope: "test", verdict: "approve", test: definition.command, definition: definition.n, reviewer: options.jev },
       });
     } else if (state.jev?.verdict === "gaps") {
       return { ok: false, reason: `Jev's open gaps on this test must be resolved first: ${state.jev.gaps.join("; ")}` };

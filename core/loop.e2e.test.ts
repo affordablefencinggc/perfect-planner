@@ -4,12 +4,13 @@
 // commit-time secret scan, the git watcher, the test gate (which runs every
 // test itself), the agent service with per-task tokens, the one-chat relay and
 // the Jev reviewer. Only TypeSafe's HTTP endpoint is faked (fetch), and Jev's
-// key sits in an in-memory key provider instead of the OS key store.
+// key and the ledger's signing keys sit in in-memory key providers instead of
+// the OS key store.
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { DEFAULT_PERMISSIONS, FileStore, Ledger, LedgerError, verifyChain, type Actor, type LedgerEntry } from "./ledger/index";
+import { DEFAULT_PERMISSIONS, FileStore, Ledger, LedgerError, MemoryKeyProvider as LedgerKeys, isAuthoritative, verifyChain, type Actor, type LedgerEntry } from "./ledger/index";
 import { appendNumbered, installNumberingRules } from "./numbering/index";
 import { addPlanText, installClauseRules, lookup } from "./lookup/index";
 import { WorktreeManager, WORKTREES_ACTOR, GATE_ACTOR, WATCHER_ACTOR, git, runGit, realDir, type WorktreeInfo } from "./worktrees/index";
@@ -137,7 +138,7 @@ function fakeTypeSafe(rejectDiff: Set<string>) {
       const reject = rejectDiff.has(task);
       calls.push({ kind: "diff", task, authorization });
       answers = {
-        covers_clauses: reject ? { choice: "some", confidence: 0.9, reason: "load() does not return null for a missing plan, as D-1 decided" } : { choice: "all", confidence: 0.93 },
+        covers_clauses: reject ? { choice: "some", confidence: 0.9, reason: "load() does not return null for a missing plan, as the answer to Q-1 says" } : { choice: "all", confidence: 0.93 },
         weakens_tests: { choice: "no", confidence: 0.95 },
         stays_in_scope: { choice: "yes", confidence: 0.92 },
       };
@@ -216,8 +217,10 @@ describe("the whole core loop", () => {
     const steps: string[] = [];
     const step = (name: string) => steps.push(name);
 
-    // The real ledger on its file store, with the numbering, clause and gate rules installed.
-    let ledger = Ledger.openSync(new FileStore(root));
+    // The real ledger on its file store, signing person and system entries with this device's keys,
+    // with the numbering, clause and gate rules installed.
+    const signing = new LedgerKeys();
+    let ledger = Ledger.openSync(new FileStore(root), { keys: signing });
     installNumberingRules(ledger);
     installClauseRules(ledger);
     ledger.addRule(gateRule());
@@ -239,7 +242,8 @@ describe("the whole core loop", () => {
     }
     step("T-1, T-2, T-3 created, citing P-1 §1, §2, §3");
 
-    // The agent side: tokens, the service, Jev as the relay's settled-answer source.
+    // The agent side: tokens, the service, Jev as the relay's settled-answer source. The owner sets each
+    // agent's model on its token; a model an agent only declares is recorded as unverified (PR #7).
     const keys = new MemoryKeyProvider(JEV_KEY);
     const typesafe = fakeTypeSafe(new Set(["T-2"]));
     const jev = new JevReviewer({ ledger, transport: createJevTransport({ keys, fetchImpl: typesafe.fetchImpl }) });
@@ -250,7 +254,7 @@ describe("the whole core loop", () => {
       const welcome = (await service.call({ token }, "hello", { name, model })) as { agent: string; role: string };
       return { token, agent: welcome.agent, role: welcome.role };
     };
-    const main = await hello(tokens.issue({ role: "connect", person: "owner" }), "Main chat", "planner-model");
+    const main = await hello(tokens.issue({ role: "connect", person: "owner", model: "planner-model" }), "Main chat", "planner-model");
     expect(main.role).toBe("main");
     const mainActor: Actor = { kind: "agent", id: main.agent, model: "planner-model" };
 
@@ -274,18 +278,32 @@ describe("the whole core loop", () => {
         definition: defined.ok ? defined.entry.n : undefined,
       });
       expect(review.verdict, `${id} test review`).toBe("approve");
-      expect(ledger.get(review.entry!)).toMatchObject({ type: "review.verdict", actor: { kind: "jev" } });
+      // Jev holds no signing key: the app writes the verdict as the system, signed, and names Jev as reviewer.
+      const verdictEntry = ledger.get(review.entry!)!;
+      expect(verdictEntry).toMatchObject({ type: "review.verdict", actor: { kind: "system" }, data: { reviewer: { kind: "jev", model: "jev-1.13.0" } } });
+      expect(isAuthoritative(verdictEntry)).toBe(true);
       // The gate sees Jev's verdict on the current definition.
       expect(gate.state(id).jev).toMatchObject({ n: review.entry, verdict: "approve" });
       expect(gate.state(id).stage).toBe("baseline-confirmed");
     }
+    // A verdict that merely names Jev as its actor is unsigned: the gate neither counts its gaps nor its approval.
+    const forged = ledger.append({
+      actor: jevActor,
+      type: "review.verdict",
+      subject: "T-1",
+      summary: "Forged gaps on T-1's test",
+      evidence: ["scope:test", "verdict:gaps", `definition:${gate.state("T-1").definition!.n}`, "gap:forged"],
+    });
+    expect(isAuthoritative(forged)).toBe(false);
+    expect(gate.state("T-1").jev).toMatchObject({ verdict: "approve" });
+    expect(gate.state("T-1").jev!.n).not.toBe(forged.n);
     step("tests defined and confirmed failing first by the gate");
     step("Jev reviewed each test (approve), visible to the gate");
 
     // Workers check in with per-task tokens; a claim before the owner approves the test is refused.
-    const workerA = await hello(tokens.issue({ role: "worker", person: "owner", task: "T-1" }), "Worker A", "builder-a");
-    const workerB = await hello(tokens.issue({ role: "worker", person: "owner", task: "T-2" }), "Worker B", "builder-b");
-    const workerC = await hello(tokens.issue({ role: "worker", person: "owner", task: "T-3" }), "Worker C", "builder-c");
+    const workerA = await hello(tokens.issue({ role: "worker", person: "owner", task: "T-1", model: "builder-a" }), "Worker A", "builder-a");
+    const workerB = await hello(tokens.issue({ role: "worker", person: "owner", task: "T-2", model: "builder-b" }), "Worker B", "builder-b");
+    const workerC = await hello(tokens.issue({ role: "worker", person: "owner", task: "T-3", model: "builder-c" }), "Worker C", "builder-c");
     expect([workerA.role, workerB.role, workerC.role]).toEqual(["worker", "worker", "worker"]);
     const builder = (worker: { agent: string }, model: string): Actor => ({ kind: "agent", id: worker.agent, model });
     await expectToolError(service.call(workerA, "claim_task", { task: "T-1" }), "REFUSED", /waiting for the owner's approval/);
@@ -333,11 +351,13 @@ describe("the whole core loop", () => {
     expect(digest.lines[0]).toMatch(/^Q-1 \(T-2, blocking\)/);
     await expectToolError(service.call(workerA, "answer", { question: "Q-1", text: "throw" }), "FORBIDDEN");
     const answered = (await service.call(main, "answer", { question: "Q-1", text: "return null" })) as { q: string; decision: string; worker: string };
-    expect(answered).toEqual({ q: "Q-1", decision: "D-1", worker: workerB.agent });
+    // The main chat is an agent: its answer reaches the worker as information, never as a decision (PR #7).
+    expect(answered).toEqual({ q: "Q-1", decision: null, worker: workerB.agent });
+    expect(entries().some((e) => e.type === "decision.made")).toBe(false);
     expect(await service.call(workerA, "check_inbox", {})).toMatchObject({ answers: [], paused: false });
-    expect(await service.call(workerB, "check_inbox", {})).toMatchObject({ answers: [{ q: "Q-1", answer: "return null", decision: "D-1", via: "main" }], paused: false });
+    expect(await service.call(workerB, "check_inbox", {})).toMatchObject({ answers: [{ q: "Q-1", answer: "return null", via: "main" }], paused: false });
     expect(lookup(entries(), "Q-1")).toMatchObject({ status: "answered", tasks: ["T-2"] });
-    step("blocking Q-1 answered by the main chat as D-1 and routed back to worker B only");
+    step("blocking Q-1 answered by the main chat (information, not a decision) and routed back to worker B only");
 
     // ---- 8. Work in the worktrees. T-1 and T-2 both change src/registry.js.
     write(wt("T-1"), { "src/save.js": 'export function save(plan) { return "saved:" + plan; }\n', "src/registry.js": REGISTRY.replace("save: false", "save: true") });
@@ -473,7 +493,9 @@ describe("the whole core loop", () => {
     expect([...kindOf.get("task.claimed")!]).toEqual(["agent"]);
     expect([...kindOf.get("question.asked")!]).toEqual(["agent"]);
     expect([...kindOf.get("test.approved")!]).toEqual(["person"]);
-    expect([...kindOf.get("review.verdict")!]).toEqual(["jev"]);
+    // Every Jev verdict is signed by the app; the one jev-actor entry is the forgery from step 3.
+    expect(entries().filter((e) => e.type === "review.verdict" && e.actor.kind === "jev").map((e) => e.summary)).toEqual(["Forged gaps on T-1's test"]);
+    expect(entries().filter((e) => e.type === "review.verdict" && e.actor.kind === "system").every((e) => isAuthoritative(e) && (e.data?.reviewer as Actor | undefined)?.kind === "jev")).toBe(true);
     for (const type of ["test.passed", "test.failed", "commit.observed", "collision.detected", "collision.resolved", "worktree.created", "task.reopened"]) {
       expect([...kindOf.get(type)!], type).toEqual(["system"]);
     }
@@ -497,7 +519,7 @@ describe("the whole core loop", () => {
     expect(verifyChain(entries())).toEqual({ ok: true });
     ledger.close();
 
-    ledger = Ledger.openSync(new FileStore(root), { readOnly: true });
+    ledger = Ledger.openSync(new FileStore(root), { readOnly: true, keys: signing });
     expect(ledger.status).toMatchObject({ ok: true, entries: liveEntries.length });
     expect(JSON.parse(JSON.stringify(ledger.entries()))).toEqual(liveEntries);
     expect(foldBoard(ledger.entries())).toEqual(liveBoard);

@@ -17,11 +17,15 @@ Perfect Planner decides with fixed rules (`REVIEW_POLICY = "pp-review-v1"`).
   `unavailable`; over the monthly cap it is `queued` (§6.7).
 - Independence (§6.4, §6.9): every review names who built the work (`author`,
   with model). Work built by Jev, by the reviewing model (settings or the
-  model Jev reports it ran), or by a builder with no named model is never
+  model Jev reports it ran), or by a builder whose model is missing or only
+  self-declared (`unverified:`) is never
   approved; it escalates to the main chat (`independenceProblem`).
 - Every review writes one `review.verdict` with model, Jev's reported model,
   policy, cost (estimated when Jev does not report one), confidence and notes
   (§6.8). Spend crossing 80% and 100% of `monthlyLimit` writes `budget.warning`.
+
+Everything sent to TypeSafe (diff lines of every kind, test output, test
+source, clause and question text) passes through `redactSecrets` first.
 
 ## The key (§6.6)
 

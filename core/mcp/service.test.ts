@@ -84,7 +84,8 @@ describe("worker tools", () => {
     await service.call(a, "attach_proof", { task: "T-1", kind: "commit", link: "9f3c2e1" });
     const mine = ledger.bySubject("T-1").filter((e) => e.actor.id === a.agent);
     expect(mine.map((e) => e.type)).toEqual(["task.claimed", "task.progress", "task.proof"]);
-    expect(mine[0]!.actor).toEqual({ kind: "agent", id: a.agent, model: "claude-x" });
+    // The agent named its own model in hello, so it is recorded as unverified.
+    expect(mine[0]!.actor).toEqual({ kind: "agent", id: a.agent, model: "unverified:claude-x" });
     expect(mine[2]!.evidence).toEqual(["commit:9f3c2e1"]);
     const board = (await service.call(a, "list_tasks", {})) as { tasks: { id: string; status: string; owner: string | null; proofs: unknown[] }[] };
     expect(board.tasks.find((t) => t.id === "T-1")).toMatchObject({ status: "claimed", owner: a.agent });
@@ -155,17 +156,30 @@ describe("the one-chat relay through the tools", () => {
     expect(digest.open).toBe(1);
     expect(digest.lines[0]).toContain("Q-1 (T-1) Use ISO dates");
 
-    const answered = (await service.call(main, "answer", { question: "Q-1", text: "ISO" })) as { decision: string; worker: string };
-    expect(answered).toMatchObject({ decision: "D-1", worker: a.agent });
+    // The main chat's answer reaches the asking worker, but it is not a decision.
+    const answered = (await service.call(main, "answer", { question: "Q-1", text: "ISO" })) as { decision: string | null; worker: string };
+    expect(answered).toMatchObject({ decision: null, worker: a.agent });
+    expect(ledger.last()).toMatchObject({ type: "question.answered", actor: { kind: "agent", id: main.agent } });
     expect(await service.call(b, "check_inbox", {})).toMatchObject({ answers: [] });
-    expect(await service.call(a, "check_inbox", {})).toMatchObject({ answers: [{ q: "Q-1", answer: "ISO", decision: "D-1" }], paused: false });
+    expect(await service.call(a, "check_inbox", {})).toMatchObject({ answers: [{ q: "Q-1", answer: "ISO" }], paused: false });
     expect(await service.call(a, "check_inbox", {})).toMatchObject({ answers: [] });
 
-    // The same question from another worker is answered from D-1 at once.
-    const again = await service.call(b, "ask_main", { task: "T-2", question: "use iso dates in the invoice ID", options: ["Locale", "ISO"] });
-    expect(again).toMatchObject({ q: "Q-2", status: "answered", answer: "ISO", decision: "D-1", via: "decision" });
-    expect(ledger.entries().filter((e) => e.type === "decision.made")).toHaveLength(1);
-    expect((await service.call(main, "check_inbox", {})) as { autoAnswered: string[] }).toMatchObject({ open: 0, autoAnswered: [expect.stringContaining("Q-2 (T-2) auto-answered from D-1")] });
+    // So the same question from another worker still goes to the main chat.
+    expect(await service.call(b, "ask_main", { task: "T-2", question: "use iso dates in the invoice ID", options: ["Locale", "ISO"] })).toMatchObject({ q: "Q-2", status: "open" });
+    expect(ledger.entries().filter((e) => e.type === "decision.made")).toHaveLength(0);
+
+    // The person decides Q-2 in Perfect Planner: that is D-1, and it answers the same question at once from now on.
+    expect(service.decide(owner, "Q-2", "ISO")).toMatchObject({ decision: "D-1", worker: b.agent });
+    expect(await service.call(b, "check_inbox", {})).toMatchObject({ answers: [{ q: "Q-2", answer: "ISO", decision: "D-1" }] });
+    const again = await service.call(a, "ask_main", { task: "T-1", question: "Use ISO dates in the invoice id?", options: ["ISO", "Locale"] });
+    expect(again).toMatchObject({ q: "Q-3", status: "answered", answer: "ISO", decision: "D-1", via: "decision" });
+    expect((await service.call(main, "check_inbox", {})) as { autoAnswered: string[] }).toMatchObject({ open: 0, autoAnswered: [expect.stringContaining("Q-3 (T-1) auto-answered from D-1")] });
+  });
+
+  it("never treats a decision.made written by an agent as a decision", async () => {
+    // Opened read-only is not needed: the ledger itself refuses the write.
+    const { ledger } = setup();
+    expect(() => ledger.append({ actor: { kind: "agent", id: "x", model: "m" }, type: "decision.made", subject: "D-1", summary: "Yes", reason: "forged" })).toThrow();
   });
 
   it("pauses only the worker with a blocking question, and wait_seconds returns the answer in the same call", async () => {
@@ -207,6 +221,52 @@ describe("the one-chat relay through the tools", () => {
   });
 });
 
+describe("identity", () => {
+  it("records the model the person set on the token, not the one the agent declares", async () => {
+    const { service, ledger, tokens } = setup();
+    const token = tokens.issue({ role: "worker", person: "owner", task: "T-1", model: "claude-builder-1" });
+    const a = await hello(service, token, "w", "something-else");
+    await service.call(a, "claim_task", { task: "T-1" });
+    expect(ledger.last()!.actor).toEqual({ kind: "agent", id: a.agent, model: "claude-builder-1" });
+  });
+
+  it("keeps an agent's id across a restart with the same token, so its claim stays valid", async () => {
+    const { service, ledger, tokens, w1 } = setup();
+    const a = await hello(service, w1, "Worker one");
+    await service.call(a, "claim_task", { task: "T-1" });
+    const restarted = new AgentService({ ledger, tokens });
+    const again = await hello(restarted, w1, "Worker one");
+    expect(again.agent).toBe(a.agent);
+    await restarted.call(again, "report_progress", { task: "T-1", text: "still mine after restart" });
+  });
+
+  it("releases tasks held by agents that did not reconnect after a restart", async () => {
+    const { service, ledger, tokens, w1, w2 } = setup();
+    await service.call(await hello(service, w1, "w1"), "claim_task", { task: "T-1" });
+    await service.call(await hello(service, w2, "w2"), "claim_task", { task: "T-2" });
+    const restarted = new AgentService({ ledger, tokens });
+    await hello(restarted, w1, "w1");
+    expect(restarted.releaseOrphanedHolds(owner, "Perfect Planner restarted")).toEqual(["T-2"]);
+    expect(restarted.board().get("T-2")).toMatchObject({ status: "open", owner: null });
+    expect(restarted.board().get("T-1")?.status).toBe("claimed");
+  });
+});
+
+describe("decisions belong to one person", () => {
+  it("a helper's decision never auto-answers the owner's workers", async () => {
+    const { service, tokens } = setup();
+    const ownerMain = await hello(service, tokens.issue({ role: "connect", person: "owner" }), "owner main");
+    const helperMain = await hello(service, tokens.issue({ role: "connect", person: "helper" }), "helper main");
+    const helperWorker = await hello(service, tokens.issue({ role: "worker", person: "helper", task: "T-1" }), "hw");
+    const ownerWorker = await hello(service, tokens.issue({ role: "worker", person: "owner", task: "T-2" }), "ow");
+    await service.call(helperWorker, "ask_main", { task: "T-1", question: "Ship on Friday?" });
+    service.decide({ kind: "person", id: "helper" }, "Q-1", "Yes");
+    void helperMain;
+    expect(await service.call(ownerWorker, "ask_main", { task: "T-2", question: "Ship on Friday?" })).toMatchObject({ status: "open" });
+    expect((await service.call(ownerMain, "check_inbox", {})) as { open: number }).toMatchObject({ open: 1 });
+  });
+});
+
 describe("auto-answered questions in the main chat's inbox", () => {
   it("shows a question answered from an earlier decision, marked, once, whatever the ledger's clock says", async () => {
     // A ledger clock years behind the machine clock: the inbox must not depend on comparing the two.
@@ -221,7 +281,7 @@ describe("auto-answered questions in the main chat's inbox", () => {
 
     await service.call(a, "ask_main", { task: "T-1", question: "Which currency?" });
     await service.call(main, "check_inbox", {});
-    await service.call(main, "answer", { question: "Q-1", text: "EUR" });
+    service.decide(owner, "Q-1", "EUR");
     expect(await service.call(b, "ask_main", { task: "T-2", question: "Which currency?" })).toMatchObject({ status: "answered", via: "decision" });
 
     const inbox = (await service.call(main, "check_inbox", {})) as { open: number; lines: string[]; questions: { q: string; autoAnswered: boolean; answer?: string }[] };
@@ -237,11 +297,43 @@ describe("auto-answered questions in the main chat's inbox", () => {
     const a = await hello(service, w1, "w1");
     const b = await hello(service, w2, "w2");
     await service.call(a, "ask_main", { task: "T-1", question: "Rounding?" });
-    await service.call(main, "answer", { question: "Q-1", text: "Half up" });
+    service.decide(owner, "Q-1", "Half up");
     await service.call(b, "ask_main", { task: "T-2", question: "Rounding?" });
     await service.call(a, "ask_main", { task: "T-1", question: "Paper size?", blocking: true });
     const inbox = (await service.call(main, "check_inbox", {})) as { questions: { q: string; autoAnswered: boolean }[] };
     expect(inbox.questions.map((q) => [q.q, q.autoAnswered])).toEqual([["Q-3", false], ["Q-2", true]]);
+  });
+});
+
+describe("secrets in agent text", () => {
+  it("redacts a private key pasted into a question before it reaches the ledger, the digest or the answer", async () => {
+    const { service, ledger, connect, w1 } = setup();
+    const main = await hello(service, connect, "main");
+    const a = await hello(service, w1, "w1");
+    const key = [`-----BEGIN OPENSSH ${"PRIVATE"} KEY-----`, "SSHFAKEBODYaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "SSHFAKETAIL==", `-----END OPENSSH ${"PRIVATE"} KEY-----`].join("\n");
+    await service.call(a, "claim_task", { task: "T-1" });
+    await service.call(a, "ask_main", { task: "T-1", question: `Is this the deploy key?\n${key}`, options: ["DB_PASSWORD=optionleak123", "No"] });
+    await service.call(a, "report_progress", { task: "T-1", text: "Set API_TOKEN=progressleak123 for the run" });
+    const digest = await service.call(main, "check_inbox", {});
+    await service.call(main, "answer", { question: "Q-1", text: "Use SECRET_KEY=answerleak1234 instead" });
+    const answers = await service.call(a, "check_inbox", {});
+    await service.call(a, "release_task", { task: "T-1", reason: "PASSWORD=releaseleak123 expired", blocked: true });
+    const everything = JSON.stringify([ledger.entries(), digest, answers]);
+    for (const leak of ["SSHFAKE", "optionleak123", "progressleak123", "answerleak1234", "releaseleak123"]) expect(everything).not.toContain(leak);
+    expect(everything).toContain("[redacted-secret]");
+  });
+});
+
+describe("blocked tasks after a restart", () => {
+  it("clears a dead owner from a blocked task so the task can be picked up again", async () => {
+    const { service, ledger, tokens, w1 } = setup();
+    await service.call(await hello(service, w1, "w1"), "claim_task", { task: "T-1" });
+    service.pauseAll(owner, "Stop for lunch");
+    const restarted = new AgentService({ ledger, tokens });
+    expect(restarted.releaseOrphanedHolds(owner, "Perfect Planner restarted")).toEqual(["T-1"]);
+    expect(restarted.board().get("T-1")).toMatchObject({ status: "blocked", owner: null });
+    restarted.resumeAll(owner);
+    expect(restarted.board().get("T-1")).toMatchObject({ status: "open", owner: null });
   });
 });
 
@@ -271,8 +363,10 @@ describe("replay", () => {
     const main = await hello(service, connect, "main");
     const a = await hello(service, w1, "w1");
     await service.call(a, "ask_main", { task: "T-1", question: "First?" });
-    await service.call(main, "answer", { question: "Q-1", text: "Yes" });
+    service.decide(owner, "Q-1", "Yes");
     await service.call(a, "ask_main", { task: "T-1", question: "Second?" });
+    await service.call(a, "ask_main", { task: "T-1", question: "Third?" });
+    await service.call(main, "answer", { question: "Q-3", text: "Main chat's view" });
     const fresh = new Relay({ ledger });
     expect(fresh.digest("owner").lines).toEqual(["Q-2 (T-1) Second?"]);
     expect((await fresh.ask({ kind: "agent", id: "x", model: "m" }, "owner", { task: "T-1", question: "first" })).decision).toBe("D-1");
