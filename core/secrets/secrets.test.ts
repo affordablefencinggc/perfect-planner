@@ -1,6 +1,7 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { checkDiff, parseDiff } from "../jev/diffChecks";
-import { detectSecrets, redactSecrets } from "./index";
+import { detectSecrets, findSecrets, redactSecrets } from "./index";
 
 // Every fixture is glued together at run time so the repository's own secret scan stays clean.
 const j = (...parts: string[]) => parts.join("");
@@ -14,6 +15,11 @@ describe("redaction (review samples, #7 at b359f6f)", () => {
     ["cookie session id", j("Cookie: ", "session=", "s3ss10nAbc123; theme=dark"), "s3ss10nAbc123"],
     ["Set-Cookie session id", j("Set-Cookie: ", "sid=", "8f2kQ93mzz; Path=/; HttpOnly"), "8f2kQ93mzz"],
     ["Stripe test key", j("sk", "_test_", "D".repeat(24)), "D".repeat(24)],
+    ["passphrase on an env line", j("DB_", "PASSWORD=", "correct-horse-battery-staple"), "correct-horse-battery-staple"],
+    ["passphrase in YAML", j("pass", "word: ", "purple-monkey-dishwasher"), "purple-monkey-dishwasher"],
+    ["dotted passphrase in YAML", j("pass", "phrase: ", "stormy.night.lantern"), "stormy.night.lantern"],
+    ["dotted passphrase on an export line", j("export API_", "KEY=", "blue.whale.sings.loud"), "blue.whale.sings.loud"],
+    ["a random token starting with fake", j("fake", RANDOM), RANDOM],
     ["curl -u password", j("curl -u admin:", "pass", " https://x.test"), "admin:pass "],
     ["curl --user password", j("curl --user ", "admin:", "Hunter22", " https://x.test"), "Hunter22"],
   ])("hides %s", (_name, text, leak) => {
@@ -36,6 +42,12 @@ describe("the diff check finds what redaction finds (review samples)", () => {
     ["letters-only password in a config file", "config/app.yml", j("  pass", "word: ", "hunter")],
     ["letters-only env value", ".env.production", j("DB_", "PASSWORD=", "letmein")],
     ["curl -u password", "scripts/check.sh", j("curl -u admin:", "pass", " https://x.test")],
+    ["passphrase on an env line", "deploy/env.sh", j("DB_", "PASSWORD=", "correct-horse-battery-staple")],
+    ["passphrase in YAML", "config/app.yml", j("pass", "word: ", "purple-monkey-dishwasher")],
+    ["passphrase in source", "src/a.ts", j('const pass', 'word = "', "purple-monkey-dishwasher", '";')],
+    ["dotted passphrase in YAML", "config/app.yml", j("pass", "phrase: ", "stormy.night.lantern")],
+    ["dotted passphrase on an export line", "deploy/env.sh", j("export API_", "KEY=", "blue.whale.sings.loud")],
+    ["a random token starting with fake", "src/a.ts", j('const k = "', "fake", RANDOM, '";')],
     ["URL-encoded cookie session", "docs/debug.md", j("Cookie: ", "session=", "eyJ1c2VyIjoxfQ%3D%3D.Zk9a2", "; theme=dark")],
   ];
   it.each(MUST_FIND)("finds %s", (_name, file, line) => {
@@ -68,5 +80,35 @@ describe("the diff check finds what redaction finds (review samples)", () => {
 +const token = value;
 `;
     expect(checkDiff(parseDiff(diff), [])).toEqual([expect.objectContaining({ rule: "secret", line: 1 })]);
+  });
+});
+
+describe("lines the release scanner flagged in the repo that are not secrets", () => {
+  it("passes a canary value a test checks never leaves (scripts/generate-truth-report.mjs)", () => {
+    const line = j('  artifact: { summary: "fixture", api', 'Key: "must-not-leave" }, maxOutputTokens: 300,');
+    expect(findSecrets("scripts/generate-truth-report.mjs", line)).toEqual([]);
+    expect(detectSecrets("scripts/generate-truth-report.mjs", line)).toEqual([]);
+  });
+
+  it("passes fixed status text in a failed-proof receipt (src-tauri/src/native_draft_commands.rs)", () => {
+    const line = 'reply:Some(json!({"secret":"do-not-retain-payload"})),stopped:Some(json!({"secret":"do-not-retain-stderr"})),';
+    expect(findSecrets("src-tauri/src/native_draft_commands.rs", line)).toEqual([]);
+    expect(detectSecrets("src-tauri/src/native_draft_commands.rs", line)).toEqual([]);
+  });
+
+  it("passes a dotted storage key name for the release scanner too", () => {
+    expect(findSecrets("src/session.ts", 'const TOKEN_KEY = "auth.session.token";')).toEqual([]);
+  });
+
+  it("still flags a secret that merely starts like a sentinel word", () => {
+    expect(detectSecrets("src/a.ts", j('const apiKey = "', "fake", 'Q9x2LmP4vR7tY1wZ";'))).not.toEqual([]);
+  });
+
+  it("finds nothing in its own documentation and comments", () => {
+    for (const file of ["core/secrets/index.ts", "core/secrets/README.md"]) {
+      const lines = readFileSync(new URL(file.replace("core/secrets/", "./"), import.meta.url), "utf8").split("\n");
+      const hits = lines.flatMap((line, i) => [...findSecrets(file, line), ...detectSecrets(file, line)].map((h) => `${file}:${i + 1} ${h.rule}`));
+      expect(hits).toEqual([]);
+    }
   });
 });

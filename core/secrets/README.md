@@ -14,7 +14,7 @@ One secret detector for the whole core, with no dependencies.
   leaves Perfect Planner (Jev requests) or that agents write (relay questions
   and answers, progress notes, release reasons). It covers whole PEM private-key
   blocks, the scanner's rules, `Authorization: Bearer/Basic` headers,
-  `scheme://user:password@host`, `mysql -pX` and `--password x`, npm tokens,
+  `scheme://<user>:<password>@<host>`, `mysql -p<password>` and `--password <password>`, npm tokens,
   `NAME=value`, `NAME: value` and `"NAME": "value"` for secret names
   (`isSecretName`), and long high-entropy runs. Names stay so a reader still
   sees what was there; values that are code (calls, member access, types,
