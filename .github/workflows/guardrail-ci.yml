@@ -16,8 +16,7 @@ jobs:
   web-and-contracts:
     name: Web, contracts, MCP, and Sites (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    # Windows runs the whole node suite (about 13 minutes there) before the UI suite.
-    timeout-minutes: 45
+    timeout-minutes: ${{ matrix.os == 'windows-latest' && 45 || 25 }}
     strategy:
       fail-fast: false
       matrix:
