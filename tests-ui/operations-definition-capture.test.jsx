@@ -48,7 +48,8 @@ test("fresh intake definitions stay project-scoped and disappear on reload witho
   expect(screen.getByText(/Hook definitions observed\. Installation and execution/)).toBeTruthy();
   const generationBeforeNavigation = registry.getActive().generation;
   fireEvent.click(screen.getByRole("button", { name: "Build" }));
-  expect(registry.getActive().generation).toBeGreaterThan(generationBeforeNavigation);
+  // A page change is not a new scan (define-05): the generation stays put and the observations survive.
+  expect(registry.getActive().generation).toBe(generationBeforeNavigation);
   expect(screen.getByText(/Hook definitions observed\. Installation and execution/)).toBeTruthy();
   view.unmount();
   render(shell());

@@ -73,7 +73,10 @@ describe("Perfect Planner shell interaction and accessibility", () => {
     await user.click(screen.getByRole("button", { name: "Index" }));
     expect(await screen.findByRole("region", { name: "Project index" })).toBeTruthy();
     expect(window.location.search).toContain("workspace=index");
+    // Closing the Index returns to the page it was opened from (shell-16).
     await user.click(screen.getByRole("button", { name: "Close project index" }));
+    expect(await screen.findByRole("region", { name: "Allocation workspace" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Open Perfect Planner home" }));
     expect(await screen.findByRole("region", { name: "Project Home workspace" })).toBeTruthy();
     await user.click(screen.getByRole("button", { name: /Drop your app/ }));
     expect(await screen.findByRole("region", { name: "Strict folder contract workspace" })).toBeTruthy();
