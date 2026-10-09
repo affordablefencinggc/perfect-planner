@@ -304,7 +304,7 @@ function BoundTaskDraftLedger({binding,project,providedStore,providedRecovery}) 
         {dirty&&ledger&&editingRevision.current!==ledger.revision&&<section aria-label="Review concurrent changes"><p>Another revision exists. Your form has not replaced it. Compare the latest saved task below with your form before reapplying.</p><pre tabIndex={0}>{JSON.stringify(ledger.tasks.find(task=>task.id===form.id)??{note:'New task; no existing task will be replaced.'},null,2)}</pre><button type="button" onClick={reapply} disabled={cannotEdit}>I reviewed the latest revision — reapply my form</button></section>}
       </form>
     </div>
-    {history&&<section aria-label="Draft revision history"><h3>Latest saved revisions (up to 50)</h3><div className="task-draft-tools">{history.map(item=><button type="button" key={item.revision} onClick={()=>viewRevision(item.revision)}>Revision {item.revision} · {item.taskCount} tasks</button>)}</div></section>}
+    {history&&<section aria-label="Draft revision history"><h3>Latest saved revisions (up to 50)</h3><div className="task-draft-tools">{history.map(item=><button type="button" key={item.revision} onClick={()=>viewRevision(item.revision)}>Revision {item.revision} · {item.taskCount} task{item.taskCount===1?"":"s"}</button>)}</div></section>}
     {historical&&<section aria-label="Historical draft"><h3>Read-only revision {historical.revision}</h3><button type="button" onClick={()=>exportDraft(historical)}>Export this revision</button><pre tabIndex={0}>{JSON.stringify(historical,null,2)}</pre></section>}
   </section>;
 }

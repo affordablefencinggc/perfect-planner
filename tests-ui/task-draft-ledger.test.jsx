@@ -59,7 +59,7 @@ test('add, edit, archive and inspect previous revision without implying approval
  fireEvent.click(screen.getByLabelText('Archive task (keep history)'));fireEvent.click(screen.getByRole('button',{name:'Save task draft'}));
  await waitFor(()=>expect(screen.queryByRole('button',{name:'Edit T0001'})).toBeNull());
  fireEvent.click(screen.getByLabelText('Show archived tasks'));await screen.findByRole('heading',{name:'Preserve all work'});
- fireEvent.click(screen.getByRole('button',{name:'Revision history'}));fireEvent.click(await screen.findByRole('button',{name:'Revision 1 · 1 tasks'}));
+ fireEvent.click(screen.getByRole('button',{name:'Revision history'}));fireEvent.click(await screen.findByRole('button',{name:'Revision 1 · 1 task'}));
  await screen.findByRole('heading',{name:'Read-only revision 1'});
  expect(screen.getByRole('region',{name:'Historical draft'}).querySelector('pre').tabIndex).toBe(0);
  expect((await store.read()).revision).toBe(2);

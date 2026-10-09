@@ -38,5 +38,6 @@ export function ownerSummary(section, taskIds, ledger) {
   }
   const draftOwners = new Map((ledger?.tasks ?? []).map((task) => [task.id, task.owner]));
   const named = taskIds.filter((id) => draftOwners.get(id)?.trim()).length;
-  return { state: "none", text: ledger ? `Owners are not assigned in Allocation yet. ${named} of ${total} task drafts name an owner.` : "Owners are not assigned in Allocation yet." };
+  const drafts = !ledger || !total ? "" : total === 1 ? ` The task draft ${named ? "names" : "does not name"} an owner.` : ` ${named} of ${total} task drafts name an owner.`;
+  return { state: "none", text: `Owners are not assigned in Allocation yet.${drafts}` };
 }
