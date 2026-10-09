@@ -46,7 +46,7 @@ ledger too, so the rules hold before the first review.
 3. **secret-scan**: added lines and file names (local)
 4. **local-tests**: only the tests for the changed files (`affectedTests`), via `options.runTests`
 5. **risk-triage**: path rules, then an optional small model that may raise but never lower the level; it sees paths and line counts only, never file contents
-6. **deep-review**: only when the preset says so; the reviewer (Jev, `core/jev`) is passed in as `options.deepReview` and must name itself (`outcome.reviewer`). A change that needs one with no reviewer configured is held, never waved through, and so is one reviewed by its own builder (same id, or an AI reviewer on the same model as the builder).
+6. **deep-review**: only when the preset says so; the reviewer (Jev, `core/jev`) is passed in as `options.deepReview` and must name itself (`outcome.reviewer`). A change that needs one with no reviewer configured is held, never waved through, and so is one reviewed by its own builder (same id, or an AI reviewer on the same model as the builder, compared without case).
 
 Verdict is `ready`, `held` (size, budget, missing reviewer) or `blocked`
 (secret, failing tests, rejected review). Skipped checks are reported as
@@ -55,7 +55,10 @@ writes it as `review.verdict` with `data.stage = "cheap-first"`; the actor is
 the system gate (or Jev), since agents may not write verdicts.
 
 Sensitive areas (`areasOf`): auth, payments, migrations, secrets handling,
-CI and build config, deleted or shrunk test files, and anything over the
+CI and build config, any test file that is deleted or loses a line
+(`isTestFile`: `*.test.*`, `*.spec.*`, `__tests__/`, `tests/`, `test_*.py`,
+`*_test.go`, `*Test.java`; swapping assertions for comments keeps the
+line count, so any removed line counts), and anything over the
 planned size. Every sensitive area except oversize gets the deep review under
 every preset, Cheap included.
 
@@ -74,10 +77,17 @@ every preset, Cheap included.
 Findings never carry a secret: `preview` is masked (`ghp_…(40)`), and the
 GitHub token never appears in a result or error. There is no inline
 "allow" marker. A finding a person has reviewed is allowed by its exact
-fingerprint (`file:rule:sha256(value)`) in `.perfect-planner/secret-allowlist.json`
-(`{ version: 1, allow: [{ fingerprint, reason, approvedBy }] }`), and the
-branch scan and the pre-push hook read that file from the base commit only,
-so a push can never allowlist its own secret. A value counts as a
+fingerprint (`file:rule:scrypt(value)`, salted with file and rule so short
+values cannot be guessed back). The review gate honours a fingerprint only
+when a person approved it in the signed ledger
+(`approveSecretFinding(ledger, person, { fingerprint, reason })`, read back
+with `approvedFingerprints(entries)`, checked with `isAuthoritative(entry, {
+personOnly: true })`); a file on a branch approves nothing, so two pushes
+cannot approve their own secret. The local pre-push hook cannot verify
+ledger signatures, so it reads `.perfect-planner/secret-allowlist.json` from
+the remote default branch only, where an entry arrives through review; it is
+a best-effort local layer, and the binding checks are the gate and GitHub
+push protection. A value counts as a
 placeholder only when the whole value is one (`changeme`, `<token>`,
 `${API_KEY}`, …) or a reference to a secret store (`secret://…`, `dpapi:…`,
 `keychain:…`).
@@ -87,11 +97,14 @@ Its rules mirror `secrets.ts`; `secrets.test.ts` fails if they drift.
 Install it with `installPrePushHook(run, { cwd, hookScript })`, which writes
 the shim where git looks (`git rev-parse --git-path hooks`, so it follows the
 `core.hooksPath` that `core/worktrees` sets) and never overwrites a hook that
-is not ours; `prePushInstalled` feeds layer 3 of `secretPosture`. Run on every tracked file of this repo today it flags 28 lines, all test
+is not ours; `prePushInstalled` feeds layer 3 of `secretPosture`.
+
+Run on every tracked file of this repo today it flags 28 lines, all test
 fixtures or non-secret values under secret-like names (for example a fake
 PEM header in `tests/provider-review-gateway.test.mjs`). They only matter
-when a branch changes one of those files, and then a person adds the
-printed fingerprint to the allowlist.
+when a branch changes one of those files, and then a person approves the
+printed fingerprint in the ledger (and, for the local hook, on the default
+branch's allowlist file).
 
 ## No giant pushes (`sizeCap.ts`)
 

@@ -30,6 +30,20 @@ export interface Triage {
   rater: "heuristic" | "heuristic+model";
 }
 
+const TEST_FILE = [
+  /\.(test|spec)\.[cm]?[jt]sx?$/i,      // login.test.ts, login.spec.jsx
+  /(^|\/)__tests__\//,                  // src/__tests__/login.js
+  /(^|\/)tests?\/.+\.[a-z0-9]+$/i,       // tests/login.mjs, test/helpers.rb
+  /(^|\/)test_[^/]+\.py$/i,              // test_login.py
+  /_test\.(py|go)$/i,                    // login_test.go
+  /(Test|Tests|Spec)\.(java|kt|cs|swift)$/, // LoginTest.java
+];
+
+export function isTestFile(path: string): boolean {
+  const normal = path.replace(/\\/g, "/");
+  return TEST_FILE.some((pattern) => pattern.test(normal));
+}
+
 /** Sensitive areas a path touches. */
 export function areasOf(path: string): SensitiveArea[] {
   const normal = path.replace(/\\/g, "/");
@@ -62,7 +76,9 @@ export function heuristicRisk(change: ChangeSet): Triage {
     level = maxRisk(level, "medium");
   }
 
-  const deletedTests = change.files.filter((file) => /\.(test|spec)\.[cm]?[jt]sx?$/.test(file.path) && (file.deleted || file.removed > file.added));
+  // Any removed line in a test file counts: swapping assertions for comments
+  // keeps the line count level, so "more removed than added" is not enough.
+  const deletedTests = change.files.filter((file) => isTestFile(file.path) && (file.deleted || file.removed > 0));
   if (deletedTests.length > 0) {
     // Weakening tests is how a change slips past its own proof, so it always
     // earns the deep review, whatever the preset (see needsDeepReview).

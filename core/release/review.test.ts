@@ -6,6 +6,8 @@ import { installReleaseRules, runCheapFirst, recordPipeline } from "./pipeline";
 import { DEFAULT_PRESET, PRESETS, currentPreset, installSettingsRule, needsDeepReview, setPreset } from "./presets";
 import { areasOf, heuristicRisk, triageRisk } from "./risk";
 import type { ChangeSet } from "./types";
+import { approveSecretFinding, approvedFingerprints } from "./allowlist";
+import { scanChange } from "./secrets";
 
 const owner = { kind: "person" as const, id: "owner" };
 const agent = { kind: "agent" as const, id: "claude-code", model: "m1" };
@@ -259,5 +261,63 @@ describe("settings an agent cannot change", () => {
     const result = await runCheapFirst(small, { ledger, author: builder, now: NOW, preset: "cheap" } as never);
     expect(result.preset).toBe("thorough");
     expect(result.deep).toBe(true);
+  });
+});
+
+describe("third review round", () => {
+  const token = "ghp_" + "Q7w8E9r0".repeat(5).slice(0, 36);
+  const secretChange: ChangeSet = { plannedLines: 100, files: [{ path: "src/a.ts", added: 1, removed: 0, addedText: `const t = "${token}";\n` }] };
+
+  it("lets a secret-looking value through only with a person's signed approval in the ledger", async () => {
+    const ledger = open();
+    const first = await runCheapFirst(secretChange, { ledger, author: builder, now: NOW });
+    expect(first.verdict).toBe("blocked");
+    const fingerprint = scanChange(secretChange.files)[0].fingerprint!;
+    approveSecretFinding(ledger, owner, { fingerprint, reason: "test fixture, not a real token" });
+    const second = await runCheapFirst(secretChange, { ledger, author: builder, now: NOW });
+    expect(second.checks.find((c) => c.check === "secret-scan")?.status).toBe("pass");
+    approveSecretFinding(ledger, owner, { fingerprint, reason: "fixture removed", revoke: true });
+    expect((await runCheapFirst(secretChange, { ledger, author: builder, now: NOW })).verdict).toBe("blocked");
+  });
+
+  it("ignores an approval written by anyone but a person, and refuses it once the gate has run", async () => {
+    const ledger = open();
+    const fingerprint = scanChange(secretChange.files)[0].fingerprint!;
+    appendNumbered(ledger, { actor: system, type: "decision.made", summary: "allow", reason: "x", evidence: [], refs: [], data: { topic: "secret-allowlist", fingerprint } });
+    expect(approvedFingerprints(ledger.entries()).size).toBe(0);
+    expect((await runCheapFirst(secretChange, { ledger, author: builder, now: NOW })).verdict).toBe("blocked");
+    expect(() =>
+      appendNumbered(ledger, { actor: system, type: "decision.made", summary: "allow", reason: "x", evidence: [], refs: [], data: { topic: "secret-allowlist", fingerprint } }),
+    ).toThrow(/Only a person/);
+    expect(() => approveSecretFinding(ledger, agent, { fingerprint, reason: "x" })).toThrow(/Only a person/);
+  });
+
+  it("catches test deletions in __tests__ folders, Python tests and edits that remove assertions", () => {
+    for (const file of [
+      { path: "src/__tests__/login.js", added: 0, removed: 30, deleted: true },
+      { path: "tests/test_login.py", added: 0, removed: 12, deleted: true },
+      { path: "pkg/login_test.go", added: 0, removed: 9, deleted: true },
+      { path: "src/login.test.ts", added: 3, removed: 3 }, // asserts swapped for comments: same size
+    ]) {
+      expect(heuristicRisk({ files: [file] }).areas).toContain("tests");
+    }
+    expect(heuristicRisk({ files: [{ path: "src/login.test.ts", added: 5, removed: 0 }] }).areas).not.toContain("tests");
+  });
+
+  it("compares reviewer and builder without regard to case", async () => {
+    const result = await runCheapFirst(authChange, {
+      ledger: open(),
+      author: builder,
+      now: NOW,
+      deepReview: async () => ({ verdict: "approve", notes: [], reviewer: { kind: "agent", id: "Worker-2", model: "other" } }),
+    });
+    expect(result.verdict).toBe("held");
+    const sameModel = await runCheapFirst(authChange, {
+      ledger: open(),
+      author: builder,
+      now: NOW,
+      deepReview: async () => ({ verdict: "approve", notes: [], reviewer: { kind: "jev", id: "jev", model: "Builder-Model" } }),
+    });
+    expect(sameModel.verdict).toBe("held");
   });
 });

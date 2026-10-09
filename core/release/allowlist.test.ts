@@ -1,3 +1,8 @@
+import { execFileSync } from "node:child_process";
+import { createHash, scryptSync } from "node:crypto";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { ALLOWLIST_PATH, fingerprintOf, parseAllowlist } from "./allowlist";
 
@@ -5,13 +10,32 @@ const HEX64 = /^[0-9a-f]{64}$/;
 const entry = (fp: string, extra: Record<string, unknown> = {}) => ({ fingerprint: fp, reason: "fixture", approvedBy: "person-1", ...extra });
 
 describe("fingerprintOf", () => {
-  it("is file:rule:sha256 and leaks nothing", () => {
+  it("is file:rule:scrypt(salt perfect-planner:file:rule) and leaks nothing", () => {
     const fp = fingerprintOf("src/a.ts", "github-token", "ghp_" + "a".repeat(36));
     const [file, rule, hash] = [fp.slice(0, 8), fp.split(":")[1], fp.split(":")[2]];
     expect(file).toBe("src/a.ts");
     expect(rule).toBe("github-token");
     expect(hash).toMatch(HEX64);
     expect(fp).not.toContain("aaaa");
+    const expected = scryptSync("ghp_" + "a".repeat(36), "perfect-planner:src/a.ts:github-token", 32).toString("hex");
+    expect(hash).toBe(expected);
+    expect(hash).not.toBe(createHash("sha256").update("ghp_" + "a".repeat(36)).digest("hex"));
+  });
+
+  it("matches the pre-push hook's copy, including backslash paths", () => {
+    const hook = join(__dirname, "hooks", "pre-push.mjs");
+    const dir = mkdtempSync(join(tmpdir(), "pp-fp-"));
+    try {
+      const file = join(dir, "x.txt");
+      const value = "ghp_" + "b".repeat(36);
+      writeFileSync(file, value + "\n");
+      const out = JSON.parse(execFileSync(process.execPath, [hook, "--scan-text", file], { encoding: "utf8" })) as Array<{ fingerprint: string }>;
+      expect(out).toHaveLength(1);
+      expect(out[0].fingerprint).toBe(fingerprintOf(file, "github-token", value));
+      expect(fingerprintOf("a\\b.ts", "r", "v")).toBe(fingerprintOf("a/b.ts", "r", "v"));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("normalises backslashes and depends on every part", () => {

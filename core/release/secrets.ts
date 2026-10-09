@@ -220,12 +220,14 @@ export interface BranchScanResult {
 
 /**
  * Layer 3: scan the full content of every file the branch adds or changes.
- * The allowlist is read from the BASE commit (or `allowlistText`), never from
- * the head, so a push cannot allowlist its own secret.
+ * `approved` is the set of fingerprints a person approved in the signed ledger
+ * (approvedFingerprints(ledger.entries())). No allowlist file is read from any
+ * branch: a file a push adds approves nothing, so two pushes cannot approve
+ * their own secret.
  */
 export async function scanBranch(
   run: CommandRunner,
-  opts: { cwd: string; base: string; head?: string; allowlistText?: string },
+  opts: { cwd: string; base: string; head?: string; approved?: ReadonlySet<string> },
 ): Promise<BranchScanResult> {
   const head = opts.head ?? "HEAD";
   const list = await run("git", ["diff", "--name-only", "--diff-filter=ACMR", `${opts.base}...${head}`], { cwd: opts.cwd });
@@ -233,26 +235,16 @@ export async function scanBranch(
     throw new Error(`git diff failed (exit ${list.code}): ${list.stderr.trim().split(/\r?\n/)[0] ?? ""}`);
   }
   const paths = list.stdout.split(/\r?\n/).map((p) => p.trim()).filter(Boolean);
-  const raw: SecretFinding[] = [];
+  const findings: SecretFinding[] = [];
   for (const path of paths) {
     const rule = isForbiddenFile(path);
-    if (rule) raw.push(...forbiddenFinding(path, rule));
+    if (rule) findings.push(...forbiddenFinding(path, rule, opts.approved));
     const shown = await run("git", ["show", `${head}:${path}`], { cwd: opts.cwd });
     if (shown.code !== 0) {
       throw new Error(`git show failed for ${path} (exit ${shown.code}): ${shown.stderr.trim().split(/\r?\n/)[0] ?? ""}`);
     }
     if (shown.stdout.includes("\0")) continue;
-    raw.push(...scanText(path, shown.stdout));
-  }
-  let findings = raw;
-  if (raw.length > 0) {
-    let text = opts.allowlistText;
-    if (text === undefined) {
-      const base = await run("git", ["show", `${opts.base}:${ALLOWLIST_PATH}`], { cwd: opts.cwd });
-      text = base.code === 0 ? base.stdout : "";
-    }
-    const allow = parseAllowlist(text);
-    findings = raw.filter((f) => !f.fingerprint || !allow.has(f.fingerprint));
+    findings.push(...scanText(path, shown.stdout, opts.approved));
   }
   return { ok: findings.length === 0, findings, filesScanned: paths.length };
 }
