@@ -230,6 +230,26 @@ describe("POST /keys/rotate", () => {
     expect(ctx.host.project("keys").ledger.owner).toBe("person:owner");
   });
 
+  it("returns the new recovery code once when rotating voided the old one", async () => {
+    personWrite("Save notes");
+    const ledger = ctx.host.project("keys").ledger;
+    const old = asPersonRequest(() => ledger.setRecoveryCode({ kind: "person", id: "owner" }, "first code"));
+    const res = await hostCall(ctx.base, "POST", `/keys/rotate${q}`, { reason: "old PC may be stolen" });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(res.body.result.recovery.code).toEqual(expect.any(String));
+    expect(res.body.result.recovery.code).not.toBe(old.code);
+    expect(ledger.checkRecoveryCode(res.body.result.recovery.code)).toMatchObject({ owner: "person:owner" });
+    expect(() => ledger.checkRecoveryCode(old.code)).toThrow();
+    // Not kept anywhere the window could read again.
+    expect(JSON.stringify((await hostCall(ctx.base, "GET", `/status${q}`)).body)).not.toContain(res.body.result.recovery.code);
+  });
+
+  it("without a recovery code in force, rotating makes none", async () => {
+    personWrite("Save notes");
+    const res = await hostCall(ctx.base, "POST", `/keys/rotate${q}`, { reason: "new PC" });
+    expect(res.body.result.recovery).toBeUndefined();
+  });
+
   it("cannot be done from outside the person's own request", () => {
     const ledger = ctx.host.project("keys").ledger;
     personWrite("Save notes");

@@ -64,12 +64,35 @@ export function projectKey(raw: string | null | undefined): string {
 export const runCommand: CommandRunner = async (command, args, options) => {
   if (command !== "git") return { code: 127, stdout: "", stderr: `The host only runs git, not ${command}.` };
   try {
+    // The runner fixes core.hooksPath to an empty folder for its own calls, so asking it where hooks live
+    // would name that folder. The pre-push shim must land where the person's own git push looks.
+    if (args.length === 3 && args[0] === "rev-parse" && args[1] === "--git-path" && args[2] === "hooks") return await repoHooksDir(options?.cwd ?? process.cwd());
     const result = await runGit(options?.cwd ?? process.cwd(), [...args]);
     return { code: result.code, stdout: result.stdout, stderr: result.stderr };
   } catch (error) {
     return { code: 127, stdout: "", stderr: (error as Error).message };
   }
 };
+
+/**
+ * Where the person's own git looks for this repo's hooks: core.hooksPath from their system, global, repo or
+ * worktree config (the last one set wins, as in git; command-line values are the runner's own and skipped),
+ * else the hooks folder in the repo's common git folder. Reading config runs nothing.
+ */
+async function repoHooksDir(cwd: string): Promise<{ code: number; stdout: string; stderr: string }> {
+  const own = { GIT_CONFIG_GLOBAL: process.env.GIT_CONFIG_GLOBAL || path.join(os.homedir(), ".gitconfig"), GIT_CONFIG_NOSYSTEM: process.env.GIT_CONFIG_NOSYSTEM ?? "0" };
+  const set = await runGit(cwd, ["config", "--show-scope", "--get-all", "core.hooksPath"], { env: own });
+  const values = set.code === 0 ? set.stdout.split(/\r?\n/).filter(Boolean).map((line) => line.split("\t")).filter(([scope, value]) => scope !== "command" && value) : [];
+  const chosen = values.at(-1)?.[1];
+  if (chosen) {
+    const top = await runGit(cwd, ["rev-parse", "--show-toplevel"]);
+    if (top.code !== 0) return top;
+    const expanded = chosen.startsWith("~/") ? path.join(os.homedir(), chosen.slice(2)) : chosen;
+    return { code: 0, stdout: path.resolve(top.stdout.trim(), expanded), stderr: "" };
+  }
+  const common = await runGit(cwd, ["rev-parse", "--git-common-dir"]);
+  return common.code === 0 ? { code: 0, stdout: path.join(path.resolve(cwd, common.stdout.trim()), "hooks"), stderr: "" } : common;
+}
 
 /**
  * protectProject for a folder, but only when the folder is itself the top of a git repository: a
