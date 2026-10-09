@@ -467,8 +467,11 @@ describe("review fixes: authority comes from the ledger, not the payload", () =>
   });
 
   it("ignores people changes that the rules would have refused", () => {
+    // The owner's claim is a real, signed entry; the rest are hand-built and unsigned.
+    const real = open();
+    claimOwnership(real, owner, "Looplet Spare");
     const entries = [
-      entry(1, owner, { op: "member.added", person: "looplet-spare", name: "Looplet Spare", role: "owner" }),
+      ...real.entries(),
       entry(2, mia, { op: "member.added", person: "mia", name: "Mia", role: "helper" }),
       entry(3, ownersAgent, { op: "member.changed", person: "looplet-spare", role: "viewer" }),
       entry(4, stranger, { op: "member.removed", person: "looplet-spare" }),
