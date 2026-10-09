@@ -44,7 +44,8 @@ export function verifyChain(entries: readonly LedgerEntry[]): ChainResult {
 
 /**
  * Like verifyChain, but a break named by a later chain.acknowledged entry is
- * accepted, and checking re-anchors on the stored entry from there.
+ * accepted when the bad entry still has the hash the person acknowledged,
+ * and checking re-anchors on that entry from there.
  */
 export function verifyWithAcknowledgements(entries: readonly LedgerEntry[]): {
   result: ChainResult;
@@ -58,8 +59,15 @@ export function verifyWithAcknowledgements(entries: readonly LedgerEntry[]): {
     const result = verifyFrom(entries, start, prev, number);
     if (result.ok) return { result, acknowledged };
     const index = entries.findIndex((e, i) => i >= start && e.n === result.firstBad);
+    // Only a person's acknowledgement counts, and only for the bytes they saw:
+    // it records the bad entry's stored hash, so a later edit is a new break.
     const ackIndex = entries.findIndex(
-      (e) => e.type === "chain.acknowledged" && e.actor?.kind === "person" && String(e.data?.firstBad ?? e.subject) === result.firstBad,
+      (e) =>
+        e.type === "chain.acknowledged" &&
+        e.actor?.kind === "person" &&
+        e.data?.firstBad === result.firstBad &&
+        index >= 0 &&
+        acknowledgesExactly(e, entries[index]),
     );
     if (index < 0 || ackIndex <= index) return { result, acknowledged };
     acknowledged.push(result.firstBad);
@@ -69,8 +77,18 @@ export function verifyWithAcknowledgements(entries: readonly LedgerEntry[]): {
   }
 }
 
+/**
+ * An acknowledgement pins both the bad entry's stored hash and the
+ * fingerprint of its content as the person saw it, so any further edit to
+ * that entry, of any field, is a new break.
+ */
+export function acknowledgesExactly(ack: LedgerEntry, bad: LedgerEntry): boolean {
+  return ack.data?.hash === bad.hash && ack.data?.content === hashEntry(bad);
+}
+
 export function parseLedgerNumber(n: string): number | undefined {
   const match = /^L-(\d{6,})$/.exec(n);
+  if (match && match[1].length > 6 && match[1].startsWith("0")) return undefined;
   return match ? Number(match[1]) : undefined;
 }
 

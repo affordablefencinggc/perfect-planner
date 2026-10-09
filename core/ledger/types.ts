@@ -88,7 +88,7 @@ export interface LedgerEntry {
   hash: string;
 }
 
-export type ChainProblem = "hash" | "prev" | "number" | "parse" | "truncated";
+export type ChainProblem = "hash" | "prev" | "number" | "parse" | "truncated" | "permission" | "write";
 
 export type ChainResult =
   | { ok: true }
@@ -103,6 +103,8 @@ export interface LedgerStatus {
   problem?: ChainProblem;
   detail?: string;
   acknowledged: string[];
+  /** Set when opening repaired a torn final line left by a crash mid-write. */
+  repaired?: string;
 }
 
 export type LedgerErrorCode =
@@ -130,8 +132,9 @@ export class LedgerError extends Error {
  * Which entry types each kind of actor may write. A person may write
  * anything (core/people narrows that per role); the system actors (the gate
  * and the git watcher) write test results, merges and done. Agents only
- * claim, report, ask and attach proof; the main chat's relay answers are
- * agent writes too (spec §4.1). Jev only records verdicts. Everything else,
+ * claim, report, ask and attach proof; the main chat's relay answer is an
+ * agent write too (spec §4.1), but it is never authoritative (see
+ * isAuthoritative). Jev only records verdicts. Everything else, decisions,
  * approvals, test results, done, releases, is refused to agents and Jev.
  */
 export type PermissionTable = Readonly<Record<ActorKind, "any" | readonly EntryType[]>>;
@@ -147,9 +150,17 @@ export const DEFAULT_PERMISSIONS: PermissionTable = {
     "test.defined",
     "question.asked",
     "question.answered",
-    "decision.made",
   ],
   jev: ["review.verdict", "question.asked"],
+};
+
+/** Entry types that hand out the next number in a series; their subject is that number. */
+export const ALLOCATING_TYPES: Readonly<Record<"P" | "T" | "Q" | "D" | "R", readonly EntryType[]>> = {
+  P: ["plan.approved"],
+  T: ["task.created"],
+  Q: ["question.asked"],
+  D: ["decision.made"],
+  R: ["release.cut", "release.rollback"],
 };
 
 export const GENESIS_PREV = "0".repeat(64);

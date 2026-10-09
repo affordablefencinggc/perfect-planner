@@ -63,9 +63,9 @@ function lookupClause(entries: readonly LedgerEntry[], text: string, clause: str
     return empty(text, later ? `§${clause} was added after ${plan}` : `§${clause} does not exist`, "clause");
   }
   const history = entries.filter((e) => e.type.startsWith("clause.") && clauseOfEntry(e) === clause);
-  const citedBy = entries.filter((e) => !e.type.startsWith("clause.") && e.refs.some((r) => refMatchesClause(r, clause)));
+  const citedBy = entries.filter((e) => !e.type.startsWith("clause.") && e.refs.some((r) => refMatchesClause(r, clause, plan)));
   const tasks = unique(citedBy.filter((e) => e.subject.startsWith("T-")).map((e) => baseNumber(e.subject)));
-  const commits = commitsFor(entries, tasks, (e) => e.refs.some((r) => refMatchesClause(r, clause)));
+  const commits = commitsFor(entries, tasks, (e) => e.refs.some((r) => refMatchesClause(r, clause, plan)));
   return {
     ref: text,
     kind: "clause",
