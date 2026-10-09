@@ -112,6 +112,18 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  # Install and smoke-test what was just built on clean Windows, macOS and Linux runners.
+  # Reported, not gating: a red trial does not stop a person from publishing the draft.
+  trial:
+    name: Installer trial
+    needs: build
+    permissions:
+      contents: write
+      actions: read
+    uses: ./.github/workflows/installer-trial.yml
+    with:
+      source_runs: '["${{ github.run_id }}"]'
+
   draft-release:
     name: Attach to draft release
     needs: build

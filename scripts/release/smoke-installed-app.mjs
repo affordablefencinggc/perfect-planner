@@ -130,7 +130,7 @@ async function main() {
     return text && text.trim().length > 40 ? text : null;
   }, 60_000);
   await shot("01-first-run");
-  const firstOk = Boolean(firstText) && /Perfect Planner|Bring in your existing app|Drop your app|Choose app folder/i.test(firstText) && !/Something went wrong|Unhandled|TypeError/i.test(firstText);
+  const firstOk = Boolean(firstText) && /Perfect Planner|Bring in your existing app|Drop your app|Choose app folder|Local Collaboration Workspace|Add project|Choose a local folder|Project Home/i.test(firstText) && !/Something went wrong|Unhandled|TypeError/i.test(firstText);
   record("first-run screen", firstOk, firstText ? JSON.stringify(firstText.trim().replace(/\s+/g, " ").slice(0, 220)) : "no text within 60 s");
 
   // 2. Settings opens (top bar, or inside More actions).
@@ -191,6 +191,13 @@ async function main() {
   const panelError = panel && /couldn't|could not|failed|unavailable|not running|error/i.test(panel.text) ? panel.text.match(/[^\n]*(couldn't|could not|failed|unavailable|not running|error)[^\n]*/i)?.[0] : null;
   record("connect agent shows a line", Boolean(line) && !panelError,
     !connect ? "no Connect agent button" : !panel ? "panel did not open" : line ? `line: ${JSON.stringify(line.slice(0, 200))}${panelError ? `; but panel says ${JSON.stringify(panelError)}` : ""}` : `no line; panel says ${JSON.stringify(panel.text.replace(/\s+/g, " ").slice(0, 240))}`);
+
+  // 4b. The line must be runnable as copied: no <placeholders> a person has to fill in by hand.
+  if (line) {
+    const placeholders = line.match(/<[^<>]+>/g) || [];
+    record("connect line runnable as copied", placeholders.length === 0,
+      placeholders.length ? `line still contains ${placeholders.join(", ")}` : "no placeholders");
+  }
 
   // 5. Closes cleanly: ending the session closes the window; the workflow then checks no process is left.
   const closeStart = Date.now();

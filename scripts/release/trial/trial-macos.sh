@@ -32,7 +32,9 @@ check "code signature" "$([ "$verify" = ok ] && echo pass || echo fail)" "verify
 q="$(mktemp -d)/$(basename "$app")"; ditto "$app" "$q"
 xattr -w com.apple.quarantine "0081;$(printf %x "$(date +%s)");Safari;" "$q"
 gk="$(spctl --assess --type execute -vv "$q" 2>&1 | tr '\n' ' ')"
-case "$gk" in *accepted*) check "gatekeeper (downloaded copy)" pass "$gk";; *) check "gatekeeper (downloaded copy)" fail "$gk";; esac
+case "$gk" in *accepted*) check "gatekeeper (downloaded copy)" pass "$gk";;
+  *"no usable signature"*|*"no resources"*|*"invalid"*) check "gatekeeper (downloaded copy)" fail "$gk (a downloaded copy shows 'damaged' or 'unidentified developer'; Developer ID signing + notarization needed)";;
+  *) check "gatekeeper (downloaded copy)" fail "$gk (not notarized: first open needs System Settings > Privacy & Security > Open Anyway)";; esac
 rm -rf "$(dirname "$q")"
 
 # Launch the installed copy (not quarantined, as after a person clicks Open Anyway).
@@ -54,7 +56,7 @@ esac
 if echo "$windows" | grep -q '^windows:'; then
   text="$(ax text "$bundle_id")"
   echo "$text" > "$out/$label-ax-text.txt"
-  if echo "$text" | grep -qiE 'Bring in your existing app|Drop your app|Choose app folder'; then check "first-run screen" pass "$(echo "$text" | tr '\n' ' ' | head -c 220)"
+  if echo "$text" | grep -qiE 'Bring in your existing app|Drop your app|Choose app folder|Local Collaboration Workspace|Add project|Choose a local folder|Project Home'; then check "first-run screen" pass "$(echo "$text" | tr '\n' ' ' | head -c 220)"
   else check "first-run screen" fail "AX text: $(echo "$text" | tr '\n' ' ' | head -c 220)"; fi
   r="$(ax press "$bundle_id" '^settings$' )"; sleep 2; screencapture -x "$out/$label-02-settings.png" || true
   t="$(ax text "$bundle_id")"
@@ -66,6 +68,10 @@ if echo "$windows" | grep -q '^windows:'; then
   err="$(echo "$t" | grep -iE "couldn't|could not|failed|unavailable|not running" | head -n1)"
   if echo "$r" | grep -q pressed && [ -n "$line" ] && [ -z "$err" ]; then check "connect agent shows a line" pass "line: $line"
   else check "connect agent shows a line" fail "${r}; line: ${line:-none}; panel says: ${err:-$(echo "$t" | tr '\n' ' ' | head -c 200)}"; fi
+  if [ -n "$line" ]; then
+    ph="$(echo "$line" | grep -oE '<[^<>]+>' | tr '\n' ' ')"
+    if [ -z "$ph" ]; then check "connect line runnable as copied" pass "no placeholders"; else check "connect line runnable as copied" fail "line still contains $ph"; fi
+  fi
   check "open project folder" skip "native NSOpenPanel is not driven on macOS runners; covered on Windows and Linux"
 else
   for name in "first-run screen" "settings opens" "connect agent shows a line" "open project folder"; do check "$name" skip "needs accessibility access, not granted on this runner"; done

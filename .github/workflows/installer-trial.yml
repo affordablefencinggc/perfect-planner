@@ -26,12 +26,13 @@ permissions:
   actions: read
 
 env:
-  # Push-triggered trials use these Release runs: PR #12 head (main + pipeline) and the preview build.
-  DEFAULT_SOURCE_RUNS: '["37918632579","37915996951"]'
+  # Push-triggered trials use these Release runs (37921501956: PR #31, core host bundled in the installer).
+  DEFAULT_SOURCE_RUNS: '["37921501956"]'
 
 jobs:
   plan:
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     outputs:
       sources: ${{ steps.pick.outputs.sources }}
     steps:
@@ -39,6 +40,17 @@ jobs:
         env:
           INPUT: ${{ inputs.source_runs }}
         run: echo "sources=${INPUT:-$DEFAULT_SOURCE_RUNS}" >> "$GITHUB_OUTPUT"
+      # A trial pushed while its Release run is still building waits for it (not needed when called by that run).
+      - name: Wait for the Release runs to finish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCES: ${{ steps.pick.outputs.sources }}
+        run: |
+          for id in $(echo "$SOURCES" | jq -r '.[]'); do
+            [ "$id" = "${{ github.run_id }}" ] && continue
+            until [ "$(gh api "repos/${{ github.repository }}/actions/runs/$id" --jq .status)" = completed ]; do echo "run $id still building"; sleep 60; done
+            echo "run $id: $(gh api "repos/${{ github.repository }}/actions/runs/$id" --jq .conclusion)"
+          done
 
   windows:
     name: Windows (run ${{ matrix.source }})
