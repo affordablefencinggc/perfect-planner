@@ -7,6 +7,7 @@ import { resolutionState, uniquePaths } from "./taskCoordination.js";
 const list = (value) => Array.isArray(value) ? value : [];
 const text = (value) => typeof value === "string" && value.trim() ? value.trim() : null;
 const taskKey = (item) => text(item?.taskId) ?? text(item?.task) ?? text(item?.id);
+const KIND_LABELS = { screenshot: "Screenshot", diff: "Code change", test: "Test result", note: "Note", skip: "Not needed" };
 const RESOLVED = new Set(["resolved", "serialized", "accepted", "cleared", "ordered", "dismissed", "sequenced", "allowed"]);
 
 function keyed(value) {
@@ -71,12 +72,13 @@ export function proofItems(sections) {
   const push = (taskId, item) => {
     if (!taskId || !item) return;
     const kind = text(item.kind) ?? text(item.type) ?? null;
-    const label = text(item.label) ?? text(item.title) ?? text(item.name) ?? text(item.summary) ?? kind;
+    const label = text(item.label) ?? text(item.title) ?? text(item.name) ?? text(item.summary) ?? (kind ? KIND_LABELS[kind] ?? kind : null);
     if (label) out.push({ taskId, label, kind });
   };
   const flat = Array.isArray(data) ? data : data.items ?? data.proof ?? data.entries ?? null;
   if (Array.isArray(flat)) for (const item of flat) push(text(item?.taskId) ?? text(item?.task), item);
-  const grouped = data.tasks ?? data.byTask ?? null;
+  // The Evidence page saves proof as { items: { T0001: [...] } }, keyed by task.
+  const grouped = data.tasks ?? data.byTask ?? (flat && typeof flat === "object" && !Array.isArray(flat) ? flat : null);
   if (grouped && typeof grouped === "object" && !Array.isArray(grouped)) for (const [id, items] of Object.entries(grouped)) for (const item of (Array.isArray(items) ? items : list(items?.items))) push(id, item);
   return out;
 }

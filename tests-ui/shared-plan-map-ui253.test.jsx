@@ -21,7 +21,7 @@ test('gap 17: an approval made by the person is never shown as "not checked"; th
  cleanup();
  await recordPlanApproval(project.projectId,{tasks:ledger.tasks,censusDigest:project.census.digest});
  render(show({state:'stale',projectId:project.projectId,reason:'ledger-context-changed'}));await screen.findByRole('button',{name:'Open T0001: Keep obligations in Ledger'});
- expect(screen.getByText('Plan approved. Run the saved-plan check to lock it to this exact Ledger.')).toBeTruthy();
+ expect(screen.getByText(/^Plan approved[.:] .*Run the saved-plan check to lock it to this exact Ledger\.$/)).toBeTruthy();
  expect(screen.queryByText(/not checked/i)).toBeNull();
  expect(screen.getByRole('button',{name:'Run saved-plan check'})).toBeTruthy();
  expect(screen.getByText(/^Saved-plan check: an extra step after you approve/)).toBeTruthy();

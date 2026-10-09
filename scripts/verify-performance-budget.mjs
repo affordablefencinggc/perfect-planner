@@ -11,7 +11,8 @@ export const PERFORMANCE_BUDGETS = Object.freeze({
   // Oct 2026: +16 KiB for the self-plan gap fixes (Blueprint pre-fill, task paste, scripted intake guard, discovery details); per-file limit unchanged.
   maxTotalJavaScriptGzipBytes: 496 * 1024,
   maxIndividualStylesheetGzipBytes: 44 * 1024,
-  maxTotalStylesheetGzipBytes: 56 * 1024,
+  // UI polish (Oct 2026): total raised for the page frame and per-screen polish layers; the per-file limit is unchanged.
+  maxTotalStylesheetGzipBytes: 72 * 1024,
   maxClientBytes: 14 * 1024 * 1024,
   maxClientFiles: 200, // raised from 160 when v1 feature panels moved to on-demand chunks
 });

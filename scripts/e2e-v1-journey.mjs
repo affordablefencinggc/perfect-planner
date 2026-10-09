@@ -474,6 +474,25 @@ async function journey(page, at, step) {
     await page.goto(at("home"));
     await page.expectText("Project status ready");
   });
+
+  // Every page must agree with Home once the project is Ready (screen tour, 9 Oct 2026).
+  await step("screens-agree-with-ready", async () => {
+    await page.goto(at("build"));
+    await page.expectText(/2 of 2 done/);
+    const attached = (await page.text()).match(/Proof\s*3 attached/g) ?? [];
+    if (attached.length !== 2) throw new Error(`Build cards should each show 3 proof items, saw ${attached.length} cards with proof`);
+    await page.goto(at("index"));
+    await page.expectText(/6\s*proof items/);
+    await page.goto(at("plan"));
+    await page.expectText(/Plan approved: 2 tasks approved on this device/);
+    const map = await page.run((h) => h.findAll({ css: ".draft-map-node" }).map((el) => el.textContent));
+    if (map.length !== 2 || map.some((text) => !/Approved/.test(text) || /Draft/.test(text))) throw new Error(`Plan map tasks should read Approved, saw ${JSON.stringify(map)}`);
+    if (/could not be checked/.test(await page.text())) throw new Error("Plan still says the approval could not be checked");
+    await page.goto(at("structure"));
+    await page.expectText("NO FOLDER PLAN");
+    const header = await page.eval(`document.querySelector(".structure-state")?.textContent ?? ""`);
+    if (/BLOCKED|blockers/.test(header)) throw new Error(`Structure header says blocked on a Ready project: ${header}`);
+  });
   await peek(page, at);
 }
 
