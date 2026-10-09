@@ -253,6 +253,15 @@ describe("FilePhotoStore", () => {
     expect(readdirSync(path.join(root, ...PHOTO_DIR.split("/")))).toEqual(["bob-0123456789ab.png"]);
   });
 
+  it("removes a photo, and does nothing when it is already gone", () => {
+    const store = new FilePhotoStore(tempRoot());
+    store.save(file, PNG);
+    store.remove(file);
+    expect(store.load(file)).toBeUndefined();
+    expect(() => store.remove(file)).not.toThrow();
+    expect(() => store.remove("../../etc/passwd")).toThrow(PeopleError);
+  });
+
   it("returns undefined for a photo that does not exist", () => {
     const store = new FilePhotoStore(tempRoot());
     expect(store.load(file)).toBeUndefined();

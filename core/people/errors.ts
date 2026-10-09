@@ -5,7 +5,8 @@ export type PeopleErrorCode =
   | "PHOTO_TYPE"
   | "PHOTO_TOO_LARGE"
   | "PHOTO_PATH"
-  | "PHOTO_MISSING";
+  | "PHOTO_MISSING"
+  | "STORED_VIOLATION";
 
 export class PeopleError extends Error {
   readonly code: PeopleErrorCode;
