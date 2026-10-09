@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -76,5 +76,65 @@ describe("git resolver", () => {
       if (inherited !== undefined) process.env.NoDefaultCurrentDirectoryInExePath = inherited;
     });
     expect(git(repo, ["-c", "alias.showenv=!env", "showenv"])).toContain("NoDefaultCurrentDirectoryInExePath=1");
+  });
+
+  // Found by the #13 thread on macOS: a PATH folder that reaches the repo through a link (there,
+  // every temp folder, since /var is /private/var) was not recognised as inside the repo.
+  it("skips a PATH folder that reaches the repo through a symlink or junction", () => {
+    const base = tempDir("pp-exe-link-");
+    const repo = path.join(base, "repo");
+    const tools = path.join(base, "tools");
+    mkdirSync(path.join(repo, "bin"), { recursive: true });
+    mkdirSync(tools);
+    plantGit(path.join(repo, "bin"));
+    const real = plantGit(tools);
+    const viaLink = path.join(base, "looks-outside");
+    symlinkSync(path.join(repo, "bin"), viaLink, isWindows ? "junction" : "dir");
+    expect(findExecutable("git", { PATH: [viaLink, tools].join(path.delimiter) }, repo)).toBe(real);
+    // The repo itself reached through a link, as cwd, is recognised too.
+    const repoLink = path.join(base, "repo-link");
+    symlinkSync(repo, repoLink, isWindows ? "junction" : "dir");
+    expect(findExecutable("git", { PATH: [path.join(repo, "bin"), tools].join(path.delimiter) }, repoLink)).toBe(real);
+  });
+
+  it("skips a program on PATH that is a link to one inside the repo", (context) => {
+    const base = tempDir("pp-exe-filelink-");
+    const repo = path.join(base, "repo");
+    const tools = path.join(base, "tools");
+    const later = path.join(base, "later");
+    mkdirSync(repo);
+    mkdirSync(tools);
+    mkdirSync(later);
+    const planted = plantGit(repo);
+    const real = plantGit(later);
+    try {
+      symlinkSync(planted, path.join(tools, path.basename(planted)), "file");
+    } catch (error) {
+      // File symlinks need Developer Mode or admin rights on Windows.
+      if ((error as NodeJS.ErrnoException).code === "EPERM") return context.skip();
+      throw error;
+    }
+    expect(findExecutable("git", { PATH: [tools, later].join(path.delimiter) }, repo)).toBe(real);
+  });
+
+  it("treats a PATH folder that does not exist as unusable", () => {
+    const base = tempDir("pp-exe-missing-");
+    const tools = path.join(base, "tools");
+    mkdirSync(tools);
+    const real = plantGit(tools);
+    expect(findExecutable("git", { PATH: [path.join(base, "gone"), tools].join(path.delimiter) }, tempDir("pp-exe-cwd-"))).toBe(real);
+  });
+
+  it("never runs a planted git reached through a linked PATH entry", () => {
+    const repo = makeRepo();
+    mkdirSync(path.join(repo, "bin"));
+    plantGit(path.join(repo, "bin"));
+    const outside = tempDir("pp-exe-outside-");
+    const viaLink = path.join(outside, "bin-link");
+    symlinkSync(path.join(repo, "bin"), viaLink, isWindows ? "junction" : "dir");
+    process.env.PATH = `${viaLink}${path.delimiter}${originalPath}`;
+    expect(git(repo, ["--version"])).toMatch(/^git version \d/);
+    expect(realpathSync.native(gitExecutable(repo)).startsWith(repo)).toBe(false);
+    expect(existsSync(path.join(repo, "bin", "planted-ran"))).toBe(false);
   });
 });
