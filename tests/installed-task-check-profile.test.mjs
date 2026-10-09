@@ -35,7 +35,7 @@ test('repository profile refuses missing selected scripts and oversized definiti
   await assert.rejects(prepareInstalledTaskCheckProfile(f),/SCRIPTS_MISMATCH/);
  }
 });
-test('native extended-length Windows paths work while redirected roots still refuse',async()=>{
+test('native extended-length Windows paths work while redirected roots still refuse',{skip:process.platform!=='win32'&&'Windows-only (DPAPI / native Windows paths)'},async()=>{
  assert.equal(process.platform,'win32');
  const f=await fixture();f.profile.registeredRoot=path.toNamespacedPath(f.root);f.profile.npmCli.path=path.toNamespacedPath(f.profile.npmCli.path);
  assert.equal((await prepareInstalledTaskCheckProfile(f)).executionAuthorized,false);
@@ -82,8 +82,10 @@ test('repository hooks are retained, ordered and policy-bound; actual npm runs t
  assert.deepEqual(runs,[{taskId:'T0001',checkId:'npm-tests',script:'test',lifecycle:['pretest','test','posttest'].map(name=>({name,command:scripts[name]}))}]);assert.ok(Object.isFrozen(runs[0].lifecycle));
  const evidence=createInstalledTaskCheckProfileEvidenceStore({directory:path.join(f.root,'evidence-hooks')});await evidence.retain(prepared.evidence,prepared.contract.policyDigest);assert.deepEqual((await evidence.read(prepared.contract.policyDigest)).scriptDefinitions,scripts);
  const userconfig=path.join(f.root,'empty-user.npmrc'),globalconfig=path.join(f.root,'empty-global.npmrc');await writeFile(userconfig,'');await writeFile(globalconfig,'');
- const npm=path.join(path.dirname(process.execPath),'node_modules/npm/bin/npm-cli.js');
- const result=spawnSync(process.execPath,[npm,'run','test','--offline','--ignore-scripts=false',`--userconfig=${userconfig}`,`--globalconfig=${globalconfig}`],{cwd:f.root,encoding:'utf8',timeout:20000,windowsHide:true,env:{SystemRoot:process.env.SystemRoot,WINDIR:process.env.WINDIR,TEMP:f.root,TMP:f.root,USERPROFILE:f.root,PATH:`${path.dirname(process.execPath)};${process.env.SystemRoot}\\System32`}});
+ // npm ships beside node.exe on Windows and under <prefix>/lib/node_modules on POSIX installs.
+ const windows=process.platform==='win32',npm=windows?path.join(path.dirname(process.execPath),'node_modules/npm/bin/npm-cli.js'):path.join(path.dirname(path.dirname(process.execPath)),'lib/node_modules/npm/bin/npm-cli.js');
+ const isolatedPath=windows?`${path.dirname(process.execPath)};${process.env.SystemRoot}\\System32`:`${path.dirname(process.execPath)}:/usr/bin:/bin`;
+ const result=spawnSync(process.execPath,[npm,'run','test','--offline','--ignore-scripts=false',`--userconfig=${userconfig}`,`--globalconfig=${globalconfig}`],{cwd:f.root,encoding:'utf8',timeout:20000,windowsHide:true,env:{SystemRoot:process.env.SystemRoot,WINDIR:process.env.WINDIR,TEMP:f.root,TMP:f.root,USERPROFILE:f.root,...(windows?{}:{HOME:f.root}),PATH:isolatedPath}});
  assert.equal(result.status,0,`${result.error??''} ${result.stderr}`);assert.equal(await readFile(path.join(f.root,'order.txt'),'utf8'),'pretest|test|posttest|');
  await writeFile(path.join(f.root,'package.json'),JSON.stringify({name:'lifecycle-fixture',scripts:{...scripts,pretest:'node different-pretest.cjs'}}));
  const changed=await prepareInstalledTaskCheckProfile(f);assert.notEqual(changed.contract.policyDigest,prepared.contract.policyDigest);await assert.rejects(evidence.retain(changed.evidence,prepared.contract.policyDigest),/DIGEST_MISMATCH/);

@@ -62,7 +62,7 @@ test('credential calls bound input and time and reject pre-cancellation before p
  await assert.rejects(createWindowsDpapiRunner({platform:'win32',execute:async()=>JSON.stringify({value:'eA==',extra:true})}).protect('x'),/malformed protected/);
 });
 
-test('real Windows credential provider handles only fresh test bytes with bounded cleanup',async()=>{
+test('real Windows credential provider handles only fresh test bytes with bounded cleanup',{skip:process.platform!=='win32'&&'Windows-only (DPAPI / native Windows paths)'},async()=>{
  assert.equal(process.platform,'win32');
  const root=await fixture();const runner=createWindowsDpapiRunner({timeoutMs:10000,compilationTempRoot:path.join(root,'compilation')});
  const original=Buffer.from('perfect-planner-new-synthetic-roundtrip');
@@ -84,7 +84,7 @@ test('real DPAPI execution requires an explicit native compilation root without 
  assert.throws(()=>createWindowsDpapiRunner({platform:'win32',execute:null}),/native compilation root/);
 });
 test('fixture cleanup uncertainty propagates without plaintext diagnostics or retry',async()=>{let calls=0;const runner=createWindowsDpapiRunner({platform:'win32',execute:async()=>{calls++;throw Object.assign(Error('DPAPI process cleanup uncertain.'),{cleanupComplete:false});}});await assert.rejects(runner.protect('newly-generated-test-only'),error=>error.cleanupComplete===false&&!error.message.includes('newly-generated-test-only'));assert.equal(calls,1);});
-test('fixed runner supplies exact isolated environment and retains uncertain or nonempty scratch',async t=>{
+test('fixed runner supplies exact isolated environment and retains uncertain or nonempty scratch',{skip:process.platform!=='win32'&&'Windows-only (DPAPI / native Windows paths)'},async t=>{
  assert.equal(process.platform,'win32');const originalEnvironment={...process.env};
  for(const mode of ['empty','residual','uncertain']){
   const root=await fixture();let scratch,finishInput;
