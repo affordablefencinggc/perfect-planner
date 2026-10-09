@@ -47,6 +47,14 @@ test('redirected mutations never create locks and invalid roots never invoke pro
  }finally{mock.mock.restore();syncBuiltinESMExports();}
 });
 
+test("the fixed script loads no PowerShell modules, so an isolated environment cannot stall it", () => {
+  assert.match(windowsDpapiScript, /^\$PSModuleAutoLoadingPreference='None';/);
+  for (const cmdlet of ["ConvertFrom-Json", "ConvertTo-Json", "Add-Type", "Import-Module"]) assert.equal(windowsDpapiScript.includes(cmdlet), false, cmdlet);
+  assert.equal(windowsDpapiScript.includes('"'), false);
+  // The request it accepts is exactly what the adapter writes to stdin.
+  const pattern = /\(protect\|unprotect\)/; assert.match(windowsDpapiScript, pattern);
+  assert.equal(JSON.stringify({ action: "protect", value: "eA==" }), '{"action":"protect","value":"eA=="}');
+});
 test("the Windows adapter invokes one fixed direct PowerShell script and sends secrets only through stdin", async () => {
   let call; const runner = createWindowsDpapiRunner({ platform: "win32", execute: async (input) => { call = input; const request = JSON.parse(input.stdin); return JSON.stringify({ value: Buffer.from(`bound:${Buffer.from(request.value, "base64").toString("utf8")}`).toString("base64") }); } });
   const result = await runner.protect(Buffer.from("super-secret")); assert.match(result.toString(), /bound:super-secret/); assert.equal(call.file, "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"); assert.equal(call.shell, false); assert.equal(call.args.at(-1), windowsDpapiScript); assert.equal(call.args.join(" ").includes("super-secret"), false); assert.equal(JSON.parse(call.stdin).value, Buffer.from("super-secret").toString("base64"));
