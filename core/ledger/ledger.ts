@@ -372,12 +372,19 @@ export class Ledger {
    * anything the old key signs after the retirement. Every other key of
    * the person still in force is retired as well, except those in `keep`,
    * so a device key added with a stolen key does not outlive the rotation.
+   * A recovery code set by a retired key is void; when the owner rotates,
+   * a new code is made and returned once in `recovery`.
    */
-  rotateKey(person: Actor, reason: string, options: { keep?: readonly string[] } = {}): { trusted: LedgerEntry; retired: LedgerEntry; others: LedgerEntry[] } {
+  rotateKey(
+    person: Actor,
+    reason: string,
+    options: { keep?: readonly string[] } = {},
+  ): { trusted: LedgerEntry; retired: LedgerEntry; others: LedgerEntry[]; recovery?: { code: string; entry: LedgerEntry } } {
     if (person?.kind !== "person") throw new LedgerError("BAD_ACTOR", "only a person can rotate their key");
     const keys = this.keys;
     if (!keys?.stageKey || !keys.activateKey) throw new LedgerError("NOT_SIGNED", "this device's key store cannot rotate keys");
     const principal = principalOf(person);
+    const recoveryBefore = ownerChain(this.list)?.recovery;
     const next = keys.stageKey(principal);
     let trusted: LedgerEntry;
     try {
@@ -398,6 +405,12 @@ export class Ledger {
       if (this.trust.retired.has(key.keyId) || options.keep?.includes(key.keyId)) continue;
       others.push(this.retireKey(person, key.keyId, `Key rotation: ${reason} (every other key of ${principal} stops; re-add trusted devices)`));
     }
+    // Retiring the key that set the recovery code voided that code (it may have been set with the
+    // stolen key); the owner gets a fresh one, shown once, so they are never left without a code.
+    const hadCode = recoveryBefore !== undefined;
+    if (hadCode && !ownerChain(this.list)?.recovery && this.trust.owner === principal) {
+      return { trusted, retired, others, recovery: this.makeRecoveryCode(person, `New code after key rotation: ${reason}`) };
+    }
     return { trusted, retired, others };
   }
 
@@ -409,6 +422,15 @@ export class Ledger {
   /** True when the ledger was opened with the project's owner key pinned. */
   get ownerKeyPinned(): boolean {
     return this.ownerKey !== undefined;
+  }
+
+  /**
+   * Whether the project has a recovery code in force. False after the key
+   * that set it was retired (a revocation from another device, say): the
+   * app should then ask the owner to make a new one with setRecoveryCode.
+   */
+  get recoveryCodeSet(): boolean {
+    return ownerChain(this.list)?.recovery !== undefined;
   }
 
   /** Who owns this ledger as this device sees it, or undefined when it cannot tell. */

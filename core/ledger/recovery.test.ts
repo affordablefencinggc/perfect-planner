@@ -265,9 +265,10 @@ describe("owner recovery after the review of 22a6d34", () => {
     const base = project();
     const stolen = base.keys.copy();
     const ledger = Ledger.openSync(base.store, { keys: base.keys, ownerKey: base.ownerKey });
-    const { retired } = ledger.rotateKey(owner, "Laptop stolen");
+    const { retired, recovery } = ledger.rotateKey(owner, "Laptop stolen");
     ledger.close();
-    return { ...base, stolen, retired };
+    // The rotation voided the old code and showed a new one.
+    return { ...base, stolen, retired, oldCode: base.code, code: recovery!.code };
   }
 
   it("A: a code does not validate a ledger rewritten after a kept non-person first entry", () => {
@@ -448,6 +449,61 @@ describe("owner recovery after the review of b3781aa", () => {
     desktop.pin(keys.trustedKeys().find((k) => k.keyId === ownerKey)!);
     const onDesktop = Ledger.openSync(new MemoryStore([...store.load().entries]), { keys: desktop, ownerKey, readOnly: true });
     expect(onDesktop.status.ownKeysRetired?.map((k) => k.keyId)).toEqual([desktopKey.keyId]);
+  });
+});
+
+// Review of #32 at 60c03a1 (HOLD): a code set with a stolen owner key outlived the owner's rotation.
+describe("a recovery code set with a stolen key", () => {
+  it("is void once the owner rotates, and the owner gets a new code", () => {
+    const { keys, ownerKey, store } = project();
+    // 1. A thief with a copy of the owner key sets their own code.
+    const stolen = keys.copy();
+    const thief = Ledger.openSync(store, { keys: stolen, ownerKey });
+    const { code: thiefCode } = thief.setRecoveryCode(owner, "Mine now");
+    thief.close();
+    // 2. The owner notices and rotates.
+    const ledger = Ledger.openSync(store, { keys, ownerKey });
+    const { others, recovery } = ledger.rotateKey(owner, "Laptop stolen");
+    expect(others).toHaveLength(0);
+    expect(recovery?.code).toBeDefined();
+    expect(ledger.recoveryCodeSet).toBe(true);
+    ledger.close();
+    // 3. The thief's code no longer opens the project on any computer; the owner's new one does.
+    const pc = newComputer(store);
+    expect(thrown(() => pc.ledger.checkRecoveryCode(thiefCode)).message).toMatch(/does not open this project/);
+    const thiefPc = new MemoryKeyProvider({ autoCreate: false });
+    thiefPc.createKey("person:owner");
+    const head = pc.ledger.last()!;
+    expect(thrown(() => pc.ledger.recoverOwner(owner, thiefCode, { n: head.n, hash: head.hash }, "Thief")).code).toBe("RULE");
+    expect(pc.ledger.owner).toBeUndefined();
+    expect(pc.ledger.checkRecoveryCode(recovery!.code).owner).toBe("person:owner");
+  });
+
+  it("is void when the key that set it is retired any other way, and the ledger says a new code is needed", () => {
+    const { keys, ownerKey, store, code } = project();
+    const desktop = new MemoryKeyProvider({ autoCreate: false });
+    const desktopKey = desktop.createKey("person:owner");
+    const ledger = Ledger.openSync(store, { keys, ownerKey });
+    ledger.trustKey(owner, desktopKey, "Desktop");
+    ledger.close();
+    // The desktop revokes the laptop's key (the one that set the code), without a rotation.
+    desktop.pin(keys.trustedKeys().find((k) => k.keyId === ownerKey)!);
+    const onDesktop = Ledger.openSync(store, { keys: desktop, ownerKey });
+    onDesktop.retireKey(owner, ownerKey, "Laptop lost");
+    expect(onDesktop.recoveryCodeSet).toBe(false);
+    expect(thrown(() => onDesktop.checkRecoveryCode(code)).message).toMatch(/does not open this project/);
+    // The desktop holds an owner key in force, so it can make the new code.
+    const { code: fresh } = onDesktop.setRecoveryCode(owner, "Laptop lost");
+    expect(onDesktop.checkRecoveryCode(fresh).owner).toBe("person:owner");
+  });
+
+  it("is spent by a recovery, which issues the next code", () => {
+    const { store, code } = project();
+    const pc = newComputer(store);
+    const result = recover(pc.ledger, code);
+    expect(pc.ledger.recoveryCodeSet).toBe(true);
+    expect(thrown(() => pc.ledger.checkRecoveryCode(code)).message).toMatch(/does not open this project/);
+    expect(pc.ledger.checkRecoveryCode(result.code).owner).toBe("person:owner");
   });
 });
 

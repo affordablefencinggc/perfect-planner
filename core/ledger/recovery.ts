@@ -124,8 +124,12 @@ export interface OwnerChain {
   keys: OwnerKeyStep[];
   /** Owner keys in force at the end of the ledger. */
   active: string[];
-  /** The latest recovery key an owner key set, unless a recovery has used it since. */
-  recovery?: { keyId: string; publicKey: string; n: string };
+  /**
+   * The latest recovery key an owner key set, unless a recovery has used it
+   * since or the key that set it was retired (a code set with a stolen key
+   * must not outlive the retirement).
+   */
+  recovery?: { keyId: string; publicKey: string; n: string; setBy: string };
   /** Each owner.recovered, in order. */
   recoveries: { index: number; n: string; keyId: string }[];
 }
@@ -136,7 +140,7 @@ export interface OwnerChain {
  * After that, an owner key in force may:
  * - add an owner key (key.trusted for the owner, as in a rotation or a
  *   second device);
- * - retire one (key.retired), which stops it for good;
+ * - retire one (key.retired), which stops it for good and voids a code it set;
  * - set the recovery key (owner.recovery.set).
  * An owner.recovered that the latest unused recovery key signed for exactly
  * the entry before it replaces every owner key in force with the new
@@ -161,6 +165,7 @@ export function ownerChain(entries: readonly LedgerEntry[]): OwnerChain | undefi
     const k = step(keyId);
     if (k && !k.replacedAt) k.replacedAt = { index, n, by };
     chain.active = chain.active.filter((id) => id !== keyId);
+    if (chain.recovery?.setBy === keyId) chain.recovery = undefined;
   };
   for (let i = firstIndex + 1; i < entries.length; i += 1) {
     const entry = entries[i];
@@ -179,7 +184,7 @@ export function ownerChain(entries: readonly LedgerEntry[]): OwnerChain | undefi
     } else if (entry.type === "owner.recovery.set") {
       if (!byOwner || data.root !== chain.root || typeof data.recoveryPublicKey !== "string" || !isEd25519(data.recoveryPublicKey)) continue;
       if (data.recoveryKeyId !== keyIdOf(data.recoveryPublicKey)) continue;
-      chain.recovery = { keyId: data.recoveryKeyId, publicKey: data.recoveryPublicKey, n: entry.n };
+      chain.recovery = { keyId: data.recoveryKeyId, publicKey: data.recoveryPublicKey, n: entry.n, setBy: entry.sig!.key };
     } else if (entry.type === "owner.recovered") {
       const before = entries[i - 1];
       const head = data.head as { n?: unknown; hash?: unknown } | undefined;

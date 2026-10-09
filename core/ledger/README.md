@@ -251,6 +251,11 @@ both built-in providers can:
    thief added with the stolen key must not outlive the rotation.
    `status.ownKeysRetired` tells a dropped device that it can no longer
    sign.
+6. A recovery code set by a retired key is void, since it may have been set
+   with the stolen key. When the owner rotates, a new code is made and
+   returned once in `recovery`. After any other retirement,
+   `ledger.recoveryCodeSet` is false until the owner calls
+   `setRecoveryCode`.
 
 Every device that trusted the old key replays those two entries, so it
 trusts the new key from step 2. It also refuses anything the old key signs
