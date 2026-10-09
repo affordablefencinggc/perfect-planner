@@ -64,10 +64,22 @@ const fixedConfig = (hooksPath: string, attributesFile: string): string[] => [
 const DIFF_COMMANDS = new Set(["diff", "show", "log", "diff-tree", "diff-index", "diff-files"]);
 
 /**
- * Commands that read or write the working tree, which is where filter programs and merge drivers run.
- * Before each, the repo config is checked and the command refused if it names one (see filterPrograms).
+ * Commands that never run a filter program or merge driver: they read refs, objects, config or the
+ * worktree list. Every other command (checkout, status, diff, add, merge, hash-object, blame, ...) is
+ * first checked with filterPrograms and refused while the repo config names one.
  */
-const WORKTREE_COMMANDS = new Set(["merge", "worktree", "status", "diff", "add", "checkout", "switch", "reset", "stash", "commit", "read-tree", "checkout-index", "apply", "restore", "rm", "mv", "cherry-pick", "rebase", "revert", "am", "pull"]);
+const NO_PROGRAM_COMMANDS = new Set(["rev-parse", "symbolic-ref", "show-ref", "for-each-ref", "merge-base", "ls-tree", "rev-list", "update-ref", "config", "init", "var", "count-objects", "verify-commit", "check-ref-format", "branch"]);
+
+/** True when git could run a filter program or merge driver for this command line. */
+function mayRunPrograms(args: readonly string[], command: string | undefined): boolean {
+  if (!command) return false;
+  const rest = args.slice(args.indexOf(command) + 1);
+  // `worktree list/remove/prune` touch no file content; `worktree add` checks files out.
+  if (command === "worktree") return rest[0] === "add" || rest[0] === "move" || rest[0] === "repair";
+  // Plain `cat-file blob|-p|-t|-s|-e` reads objects; --filters and --textconv run programs.
+  if (command === "cat-file") return rest.some((arg) => arg.startsWith("--filters") || arg.startsWith("--textconv") || arg.startsWith("--batch"));
+  return !NO_PROGRAM_COMMANDS.has(command);
+}
 
 interface Hardening {
   hooksPath: string;
@@ -268,18 +280,16 @@ function worktreeAddPath(args: readonly string[], at: number): string | undefine
  * Run git without a shell, by its absolute path from PATH (never a git in the repo), with the repo's
  * own hooks and every config setting that runs a program or changes what is shown switched off (see
  * fixedConfig and baseEnv). Diffs never use an external diff or textconv. A command that touches the
- * working tree is refused (GitProgramRefusedError) when the repo config names a filter program or
- * merge driver. `worktree add` makes the worktree without files, checks the config as seen from inside
+ * working tree or file content is refused (GitProgramRefusedError) while the repo config names a
+ * filter program or merge driver; only an allow-list of commands skips that check. `worktree add` makes the worktree without files, checks the config as seen from inside
  * it (its branch and folder), and only then checks the files out. Use this for every host git call.
  * Never throws for a non-zero exit; see `git()`.
  */
 export async function runGit(cwd: string, args: string[], options: GitOptions = {}): Promise<GitResult> {
   const command = subcommand(args);
   const at = command ? args.indexOf(command) : -1;
-  // Removing or listing worktrees runs no filter; adding one checks files out.
   const addsWorktree = command === "worktree" && args[at + 1] === "add";
-  const checksOut = command === "worktree" ? addsWorktree : !!command && WORKTREE_COMMANDS.has(command);
-  if (checksOut) refuseFilters(await filterPrograms(cwd));
+  if (mayRunPrograms(args, command)) refuseFilters(await filterPrograms(cwd));
   if (!addsWorktree) return spawnGit(cwd, args, options);
 
   const rest = args.slice(at + 2).filter((arg) => arg !== "--checkout");

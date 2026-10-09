@@ -6,7 +6,7 @@ import { gitExecutable } from "../exec/index";
 import { filterPrograms, git, GitHardeningError, GitProgramRefusedError, runGit } from "../worktrees/git";
 import { WorktreeManager } from "../worktrees/manager";
 import { commitAll, makeRepo, memoryLedger, writeFiles } from "../worktrees/testing";
-import { TestGate, sensitiveChanges } from "./index";
+import { TestGate, sensitiveChanges, verifyMergeCommit } from "./index";
 
 // A program on the PC writes hooks or git settings into the project's own .git between approval and
 // merge. The app's git must never run them, and the diff the person sees must be the real one.
@@ -124,6 +124,21 @@ describe("the app's git ignores hooks and settings planted in the project", () =
       expect(existsSync(ctx.marker), `${key} ran: ${existsSync(ctx.marker) ? readFileSync(ctx.marker, "utf8") : ""}`).toBe(false);
     }
   }, SLOW * 2);
+});
+
+describe("only an allow-list of git commands skips the filter check", () => {
+  it("refuses hash-object, blame and cat-file --filters while a filter program is configured", async () => {
+    const ctx = await approvedRepo();
+    await git(ctx.root, ["config", "filter.evil.clean", plant(path.join(path.dirname(ctx.root), "filter.sh"), ctx.marker)]);
+    writeFiles(ctx.gitDir, { "info/attributes": "* filter=evil\n" });
+    for (const args of [["hash-object", "feature.txt"], ["blame", "feature.txt"], ["cat-file", "--filters", "HEAD:feature.txt"]]) {
+      await expect(runGit(ctx.root, args)).rejects.toThrow(/a person must review/);
+    }
+    // Reading objects and refs stays possible.
+    expect((await runGit(ctx.root, ["cat-file", "blob", "HEAD:feature.txt"])).stdout).toBe("disabled\n");
+    expect((await runGit(ctx.root, ["rev-parse", "HEAD"])).code).toBe(0);
+    expect(existsSync(ctx.marker)).toBe(false);
+  }, SLOW);
 });
 
 describe("settings that only apply on some branches or folders (includeIf) are refused too", () => {
@@ -274,6 +289,44 @@ describe("the app's own git settings cannot be used to run a program", () => {
     writeFileSync(path.join(ctx.root, ".gitattributes"), "* filter=x\n");
     await expect(runGit(ctx.root, ["status"])).rejects.toBeInstanceOf(GitProgramRefusedError);
     expect(existsSync(ctx.marker)).toBe(false);
+  }, SLOW);
+});
+
+describe("the merge lands only the clean merge of the approved commit", () => {
+  it("refuses when the candidate moved after the merge", async () => {
+    const ctx = await approvedRepo();
+    const info = await ctx.manager.create({ taskId: "T-1", actor: OWNER });
+    writeFiles(info.path, { "feature.txt": "enabled\n" });
+    const tip = await commitAll(info.path, "enable feature");
+    expect((await ctx.gate.prove("T-1", info.path)).ok).toBe(true);
+    expect(ctx.gate.approveDiff("T-1", OWNER, tip).ok).toBe(true);
+    expect(ctx.gate.approveMerge("T-1", OWNER, tip).ok).toBe(true);
+    const before = await git(ctx.root, ["rev-parse", "main"]);
+    const prepare = async (candidate: string) => {
+      writeFiles(candidate, { "unapproved.txt": "slipped in\n" });
+      await git(candidate, ["add", "unapproved.txt"]);
+      await git(candidate, ["commit", "-q", "--amend", "--no-edit"]);
+    };
+    const merged = await ctx.gate.mergeAndVerify("T-1", { repoRoot: ctx.root, branch: info.branch, integrationBranch: "main", actor: OWNER, prepare });
+    expect(merged).toMatchObject({ ok: false, reason: expect.stringContaining("moved") });
+    expect(await git(ctx.root, ["rev-parse", "main"])).toBe(before);
+  }, SLOW);
+
+  it("refuses a merge commit with the right parents but a different tree", async () => {
+    const ctx = await approvedRepo();
+    const base = await git(ctx.root, ["rev-parse", "main"]);
+    await git(ctx.root, ["checkout", "-q", "-b", "work"]);
+    writeFiles(ctx.root, { "feature.txt": "enabled\n" });
+    const approved = await commitAll(ctx.root, "enable feature");
+    writeFiles(ctx.root, { "unapproved.txt": "slipped in\n" });
+    await git(ctx.root, ["add", "-A"]);
+    const tree = await git(ctx.root, ["write-tree"]);
+    const forged = await git(ctx.root, ["commit-tree", tree, "-p", base, "-p", approved, "-m", "merge"]);
+    await git(ctx.root, ["reset", "-q", "--hard", forged]);
+    expect(await verifyMergeCommit(ctx.root, forged, base, approved)).toMatch(/not the clean merge/);
+    const clean = await git(ctx.root, ["commit-tree", `${approved}^{tree}`, "-p", base, "-p", approved, "-m", "merge"]);
+    await git(ctx.root, ["reset", "-q", "--hard", clean]);
+    expect(await verifyMergeCommit(ctx.root, clean, base, approved)).toBeNull();
   }, SLOW);
 });
 
