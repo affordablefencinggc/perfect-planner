@@ -189,13 +189,15 @@ export class Relay {
       if (asked.status === "answered") return { q, status: "answered", answer: asked.answer!, via: asked.answeredVia!, ...(asked.decision ? { decision: asked.decision } : {}), paused: false };
       if (settled) {
         this.write({
-          actor: settled.actor,
+          // The ledger lets Jev write only review.verdict, so Perfect Planner records the
+          // answer itself and names the source; Jev's own review.verdict is already logged.
+          actor: SYSTEM,
           type: "question.answered",
           subject: q,
           summary: settled.answer,
           reason: settled.reason,
           refs: [...settled.refs, input.task],
-          data: { answer: settled.answer, via: "settled" },
+          data: { answer: settled.answer, via: "settled", source: settled.actor },
         });
         return { q, status: "answered", answer: settled.answer, via: "settled", paused: false };
       }
