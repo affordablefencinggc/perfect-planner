@@ -127,6 +127,17 @@ describe("tasks routes", () => {
     expect(diff.sensitive).toEqual([".github/workflows/ci.yml", "package.json", "tests/save.check.mjs"]);
     expect(diff.text).toContain("export const save");
     expect((await tasks()).tasks[0]).toMatchObject({ stage: "review-diff" });
+    // A program planted in the repo's config (a filter git would run on diff) is a plain refusal, never a crash.
+    const planted = path.join(repo, "planted-ran");
+    git(repo, "config", "filter.planted.clean", `node -e "require('fs').writeFileSync('${planted.replace(/\\/g, "/")}', '')"`);
+    const refusedDiff = await hostCall(ctx.base, "GET", `/tasks/T-1/diff${q}`);
+    expect(refusedDiff.status, JSON.stringify(refusedDiff.body)).toBe(409);
+    expect(refusedDiff.body).toMatchObject({ code: "GIT_PROGRAM_REFUSED", message: expect.stringContaining("filter.planted.clean") });
+    const refusedApprove = await post("/tasks/T-1/approve-diff", { commit: diff.commit, confirmSensitive: diff.sensitive });
+    expect(refusedApprove.status, JSON.stringify(refusedApprove.body)).toBe(409);
+    expect(refusedApprove.body.code).toBe("GIT_PROGRAM_REFUSED");
+    expect(fs.existsSync(planted)).toBe(false);
+    git(repo, "config", "--unset", "filter.planted.clean");
     const early = await post("/tasks/T-1/merge", { commit: head });
     expect(early.status).toBe(409);
     expect(early.body.code).toBe("STALE");

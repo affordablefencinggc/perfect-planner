@@ -15,6 +15,7 @@ import { registerRoutes } from "./routes/index";
 import { syncJevPolicy } from "./routes/decisions";
 import { chosenRepoRoot } from "./routes/tasks";
 import { protectRoots } from "../exec/index";
+import { GitProgramRefusedError } from "../worktrees/index";
 
 export const CORE_PREFIX = "/api/core";
 export { PERSON_COOKIE, CSRF_HEADER } from "./session";
@@ -206,6 +207,8 @@ export class CoreHost {
       send(200, { ok: true, result: result ?? null });
     } catch (error) {
       if (error instanceof HttpError) return send(error.status, { ok: false, code: error.code, message: error.message });
+      // The repo's config names a program git would run (a filter or merge driver): a plain refusal, not a crash.
+      if (error instanceof GitProgramRefusedError) return send(409, { ok: false, code: "GIT_PROGRAM_REFUSED", message: error.message });
       const named = error as { code?: string; message?: string };
       if (error instanceof LedgerError || error instanceof ToolError || error instanceof PeopleError) {
         return send(422, { ok: false, code: String(named.code ?? "REFUSED"), message: named.message ?? "Refused." });
