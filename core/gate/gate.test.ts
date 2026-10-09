@@ -106,6 +106,67 @@ describe("TestGate", () => {
     expect(gate.canStart("T-1").ok).toBe(false);
   }, SLOW);
 
+  it("an agent cannot rewrite its approved test and then finish the task", async () => {
+    const { root, ledger, gate, worktree, branch, addWorktree } = await approved();
+    ledger.addRule(gateRule());
+    await addWorktree();
+    // Instead of doing the work, the agent turns the test into one that always passes.
+    writeFiles(worktree, { "check.mjs": 'console.log("ok");\n' });
+    const cheat = await commitAll(worktree, "simplify the check");
+    const proof = await gate.prove("T-1", worktree);
+    expect(proof).toMatchObject({ ok: false, reason: expect.stringContaining("check.mjs") });
+    expect(proof.ok ? "" : proof.reason).toMatch(/approved test/);
+    expect(gate.state("T-1").passedCommits).not.toContain(cheat);
+    expect(ledger.entries().filter((entry) => entry.type === "test.passed")).toHaveLength(0);
+    const merged = await gate.mergeAndVerify("T-1", { repoRoot: root, branch, integrationBranch: "main", actor: OWNER });
+    expect(merged.ok).toBe(false);
+    expect(types(ledger)).not.toContain("task.done");
+    expect(() => gate.assertCanFinish("T-1", cheat)).toThrow();
+
+    // Putting the test back and doing the real work still finishes normally.
+    writeFiles(worktree, { "check.mjs": CHECK, "feature.txt": "enabled\n" });
+    await commitAll(worktree, "restore the test and enable the feature");
+    expect((await gate.prove("T-1", worktree)).ok).toBe(true);
+    expect((await gate.mergeAndVerify("T-1", { repoRoot: root, branch, integrationBranch: "main", actor: OWNER })).ok).toBe(true);
+  }, SLOW);
+
+  it("pins the approved test by content hash, ignoring only line endings", async () => {
+    const { gate, worktree, addWorktree } = await approved();
+    const approval = gate.state("T-1").approval!;
+    expect(approval.pins).toEqual({ "check.mjs": expect.stringMatching(/^[0-9a-f]{64}$/) });
+    await addWorktree();
+    writeFiles(worktree, { "check.mjs": CHECK.replace(/\n/g, "\r\n"), "feature.txt": "enabled\n" });
+    await commitAll(worktree, "CRLF checkout of the same test");
+    expect((await gate.prove("T-1", worktree)).ok).toBe(true);
+  }, SLOW);
+
+  it("refuses to approve a test whose files it cannot pin, unless they are named", async () => {
+    const { root, gate } = await setup();
+    gate.define("T-1", 'node -e "process.exit(1)"', WORKER);
+    expect((await gate.confirmFailsFirst("T-1", root)).ok).toBe(true);
+    expect(gate.approve("T-1", OWNER)).toMatchObject({ ok: false, reason: expect.stringContaining("test file") });
+    gate.define("T-1", 'node -e "process.exit(1)"', WORKER, [], { files: ["check.mjs"] });
+    expect((await gate.confirmFailsFirst("T-1", root)).ok).toBe(true);
+    expect(gate.approve("T-1", OWNER).ok).toBe(true);
+    expect(Object.keys(gate.state("T-1").approval!.pins)).toEqual(["check.mjs"]);
+  });
+
+  it("only the gate may write task.done", async () => {
+    const { root, ledger, gate, worktree, branch, addWorktree } = await approved();
+    ledger.addRule(gateRule());
+    await addWorktree();
+    writeFiles(worktree, { "feature.txt": "enabled\n" });
+    const work = await commitAll(worktree, "enable feature");
+    expect((await gate.prove("T-1", worktree)).ok).toBe(true);
+    for (const actor of [OWNER, WORKER, { kind: "system", id: "watcher" } as Actor]) {
+      // The ledger's own permission table already stops agents; the gate rule stops everyone else.
+      expect(() => ledger.append({ type: "task.done", actor, subject: "T-1", summary: "Done", evidence: [`commit:${work}`] })).toThrow(actor.kind === "agent" ? /may not write/ : /only the gate/);
+    }
+    const merged = await gate.mergeAndVerify("T-1", { repoRoot: root, branch, integrationBranch: "main", actor: OWNER });
+    expect(merged.ok).toBe(true);
+    expect(ledger.entries().at(-1)).toMatchObject({ type: "task.done", actor: { kind: "system", id: "gate" }, data: { approvedBy: OWNER } });
+  }, SLOW);
+
   it("fast-forwards an integration branch that is not checked out with update-ref", async () => {
     const { root, gate, worktree, branch, addWorktree } = await approved();
     await git(root, ["branch", "integration", "main"]);

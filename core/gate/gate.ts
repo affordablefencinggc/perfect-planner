@@ -1,4 +1,5 @@
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { git, runGit } from "../worktrees/git";
@@ -23,16 +24,18 @@ export interface GateState {
   baseId: string;
   attempt: number;
   /** The current test.defined entry. Definitions, baselines, Jev's test verdicts and approvals carry over from earlier attempts. */
-  definition?: { n: string; command: string; actor: Actor };
-  baseline?: TestOutcome;
+  definition?: { n: string; command: string; actor: Actor; files: string[] };
+  /** The baseline run, with the content hashes of the test files it ran (see pinTestFiles). */
+  baseline?: TestOutcome & { pins: Pins };
+  /** Approval pins the test: the command plus the content hash of every test file. */
   /** Latest Jev verdict on the current definition. */
   jev?: { n: string; verdict: "approve" | "gaps"; gaps: string[] };
-  approval?: { n: string; actor: Actor };
+  approval?: { n: string; actor: Actor; pins: Pins; pin: string };
   /** Latest worktree run of the current definition for this attempt. */
   worktree?: TestOutcome;
   /** Latest post-merge run of the current definition for this attempt. */
   merge?: TestOutcome;
-  /** Commits (full sha) this attempt's current test has passed on, outside the baseline. */
+  /** Commits (full sha) this attempt's current, unaltered test has passed on, outside the baseline. */
   passedCommits: string[];
   merged?: { n: string; commit: string };
   done?: { n: string };
@@ -44,6 +47,8 @@ export interface GateState {
 }
 
 export type Refusal = { ok: false; reason: string };
+/** Repo-relative test file -> sha256 of its content with CRLF read as LF. */
+export type Pins = Record<string, string>;
 export type Ok<T> = { ok: true } & T;
 
 export interface RunReport {
@@ -58,6 +63,14 @@ export interface MergeOptions {
   integrationBranch: string;
   /** Who approved the merge (the person acting on Jev's diff review). Written on merge.done and task.done. */
   actor: Actor;
+}
+
+export interface DefineOptions {
+  /**
+   * Test files to pin, relative to the checkout. Files named in the command (node check.mjs,
+   * vitest run tests/x.test.ts) are found automatically; name the rest here.
+   */
+  files?: string[];
 }
 
 export interface ApproveOptions {
@@ -143,6 +156,74 @@ function phaseOf(entry: LedgerEntry): Phase | undefined {
   return entry.data?.afterMerge === true ? "merge" : undefined;
 }
 
+function dataPins(entry: LedgerEntry): Pins {
+  const value = entry.data?.pins;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  return Object.fromEntries(Object.entries(value as Record<string, unknown>).filter((pair): pair is [string, string] => typeof pair[1] === "string"));
+}
+
+function dataFiles(entry: LedgerEntry): string[] {
+  const value = entry.data?.files;
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}
+
+/** Hash text the same whichever line endings the checkout uses. */
+function contentHash(content: Buffer): string {
+  return createHash("sha256").update(content.toString("latin1").replace(/\r\n/g, "\n"), "latin1").digest("hex");
+}
+
+/** One hash for a whole set of pins, recorded on every proof so a pass can be matched to the approved test. */
+export function pinDigest(pins: Pins): string {
+  return createHash("sha256").update(Object.keys(pins).sort().map((file) => `${file}=${pins[file]}`).join("\n")).digest("hex");
+}
+
+function normalizeTestFile(file: string): string | undefined {
+  const clean = path.posix.normalize(file.trim().replace(/\\/g, "/")).replace(/^\.\//, "");
+  if (!clean || clean === "." || clean.startsWith("../") || clean === ".." || path.isAbsolute(file.trim()) || /^[a-z]:/i.test(clean)) return undefined;
+  return clean;
+}
+
+function isFileIn(cwd: string, file: string): boolean {
+  try {
+    return statSync(path.join(cwd, file)).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/** The command's arguments that name files in cwd, plus the files named explicitly. */
+export function testFilesOf(command: string, cwd: string, named: readonly string[] = []): string[] {
+  const tokens = [...command.matchAll(/"([^"]*)"|'([^']*)'|([^\s"']+)/g)].map((match) => match[1] ?? match[2] ?? match[3] ?? "");
+  const found = new Set<string>();
+  for (const token of [...named, ...tokens.filter((token) => !token.startsWith("-"))]) {
+    const file = normalizeTestFile(token);
+    if (file && isFileIn(cwd, file)) found.add(file);
+  }
+  return [...found].sort();
+}
+
+/** Content hashes of the test files as they are on disk in cwd. */
+export function pinTestFiles(cwd: string, files: readonly string[]): Pins {
+  const pins: Pins = {};
+  for (const file of files) if (isFileIn(cwd, file)) pins[file] = contentHash(readFileSync(path.join(cwd, file)));
+  return pins;
+}
+
+/** Pinned files that are missing or differ in cwd: on disk, and in the commit checked out there. */
+async function changedTestFiles(cwd: string, pins: Pins): Promise<string[]> {
+  const changed = new Set<string>();
+  const onDisk = pinTestFiles(cwd, Object.keys(pins));
+  const isRepo = (await headOf(cwd)) !== undefined;
+  for (const [file, hash] of Object.entries(pins)) {
+    if (onDisk[file] !== hash) changed.add(file);
+    if (!isRepo) continue;
+    // The committed copy counts too: an ignored or assume-unchanged file could hide a rewritten test from git status.
+    const committed = await runGit(cwd, ["cat-file", "blob", `HEAD:${file}`]).catch(() => undefined);
+    if (committed?.code === 0 && contentHash(committed.stdoutBytes) !== hash) changed.add(file);
+  }
+  return [...changed].sort();
+}
+
 /** Replay the ledger into one task's gate state. Pure. */
 export function deriveState(entries: readonly LedgerEntry[], taskId: string): GateState {
   const { baseId, attempt } = parseTaskId(taskId);
@@ -163,7 +244,7 @@ export function deriveState(entries: readonly LedgerEntry[], taskId: string): Ga
     const forCurrent = state.definition !== undefined && definitionOf(entry) === state.definition.n;
     switch (entry.type) {
       case "test.defined": {
-        state.definition = { n: entry.n, command: dataString(entry, "test") ?? evidenceValue(entry, "test") ?? "", actor: entry.actor };
+        state.definition = { n: entry.n, command: dataString(entry, "test") ?? evidenceValue(entry, "test") ?? "", actor: entry.actor, files: dataFiles(entry) };
         state.baseline = state.jev = state.approval = state.worktree = state.merge = undefined;
         passed.clear();
         break;
@@ -173,10 +254,12 @@ export function deriveState(entries: readonly LedgerEntry[], taskId: string): Ga
         if (!forCurrent) break;
         const outcome: TestOutcome = { n: entry.n, passed: entry.type === "test.passed", phase: phase ?? "worktree", commit: dataString(entry, "commit") ?? evidenceValue(entry, "commit") };
         // An inconclusive baseline (timeout, crash, missing command) clears any earlier one.
-        if (outcome.phase === "baseline") state.baseline = entry.data?.conclusive === false ? undefined : outcome;
+        if (outcome.phase === "baseline") state.baseline = entry.data?.conclusive === false ? undefined : { ...outcome, pins: dataPins(entry) };
         else if (outcome.phase === "worktree") state.worktree = outcome;
         else state.merge = outcome;
-        if (outcome.phase !== "baseline" && outcome.passed && outcome.commit) passed.add(outcome.commit.toLowerCase());
+        // A pass only counts for the test exactly as approved.
+        const pinned = state.approval !== undefined && dataString(entry, "pin") === state.approval.pin;
+        if (outcome.phase !== "baseline" && outcome.passed && outcome.commit && pinned) passed.add(outcome.commit.toLowerCase());
         break;
       }
       case "review.verdict": {
@@ -187,7 +270,10 @@ export function deriveState(entries: readonly LedgerEntry[], taskId: string): Ga
         break;
       }
       case "test.approved": {
-        if (forCurrent) state.approval = { n: entry.n, actor: entry.actor };
+        if (forCurrent) {
+          const pins = dataPins(entry);
+          state.approval = { n: entry.n, actor: entry.actor, pins, pin: dataString(entry, "pin") ?? pinDigest(pins) };
+        }
         break;
       }
       case "merge.done": {
@@ -243,11 +329,22 @@ export function startRefusal(state: GateState): string | null {
  */
 export function gateRule(): (draft: EntryDraft, ledger: LedgerReader) => string | null {
   return (draft, ledger) => {
-    if (draft.type !== "task.claimed") return null;
+    if (draft.type !== "task.claimed" && draft.type !== "task.done") return null;
     const subject = draft.subject.trim();
     if (!TASK_ID.test(subject)) return null;
-    const refusal = startRefusal(deriveState(ledger.entries(), subject));
-    return refusal ? `${subject} cannot be claimed: ${refusal}` : null;
+    const state = deriveState(ledger.entries(), subject);
+    if (draft.type === "task.claimed") {
+      const refusal = startRefusal(state);
+      return refusal ? `${subject} cannot be claimed: ${refusal}` : null;
+    }
+    if (draft.actor.kind !== GATE_ACTOR.kind || draft.actor.id !== GATE_ACTOR.id) {
+      return `${subject} cannot be marked done by ${draft.actor.kind} ${draft.actor.id}: only the gate writes task.done, after the approved test passes on the merged code.`;
+    }
+    const commit = draft.evidence?.find((item) => item.startsWith("commit:"))?.slice("commit:".length).trim().toLowerCase();
+    if (!state.approval || !commit || !state.passedCommits.includes(commit)) {
+      return `${subject} cannot be marked done: its approved, unaltered test has not passed at ${commit ? commit.slice(0, 12) : "a named commit"}.`;
+    }
+    return null;
   };
 }
 
@@ -279,11 +376,16 @@ export class TestGate {
     return deriveState(this.ledger.entries(), taskId);
   }
 
-  define(taskId: string, command: string, actor: Actor, refs: string[] = []): Ok<{ entry: LedgerEntry }> | Refusal {
+  define(taskId: string, command: string, actor: Actor, refs: string[] = [], options: DefineOptions = {}): Ok<{ entry: LedgerEntry }> | Refusal {
     parseTaskId(taskId);
     const trimmed = command.trim();
     if (!trimmed) throw new GateError("A done-when test needs a runnable command.");
     if (/[\r\n]/.test(trimmed)) throw new GateError("A done-when test command must be one line.");
+    const files = [...new Set((options.files ?? []).map((file) => {
+      const clean = normalizeTestFile(file);
+      if (!clean) throw new GateError(`"${file}" is not a test file path inside the project.`);
+      return clean;
+    }))].sort();
     const state = this.state(taskId);
     if (state.done) return { ok: false, reason: `${taskId} is already done.` };
     if (state.reopenedAs) return { ok: false, reason: `${taskId} was reopened as ${state.reopenedAs}; define the test there.` };
@@ -293,9 +395,9 @@ export class TestGate {
       subject: taskId,
       summary: oneLine(`Done-when test for ${taskId}: ${trimmed}`),
       reason: state.definition ? `Replaces ${state.definition.n}; any earlier approval no longer applies.` : undefined,
-      evidence: [`test:${trimmed}`],
+      evidence: [`test:${trimmed}`, ...files.map((file) => `file:${file}`)],
       refs,
-      data: { test: trimmed },
+      data: { test: trimmed, ...(files.length ? { files } : {}) },
     });
     return { ok: true, entry };
   }
@@ -308,12 +410,14 @@ export class TestGate {
     if (!existsSync(cwd)) return { ok: false, reason: `${cwd} does not exist, so a failure there would prove nothing.` };
     const definition = state.definition;
     const commit = await headOf(cwd);
+    // Hash the test files before running them, so what gets approved is exactly what failed.
+    const pins = pinTestFiles(cwd, testFilesOf(definition.command, cwd, definition.files));
     const run = await this.run(definition.command, cwd, { timeoutMs: this.timeoutMs });
     const draft = {
       actor: GATE_ACTOR,
       subject: taskId,
-      evidence: [`test:${definition.command}`, `definition:${definition.n}`, "phase:baseline", ...(commit ? [`commit:${commit}`] : []), ...runEvidence(run)],
-      data: { test: definition.command, definition: definition.n, phase: "baseline", afterMerge: false, ...(commit ? { commit } : {}) },
+      evidence: [`test:${definition.command}`, `definition:${definition.n}`, "phase:baseline", ...(commit ? [`commit:${commit}`] : []), ...Object.entries(pins).map(([file, hash]) => `pin:${file}=${hash}`), ...runEvidence(run)],
+      data: { test: definition.command, definition: definition.n, phase: "baseline", afterMerge: false, pins, ...(commit ? { commit } : {}) },
     };
     if (run.passed) {
       const entry = this.ledger.append({
@@ -348,6 +452,13 @@ export class TestGate {
     if (!state.baseline) return { ok: false, reason: "Run the test on the current code first; it has to fail before it can be approved." };
     if (state.baseline.passed) return { ok: false, reason: "The test passes on the current code, so it proves nothing. Define a stricter test." };
     const definition = state.definition;
+    const pins = state.baseline.pins;
+    if (!Object.keys(pins).length) {
+      return { ok: false, reason: "No test file could be pinned, so an agent could change the test after approval. Name the test file(s) when defining the test." };
+    }
+    const unpinned = definition.files.filter((file) => !(file in pins));
+    if (unpinned.length) return { ok: false, reason: `These named test files did not exist when the test first ran: ${unpinned.join(", ")}. Add them and run the test again.` };
+    const pin = pinDigest(pins);
     let verdict: LedgerEntry | undefined;
     const jev = options.jevVerdict;
     if (jev !== undefined) {
@@ -383,8 +494,8 @@ export class TestGate {
       actor: approver,
       subject: taskId,
       summary: oneLine(`Done-when test for ${taskId} approved: ${definition.command}`),
-      evidence: [`test:${definition.command}`, `definition:${definition.n}`, `baseline:${state.baseline.n}`, ...(verdict ? [`review:${verdict.n}`] : [])],
-      data: { test: definition.command, definition: definition.n },
+      evidence: [`test:${definition.command}`, `definition:${definition.n}`, `baseline:${state.baseline.n}`, `pin:${pin}`, ...Object.entries(pins).map(([file, hash]) => `pin:${file}=${hash}`), ...(verdict ? [`review:${verdict.n}`] : [])],
+      data: { test: definition.command, definition: definition.n, pins, pin },
     });
     return { ok: true, entry, verdict };
   }
@@ -407,13 +518,27 @@ export class TestGate {
     if (status.code !== 0) return { ok: false, reason: `git status failed in ${worktreePath}: ${status.stderr.trim()}` };
     const dirty = lines(status.stdout);
     if (dirty.length) return { ok: false, reason: `Commit or remove these changes first; the test only counts against a commit: ${dirty.slice(0, 10).join(", ")}` };
-    const run = await this.run(definition.command, worktreePath, { timeoutMs: this.timeoutMs });
-    const draft = {
+    const approval = state.approval!;
+    const base = {
       actor: GATE_ACTOR,
       subject: taskId,
-      evidence: [`test:${definition.command}`, `definition:${definition.n}`, "phase:worktree", `commit:${commit}`, ...runEvidence(run)],
-      data: { test: definition.command, definition: definition.n, phase: "worktree", afterMerge: false, commit },
+      evidence: [`test:${definition.command}`, `definition:${definition.n}`, "phase:worktree", `commit:${commit}`, `pin:${approval.pin}`],
+      data: { test: definition.command, definition: definition.n, phase: "worktree", afterMerge: false, commit, pin: approval.pin },
     };
+    const tampered = await changedTestFiles(worktreePath, approval.pins);
+    if (tampered.length) {
+      const entry = this.ledger.append({
+        ...base,
+        type: "test.failed",
+        summary: `${taskId} changed its approved test at ${commit.slice(0, 12)}; the test was not run`,
+        reason: `Changed since approval: ${tampered.join(", ")}`,
+        evidence: [...base.evidence, "conclusive:false", ...tampered.map((file) => `tampered:${file}`)],
+        data: { ...base.data, conclusive: false, tampered },
+      });
+      return { ok: false, reason: `The approved test was changed (${tampered.join(", ")}). Restore it, or define a new test and get it approved again.`, entry, commit };
+    }
+    const run = await this.run(definition.command, worktreePath, { timeoutMs: this.timeoutMs });
+    const draft = { ...base, evidence: [...base.evidence, ...runEvidence(run)] };
     if (run.passed) {
       const entry = this.ledger.append({ ...draft, type: "test.passed", summary: `Done-when test for ${taskId} passes in its worktree at ${commit.slice(0, 12)}` });
       return { ok: true, entry, run, commit };
@@ -438,6 +563,7 @@ export class TestGate {
     const refusal = startRefusal(state);
     if (refusal) return refuse(refusal);
     const definition = state.definition!;
+    const approval = state.approval!;
     const tip = await runGit(repoRoot, ["rev-parse", "--verify", `refs/heads/${branch}^{commit}`]);
     if (tip.code !== 0) return refuse(`Branch ${branch} does not exist.`);
     const branchTip = tip.stdout.trim();
@@ -457,8 +583,8 @@ export class TestGate {
       const proof = (commit: string, run?: TestRunResult) => ({
         actor: GATE_ACTOR,
         subject: taskId,
-        evidence: [`test:${definition.command}`, `definition:${definition.n}`, "phase:merge", `commit:${commit}`, `branch:${branch}`, `integration:${integrationBranch}`, ...(run ? runEvidence(run) : [])],
-        data: { test: definition.command, definition: definition.n, phase: "merge", afterMerge: true, commit },
+        evidence: [`test:${definition.command}`, `definition:${definition.n}`, "phase:merge", `commit:${commit}`, `branch:${branch}`, `integration:${integrationBranch}`, `pin:${approval.pin}`, ...(run ? runEvidence(run) : [])],
+        data: { test: definition.command, definition: definition.n, phase: "merge", afterMerge: true, commit, pin: approval.pin },
       });
       const merge = await runGit(candidate, ["merge", "--no-ff", "--no-edit", "-m", `Merge ${branch} (${taskId}) into ${integrationBranch}`, branchTip]);
       if (merge.code !== 0) {
@@ -477,6 +603,21 @@ export class TestGate {
         return refuse(`Merge conflict; ${integrationBranch} was left untouched.`, { output });
       }
       const mergeCommit = await git(candidate, ["rev-parse", "HEAD"]);
+      const tampered = await changedTestFiles(candidate, approval.pins);
+      if (tampered.length) {
+        const draft = proof(mergeCommit);
+        entries.push(
+          this.ledger.append({
+            ...draft,
+            type: "test.failed",
+            summary: `The approved test for ${taskId} is different after merging into ${integrationBranch}; the test was not run`,
+            reason: `Changed since approval: ${tampered.join(", ")}`,
+            evidence: [...draft.evidence, "conclusive:false", ...tampered.map((file) => `tampered:${file}`)],
+            data: { ...draft.data, conclusive: false, tampered },
+          }),
+        );
+        return refuse(`The approved test is different after the merge (${tampered.join(", ")}); ${integrationBranch} was left untouched.`, { mergeCommit });
+      }
       const run = await this.run(definition.command, candidate, { timeoutMs: this.timeoutMs });
       if (!run.passed) {
         entries.push(this.ledger.append({ ...proof(mergeCommit, run), type: "test.failed", summary: `Done-when test for ${taskId} fails after merging into ${integrationBranch}`, reason: failureReason(run) }));
@@ -504,11 +645,12 @@ export class TestGate {
       entries.push(
         this.ledger.append({
           type: "task.done",
-          actor,
+          // Only the gate writes done (see gateRule); the person who approved the merge is named in the entry.
+          actor: GATE_ACTOR,
           subject: taskId,
           summary: `${taskId} is done: its approved test passes on ${integrationBranch} at ${mergeCommit.slice(0, 12)}`,
-          evidence: [`commit:${mergeCommit}`, `test:${definition.command}`, `definition:${definition.n}`, `proof:${passed.n}`],
-          data: { commit: mergeCommit, test: definition.command },
+          evidence: [`commit:${mergeCommit}`, `test:${definition.command}`, `definition:${definition.n}`, `proof:${passed.n}`, `pin:${approval.pin}`, `approved-by:${actor.kind}:${actor.id}`],
+          data: { commit: mergeCommit, test: definition.command, pin: approval.pin, approvedBy: actor },
         }),
       );
       return { ok: true, mergeCommit, entries, run };

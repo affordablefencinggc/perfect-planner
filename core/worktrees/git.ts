@@ -4,6 +4,8 @@ export interface GitResult {
   code: number;
   stdout: string;
   stderr: string;
+  /** stdout as bytes, for binary-exact reads such as git cat-file. */
+  stdoutBytes: Buffer;
 }
 
 export interface GitOptions {
@@ -33,7 +35,8 @@ export function runGit(cwd: string, args: string[], options: GitOptions = {}): P
     });
     child.on("close", (code) => {
       clearTimeout(timer);
-      resolve({ code: code ?? -1, stdout: Buffer.concat(out).toString("utf8"), stderr: Buffer.concat(err).toString("utf8") });
+      const bytes = Buffer.concat(out);
+      resolve({ code: code ?? -1, stdout: bytes.toString("utf8"), stderr: Buffer.concat(err).toString("utf8"), stdoutBytes: bytes });
     });
   });
 }
