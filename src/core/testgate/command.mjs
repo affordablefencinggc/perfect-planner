@@ -9,6 +9,28 @@ import path from "node:path";
 const fail = (code, message) => { const error = new Error(message ?? code); error.code = code; throw error; };
 const SHELL_OPERATORS = /[|&;<>`]|\$\(/;
 const CMD_UNSAFE = /[&|<>^%!"()\r\n]/;
+// The resolved shim path is always passed inside "..." to cmd.exe, where & | < > ^ ( ) are
+// literal (so "C:\Program Files (x86)\..." works); % and ! still expand and " would end the quote.
+const CMD_PATH_UNSAFE = /[%!"\r\n]/;
+
+// Credentials must never reach the ledger through a test command (it is stored forever).
+const SECRET_WORD = "(?:token|secret|password|passwd|passphrase|credentials?|api[-_]?key|private[-_]?key|access[-_]?key|auth|cookie|pat|dsn)";
+// --token=x, --token x, --github-token, --api-key ... (a secret word as a whole dash/underscore-separated part)
+const SECRET_FLAG = new RegExp(`^--?(?!no-)(?:[a-z0-9]+[-_])*${SECRET_WORD}(?:[-_][a-z0-9]+)*(?:=|$)`, "i");
+// GITHUB_TOKEN=x, DB_PASSWORD=y, NPM_CONFIG__AUTH=z
+const SECRET_ASSIGN = new RegExp(`^(?:[A-Za-z0-9]+_+)*${SECRET_WORD}(?:_+[A-Za-z0-9]+)*=.`, "i");
+const CREDENTIAL_URL = /[a-z][a-z0-9+.-]*:\/\/[^/\s:@]+:[^/\s@]+@/i;
+const TOKEN_SHAPES = /(?:^|[^A-Za-z0-9])(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{20,}|xox[abposr]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{30,}|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.)/;
+
+/** Index of the first argument that looks like (or introduces) a credential, else null. */
+export function findSecretArgument(argv) {
+  if (!Array.isArray(argv)) return null;
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = String(argv[i]);
+    if (SECRET_FLAG.test(arg) || SECRET_ASSIGN.test(arg) || CREDENTIAL_URL.test(arg) || TOKEN_SHAPES.test(arg)) return i;
+  }
+  return null;
+}
 
 /** Parse "npm test -- --grep 'a b'" into argv. Quotes group; shell operators are refused. */
 export function parseCommandString(text) {
@@ -80,6 +102,11 @@ function findExecutable(name, options) {
   return null;
 }
 
+function cmdQuotePath(file) {
+  if (CMD_PATH_UNSAFE.test(file)) fail("TEST_COMMAND_INVALID", `Shim path ${JSON.stringify(file)} contains % ! or " and cannot be run through cmd.exe safely`);
+  return /[\s&|<>^()]/.test(file) ? `"${file}"` : file;
+}
+
 function cmdQuote(arg) {
   if (CMD_UNSAFE.test(arg)) fail("TEST_COMMAND_INVALID", `Argument ${JSON.stringify(arg)} contains cmd.exe metacharacters and cannot be passed to a .cmd/.bat shim safely`);
   return arg === "" || /[\s]/.test(arg) ? `"${arg}"` : arg;
@@ -113,7 +140,7 @@ export function resolveCommand(command, { cwd = process.cwd(), env = process.env
     }
     // Generic shim: cmd.exe /d /s /c "<shim> args", only with metacharacter-free arguments.
     const shell = comspec || path.join(envValue(env, "SYSTEMROOT") || "C:\\Windows", "System32", "cmd.exe");
-    const line = [cmdQuote(found), ...rest.map(cmdQuote)].join(" ");
+    const line = [cmdQuotePath(found), ...rest.map(cmdQuote)].join(" ");
     return { file: shell, args: ["/d", "/s", "/c", `"${line}"`], windowsVerbatimArguments: true, via: "cmd-shim" };
   }
   fail("TEST_COMMAND_INVALID", `Unsupported executable type on Windows: ${found}`);
