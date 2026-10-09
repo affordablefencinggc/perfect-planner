@@ -36,6 +36,7 @@ export const FORBIDDEN_FILES: readonly ForbiddenRule[] = [
 ];
 
 const ENV_TEMPLATE = /^\.env\.(?:example|sample|template)$/;
+const PLANNER_STATE = /(^|\/)\.perfect-planner\//i;
 
 function baseName(path: string): string {
   const p = path.replace(/\\/g, "/");
@@ -45,11 +46,16 @@ function baseName(path: string): string {
 /** Rule id when a file name must never be committed, else null. */
 export function isForbiddenFile(path: string): string | null {
   if (path.replace(/\\/g, "/") === ALLOWLIST_PATH) return null;
+  // Perfect Planner's own state (ledger, worker tokens, briefs, keys) never leaves the machine.
+  if (PLANNER_STATE.test(path.replace(/\\/g, "/"))) return "planner-state";
   const name = baseName(path).toLowerCase();
   if (ENV_TEMPLATE.test(name)) return null;
   for (const r of FORBIDDEN_FILES) if (r.pattern.test(name)) return r.id;
   return null;
 }
+
+/** A value that is only the name of a secret field (a UI label), mirrored in hooks/pre-push.mjs. */
+export const FIELD_WORD = /^(?:password|passwd|passphrase|secret|token|api[ _-]?key|client[ _-]?secret|credentials?)$/i;
 
 const NPMRC_TOKEN = /_authToken\s*=\s*(\S+)/;
 
@@ -65,7 +71,11 @@ export function scanText(file: string, text: string, allow?: ReadonlySet<string>
       if (allow?.has(fingerprint)) return;
       findings.push({ file, line: i + 1, rule, preview: maskSecret(secret), fingerprint });
     };
-    for (const match of findSecrets(file, line)) add(match.rule, match.value);
+    for (const match of findSecrets(file, line)) {
+      // "passwordLabel": "Password" names a field; it is not a credential.
+      if (match.name !== undefined && FIELD_WORD.test(match.value)) continue;
+      add(match.rule, match.value);
+    }
     if (isNpmrc) {
       const m = NPMRC_TOKEN.exec(line);
       if (m && !isPlaceholder(m[1])) add("npmrc-auth-token", m[1]);

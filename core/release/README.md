@@ -127,7 +127,10 @@ cannot approve their own secret. The local pre-push hook cannot verify
 ledger signatures, so it reads `.perfect-planner/secret-allowlist.json` from
 the remote default branch only, where an entry arrives through review; it is
 a best-effort local layer, and the binding checks are the gate and GitHub
-push protection. A value counts as a
+push protection. Any path under `.perfect-planner/` (the ledger, worker tokens, briefs,
+keys) is refused whatever it holds (`planner-state`), except the reviewed
+allowlist file. A quoted value that only names a field (`"passwordLabel":
+"Password"`) is a label, not a credential. A value counts as a
 placeholder only when the whole value is one (`changeme`, `<token>`,
 `${API_KEY}`, …) or a reference to a secret store (`secret://…`, `dpapi:…`,
 `keychain:…`).
