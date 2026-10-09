@@ -38,8 +38,11 @@ export interface GateState {
   merge?: TestOutcome;
   /** Commits (full sha) this attempt's current, unaltered test has passed on, outside the baseline. */
   passedCommits: string[];
-  /** Latest approving review of the diff (Jev or a person), at the commit it reviewed. */
-  diffApproval?: { n: string; commit: string; actor: Actor };
+  /**
+   * Latest approving review of the diff at the commit it reviewed. Counts only when the ledger verified
+   * its signature: a person's own entry, or the gate's entry recording Jev's verdict.
+   */
+  diffApproval?: { n: string; commit: string; reviewer: Actor; byPerson: boolean };
   merged?: { n: string; commit: string };
   done?: { n: string };
   reopenedAs?: string;
@@ -252,6 +255,8 @@ export function deriveState(entries: readonly LedgerEntry[], taskId: string): Ga
     if (!own && !aboutTheTest) continue;
     state.history.push({ n: entry.n, type: entry.type, summary: entry.summary });
     const forCurrent = state.definition !== undefined && definitionOf(entry) === state.definition.n;
+    // Results, merges, done and reopen only count when the ledger verified who wrote them.
+    if (["test.passed", "test.failed", "merge.done", "task.done", "task.reopened"].includes(entry.type) && !isAuthoritative(entry)) continue;
     switch (entry.type) {
       case "test.defined": {
         state.definition = { n: entry.n, command: dataString(entry, "test") ?? evidenceValue(entry, "test") ?? "", actor: entry.actor, files: dataFiles(entry) };
@@ -278,9 +283,14 @@ export function deriveState(entries: readonly LedgerEntry[], taskId: string): Ga
       }
       case "review.verdict": {
         if (own && evidenceValue(entry, "scope") === "diff") {
+          // An unsigned entry (an agent claiming to be Jev, say) is information, never approval.
+          if (!isAuthoritative(entry)) break;
           const commit = (dataString(entry, "commit") ?? evidenceValue(entry, "commit") ?? "").toLowerCase();
-          const approves = evidenceValue(entry, "verdict") === "approve" && (entry.actor.kind === "jev" || entry.actor.kind === "person");
-          state.diffApproval = approves && commit ? { n: entry.n, commit, actor: entry.actor } : undefined;
+          const byPerson = isAuthoritative(entry, { personOnly: true });
+          const recorded = entry.data?.reviewer as Actor | undefined;
+          const reviewer = byPerson ? entry.actor : recorded?.kind === "jev" ? recorded : undefined;
+          const approves = evidenceValue(entry, "verdict") === "approve" && reviewer !== undefined;
+          state.diffApproval = approves && commit ? { n: entry.n, commit, reviewer, byPerson } : undefined;
           break;
         }
         if (evidenceValue(entry, "scope") !== "test" || !forCurrent) break;
@@ -413,16 +423,61 @@ async function cleanDependencies(repoRoot: string, integrationBranch: string, ca
   return install.passed ? {} : { failure: `A clean dependency install in the merge candidate failed (${describeRun(install)}).` };
 }
 
+const IMPORT_SPECIFIER = /(?:\bimport\s*(?:[^"'`;]*?\bfrom\s*)?|\bexport\s*[^"'`;]*?\bfrom\s*|\bimport\s*\(\s*|\brequire\s*\(\s*)["']([^"']+)["']/g;
+const IMPORT_EXTENSIONS = ["", ".js", ".mjs", ".cjs", ".ts", ".mts", ".cts", ".tsx", ".jsx", ".json"];
+
+/**
+ * Files the approved test depends on, in either of the given commits: everything the pinned test
+ * files import (relative imports, followed transitively) and files named in package.json scripts
+ * or in the test command. A change to any of them can change what the test checks.
+ */
+export async function testSupportFiles(repoRoot: string, commits: readonly string[], pinned: readonly string[], command: string): Promise<Set<string>> {
+  const support = new Set<string>();
+  for (const commit of commits) {
+    const tracked = new Set(lines((await runGit(repoRoot, ["ls-tree", "-r", "--name-only", commit])).stdout));
+    const show = async (file: string) => {
+      const result = await runGit(repoRoot, ["cat-file", "blob", `${commit}:${file}`]);
+      return result.code === 0 ? result.stdout : "";
+    };
+    const named = (text: string) => [...text.matchAll(/[^\s"'`;&|<>()]+/g)].map((match) => normalizeTestFile(match[0])).filter((file): file is string => !!file && tracked.has(file));
+    for (const file of named(command)) support.add(file);
+    try {
+      const scripts = (JSON.parse(await show("package.json")) as { scripts?: Record<string, string> }).scripts ?? {};
+      for (const value of Object.values(scripts)) if (typeof value === "string") for (const file of named(value)) support.add(file);
+    } catch {
+      // No package.json, or not valid JSON: nothing to follow.
+    }
+    const queue = [...pinned];
+    const seen = new Set(queue);
+    while (queue.length && seen.size < 2000) {
+      const file = queue.shift()!;
+      for (const match of (await show(file)).matchAll(IMPORT_SPECIFIER)) {
+        const specifier = match[1]!;
+        if (!specifier.startsWith(".")) continue;
+        const base = path.posix.normalize(path.posix.join(path.posix.dirname(file), specifier));
+        const target = [...IMPORT_EXTENSIONS.map((ext) => base + ext), ...IMPORT_EXTENSIONS.slice(1).map((ext) => `${base}/index${ext}`)].find((candidate) => tracked.has(candidate));
+        if (!target || seen.has(target)) continue;
+        seen.add(target);
+        support.add(target);
+        queue.push(target);
+      }
+    }
+  }
+  return support;
+}
+
 /** Files whose change can alter what the approved test checks without touching the test itself. */
-export function sensitiveChanges(changed: readonly string[], pinned: readonly string[]): string[] {
+export function sensitiveChanges(changed: readonly string[], pinned: readonly string[], support: ReadonlySet<string> = new Set()): string[] {
   const pinnedDirs = new Set(pinned.map((file) => path.posix.dirname(file)));
   return changed.filter((file) => {
     const base = path.posix.basename(file);
-    if (DEPENDENCY_FILES.includes(base)) return true;
+    if (support.has(file) || DEPENDENCY_FILES.includes(base)) return true;
+    // Test setup and teardown files (vitest.setup.mjs, jest-setup.js, global-teardown.ts).
+    if (/(^|[._-])(setup|teardown|globalsetup)([._-]|$)/i.test(base)) return true;
     // Tool and build configuration: vitest.config.ts, tsconfig.json, babel, jest, .mocharc and the like.
     if (/(^|\.)config\.[cm]?[jt]s$|^tsconfig.*\.json$|^\.?(babel|jest|mocha|vitest|vite|eslint|prettier)rc/i.test(base)) return true;
     // Test support: helpers, fixtures, mocks and other tests can change what the approved test sees.
-    if (/(^|\/)(tests?|__tests__|specs?|fixtures|helpers|mocks|__mocks__)\//i.test(file) || /\.(test|spec)\.[cm]?[jt]sx?$/i.test(base)) return true;
+    if (/(^|\/)(tests?|__tests__|specs?|fixtures|helpers|support|mocks|__mocks__)\//i.test(file) || /\.(test|spec)\.[cm]?[jt]sx?$/i.test(base)) return true;
     // Anything beside a pinned test file (outside the project root) is treated as one of its helpers.
     const dir = path.posix.dirname(file);
     return dir !== "." && pinnedDirs.has(dir);
@@ -652,13 +707,15 @@ export class TestGate {
     if (reviewer.kind !== "jev" && reviewer.kind !== "person") return { ok: false, reason: `Only Jev or a person can approve a diff, not ${reviewer.kind} ${reviewer.id}.` };
     const reviewed = (commit ?? state.worktree?.commit ?? "").trim().toLowerCase();
     if (!/^[0-9a-f]{40,64}$/.test(reviewed)) return { ok: false, reason: "Name the full commit that was reviewed." };
+    // A person signs their own approval. Jev's verdict is recorded by the gate (signed by the app), so a
+    // process that merely calls itself Jev in the ledger can never approve a diff.
     const entry = this.ledger.append({
       type: "review.verdict",
-      actor: reviewer,
+      actor: reviewer.kind === "person" ? reviewer : GATE_ACTOR,
       subject: taskId,
-      summary: `Diff for ${taskId} approved at ${reviewed.slice(0, 12)}`,
-      evidence: ["scope:diff", "verdict:approve", `commit:${reviewed}`],
-      data: { scope: "diff", verdict: "approve", commit: reviewed },
+      summary: `Diff for ${taskId} approved by ${reviewer.kind === "jev" ? "Jev" : reviewer.id} at ${reviewed.slice(0, 12)}`,
+      evidence: ["scope:diff", "verdict:approve", `commit:${reviewed}`, `reviewer:${reviewer.kind}:${reviewer.id}`],
+      data: { scope: "diff", verdict: "approve", commit: reviewed, reviewer },
     });
     return { ok: true, entry };
   }
@@ -690,12 +747,12 @@ export class TestGate {
       return refuse(`The diff at ${branchTip.slice(0, 12)} has not been approved by Jev or a person.`);
     }
     const forkPoint = await runGit(repoRoot, ["merge-base", `refs/heads/${integrationBranch}`, branchTip]);
-    if (forkPoint.code === 0) {
-      const changed = lines((await runGit(repoRoot, ["diff", "--name-only", "--no-renames", forkPoint.stdout.trim(), branchTip])).stdout);
-      const sensitive = sensitiveChanges(changed, Object.keys(approval.pins));
-      if (sensitive.length && state.diffApproval.actor.kind !== "person") {
-        return refuse(`The diff changes ${sensitive.join(", ")}, which can change what the approved test checks; a person has to approve this diff.`);
-      }
+    if (forkPoint.code !== 0) return refuse(`Could not find where ${branch} left ${integrationBranch}, so its changes cannot be checked.`);
+    const changed = lines((await runGit(repoRoot, ["diff", "--name-only", "--no-renames", forkPoint.stdout.trim(), branchTip])).stdout);
+    const support = await testSupportFiles(repoRoot, [forkPoint.stdout.trim(), branchTip], Object.keys(approval.pins), definition.command);
+    const sensitive = sensitiveChanges(changed, Object.keys(approval.pins), support);
+    if (sensitive.length && !state.diffApproval.byPerson) {
+      return refuse(`The diff changes ${sensitive.join(", ")}, which can change what the approved test checks; a person has to approve this diff.`);
     }
     if (actor.kind !== "person") return refuse(`A person approves the merge, not ${actor.kind} ${actor.id}.`);
     const base = await runGit(repoRoot, ["rev-parse", "--verify", `refs/heads/${integrationBranch}^{commit}`]);

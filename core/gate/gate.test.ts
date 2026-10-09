@@ -394,6 +394,51 @@ describe("TestGate", () => {
     }
   }, SLOW);
 
+  it("ignores a diff approval an agent writes under Jev's name", async () => {
+    const { root, gate, ledger, worktree, branch, addWorktree } = await approved();
+    await addWorktree();
+    writeFiles(worktree, { "feature.txt": "enabled\n" });
+    const tip = await commitAll(worktree, "enable feature");
+    expect((await gate.prove("T-1", worktree)).ok).toBe(true);
+    // Nothing stops a process with ledger access from claiming to be Jev; the entry is just unsigned.
+    ledger.append({ type: "review.verdict", actor: { kind: "jev", id: "jev", model: "test-model" }, subject: "T-1", summary: "Diff approved", evidence: ["scope:diff", "verdict:approve", `commit:${tip}`], data: { scope: "diff", verdict: "approve", commit: tip } });
+    const merge = () => gate.mergeAndVerify("T-1", { repoRoot: root, branch, integrationBranch: "main", actor: OWNER });
+    expect(await merge()).toMatchObject({ ok: false, reason: expect.stringContaining("not been approved") });
+    expect(gate.approveDiff("T-1", JEV, tip).ok).toBe(true);
+    expect(ledger.entries().at(-1)).toMatchObject({ type: "review.verdict", actor: { kind: "system", id: "gate" }, data: { reviewer: JEV } });
+    expect((await merge()).ok).toBe(true);
+  }, SLOW);
+
+  it("asks a person when the diff changes a setup file, a script the test runs, or anything the test imports", async () => {
+    const files = {
+      "check.mjs": 'import { ready } from "./lib/flag.mjs";\nprocess.exit(ready() ? 0 : 1);\n',
+      "lib/flag.mjs": 'import { readFileSync } from "node:fs";\nimport { enabled } from "../support/parse.mjs";\nexport const ready = () => enabled(readFileSync("feature.txt", "utf8"));\n',
+      "support/parse.mjs": 'export const enabled = (text) => text.trim() === "enabled";\n',
+      "package.json": '{"scripts":{"check":"node scripts/run.mjs"}}\n',
+      "scripts/run.mjs": "process.exit(0);\n",
+      "vitest.setup.mjs": "export {};\n",
+      "feature.txt": "disabled\n",
+    };
+    for (const [file, content] of [["support/parse.mjs", "export const enabled = () => true;\n"], ["lib/flag.mjs", "export const ready = () => true;\n"], ["scripts/run.mjs", "process.exit(1);\n"], ["vitest.setup.mjs", "globalThis.x = 1;\n"]] as const) {
+      const repo = await makeRepo(files);
+      cleanups.push(repo.cleanup);
+      const ledger = await memoryLedger();
+      const gate = new TestGate({ ledger, timeoutMs: 30_000 });
+      gate.define("T-1", "node check.mjs", WORKER);
+      expect(gate.approve("T-1", OWNER, { cwd: repo.root }).ok).toBe(true);
+      expect((await gate.confirmFailsFirst("T-1", repo.root)).ok).toBe(true);
+      const worktree = path.join(path.dirname(repo.root), `wt-${file.replace(/\W/g, "-")}`);
+      cleanups.push(() => rmSync(worktree, { recursive: true, force: true }));
+      await git(repo.root, ["worktree", "add", "-q", "-b", "pp/T-1", worktree, "main"]);
+      writeFiles(worktree, { [file]: content, "feature.txt": "enabled\n" });
+      const tip = await commitAll(worktree, `touch ${file}`);
+      expect((await gate.prove("T-1", worktree)).ok).toBe(true);
+      expect(gate.approveDiff("T-1", JEV, tip).ok).toBe(true);
+      const merged = await gate.mergeAndVerify("T-1", { repoRoot: repo.root, branch: "pp/T-1", integrationBranch: "main", actor: OWNER });
+      expect(merged).toMatchObject({ ok: false, reason: expect.stringContaining(file) });
+    }
+  }, SLOW);
+
   it("reject bumps the attempt and the new attempt keeps the approved test", async () => {
     const { gate, ledger } = await approved("T-14");
     expect(nextAttemptId("T-14")).toBe("T-14.a2");

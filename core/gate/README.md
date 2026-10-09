@@ -67,10 +67,20 @@ integration branch: `git merge --ff-only` in its checkout if it is checked out
 `git update-ref` with the expected old value. Conflicts and failures leave
 the integration branch untouched. The temporary worktree is always removed.
 It merges only when the branch tip has an approving diff verdict, and the merge
-actor must be a person. When the diff touches package files (package.json,
-lockfiles, .npmrc), tool configuration (`*.config.*`, tsconfig, rc files) or test
-support (tests/, helpers/, fixtures/, mocks/, `*.test.*`, files beside a pinned
-test), Jev's approval is not enough: a person has to approve that diff.
+actor must be a person. A verdict counts only when the ledger verified its
+signature: a person's own entry, or the gate's entry recording Jev's verdict
+(`approveDiff(taskId, jev)` writes it as `system:gate` with `data.reviewer`). A
+`review.verdict` that merely names Jev as its actor is unsigned and ignored, as
+are unsigned test results, merges, done and reopen entries.
+
+When the diff touches anything that can change what the approved test checks,
+Jev's approval is not enough and a person has to approve that diff: package
+files (package.json, lockfiles, .npmrc), tool configuration (`*.config.*`,
+tsconfig, rc files), setup and teardown files, test support (tests/, helpers/,
+support/, fixtures/, mocks/, `*.test.*`, files beside a pinned test), files named
+in the test command or in package.json scripts, and every file the pinned test
+files import, followed transitively. That last rule includes the code under test
+when the test imports it directly, so such tasks always need a person's review.
 
 The task's own `node_modules` is never used for the merge check, because it is
 ignored by git and a worker could edit it unseen. When the candidate's package
