@@ -28,9 +28,10 @@ on:
 permissions:
   contents: read
 
+# One release run per tag at a time; PR dry runs never cancel each other.
 concurrency:
-  group: perfect-planner-release-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: perfect-planner-release-${{ github.event_name == 'pull_request' && github.sha || github.ref }}
+  cancel-in-progress: false
 
 env:
   RELEASE_NAME: ${{ github.event_name == 'push' && github.ref_name || github.event_name == 'workflow_dispatch' && inputs.release || 'dry-run' }}
@@ -89,6 +90,10 @@ jobs:
       - run: npm ci
 
       - name: Build installers
+        # macOS's default temp dir sits behind the /var -> /private/var symlink,
+        # which the truth report's proof runner refuses as a root escape.
+        env:
+          TMPDIR: ${{ runner.temp }}
         run: npm run tauri -- build --ci --bundles ${{ matrix.bundles }} ${{ matrix.args }}
 
       - name: Stamp installer names
