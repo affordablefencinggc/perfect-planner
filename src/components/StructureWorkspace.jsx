@@ -594,7 +594,7 @@ export function StructureWorkspace({
     if (scanAbortRef.current && !scanAbortRef.current.signal.aborted) return;
     if (!path.trim()) {
       const message = "Choose one app folder first.";
-      setIntake((current) => ({ ...current, state: "error", message }));
+      setIntake((current) => ({ ...current, state: "no-folder", message }));
       onDiagnostic?.("workspace", "warning", message);
       return;
     }
@@ -925,7 +925,8 @@ export function StructureWorkspace({
           receipt?.reason === "native-runtime-unavailable"
             ? "Open the native desktop app to choose a folder. This browser does not provide secure folder access."
             : pickerFailureText(receipt?.reason);
-        setIntake((current) => ({ ...current, state: "error", message }));
+        // No folder was chosen, so nothing has started: say why, but don't badge the section as a red error.
+        setIntake((current) => ({ ...current, state: "no-folder", message }));
         // Browser limits (no native picker, no drag-and-drop access) are expected, not failures.
         const expected = receipt?.reason === "native-runtime-unavailable" || /cannot grant folder access|Drop exactly one/.test(message);
         onDiagnostic?.("workspace", expected ? "warning" : "error", receipt?.reason || message);
@@ -945,7 +946,7 @@ export function StructureWorkspace({
     } catch (error) {
       if (selectionRunRef.current !== runId) return;
       const message = pickerFailureText(error instanceof Error ? error.message : "");
-      setIntake((current) => ({ ...current, state: "error", message }));
+      setIntake((current) => ({ ...current, state: "no-folder", message }));
       onDiagnostic?.("workspace", "error", error instanceof Error ? error.message : message);
     }
   };
@@ -1196,7 +1197,7 @@ export function StructureWorkspace({
             </span>
           </button>
           <span className={`intake-state ${intake.state}`}>
-            {intake.state.replaceAll("-", " ")}
+            {intake.state === "no-folder" ? "not started" : intake.state.replaceAll("-", " ")}
           </span>
         </header>
         {openSections.intake && (
@@ -1301,7 +1302,7 @@ export function StructureWorkspace({
               </form>
             )}
             <div className="folder-intake-status">
-              <span className={`folder-intake-message${intake.state === "error" ? " is-error" : ""}`} role={intake.state === "error" ? "alert" : "status"}>{intake.message}</span>
+              <span className={`folder-intake-message${intake.state === "error" ? " is-error" : ""}`} role={["error", "no-folder"].includes(intake.state) ? "alert" : "status"}>{intake.message}</span>
               <span className="folder-scan-actions">
                 {rootPath && !mapLoading && ["error", "analysis-refused"].includes(intake.state) && (
                   <button type="button" className="soft-button" onClick={() => connectFolder()}>
