@@ -110,6 +110,7 @@ export const REQUIRED_IGNORES: readonly string[] = [
   "*.key",
   "id_rsa*",
   ".perfect-planner/secrets/",
+  ".perfect-planner/tokens/",
 ];
 
 const IGNORE_HEADER = "# Perfect Planner: never commit secrets";
