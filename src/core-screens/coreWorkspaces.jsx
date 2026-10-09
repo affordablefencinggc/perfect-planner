@@ -1,5 +1,7 @@
 import { lazy, Suspense } from "react";
-import { CoreLoading } from "./CoreScreen.jsx";
+// Loaded with the app (JS only, no stylesheet) so a one-time launch link is claimed and
+// taken out of the address bar as soon as the window opens, whichever screen is shown.
+import "./coreApi.js";
 
 // The core loop screens and where they sit in the stage navigation
 // (Define: planning, mvp · Coordinate: decisions, people · Release: lookup).
@@ -60,8 +62,14 @@ export function CoreWorkspace({ workspace, onWorkspace }) {
   const Screen = screens[workspace];
   if (!Screen) return null;
   return (
-    <Suspense fallback={<CoreLoading label={`Loading ${coreWorkspaceLabels[workspace]}`} />}>
+    <Suspense fallback={<ScreenLoading label={`Loading ${coreWorkspaceLabels[workspace]}`} />}>
       <Screen onWorkspace={onWorkspace} />
     </Suspense>
   );
+}
+
+// While a screen's code loads. Kept free of CoreScreen.jsx so the core screens' stylesheet
+// stays out of the first-load bundle (scripts/verify-performance-budget.mjs).
+function ScreenLoading({ label }) {
+  return <p className="core-loading" role="status" aria-live="polite" aria-label={label}>{label}…</p>;
 }
