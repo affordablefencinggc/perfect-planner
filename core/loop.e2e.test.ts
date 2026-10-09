@@ -14,6 +14,7 @@ import { DEFAULT_PERMISSIONS, FileStore, Ledger, LedgerError, MemoryKeyProvider 
 import { appendNumbered, installNumberingRules } from "./numbering/index";
 import { addPlanText, installClauseRules, lookup } from "./lookup/index";
 import { WorktreeManager, WORKTREES_ACTOR, GATE_ACTOR, WATCHER_ACTOR, git, runGit, realDir, type WorktreeInfo } from "./worktrees/index";
+import { workerGit } from "./worktrees/testing";
 import { GitWatcher } from "./watcher/index";
 import { TestGate, deriveState, gateRule } from "./gate/index";
 import { AgentService, TokenStore, ToolError, attemptLabel, foldBoard, type Caller } from "./mcp/index";
@@ -117,9 +118,11 @@ function write(root: string, files: Record<string, string>): void {
   }
 }
 
+/** Commit as a worker would, with its own plain git, so the worktree's hooks (the secret scan) run; the app's runGit never runs them. */
 async function commit(cwd: string, message: string): Promise<{ code: number; stderr: string }> {
-  await git(cwd, ["add", "-A"]);
-  return runGit(cwd, ["commit", "-q", "-m", message]);
+  const added = workerGit(cwd, ["add", "-A"]);
+  if (added.code !== 0) return added;
+  return workerGit(cwd, ["commit", "-q", "-m", message]);
 }
 
 /** A fake TypeSafe System One endpoint: approves every test, rejects the diffs of `rejectDiff`, never settles a question. */
