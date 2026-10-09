@@ -4386,6 +4386,36 @@ function EvidenceWorkspace({ selectedId, onSelect, zoom, onZoom }) {
           >
             <ListChecksIcon /> Document ledger · {documentLedger.length} sources
           </button>
+          {/* Page controls live in the toolbar, not over the spine, so they never cover step numbers or cards. */}
+          {evidenceView === "journey" && (
+            <nav
+              className="journey-spine-controls"
+              aria-label="Quick journey rotation"
+            >
+              <button
+                onClick={() =>
+                  journeyViewportRef.current?.scrollBy({
+                    top: -journeyViewportRef.current.clientHeight * 0.82,
+                    behavior: "smooth",
+                  })
+                }
+                aria-label="Previous journey page"
+              >
+                <CaretUpIcon />
+              </button>
+              <button
+                onClick={() =>
+                  journeyViewportRef.current?.scrollBy({
+                    top: journeyViewportRef.current.clientHeight * 0.82,
+                    behavior: "smooth",
+                  })
+                }
+                aria-label="Next journey page"
+              >
+                <CaretDownIcon />
+              </button>
+            </nav>
+          )}
           {evidenceView === "proof" && (
             <>
               <span>
@@ -4467,33 +4497,6 @@ function EvidenceWorkspace({ selectedId, onSelect, zoom, onZoom }) {
               </small>
             </label>
           </aside>
-          <nav
-            className="journey-spine-controls"
-            aria-label="Quick journey rotation"
-          >
-            <button
-              onClick={() =>
-                journeyViewportRef.current?.scrollBy({
-                  top: -journeyViewportRef.current.clientHeight * 0.82,
-                  behavior: "smooth",
-                })
-              }
-              aria-label="Previous journey page"
-            >
-              <CaretUpIcon />
-            </button>
-            <button
-              onClick={() =>
-                journeyViewportRef.current?.scrollBy({
-                  top: journeyViewportRef.current.clientHeight * 0.82,
-                  behavior: "smooth",
-                })
-              }
-              aria-label="Next journey page"
-            >
-              <CaretDownIcon />
-            </button>
-          </nav>
           <div className="journey-map">
             <div className="journey-spine" aria-hidden="true" />
             <div

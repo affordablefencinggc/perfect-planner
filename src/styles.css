@@ -4435,22 +4435,14 @@ code {
   color: var(--muted);
   font: 7px/1.4 var(--mono);
 }
+/* In the Evidence toolbar, not floating over the spine, so they never cover step numbers or cards. */
 .journey-spine-controls {
-  position: sticky;
-  z-index: 20;
-  top: calc(50% - 39px);
-  left: 50%;
-  width: 0;
-  height: 0;
-  display: grid;
+  display: flex;
   gap: 5px;
-  transform: translateX(-50%);
 }
 .journey-spine-controls button {
-  /* Beside the spine (not on it) so the sticky controls never cover step numbers. */
   width: 32px;
   height: 32px;
-  transform: translateX(21px);
   display: grid;
   place-items: center;
   border: 2px solid var(--chrome-dark);

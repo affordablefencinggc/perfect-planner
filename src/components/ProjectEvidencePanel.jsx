@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { CameraIcon, CheckCircleIcon, CircleDashedIcon, CodeIcon, FlaskIcon, LinkSimpleIcon, NoteIcon, PlusIcon, TrashIcon, XCircleIcon } from "@phosphor-icons/react";
 import { readWorkRecords, writeSection } from "../project/projectWorkRecords.js";
 import { activeDrafts, addProofItem, kindLabel, MAX_TEXT_CHARS, newProofId, PROOF_KINDS, proofCoverage, proofItems, proofScope, removeProofItem, REQUIRED_PROOF_KINDS, saveErrorMessage } from "../project/proofRecords.js";
@@ -40,19 +41,21 @@ function ScreenshotViewer({ item, onClose }) {
     return () => { document.removeEventListener("keydown", onKey); previous?.focus?.(); };
   }, [onClose]);
   const title = item.label || "Screenshot";
-  return <div className="proof-viewer-layer" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+  // Portalled to the body so no transformed workspace ancestor clips the fixed overlay.
+  return createPortal(<div className="proof-viewer-layer" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
     <div className="proof-viewer" role="dialog" aria-modal="true" aria-label={title}>
       <header><strong>{title}</strong><button ref={closeRef} type="button" onClick={onClose}>Close</button></header>
       <img src={item.value} alt={title} />
     </div>
-  </div>;
+  </div>, document.body);
 }
 
 function ProofValue({ item }) {
   const [viewing, setViewing] = useState(false);
+  const closeViewer = useCallback(() => setViewing(false), []);
   if (item.format === "image") return <>
     <button type="button" className="proof-thumb" aria-label={`View ${item.label || "screenshot"} full size`} onClick={() => setViewing(true)}><img src={item.value} alt={item.label || "Screenshot"} /></button>
-    {viewing && <ScreenshotViewer item={item} onClose={() => setViewing(false)} />}
+    {viewing && <ScreenshotViewer item={item} onClose={closeViewer} />}
   </>;
   if (item.format === "link") return <a className="proof-link" href={item.value} target="_blank" rel="noreferrer noopener"><LinkSimpleIcon aria-hidden="true" />{item.value}</a>;
   if (item.value.length <= 160 && !item.value.includes("\n")) return <p className="proof-text">{item.value}</p>;
