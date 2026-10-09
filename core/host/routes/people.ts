@@ -15,6 +15,7 @@ import {
   isSlug,
   photoSources,
   removeMember,
+  replayRoster,
   setPhoto,
   shareDoc,
   validatePhoto,
@@ -77,6 +78,12 @@ export interface PeopleResult {
   me: string;
   /** True when nobody is on the roster yet: the first person added becomes the owner. */
   firstRun: boolean;
+  /** The person who first wrote to this project; only they may become its owner. */
+  starter?: string;
+}
+
+function starter(project: CoreProject): string | undefined {
+  return replayRoster(project.entries()).starter;
 }
 
 function peopleResult(project: CoreProject): PeopleResult {
@@ -86,6 +93,7 @@ function peopleResult(project: CoreProject): PeopleResult {
     photos: photoSources(view, new FilePhotoStore(project.root)),
     me: view.owner?.person ?? DEFAULT_LOCAL_PERSON,
     firstRun: view.members.length === 0,
+    ...(view.members.length === 0 && starter(project) ? { starter: starter(project) } : {}),
   };
 }
 
@@ -106,15 +114,16 @@ export function registerPeopleRoutes(router: Router): void {
   router.get("/people", ({ project }) => peopleResult(project));
 
   // First run: the first person added becomes the owner (and the person at this computer).
-  router.post("/people/claim", ({ project, body: raw }) => {
+  router.post("/people/claim", ({ project, body: raw, host }) => {
     const b = body(raw);
     if (buildPeopleView(project.entries()).members.length > 0) throw new HttpError(409, "HAS_OWNER", "This project already has an owner.");
     const id = person(b.person ?? DEFAULT_LOCAL_PERSON);
+    host.ensurePersonKey(id); // the person naming themselves, in their own window
     const entry = claimOwnership(project.ledger, { kind: "person", id }, text(b.name, "a name"));
     return { entry: entry.n, ...peopleResult(project) };
   });
 
-  router.post("/people/members", ({ project, body: raw }) => {
+  router.post("/people/members", ({ project, body: raw, host }) => {
     const b = body(raw);
     const id = person(b.person);
     const name = text(b.name, "a name");
@@ -122,6 +131,7 @@ export function registerPeopleRoutes(router: Router): void {
     const roster = buildPeopleView(project.entries());
     if (roster.members.length === 0) {
       if (r !== undefined && r !== "owner") throw new HttpError(422, "FIRST_IS_OWNER", "The first person on a project is its owner. Add yourself as owner first, then add helpers.");
+      host.ensurePersonKey(id);
       const entry = claimOwnership(project.ledger, { kind: "person", id }, name);
       return { entry: entry.n, ...peopleResult(project) };
     }

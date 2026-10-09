@@ -1,7 +1,7 @@
 import type { Actor, Ledger, LedgerEntry } from "../ledger/index";
-import { budgetStatus, formatCents } from "./budget";
+import { budgetStatus, formatCents, installBudgetRule } from "./budget";
 import { affectedTests } from "./ciPlan";
-import { DEFAULT_PRESET, PRESETS, needsDeepReview } from "./presets";
+import { PRESETS, currentPreset, installSettingsRule, needsDeepReview } from "./presets";
 import { triageRisk, type RiskRater, type Triage } from "./risk";
 import { scanChange } from "./secrets";
 import { checkSize, type SizeCapOptions } from "./sizeCap";
@@ -16,12 +16,20 @@ import type { ChangeSet, CheckResult, PresetName } from "./types";
 export interface DeepReviewOutcome {
   verdict: "approve" | "reject";
   notes: string[];
+  /** Who reviewed. Must differ from the builder in id and, for AI reviewers, in model. */
+  reviewer: Actor;
 }
 
 export interface PipelineOptions {
-  preset?: PresetName;
-  /** Ledger entries, for the monthly budget. Omit to skip the budget check. */
-  entries?: readonly LedgerEntry[];
+  /**
+   * The project ledger. Required: the review preset and the monthly budget
+   * are read from it, never from the caller, so whoever runs the gate cannot
+   * pick a cheaper preset or skip the budget. The gate also installs the
+   * release rules on it (budget stop, person-only settings).
+   */
+  ledger: Ledger;
+  /** Who built the change; the deep reviewer must be someone else. */
+  author: Actor;
   now?: Date;
   size?: SizeCapOptions;
   /** Every test file in the repo; the changed files pick theirs from it. */
@@ -49,7 +57,11 @@ const ORDER = ["budget", "size-cap", "secret-scan", "local-tests", "risk-triage"
 function finish(preset: PresetName, checks: CheckResult[], verdict: PipelineVerdict, deep: boolean, triage?: Triage): PipelineResult {
   const ran = new Set(checks.map((check) => check.check));
   for (const name of ORDER) {
-    if (!ran.has(name)) checks.push({ check: name, status: "skipped", summary: verdict === "ready" ? "not needed" : "not run, an earlier check stopped the change" });
+    if (ran.has(name)) continue;
+    const summary = verdict !== "ready" ? "Not run: an earlier check stopped the change"
+      : name === "local-tests" ? "Not run: no test runner configured"
+      : "Not run";
+    checks.push({ check: name, status: "skipped", summary });
   }
   const stopper = checks.find((check) => check.status === "fail" || check.status === "hold");
   const summary = verdict === "ready"
@@ -58,19 +70,45 @@ function finish(preset: PresetName, checks: CheckResult[], verdict: PipelineVerd
   return { preset, verdict, checks, triage, deep, summary };
 }
 
-export async function runCheapFirst(change: ChangeSet, options: PipelineOptions = {}): Promise<PipelineResult> {
-  const preset = options.preset ?? DEFAULT_PRESET;
+const wired = new WeakSet<Ledger>();
+
+/**
+ * Installs the release rules on a ledger once: new runs stop when the month's
+ * budget is spent, and only a person may change the review preset or budget.
+ * The gate calls this itself; the app should also call it when it opens the
+ * ledger so the rules hold before the first review runs.
+ */
+export function installReleaseRules(ledger: Ledger, options: { now?: () => Date } = {}): void {
+  if (wired.has(ledger)) return;
+  wired.add(ledger);
+  installSettingsRule(ledger);
+  installBudgetRule(ledger, options);
+}
+
+function sameBuilder(author: Actor, reviewer: Actor | undefined): string | null {
+  if (!reviewer || !reviewer.kind || !reviewer.id) return "the reviewer did not say who it is";
+  if (reviewer.kind === author.kind && reviewer.id === author.id) return `${reviewer.id} built this change`;
+  if (author.model && reviewer.model && author.model === reviewer.model) return `the reviewer runs the same model as the builder (${author.model})`;
+  return null;
+}
+
+export async function runCheapFirst(change: ChangeSet, options: PipelineOptions): Promise<PipelineResult> {
+  // Fail closed: without the ledger there is no preset or budget to honour.
+  if (!options?.ledger) throw new Error("The review gate needs the project ledger to read the preset and budget");
+  if (!options.author?.kind || !options.author.id) throw new Error("The review gate needs the builder of the change, to keep the reviewer independent");
+  const { ledger } = options;
+  installReleaseRules(ledger, options.now ? { now: () => options.now! } : {});
+  const entries = ledger.entries();
+  const preset = currentPreset(entries);
   const checks: CheckResult[] = [];
 
   // 1. Budget: a stopped month starts no new review spend.
-  if (options.entries) {
-    const status = budgetStatus(options.entries, options.now ?? new Date());
-    if (status.state === "stopped") {
-      checks.push({ check: "budget", status: "hold", summary: `Monthly budget reached (${formatCents(status.spentCents)} of ${formatCents(status.budgetCents ?? 0)})`, detail: status });
-      return finish(preset, checks, "held", false);
-    }
-    checks.push({ check: "budget", status: "pass", summary: status.state === "uncapped" ? "No monthly cap set" : `${formatCents(status.spentCents)} of ${formatCents(status.budgetCents ?? 0)} used`, detail: status });
+  const status = budgetStatus(entries, options.now ?? new Date());
+  if (status.state === "stopped") {
+    checks.push({ check: "budget", status: "hold", summary: `Monthly budget reached (${formatCents(status.spentCents)} of ${formatCents(status.budgetCents ?? 0)})`, detail: status });
+    return finish(preset, checks, "held", false);
   }
+  checks.push({ check: "budget", status: "pass", summary: status.state === "uncapped" ? "No monthly cap set" : `${formatCents(status.spentCents)} of ${formatCents(status.budgetCents ?? 0)} used`, detail: status });
 
   // 2. Size cap: oversize changes are held and split, not reviewed.
   const size = checkSize(change, options.size);
@@ -115,6 +153,11 @@ export async function runCheapFirst(change: ChangeSet, options: PipelineOptions 
     return finish(preset, checks, "held", true, triage);
   }
   const outcome = await options.deepReview(change, triage);
+  const conflict = sameBuilder(options.author, outcome?.reviewer);
+  if (conflict) {
+    checks.push({ check: "deep-review", status: "hold", summary: `Needs a different reviewer: ${conflict}` });
+    return finish(preset, checks, "held", true, triage);
+  }
   checks.push({
     check: "deep-review",
     status: outcome.verdict === "approve" ? "pass" : "fail",

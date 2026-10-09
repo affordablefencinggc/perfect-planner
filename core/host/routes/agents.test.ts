@@ -56,7 +56,7 @@ describe("agents routes", () => {
 
     const list = (await hostCall(base, "GET", "/agents?project=demo")).body.result;
     expect(list.agents).toHaveLength(1);
-    expect(list.agents[0]).toMatchObject({ name: "Claude Code", model: "claude-opus", role: "main", person: "owner", connection });
+    expect(list.agents[0]).toMatchObject({ name: "Claude Code", model: "unverified:claude-opus", role: "main", person: "owner", connection });
     expect(typeof list.agents[0].connectedAt).toBe("string");
     expect(list.agents[0]).not.toHaveProperty("token");
     expect(list.connections[0].agent).toBe(list.agents[0].id);
@@ -144,7 +144,7 @@ describe.skipIf(!built.built)("built stdio agent", () => {
       const hello = await wait(2);
       expect(hello?.result?.structuredContent?.role).toBe("main");
       const list = (await hostCall(base, "GET", "/agents?project=demo")).body.result;
-      expect(list.agents).toEqual([expect.objectContaining({ name: "Stdio agent", model: "test-model", role: "main" })]);
+      expect(list.agents).toEqual([expect.objectContaining({ name: "Stdio agent", model: "unverified:test-model", role: "main" })]);
     } finally {
       child.kill();
     }

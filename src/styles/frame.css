@@ -3,7 +3,7 @@
    the header and context strip wrap instead of clipping, and page content sits
    in a max-width column with even gutters at any window width. */
 :root {
-  --page-max: 1640px;
+  --page-max: 1440px;
   --page-gutter: clamp(44px, 3.5vw, 56px); /* clears the Repositories and Inspector edge tabs */
   /* Padding that centres a --page-max column inside any full-width container. */
   --frame-pad: max(var(--page-gutter), calc((100% - var(--page-max)) / 2));
@@ -172,6 +172,7 @@
   .ledger-workspace,
   .index-workspace,
   .evidence-workspace,
+  .plan-workspace,
   .project-unavailable-workspace
 ) {
   width: 100%;
@@ -197,34 +198,6 @@
   margin-inline: 0;
 }
 
-/* Coordinate: the plan map and its page rail share the same centred frame. */
-.app-shell .workspace-stage-coordinate {
-  grid-template-columns: minmax(0, 1fr) 120px;
-  column-gap: 20px;
-  padding-inline: var(--frame-pad);
-  padding-right: var(--frame-pad);
-}
-.app-shell .workspace-stage-coordinate .plan-canvas {
-  width: 100%;
-}
-@media (max-width: 980px) {
-  .app-shell .workspace-stage-coordinate {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  .app-shell .stage-subnav-coordinate {
-    grid-column: 1;
-    grid-row: auto;
-    position: static;
-    margin-top: 0;
-    width: auto;
-    grid-template-columns: repeat(3, auto);
-    justify-content: start;
-  }
-}
-.app-shell .workspace-stage-coordinate > .workspace {
-  background: transparent;
-}
-
 /* Every interactive control gets the same visible keyboard focus. */
 .app-shell :is(button, a, [role="tab"], [tabindex="0"], summary):focus-visible {
   outline: 2px solid var(--blue-focus);
@@ -238,4 +211,26 @@
   align-items: center;
   gap: 6px;
   min-width: 0;
+}
+
+/* Keep brand, stage tabs and status chips on one header row down to ~1800px wide. */
+.app-shell .topbar .top-metric-button,
+.app-shell .topbar .top-metric-button :is(span, small, strong) {
+  font-size: 11.5px !important;
+}
+.app-shell .topbar .top-metric-button {
+  gap: 6px;
+  padding-inline: 9px;
+}
+.app-shell .topbar .workspace-tab {
+  padding-inline: 10px;
+}
+.app-shell .topbar-primary {
+  column-gap: 10px;
+}
+.app-shell .brand-lockup {
+  max-width: 190px;
+}
+.app-shell .top-metrics {
+  gap: 4px;
 }

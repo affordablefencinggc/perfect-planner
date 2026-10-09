@@ -1,5 +1,7 @@
-import { ArrowClockwiseIcon, WarningCircleIcon } from "@phosphor-icons/react";
+import { ArrowClockwiseIcon, LockSimpleIcon, WarningCircleIcon } from "@phosphor-icons/react";
+import { useEffect, useState } from "react";
 import { useViewMode } from "../project/viewMode.js";
+import { claimPersonSession, hasPersonSession } from "./coreApi.js";
 import "./coreScreens.css";
 
 // Shared frame for the core loop screens: heading, purpose line, and the
@@ -15,11 +17,32 @@ export function CoreScreen({ id, title, purpose, actions = null, resource, empty
         </div>
         {actions && <div className="core-screen-actions">{actions}</div>}
       </header>
+      <ReadOnlyNotice />
       {status === "loading" && <CoreLoading label={`Loading ${title.toLowerCase()}`} />}
       {status === "error" && <CoreError error={resource.error} onRetry={resource.reload} />}
       {status === "empty" && <div className="core-empty" role="status">{empty}</div>}
       {status === "ready" && children}
     </section>
+  );
+}
+
+/** Whether this window may make changes (it was opened from the launcher's one-time link). */
+export function usePersonSession() {
+  const [person, setPerson] = useState(hasPersonSession);
+  useEffect(() => {
+    let live = true;
+    claimPersonSession().then((ok) => { if (live) setPerson(ok); }, () => undefined);
+    return () => { live = false; };
+  }, []);
+  return person;
+}
+
+function ReadOnlyNotice() {
+  if (usePersonSession()) return null;
+  return (
+    <p className="core-readonly" role="note">
+      <LockSimpleIcon aria-hidden="true" /> This window can only read. To make changes, open Perfect Planner from the one-time link its launcher printed.
+    </p>
   );
 }
 

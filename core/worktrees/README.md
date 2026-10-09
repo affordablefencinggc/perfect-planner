@@ -27,8 +27,18 @@ If any step after `git worktree add` fails, the fresh worktree and branch are ro
 
 ## Removal never discards work
 
-`manager.remove("T-14")` refuses while the worktree has uncommitted or untracked files. It deletes
-the branch only when it is fully merged into its base, otherwise keeps it and says so. Writes `worktree.removed`.
+`manager.remove("T-14")` refuses while the worktree has uncommitted or untracked files, or ignored
+files that hold work (anything but `node_modules` and `.env*` files still exactly as launch copied them),
+because `git worktree remove` deletes ignored files too. It deletes the branch only when it is fully
+merged into its base, otherwise keeps it and says so. Writes `worktree.removed`.
+
+## Changes to the user's repository config
+
+The first launch turns on git's `extensions.worktreeConfig` (and, if needed, sets
+`core.repositoryformatversion` to 1) in the repository's own config, so the secret-scan hook can be
+set per worktree without touching the user's hooks. It stays on afterwards; git 2.20+ understands it.
+Turn it off with `git config --unset extensions.worktreeConfig` once no task worktrees remain.
+Pass `secretScan: false` to skip the hook and leave the config alone.
 
 ## Other calls
 

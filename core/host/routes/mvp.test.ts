@@ -17,6 +17,12 @@ const NEW = {
   features: "Plan editor (needs: Local project store)\nTask board to track tasks (needs: Local project store)\nLocal project store\nShare with a team\nPerformance budget gate",
 };
 
+async function fp(project: string): Promise<string> {
+  return (await hostCall(t.base, "GET", `/mvp?project=${project}`)).body.result.fingerprint;
+}
+/** A folder inside the project's own folder, which is the only place a scan may read. */
+const inProject = (project: string, ...parts: string[]) => path.join(t.dir, "projects", project, ...parts);
+
 describe("MVP board routes", () => {
   it("starts empty", async () => {
     const r = await hostCall(t.base, "GET", "/mvp?project=a");
@@ -51,7 +57,7 @@ describe("MVP board routes", () => {
     expect(out.status).toBe(200);
     expect(out.body.result.moved).toMatchObject({ from: "mvp", to: "v1" });
     expect(out.body.result.warnings.length).toBeGreaterThan(0);
-    const blocked = await hostCall(t.base, "POST", "/mvp/confirm?project=a", {});
+    const blocked = await hostCall(t.base, "POST", "/mvp/confirm?project=a", { fingerprint: await fp("a") });
     expect(blocked.status).toBe(422);
     expect(blocked.body.code).toBe("MISSING_DEPENDENCIES");
     expect(blocked.body.message).toMatch(/needs Local project store/);
@@ -64,7 +70,7 @@ describe("MVP board routes", () => {
     const badName = await hostCall(t.base, "POST", "/mvp/rename?project=a", { stage: "beta", name: "pilot" });
     expect(badName.status).toBe(422);
 
-    const confirmed = await hostCall(t.base, "POST", "/mvp/confirm?project=a", {});
+    const confirmed = await hostCall(t.base, "POST", "/mvp/confirm?project=a", { fingerprint: await fp("a") });
     expect(confirmed.status).toBe(200);
     const c = confirmed.body.result;
     expect(c.confirmed).toBe(true);
@@ -91,11 +97,10 @@ describe("MVP board routes", () => {
     const noBoard = await hostCall(t.base, "POST", "/mvp/confirm?project=b", {});
     expect(noBoard.status).toBe(422);
     expect(noBoard.body.message).toMatch(/no proposed MVP line yet/);
-    const notFolder = await hostCall(t.base, "POST", "/mvp/stage?project=b", { mode: "existing", path: path.join(t.dir, "nope") });
+    const notFolder = await hostCall(t.base, "POST", "/mvp/stage?project=b", { mode: "existing", path: "nope" });
     expect(notFolder.body.code).toBe("NOT_A_FOLDER");
-    const file = path.join(t.dir, "file.txt");
-    fs.writeFileSync(file, "x");
-    expect((await hostCall(t.base, "POST", "/mvp/stage?project=b", { mode: "existing", path: file })).body.code).toBe("NOT_A_FOLDER");
+    fs.writeFileSync(inProject("b", "file.txt"), "x");
+    expect((await hostCall(t.base, "POST", "/mvp/stage?project=b", { mode: "existing", path: "file.txt" })).body.code).toBe("NOT_A_FOLDER");
     // The project's own (empty) folder has nothing to scan.
     const empty = await hostCall(t.base, "POST", "/mvp/stage?project=b", { mode: "existing" });
     expect(empty.body.code).toBe("NO_FEATURES");
@@ -103,14 +108,16 @@ describe("MVP board routes", () => {
   });
 
   it("scans an existing folder with evidence and rescans it", async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pp-mvp-scan-"));
+    await hostCall(t.base, "GET", "/mvp?project=c");
+    const dir = inProject("c", "app");
+    fs.mkdirSync(dir, { recursive: true });
     try {
       fs.mkdirSync(path.join(dir, "src/components"), { recursive: true });
       fs.mkdirSync(path.join(dir, "tests"), { recursive: true });
       fs.writeFileSync(path.join(dir, "src/components/NoteEditor.jsx"), "export default function NoteEditor() { return null; }\n");
       fs.writeFileSync(path.join(dir, "tests/NoteEditor.test.jsx"), "it('works', () => {});\n");
       fs.writeFileSync(path.join(dir, "src/components/ShareDialog.jsx"), "// TODO: wire up sharing\nexport default function ShareDialog() { return null; }\n");
-      const r = await hostCall(t.base, "POST", "/mvp/stage?project=c", { mode: "existing", path: dir, goal: "Write notes" });
+      const r = await hostCall(t.base, "POST", "/mvp/stage?project=c", { mode: "existing", path: "app", goal: "Write notes" });
       expect(r.status).toBe(200);
       const b = r.body.result;
       expect(b.mode).toBe("existing");
@@ -129,10 +136,61 @@ describe("MVP board routes", () => {
     }
   });
 
-  it("scans this repository through its feature registry", async () => {
-    const r = await hostCall(t.base, "POST", "/mvp/stage?project=d", { mode: "existing", path: repoRoot });
-    expect(r.status).toBe(200);
-    expect(r.body.result.source.kind).toMatch(/^registry:/);
-    expect(r.body.result.features.some((f: any) => f.id === "C057" && f.stage === "mvp")).toBe(true);
+  it("refuses scan folders outside the project with BAD_PATH", async () => {
+    await hostCall(t.base, "GET", "/mvp?project=e");
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), "pp-mvp-outside-"));
+    try {
+      fs.mkdirSync(path.join(outside, "src/components"), { recursive: true });
+      fs.writeFileSync(path.join(outside, "src/components/Secret.jsx"), "export default function Secret() { return null; }\n");
+      for (const bad of [outside, repoRoot, "../other", "a/../../x", "..", "..\\x", "C:\\Windows"]) {
+        const r = await hostCall(t.base, "POST", "/mvp/stage?project=e", { mode: "existing", path: bad });
+        expect(r.status, String(bad)).toBe(400);
+        expect(r.body.code).toBe("BAD_PATH");
+        expect(r.body.message).toMatch(/inside this project/);
+      }
+      // A link that points out of the project is refused too.
+      fs.symlinkSync(outside, inProject("e", "link"));
+      const linked = await hostCall(t.base, "POST", "/mvp/stage?project=e", { mode: "existing", path: "link" });
+      expect(linked.body.code).toBe("BAD_PATH");
+      expect((await hostCall(t.base, "GET", "/mvp?project=e")).body.result.staged).toBe(false);
+    } finally {
+      fs.rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("scans a valid subfolder of the project", async () => {
+    await hostCall(t.base, "GET", "/mvp?project=f");
+    const sub = inProject("f", "packages", "app");
+    fs.mkdirSync(path.join(sub, "src/components"), { recursive: true });
+    fs.writeFileSync(path.join(sub, "src/components/NoteEditor.jsx"), "export default function NoteEditor() { return null; }\n");
+    for (const ok of ["packages/app", "./packages/app"]) {
+      const r = await hostCall(t.base, "POST", "/mvp/stage?project=f", { mode: "existing", path: ok });
+      expect(r.status, ok).toBe(200);
+      expect(r.body.result.source.root).toBe(sub);
+    }
+  });
+
+  it("confirming needs the fingerprint of the board that was reviewed", async () => {
+    const staged = (await hostCall(t.base, "POST", "/mvp/stage?project=g", NEW)).body.result;
+    expect(staged.fingerprint).toMatch(/^[0-9a-f]{64}$/);
+    expect(await fp("g")).toBe(staged.fingerprint);
+    // Reading again changes nothing.
+    expect(await fp("g")).toBe(staged.fingerprint);
+
+    const none = await hostCall(t.base, "POST", "/mvp/confirm?project=g", {});
+    expect(none.status).toBe(400);
+    expect(none.body.code).toBe("FINGERPRINT_REQUIRED");
+
+    const moved = await hostCall(t.base, "POST", "/mvp/move?project=g", { feature: "share-with-a-team", to: "v1", reason: "Later" });
+    expect(moved.body.result.fingerprint).not.toBe(staged.fingerprint);
+    const stale = await hostCall(t.base, "POST", "/mvp/confirm?project=g", { fingerprint: staged.fingerprint });
+    expect(stale.status).toBe(409);
+    expect(stale.body.code).toBe("STALE");
+    expect(stale.body.message).toMatch(/MVP board changed since you looked/);
+    expect((await hostCall(t.base, "GET", "/mvp?project=g")).body.result.confirmed).toBe(false);
+
+    const ok = await hostCall(t.base, "POST", "/mvp/confirm?project=g", { fingerprint: moved.body.result.fingerprint });
+    expect(ok.status).toBe(200);
+    expect(ok.body.result.confirmed).toBe(true);
   });
 });

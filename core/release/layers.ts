@@ -1,5 +1,8 @@
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join, resolve } from "node:path";
 import type { PushProtectionResult } from "./pushProtection";
 import { checkIgnoreList, scanText } from "./secrets";
+import type { CommandRunner } from "./types";
 
 // The four secret layers as one report (plan: "No scanner catches 100% alone,
 // so the guarantee comes from layering"). Layers 1 and 2 are installed by
@@ -93,6 +96,8 @@ export function secretPosture(input: PostureInput): Posture {
   return { ok: layers.every((layer) => layer.state === "on"), layers };
 }
 
+const SHIM_MARK = "# Perfect Planner: whole-branch secret scan before any push (layer 3).";
+
 /**
  * A git hook shim that runs the pre-push scan. Git runs hooks through sh on
  * every platform (Git for Windows ships one), so the same text works on
@@ -100,5 +105,39 @@ export function secretPosture(input: PostureInput): Posture {
  */
 export function prePushShim(hookScriptPath: string): string {
   const path = hookScriptPath.replace(/\\/g, "/").replace(/"/g, '\\"');
-  return `#!/bin/sh\n# Perfect Planner: whole-branch secret scan before any push (layer 3).\nexec node "${path}" "$@"\n`;
+  return `#!/bin/sh\n${SHIM_MARK}\nexec node "${path}" "$@"\n`;
+}
+
+async function hooksDir(run: CommandRunner, cwd: string): Promise<string> {
+  // --git-path honours core.hooksPath, so this lands where git will look,
+  // including the per-worktree hooks folder core/worktrees sets up.
+  const result = await run("git", ["rev-parse", "--git-path", "hooks"], { cwd });
+  if (result.code !== 0) throw new Error(`Not a git repository: ${result.stderr.trim()}`);
+  return resolve(cwd, result.stdout.trim());
+}
+
+/** Whether the pre-push scan is installed as this repository's pre-push hook (layer 3). */
+export async function prePushInstalled(run: CommandRunner, options: { cwd: string }): Promise<boolean> {
+  const file = join(await hooksDir(run, options.cwd), "pre-push");
+  return existsSync(file) && readFileSync(file, "utf8").includes(SHIM_MARK);
+}
+
+/**
+ * Installs the pre-push scan as the repository's pre-push hook. Never
+ * overwrites a hook that is not ours: it reports it instead, so the person
+ * can chain the two.
+ */
+export async function installPrePushHook(
+  run: CommandRunner,
+  options: { cwd: string; hookScript: string },
+): Promise<{ installed: boolean; path: string; reason?: string }> {
+  const dir = await hooksDir(run, options.cwd);
+  const file = join(dir, "pre-push");
+  if (existsSync(file) && !readFileSync(file, "utf8").includes(SHIM_MARK)) {
+    return { installed: false, path: file, reason: "This repository already has its own pre-push hook; add the Perfect Planner scan to it by hand" };
+  }
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(file, prePushShim(options.hookScript), { mode: 0o755 });
+  chmodSync(file, 0o755);
+  return { installed: true, path: file };
 }

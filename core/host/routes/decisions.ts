@@ -11,7 +11,7 @@
 // the question), deep planning's question pack, or the offline reviewer below,
 // which only reads the ledger and says so. The Jev key is never read here:
 // only its stored/not-stored status is asked of the key provider.
-import type { Actor, Ledger, LedgerEntry } from "../../ledger/index";
+import { isAuthoritative, type Actor, type Ledger, type LedgerEntry } from "../../ledger/index";
 import { createJevTransport, createOsKeyProvider, JevReviewer, JEV_MODEL, type JevCallResult, type JevKeyProvider, type JevRequest } from "../../jev/index";
 import { clausesAt, sortedClauses } from "../../lookup/index";
 import { appendNumbered } from "../../numbering/index";
@@ -20,6 +20,7 @@ import { replayRoster, type Roster } from "../../people/index";
 import { PlanningError, PlanningSession, planningMeta } from "../../planning/index";
 import { questionKey } from "../../relay/index";
 import type { CoreProject } from "../project";
+import { fingerprintOf, requireFingerprint } from "../fingerprint";
 import { HttpError, type Router } from "../router";
 import { localPerson } from "./people";
 
@@ -128,6 +129,8 @@ export interface DecisionCard {
   cost: Money | null;
   entries: EntryRef[];
   at: string;
+  /** Binds an approval to the question and recommendation shown here. */
+  fingerprint?: string;
 }
 
 export interface DecisionsView {
@@ -157,6 +160,18 @@ export function spendThisMonth(entries: readonly LedgerEntry[], month: string): 
   let jevDollars = 0;
   for (const e of entries) if (e.at.slice(0, 7) === month && typeof e.data?.cost === "number") jevDollars += e.data.cost;
   return Math.round(monthSpend(entries, month).modelCents + jevDollars * 100);
+}
+
+/** The question and recommendation as the person sees them. */
+function cardFingerprint(card: DecisionCard): string {
+  const r = card.recommendation;
+  return fingerprintOf({
+    id: card.id,
+    title: card.title,
+    options: card.options,
+    noRecommendation: card.noRecommendation ?? null,
+    recommendation: r ? { option: r.option, optionId: r.optionId, reasons: r.reasons, confidence: r.confidence, producedBy: r.producedBy, model: r.model, source: r.source, entry: r.entry } : null,
+  });
 }
 
 const ref = (e: LedgerEntry): EntryRef => ({ n: e.n, hash: e.hash.slice(0, 12) });
@@ -204,7 +219,8 @@ interface Asked {
 function askedQuestions(entries: readonly LedgerEntry[]): Map<string, Asked> {
   const out = new Map<string, Asked>();
   const decisions = new Map<string, LedgerEntry>();
-  for (const e of entries) if (e.type === "decision.made") decisions.set(e.subject, e);
+  // A decision counts only when the ledger verified a person or the system wrote it, never from actor.kind alone.
+  for (const e of entries) if (e.type === "decision.made" && isAuthoritative(e)) decisions.set(e.subject, e);
   for (const e of entries) {
     const d = e.data ?? {};
     if (e.type === "question.asked") {
@@ -216,6 +232,7 @@ function askedQuestions(entries: readonly LedgerEntry[]): Map<string, Asked> {
     } else if (e.type === "question.answered") {
       const q = out.get(e.subject);
       if (!q) continue;
+      if (!isAuthoritative(e)) continue;
       q.answered = e;
       if (typeof d.decision === "string") q.decision = decisions.get(d.decision);
     } else if (e.type === "review.verdict" && d.review === "question") {
@@ -371,6 +388,7 @@ function questionCard(entries: readonly LedgerEntry[], roster: Roster, q: Asked)
     const stored = q.decision?.data?.question === q.q ? q.decision.data.outcome : undefined;
     card.status = stored === "accepted" || stored === "overridden" ? stored : recommendation && d.via !== "decision" && d.via !== "settled" && d.via !== "spike" ? (norm(answer).startsWith(norm(recommendation.option)) ? "accepted" : "overridden") : "decided";
   }
+  card.fingerprint = cardFingerprint(card);
   return card;
 }
 
@@ -479,6 +497,13 @@ function openQuestion(project: CoreProject, body: unknown): Asked {
   return asked;
 }
 
+/** The card as it is now must be the card the person approved. */
+function checkFingerprint(project: CoreProject, asked: Asked, body: unknown): void {
+  const entries = project.entries();
+  const card = questionCard(entries, replayRoster(entries), asked);
+  requireFingerprint(body, card.fingerprint ?? "", "question and recommendation");
+}
+
 function refuse(error: unknown): never {
   if (error instanceof PlanningError) throw new HttpError(422, error.code, error.message);
   throw error;
@@ -576,6 +601,7 @@ export function registerDecisionRoutes(router: Router): void {
 
   router.post("/decisions/accept", ({ project, body }) => {
     const asked = openQuestion(project, body);
+    checkFingerprint(project, asked, body);
     const rec = recommendationFor(project.entries(), asked);
     if (typeof rec === "string") throw new HttpError(409, "NO_RECOMMENDATION", `${asked.q} has no recommendation to accept. ${rec}`);
     const reason = `Accepted the recommendation from ${rec.producedBy}${rec.reasons[0] ? `: ${rec.reasons[0]}` : ""}`;
@@ -584,6 +610,7 @@ export function registerDecisionRoutes(router: Router): void {
 
   router.post("/decisions/override", ({ project, body }) => {
     const asked = openQuestion(project, body);
+    checkFingerprint(project, asked, body);
     const b = (body ?? {}) as { choice?: unknown; text?: unknown; reason?: unknown };
     const reason = text(b.reason, "The reason", 1000);
     if (!reason) throw new HttpError(400, "REASON_REQUIRED", "Say why you chose something else. The reason is kept with the decision.");

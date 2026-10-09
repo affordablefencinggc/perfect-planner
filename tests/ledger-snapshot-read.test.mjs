@@ -1,3 +1,4 @@
+import "./helpers/hermetic-env.mjs";
 import test from 'node:test';import assert from 'node:assert/strict';import os from 'node:os';import {createHash} from 'node:crypto';
 import {createAgentLedgerReads} from '../src/node/proposalLedgerReads.mjs';
 const binding={projectId:'pp_snapshot',rootIdentity:'a'.repeat(64),censusDigest:'b'.repeat(64)};

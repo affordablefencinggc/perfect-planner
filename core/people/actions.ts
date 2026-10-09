@@ -1,8 +1,9 @@
 import type { Actor, Ledger, LedgerEntry } from "../ledger/index";
 import { appendNumbered } from "../numbering/index";
 import { assertPerson, isSlug, PeopleError } from "./errors";
-import { replayRoster } from "./model";
+import { isDocPath, replayRoster } from "./model";
 import { photoFile, validatePhoto, type PhotoStore } from "./photos";
+import { installPeopleRules } from "./rules";
 import type { Approval, PeopleEvent, Role } from "./types";
 
 /**
@@ -11,6 +12,7 @@ import type { Approval, PeopleEvent, Role } from "./types";
  * decide whether the actor may make it.
  */
 function record(ledger: Ledger, actor: Actor, event: PeopleEvent, summary: string, reason: string, evidence: string[] = []): LedgerEntry {
+  installPeopleRules(ledger);
   return appendNumbered(ledger, { actor, type: "decision.made", summary, reason, evidence, refs: [], data: { people: { ...event } } });
 }
 
@@ -92,11 +94,15 @@ export function setPhoto(ledger: Ledger, store: PhotoStore, actor: Actor, person
   return entry;
 }
 
-export function clearPhoto(ledger: Ledger, actor: Actor, person: string): LedgerEntry {
+/** Clears a photo; with a store, its file is deleted too. */
+export function clearPhoto(ledger: Ledger, actor: Actor, person: string, store?: PhotoStore): LedgerEntry {
   assertPerson(person);
-  const name = replayRoster(ledger.entries()).members.get(person)?.name ?? person;
+  const before = replayRoster(ledger.entries()).members.get(person);
+  const name = before?.name ?? person;
   const summary = `${name} removed their profile photo`;
-  return record(ledger, actor, { op: "photo.cleared", person }, summary, summary);
+  const entry = record(ledger, actor, { op: "photo.cleared", person }, summary, summary);
+  if (before?.photo) store?.remove(before.photo.file);
+  return entry;
 }
 
 export interface DocToShare {
@@ -121,6 +127,7 @@ export function docId(title: string): string {
 export function shareDoc(ledger: Ledger, actor: Actor, doc: DocToShare, reason?: string): LedgerEntry {
   const id = doc.doc ?? docId(doc.title);
   if (!isSlug(id)) throw new PeopleError("BAD_DOC", `"${id}" is not a document id (lowercase letters, digits and dashes)`);
+  if (!isDocPath(doc.path.trim())) throw new PeopleError("BAD_DOC", `"${doc.path}" must be a path inside the project or an https link`);
   const event: PeopleEvent = { op: "doc.shared", doc: id, title: doc.title.trim(), path: doc.path.trim() };
   if (doc.clauses?.length) event.clauses = [...doc.clauses];
   const again = replayRoster(ledger.entries()).docs.has(id);

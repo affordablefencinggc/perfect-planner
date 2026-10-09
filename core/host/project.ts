@@ -2,7 +2,7 @@
 // service that agents check in through. The host keeps one per project key.
 import fs from "node:fs";
 import path from "node:path";
-import { FileStore, Ledger, type LedgerEntry } from "../ledger/index";
+import { FileStore, Ledger, type KeyProvider, type LedgerEntry } from "../ledger/index";
 import { installClauseRules } from "../lookup/index";
 import { AgentService } from "../mcp/index";
 import { installNumberingRules } from "../numbering/index";
@@ -28,10 +28,10 @@ export function projectKey(raw: string | null | undefined): string {
   return KEY.test(key) ? key : "default";
 }
 
-export function openCoreProject(baseRoot: string, key: string, override?: string): CoreProject {
+export function openCoreProject(baseRoot: string, key: string, override?: string, keys?: KeyProvider): CoreProject {
   const root = override ?? path.join(baseRoot, "projects", key);
   fs.mkdirSync(root, { recursive: true });
-  const ledger = Ledger.openSync(new FileStore(root));
+  const ledger = Ledger.openSync(new FileStore(root), keys ? { keys } : {});
   // The same rules every core module assumes: numbering (D-/Q-/T-/R- subjects), clauses, people, planning gates.
   installNumberingRules(ledger);
   installClauseRules(ledger);
