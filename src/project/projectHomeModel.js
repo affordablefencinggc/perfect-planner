@@ -1,6 +1,7 @@
 import { projectAuthorityKinds, validateProjectSession } from "./projectSession.js";
 import { deriveDiscoveryReview } from "./discoveryReviewModel.js";
 import { effectivePlanAuthority } from "./planApproval.js";
+import { allocationStatus, collisionStatus } from "./taskCoordination.js";
 
 export const PROJECT_HOME_MODEL_SCHEMA_VERSION = 1;
 
@@ -217,6 +218,35 @@ function planStage(authority, planStatus) {
   };
 }
 
+const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+const sameSet = (left, right) => left.length === right.length && [...left].sort().join("|") === [...right].sort().join("|");
+
+/**
+ * Overlap and owner steps between an approved plan and readiness. Each saved
+ * record must cover exactly the approved tasks; nothing here is inferred.
+ */
+function coordinationGaps(records, planStatus) {
+  const approved = planStatus?.record?.taskIds;
+  if (planStatus?.state !== "recorded" || !Array.isArray(approved)) return [];
+  const gaps = [];
+  const collisions = records?.sections?.collisions?.data;
+  const checkedIds = collisions ? [...(collisions.checkedTaskIds ?? []), ...(collisions.uncheckedTaskIds ?? []), ...(collisions.invalid ?? []).map((item) => item?.taskId)] : [];
+  if (!collisions || typeof collisions !== "object") gaps.push({ id: "collision-check-missing", workspace: "collision", label: "Check tasks for overlapping work", reason: "The approved tasks have not been checked for overlapping files yet." });
+  else if (!sameSet(checkedIds, approved)) gaps.push({ id: "collision-check-stale", workspace: "collision", label: "Check overlapping work again", reason: "The saved overlap check covers a different set of tasks than the approved plan." });
+  else {
+    const status = collisionStatus(collisions);
+    if (status.open) gaps.push({ id: "collision-undecided", workspace: "collision", label: "Decide overlapping work", reason: `${status.open} of ${plural(status.total, "overlap")} still ${status.open === 1 ? "needs" : "need"} a decision.` });
+  }
+  const allocation = records?.sections?.allocation?.data;
+  if (!allocation || typeof allocation !== "object") gaps.push({ id: "owners-missing", workspace: "allocation", label: "Assign owners", reason: "No task has a saved owner yet." });
+  else if (!sameSet(Array.isArray(allocation.taskIds) ? allocation.taskIds : [], approved)) gaps.push({ id: "owners-stale", workspace: "allocation", label: "Review owners again", reason: "The saved owners were set for a different set of tasks than the approved plan." });
+  else {
+    const status = allocationStatus(allocation);
+    if (status.missing) gaps.push({ id: "owners-incomplete", workspace: "allocation", label: "Assign owners", reason: `${status.missing} of ${plural(status.tasks, "task")} still ${status.missing === 1 ? "needs" : "need"} an owner.` });
+  }
+  return gaps;
+}
+
 function nextStage(project, records = null, planStatus = null) {
   const registration = project.registration;
   const census = project.census;
@@ -280,6 +310,11 @@ function nextStage(project, records = null, planStatus = null) {
 
   // Ready needs an explicit confirmation: either a promoted session, or the
   // user's "Confirm project is ready" recorded against the current approved plan.
+  const gaps = coordinationGaps(records, planStatus);
+  if (project.state !== "authoritative" && !planStatus?.confirmed && gaps.length) return {
+    stage: { id: gaps[0].workspace, state: "review", label: gaps[0].label },
+    nextAction: action(gaps[0].id, gaps[0].label, gaps[0].workspace, gaps[0].reason),
+  };
   if (project.state !== "authoritative" && !planStatus?.confirmed) return {
     stage: { id: "promotion", state: "review", label: "Confirm the project is ready" },
     nextAction: planStatus?.state === "recorded"
@@ -319,6 +354,7 @@ export function deriveProjectHomeModel(session, records = null) {
   const blockers = collectBlockers(project, records);
   if (project.state === "stale") blockers.unshift(blocker("project-stale", "project", "stale", "The active ProjectSession is stale."));
   if (project.state === "unavailable") blockers.unshift(blocker("project-unavailable", "project", "unavailable", "The active project session record is unavailable."));
+  for (const gap of coordinationGaps(records, plan.status)) blockers.push(blocker(gap.id, gap.workspace, "review", gap.reason));
   if (stage.id === "promotion") blockers.push(blocker("project-promotion-pending", "project", "review", "Every planning step is recorded, but nobody has confirmed the project is ready yet."));
 
   return deepFreeze({

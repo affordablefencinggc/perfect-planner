@@ -129,7 +129,22 @@ test("Home reaches promotion, then Ready only after an explicit confirmation", a
   assert.equal(none.nextAction.workspace, "plan");
 
   await recordPlanApproval(session.projectId, { tasks: TASKS, censusDigest: session.census.digest }, { storage, now });
-  const promotion = deriveProjectHomeModel(session, readWorkRecords(session.projectId, storage));
+  // Overlaps and owners are planning steps too: Home never offers readiness while they are open.
+  const home = () => deriveProjectHomeModel(session, readWorkRecords(session.projectId, storage));
+  assert.equal(home().nextAction.id, "collision-check-missing");
+  assert.equal(home().nextAction.workspace, "collision");
+  assert.ok(home().blockers.some((item) => item.id === "owners-missing"));
+  const pair = { key: "T0001|T0002", tasks: ["T0001", "T0002"], severity: "ordered", files: [], signature: "sig" };
+  writeSection(session.projectId, "collisions", { checkedTaskIds: ["T0001", "T0002"], uncheckedTaskIds: [], invalid: [], collisions: [pair], resolutions: {} }, { storage, now });
+  assert.equal(home().nextAction.id, "collision-undecided", "an undecided 'needs an order' pair blocks readiness");
+  assert.match(home().nextAction.reason, /1 of 1 overlap still needs a decision/);
+  writeSection(session.projectId, "collisions", { checkedTaskIds: ["T0001", "T0002"], uncheckedTaskIds: [], invalid: [], collisions: [pair], resolutions: { [pair.key]: { choice: "order", first: "T0001", signature: "sig" } } }, { storage, now });
+  assert.equal(home().nextAction.id, "owners-missing");
+  writeSection(session.projectId, "allocation", { taskIds: ["T0001", "T0002"], assignments: { T0001: { owner: "Ana", wave: 1 }, T0002: { owner: "agent:", wave: 2 } } }, { storage, now });
+  assert.equal(home().nextAction.id, "owners-incomplete", "a bare 'agent:' is not an owner");
+  assert.equal(home().nextAction.workspace, "allocation");
+  writeSection(session.projectId, "allocation", { taskIds: ["T0001", "T0002"], assignments: { T0001: { owner: "Ana", wave: 1 }, T0002: { owner: "agent: builder", wave: 2 } } }, { storage, now });
+  const promotion = home();
   assert.equal(promotion.stage.id, "promotion");
   assert.equal(promotion.nextAction.id, "confirm-project-ready");
   assert.equal(promotion.nextAction.label, "Confirm project is ready");
