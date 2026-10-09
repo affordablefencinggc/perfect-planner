@@ -76,3 +76,10 @@ the current folder before PATH. Every child also gets `NO_CWD_SEARCH_ENV`
 Other modules that spawn git (the ledger's ignore check, release hooks) should import
 `gitExecutable` and `NO_CWD_SEARCH_ENV` from `core/exec` (re-exported by `core/worktrees`), or call `runGit`, rather than spawning
 a bare `git`.
+
+npm is never started by name or through a shell. `runNpm` runs `node npm-cli.js` with the Node that
+runs Perfect Planner, taking npm's entry script from beside that Node or from an npm on PATH found by
+core/exec, and refusing any copy inside the project, its repo or its worktrees (`protect` roots,
+compared as written and as real paths). Installs pass `--ignore-scripts` unless a person turned on
+`allowInstallScripts` (WorktreeManager and TestGate options), since a dependency's install script is
+arbitrary code.
