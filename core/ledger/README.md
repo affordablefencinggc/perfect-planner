@@ -198,7 +198,9 @@ writes one `chain.acknowledged` entry naming the first bad entry and reopens
 writes. Only acknowledgements written by a person count when the chain is
 re-checked, and `append` refuses the type, so an agent cannot pre-acknowledge
 a break. The acknowledgement pins the bad entry's stored hash and the fingerprint of
-its content, so editing that entry again is a new break. After the
+its content (and, for a `prev` break, the entry before it, which is the one
+that was rewritten), so editing either again is a new break. Acknowledging
+also rewrites a missing or stale `HEAD` from the current tip. After the
 acknowledgement the whole chain is re-checked, so a second break further on
 still stops writes. A later open still reports the break, as acknowledged
 (`status.acknowledged = ["L-000005"]`), so the red banner can say "a known
@@ -221,8 +223,10 @@ appended (in full, fsynced) and never rewritten; `HEAD` is replaced
 atomically. The writer takes its lock before it reads, and checks `HEAD`
 before every append, so files changed underneath a live writer stop it
 instead of forking the chain. A final line torn by a crash mid-write is
-repaired on the next writable open (`status.repaired` says what was done,
-and dropped bytes are kept in `torn-<time>.txt`). A writer lock
+repaired on the next writable open: `status.repaired` says what was done,
+dropped bytes are kept in `torn-<time>.txt`, and a system `correction`
+entry records the repair in the ledger itself. Known gap: three processes
+racing for a stale lock in one narrow window can both believe they hold it. A writer lock
 (`.perfect-planner/ledger/.writer.lock`, holding pid and host) makes this the
 only writing process for the project; a second writer opens read-only with
 `READ_ONLY`. A lock left by a dead process on the same host is taken over by an atomic
