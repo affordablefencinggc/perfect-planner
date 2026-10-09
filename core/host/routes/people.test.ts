@@ -49,6 +49,19 @@ describe("people routes", () => {
     expect(view).toMatchObject({ firstRun: true, starter: "owner" });
   });
 
+  it("says the owner key is missing instead of offering a first person when this device has no owner key", async () => {
+    const unowned = await startTestHost({ owned: false });
+    try {
+      const view = (await hostCall(unowned.base, "GET", "/people?project=p1")).body.result;
+      expect(view).toMatchObject({ firstRun: false, ownerMissing: true });
+      expect(view).not.toHaveProperty("starter");
+      const add = await hostCall(unowned.base, "POST", "/people/members?project=p1", { person: "owner", name: "Riley", role: "owner" });
+      expect(add.status).toBe(422);
+    } finally {
+      await unowned.stop();
+    }
+  });
+
   it("refuses a first person who is not the owner", async () => {
     const res = await call("POST", "/people/members", { person: "eli", name: "Eli", role: "helper" });
     expect(res.status).toBe(422);

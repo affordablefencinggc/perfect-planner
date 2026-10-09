@@ -80,13 +80,22 @@ export interface PeopleResult {
   firstRun: boolean;
   /** The person who first wrote to this project; only they may become its owner. */
   starter?: string;
+  /**
+   * True when this device has no owner key for the project (lost, or not pinned yet): nobody can
+   * add people or share documents here, so the screen says so instead of offering "Add the first person".
+   */
+  ownerMissing?: boolean;
 }
 
-/** Who may become the owner: the pinned owner, or for a new project the local person, whose key the host pins on their first write. */
+/** Who may become the owner: the person whose key is pinned as the owner key. */
 function starter(project: CoreProject): string | undefined {
-  const pinned = replayRoster(project.entries(), project.ledger.owner).pinnedOwner;
-  if (pinned) return pinned;
-  return project.entries().some((e) => e.actor?.kind === "person") ? undefined : DEFAULT_LOCAL_PERSON;
+  if (!project.ledger.ownerKeyPinned) return undefined;
+  return replayRoster(project.entries(), project.ledger.owner).pinnedOwner ?? (project.entries().some((e) => e.actor?.kind === "person") ? undefined : DEFAULT_LOCAL_PERSON);
+}
+
+/** No owner key for this project on this device: nobody can start the roster or share documents here. */
+function ownerMissing(project: CoreProject): boolean {
+  return !project.ledger.ownerKeyPinned;
 }
 
 function peopleResult(project: CoreProject): PeopleResult {
@@ -95,8 +104,9 @@ function peopleResult(project: CoreProject): PeopleResult {
     view,
     photos: photoSources(view, new FilePhotoStore(project.root)),
     me: view.owner?.person ?? DEFAULT_LOCAL_PERSON,
-    firstRun: view.members.length === 0,
+    firstRun: view.members.length === 0 && !ownerMissing(project),
     ...(view.members.length === 0 && starter(project) ? { starter: starter(project) } : {}),
+    ...(ownerMissing(project) ? { ownerMissing: true } : {}),
   };
 }
 

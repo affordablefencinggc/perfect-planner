@@ -1,42 +1,17 @@
-// People screen journey: first run (the first person becomes the owner), add a
-// helper, change their role, share a document, and see it all again after a reload.
+// People screen journey. Until the app's signed owner pin is in (#25, kept outside every project
+// folder), this build has no owner key for a project, so the people rules let nobody start the
+// roster. The screen must say that plainly and must not offer "Add the first person".
+// The add-helper / change-role / share-document steps come back with the pin.
 export const steps = [
   {
-    name: "core-people-first-owner",
-    run: async (page, at, { waitFor }) => {
+    name: "core-people-says-owner-key-missing",
+    run: async (page, at) => {
       await page.goto(at("people"));
       await page.expectText("See who is on this project");
-      await page.expectText("Add the first person");
-      await page.type({ label: "Name" }, "Riley Owner");
-      // Earlier steps already wrote to this project as "owner" from this computer, so that stays the id.
-      await waitFor(() => page.run((h) => h.find({ label: "Person id" })?.value === "owner"), { label: "person id owner (the project starter)" });
-      await page.expectText("so that stays your person id");
-      await page.click({ role: "button", name: "Add person" });
-      await page.expectText("Riley Owner is now the owner of this project.");
-      await page.expectText("Add helper");
-    },
-  },
-  {
-    name: "core-people-helper-and-role",
-    run: async (page) => {
-      await page.type({ label: "Name" }, "Sam Helper");
-      await page.click({ role: "button", name: "Add person" });
-      await page.expectText("Sam Helper was added as a helper.");
-      await page.select({ label: "Role for Sam Helper" }, "viewer");
-      await page.expectText("Sam Helper is now a viewer.");
-    },
-  },
-  {
-    name: "core-people-share-doc",
-    run: async (page, at) => {
-      await page.type({ label: "Document title" }, "Core specs");
-      await page.type({ label: "Document path" }, "specs/CORE-SPECS.md");
-      await page.click({ role: "button", name: "Share document" });
-      await page.expectText("Core specs is now shared with everyone on the project.");
-      await page.goto(at("people"));
-      await page.expectText("Riley Owner");
-      await page.expectText("Sam Helper");
-      await page.expectText(/Core specs\s*v1/);
+      await page.expectText("does not have this project's owner key");
+      const text = await page.text();
+      const offered = text.includes("Add the first person") || text.includes("Add person");
+      if (offered) throw new Error("People offers to add a first person although nobody can be added without an owner key");
     },
   },
 ];
