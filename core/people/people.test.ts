@@ -135,7 +135,7 @@ describe("solo first", () => {
     const ledger = open();
     expect(refusal(() => addMember(ledger, owner, { person: "looplet-spare", name: "L", role: "helper" }))).toMatch(/first member .* owner/);
     expect(refusal(() => addMember(ledger, owner, { person: "mia", name: "Mia", role: "owner" }))).toMatch(/adds themselves first/);
-    expect(refusal(() => claimOwnership(ledger, ownersAgent, "Agent"))).toMatch(/only a person/);
+    expect(() => claimOwnership(ledger, ownersAgent, "Agent")).toThrow(expect.objectContaining({ code: "NOT_PERMITTED" }));
     claimOwnership(ledger, owner, "Looplet Spare");
     expect(buildPeopleView(ledger.entries()).owner?.person).toBe("looplet-spare");
   });
@@ -436,25 +436,42 @@ describe("the view", () => {
 });
 
 describe("review fixes: authority comes from the ledger, not the payload", () => {
-  /** A ledger with no people rules installed, as any reader of a synced ledger sees it. */
+  /** A ledger with no people rules installed yet. */
   function bare(): Ledger {
     return Ledger.openSync(new MemoryStore(), { now: clock() });
   }
   const people = (event: Record<string, unknown>) => ({ people: event });
 
-  it("ignores an agent that writes itself in as owner, even with no rules installed", () => {
-    const ledger = bare();
-    appendNumbered(ledger, { actor: ownersAgent, type: "decision.made", summary: "I own this", reason: "x", evidence: [], refs: [], data: people({ op: "member.added", person: "claude-code", name: "Claude", role: "owner" }) });
-    expect(buildPeopleView(ledger.entries()).members).toEqual([]);
+  /** Entries as a reader sees them: replay is pure over the list, so forged entries can be fed straight in. */
+  function entry(n: number, actor: Actor, event: Record<string, unknown>): LedgerEntry {
+    const num = `L-${String(n).padStart(6, "0")}`;
+    return { n: num, at: "2026-10-09T02:00:00Z", actor, type: "decision.made", subject: `D-${n}`, summary: "x", reason: "x", evidence: [], refs: [], data: people(event), prev: "0".repeat(64), hash: "0".repeat(64) };
+  }
+
+  it("refuses an agent that tries to write itself in as owner", () => {
+    const ledger = open();
+    expect(() =>
+      appendNumbered(ledger, { actor: ownersAgent, type: "decision.made", summary: "I own this", reason: "x", evidence: [], refs: [], data: people({ op: "member.added", person: "claude-code", name: "Claude", role: "owner" }) }),
+    ).toThrow(expect.objectContaining({ code: "NOT_PERMITTED" }));
+  });
+
+  it("ignores roster changes in entries not written by a person, whatever their payload says", () => {
+    const forged = [
+      entry(1, ownersAgent, { op: "member.added", person: "claude-code", name: "Claude", role: "owner" }),
+      entry(2, { kind: "system", id: "watcher" }, { op: "member.added", person: "watcher", name: "Watcher", role: "owner" }),
+      entry(3, { kind: "jev", id: "jev", model: "j" }, { op: "member.added", person: "jev", name: "Jev", role: "owner" }),
+    ];
+    expect(buildPeopleView(forged).members).toEqual([]);
   });
 
   it("ignores people changes that the rules would have refused", () => {
-    const ledger = bare();
-    appendNumbered(ledger, { actor: owner, type: "decision.made", summary: "Mine", reason: "x", evidence: [], refs: [], data: people({ op: "member.added", person: "looplet-spare", name: "Looplet Spare", role: "owner" }) });
-    appendNumbered(ledger, { actor: mia, type: "decision.made", summary: "Me too", reason: "x", evidence: [], refs: [], data: people({ op: "member.added", person: "mia", name: "Mia", role: "helper" }) });
-    appendNumbered(ledger, { actor: ownersAgent, type: "decision.made", summary: "Promote", reason: "x", evidence: [], refs: [], data: people({ op: "member.changed", person: "looplet-spare", role: "viewer" }) });
-    const view = buildPeopleView(ledger.entries());
-    expect(view.members.map((m) => [m.person, m.role])).toEqual([["looplet-spare", "owner"]]);
+    const entries = [
+      entry(1, owner, { op: "member.added", person: "looplet-spare", name: "Looplet Spare", role: "owner" }),
+      entry(2, mia, { op: "member.added", person: "mia", name: "Mia", role: "helper" }),
+      entry(3, ownersAgent, { op: "member.changed", person: "looplet-spare", role: "viewer" }),
+      entry(4, stranger, { op: "member.removed", person: "looplet-spare" }),
+    ];
+    expect(buildPeopleView(entries).members.map((m) => [m.person, m.role])).toEqual([["looplet-spare", "owner"]]);
   });
 
   it("installs the people rules on the first people write", () => {
