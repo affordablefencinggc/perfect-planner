@@ -26,6 +26,12 @@ const reopen = async () => {
   return ctx.host.project("keys");
 };
 
+/** Closes a project opened in a test after its git work is done (Windows cannot remove a folder git is still in). */
+const closeProject = async (project: { ready: Promise<unknown>; protection: Promise<unknown>; ledger: { close(): void } }) => {
+  await Promise.allSettled([project.ready, project.protection]);
+  project.ledger.close();
+};
+
 const genesisOf = (project: { entries(): readonly { hash: string }[] }) => project.entries()[0]!.hash;
 const claim = () => hostCall(ctx.base, "POST", `/people/claim${q}`, { name: "Solo" });
 
@@ -67,14 +73,14 @@ describe("project owner pin", () => {
     await claim();
     const other = openCoreProject(ctx.dir, "other", path.join(ctx.dir, "other"), ctx.host.keys);
     asPersonRequest(() => appendNumbered(other.ledger, { actor: { kind: "person", id: "owner" }, type: "task.created", summary: "Other", data: { title: "Other" } }));
-    other.ledger.close();
+    await closeProject(other);
     fs.copyFileSync(ownerPinFile(ctx.dir, genesisOf(ctx.host.project("keys"))), ownerPinFile(ctx.dir, genesisOf(other)));
     const reopened = openCoreProject(ctx.dir, "other", path.join(ctx.dir, "other"), ctx.host.keys);
     try {
       expect(reopened.owner).toMatchObject({ state: "tampered", reason: expect.stringMatching(/does not belong/) });
       expect(reopened.ledger.owner).toBeUndefined();
     } finally {
-      reopened.ledger.close();
+      await closeProject(reopened);
     }
   });
 
@@ -84,7 +90,7 @@ describe("project owner pin", () => {
     asPersonRequest(() => appendNumbered(opened.ledger, { actor: { kind: "person", id: "owner" }, type: "task.created", summary: "Save notes", data: { title: "Save notes" } }));
     pinOwnerAfterWrite(ctx.dir, opened, ctx.host.keys);
     expect(opened.owner.state).toBe("pinned");
-    opened.ledger.close();
+    await closeProject(opened);
     const after = path.join(ctx.dir, "renamed");
     fs.renameSync(before, after);
     const moved = openCoreProject(ctx.dir, "moving", after, ctx.host.keys);
@@ -92,7 +98,7 @@ describe("project owner pin", () => {
       expect(moved.owner).toMatchObject({ ownerKey: opened.owner.ownerKey, principal: "person:owner", state: "pinned" });
       expect(moved.ledger.owner).toBe("person:owner");
     } finally {
-      moved.ledger.close();
+      await closeProject(moved);
     }
   });
 
@@ -112,13 +118,13 @@ describe("project owner pin", () => {
     const written = openCoreProject(ctx.dir, "written", path.join(ctx.dir, "written"), ctx.host.keys);
     asPersonRequest(() => appendNumbered(written.ledger, { actor: { kind: "person", id: "owner" }, type: "task.created", summary: "Save notes", data: { title: "Save notes" } }));
     pinOwnerAfterWrite(ctx.dir, written, ctx.host.keys);
-    written.ledger.close();
+    await closeProject(written);
     const lost = openCoreProject(ctx.dir, "written", path.join(ctx.dir, "written"), new HostKeys(new MemoryKeyProvider({ autoCreate: false })));
     try {
       expect(lost.owner.state).toMatch(/^(tampered|replaced)$/);
       expect(lost.ledger.owner).toBeUndefined();
     } finally {
-      lost.ledger.close();
+      await closeProject(lost);
     }
   });
 });
@@ -136,8 +142,7 @@ describe("ownerKey source (CoreHostOptions.ownerKey)", () => {
     expect(unowned.ledger.ownerKeyPinned).toBe(false);
     // Nothing is written to app data for a supplied owner.
     expect(fs.existsSync(path.join(base, "owners"))).toBe(false);
-    for (const project of [owned, unowned]) project.ledger.close();
-    await Promise.allSettled([owned.ready, owned.protection, unowned.ready, unowned.protection]);
+    for (const project of [owned, unowned]) await closeProject(project);
   });
 });
 

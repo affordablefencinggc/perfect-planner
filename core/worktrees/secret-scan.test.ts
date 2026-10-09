@@ -111,6 +111,27 @@ describe("secret scan hook starts the real git", () => {
     expect(existsSync(path.join(repo.root, "libexec", "planted-ran"))).toBe(false);
   });
 
+  it("resolveGit on Windows refuses a local-looking PATH folder whose real path is a network share", () => {
+    const links: Record<string, string> = {
+      "C:\\repo": "C:\\repo",
+      "C:\\share-link": "\\\\server\\share\\git\\cmd",
+      "C:\\share-link\\git.exe": "\\\\server\\share\\git\\cmd\\git.exe",
+      "C:\\Program Files\\Git\\cmd": "C:\\Program Files\\Git\\cmd",
+      "C:\\Program Files\\Git\\cmd\\git.exe": "C:\\Program Files\\Git\\cmd\\git.exe",
+      "C:\\dev-link": "C:\\Program Files\\Git\\cmd",
+      "C:\\dev-link\\git.exe": "\\??\\UNC\\server\\share\\git.exe",
+    };
+    const io = {
+      realpath: (file: string) => {
+        if (!(file in links)) throw new Error("ENOENT");
+        return links[file]!;
+      },
+      isProgram: () => true,
+    };
+    expect(resolveGit({ PATH: "C:\\share-link;C:\\dev-link" }, "C:\\repo", "win32", io)).toBeNull();
+    expect(resolveGit({ PATH: "C:\\share-link;C:\\dev-link;C:\\Program Files\\Git\\cmd" }, "C:\\repo", "win32", io)).toBe("C:\\Program Files\\Git\\cmd\\git.exe");
+  });
+
   it("resolveGit refuses when the only git is inside the repo", async () => {
     const repo = await makeRepo({ "a.txt": "a\n" });
     cleanups.push(repo.cleanup);

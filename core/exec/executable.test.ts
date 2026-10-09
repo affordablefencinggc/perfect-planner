@@ -3,7 +3,7 @@ import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, realpathSy
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { findExecutable, gitExecutable, isLocalWindowsPath, NO_CWD_SEARCH_ENV } from "./executable";
+import { findExecutable, gitExecutable, isLocalWindowsPath, NO_CWD_SEARCH_ENV, protectRoots, registeredRoots } from "./executable";
 
 const isWindows = process.platform === "win32";
 const cleanups: (() => void)[] = [];
@@ -137,6 +137,36 @@ describe("git resolver", () => {
     expect(realpathSync.native(gitExecutable(repo)).startsWith(repo)).toBe(false);
     expect(existsSync(path.join(repo, "bin", "planted-ran"))).toBe(false);
   });
+
+  // Review of 4c317f7: the project can be a subfolder of the repo (core/ledger/ignore.ts runs git
+  // there), so a PATH entry at the repo root, such as an activated .venv/bin, was still searched.
+  it("skips PATH entries inside the roots the host protects, with a subfolder cwd", () => {
+    const repo = makeRepo();
+    const project = path.join(repo, "apps", "web");
+    mkdirSync(project, { recursive: true });
+    mkdirSync(path.join(repo, ".venv", "bin"), { recursive: true });
+    plantGit(path.join(repo, ".venv", "bin"));
+    const tools = tempDir("pp-exe-tools-");
+    const real = plantGit(tools);
+    const env = { PATH: [path.join(repo, ".venv", "bin"), tools].join(path.delimiter) };
+    // cwd alone does not cover the repo root; that is what `protect` is for.
+    expect(findExecutable("git", env, project)).not.toBe(real);
+    expect(findExecutable("git", env, project, process.platform, [repo])).toBe(real);
+  });
+
+  it("gitExecutable looks again when its cached git is inside a protected root", () => {
+    const repo = makeRepo();
+    const project = path.join(repo, "apps", "web");
+    mkdirSync(project, { recursive: true });
+    plantGit(repo);
+    process.env.PATH = `${repo}${path.delimiter}${originalPath}`;
+    // A first call without the root caches the repo's git, which is never run here.
+    expect(gitExecutable(project).startsWith(repo)).toBe(true);
+    const safe = gitExecutable(project, [repo]);
+    expect(realpathSync.native(safe).startsWith(repo)).toBe(false);
+    expect(execFileSync(safe, ["--version"], { cwd: project, encoding: "utf8", env: { ...process.env, ...NO_CWD_SEARCH_ENV } })).toMatch(/^git version \d/);
+    expect(existsSync(path.join(repo, "planted-ran"))).toBe(false);
+  });
 });
 
 describe("isLocalWindowsPath", () => {
@@ -156,5 +186,31 @@ describe("isLocalWindowsPath", () => {
       "tools\\git",
       "",
     ]) expect(isLocalWindowsPath(bad)).toBe(false);
+  });
+});
+
+describe("protectRoots", () => {
+  it("skips a program inside a registered root until the registration is released", () => {
+    const base = realpathSync.native(mkdtempSync(path.join(os.tmpdir(), "pp-exec-protect-")));
+    try {
+      const repo = path.join(base, "repo");
+      const bin = path.join(repo, "bin");
+      mkdirSync(bin, { recursive: true });
+      const name = process.platform === "win32" ? "tool.exe" : "tool";
+      writeFileSync(path.join(bin, name), "");
+      chmodSync(path.join(bin, name), 0o755);
+      const env = { PATH: bin };
+      const cwd = path.join(base, "elsewhere");
+      expect(findExecutable("tool", env, cwd)).toBe(path.join(bin, name));
+      const release = protectRoots([repo, "relative/ignored"]);
+      expect(registeredRoots()).toContain(repo);
+      expect(registeredRoots()).not.toContain("relative/ignored");
+      expect(findExecutable("tool", env, cwd)).toBeNull();
+      release();
+      expect(registeredRoots()).not.toContain(repo);
+      expect(findExecutable("tool", env, cwd)).toBe(path.join(bin, name));
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
   });
 });
