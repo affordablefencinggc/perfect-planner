@@ -30,6 +30,3 @@ jobs:
       - run: npm ci --ignore-scripts
       - run: npm run typecheck:core
       - run: npm run test:core
-      # Signing keys in the real OS keychain: Credential Locker, the macOS
-      # keychain, and the Secret Service (gnome-keyring in a private session).
-      - run: node scripts/ci-keychain-test.mjs

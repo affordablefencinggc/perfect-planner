@@ -8,11 +8,11 @@ const CONNECT = {
   connection: "C-1",
   person: "owner",
   bridgeUrl: "http://127.0.0.1:5555",
-  token: TOKEN,
+  tokenFile: "/data/.perfect-planner/tokens/connect-C-1.token",
   agentPath: "/repo/dist/core-host/agent.mjs",
   agentBuilt: true,
-  claudeCode: `node "/repo/dist/core-host/connect.mjs" http://127.0.0.1:5555 ${TOKEN}`,
-  json: JSON.stringify({ mcpServers: { "perfect-planner-core": { command: "node", args: ["/repo/dist/core-host/agent.mjs"], env: { PP_BRIDGE_URL: "http://127.0.0.1:5555", PP_AGENT_TOKEN: TOKEN } } } }, null, 2),
+  claudeCode: "node '/repo/dist/core-host/connect.mjs' http://127.0.0.1:5555 '/data/.perfect-planner/tokens/connect-C-1.token'",
+  json: JSON.stringify({ mcpServers: { "perfect-planner-core": { command: "node", args: ["/repo/dist/core-host/agent.mjs"], env: { PP_BRIDGE_URL: "http://127.0.0.1:5555", PP_AGENT_TOKEN_FILE: "/data/.perfect-planner/tokens/connect-C-1.token" } } } }, null, 2),
 };
 const MAIN = { id: "claude-code-ab12cd", name: "Claude Code", model: "claude-opus", role: "main", person: "owner", connection: "C-1", connectedAt: "2026-10-09T10:00:00Z" };
 const SKILL_LINE = 'node "/repo/dist/core-host/connect.mjs" --skill-only';

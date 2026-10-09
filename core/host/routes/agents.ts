@@ -15,6 +15,7 @@ import { fileURLToPath } from "node:url";
 import type { AgentRecord, AgentService } from "../../mcp/index";
 import type { CoreProject } from "../project";
 import { HttpError, type Router } from "../router";
+import { writeOwnerOnlyFile } from "../tokenFile";
 import { localPersonId } from "./people";
 
 export const AGENT_SERVER_NAME = "perfect-planner-core";
@@ -27,8 +28,9 @@ interface Connection {
   id: string;
   person: string;
   issuedAt: string;
-  /** In memory only, for revoke. Never sent back after the connect response. */
+  /** In memory only, for revoke. Never sent to the app window; the agent reads it from tokenFile. */
   token: string;
+  tokenFile: string;
   revoked: boolean;
 }
 
@@ -101,7 +103,11 @@ export function agentEntryPath(from: string = fileURLToPath(import.meta.url)): {
   return { path: entry, built: fs.existsSync(entry) };
 }
 
-const quote = (value: string) => `"${value.replaceAll('"', '\\"')}"`;
+/** Single quotes in both shells, so nothing in a path ($(...), backticks, %VAR% in PowerShell) runs. */
+export const quoteFor = (windows: boolean) => (value: string) =>
+  windows ? `'${value.replaceAll("'", "''")}'` : `'${value.replaceAll("'", `'\\''`)}'`;
+
+const connectProgram = (entry: string) => entry.replace(/agent\.mjs$/, "connect.mjs");
 
 /**
  * The Node that runs connect.mjs and agent.mjs. The desktop app ships its own Node and sets
@@ -113,29 +119,40 @@ export function nodeBinary(env: NodeJS.ProcessEnv = process.env): string {
 }
 
 /** nodeBinary as the first word of a pasted line. A quoted path needs PowerShell's call operator on Windows. */
-export function nodeCommand(env: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform): string {
+export function nodeCommand(platform: NodeJS.Platform = process.platform, env: NodeJS.ProcessEnv = process.env): string {
   const binary = env.PP_NODE_BINARY;
   if (!binary) return "node";
-  return platform === "win32" ? `& ${quote(binary)}` : quote(binary);
+  const quoted = quoteFor(platform === "win32")(binary);
+  return platform === "win32" ? `& ${quoted}` : quoted;
 }
 
 /**
  * The one line for Claude Code: connect.mjs (next to the agent entry) registers the server for the
  * folder it runs in, replacing an older registration, and installs the perfect-planner-connect skill.
+ * It names the token file, never the token, so nothing secret lands in shell history, a chat
+ * transcript or ~/.claude.json.
  */
-export function connectLine(bridgeUrl: string, token: string, entry: string): string {
-  return `${nodeCommand()} ${quote(entry.replace(/agent\.mjs$/, "connect.mjs"))} ${bridgeUrl} ${token}`;
+export function connectLine(bridgeUrl: string, tokenFile: string, entry: string, platform: NodeJS.Platform = process.platform): string {
+  const quote = quoteFor(platform === "win32");
+  return `${nodeCommand(platform)} ${quote(connectProgram(entry))} ${bridgeUrl} ${quote(tokenFile)}`;
 }
 
 /** Installs only the skill, user-wide; no token, so it is safe to show at any time. */
-export function skillLine(entry: string): string {
-  return `${nodeCommand()} ${quote(entry.replace(/agent\.mjs$/, "connect.mjs"))} --skill-only`;
+export function skillLine(entry: string, platform: NodeJS.Platform = process.platform): string {
+  return `${nodeCommand(platform)} ${quoteFor(platform === "win32")(connectProgram(entry))} --skill-only`;
 }
 
-export function setupFor(bridgeUrl: string, token: string, entry: string) {
-  const claudeCode = connectLine(bridgeUrl, token, entry);
-  const json = JSON.stringify({ mcpServers: { [AGENT_SERVER_NAME]: { command: nodeBinary(), args: [entry], env: { PP_BRIDGE_URL: bridgeUrl, PP_AGENT_TOKEN: token } } } }, null, 2);
+export function setupFor(bridgeUrl: string, tokenFile: string, entry: string, platform: NodeJS.Platform = process.platform) {
+  const claudeCode = connectLine(bridgeUrl, tokenFile, entry, platform);
+  const json = JSON.stringify({ mcpServers: { [AGENT_SERVER_NAME]: { command: nodeBinary(), args: [entry], env: { PP_BRIDGE_URL: bridgeUrl, PP_AGENT_TOKEN_FILE: tokenFile } } } }, null, 2);
   return { claudeCode, json };
+}
+
+/** The token waits in a file only this OS user can read (0600, or an owner-only ACL on Windows); the agent program reads it at start. */
+export function writeTokenFile(project: CoreProject, name: string, token: string): string {
+  const file = path.join(project.root, ".perfect-planner", "tokens", `${name}.token`);
+  writeOwnerOnlyFile(file, token);
+  return file;
 }
 
 function viewAgents(project: CoreProject): { agents: AgentView[]; connections: ConnectionView[] } {
@@ -190,15 +207,17 @@ export function registerAgentRoutes(router: Router): void {
     const bridge = await host.bridge(project);
     project.state.set(BRIDGE_URL, bridge.url);
     const token = project.service.tokens.issue({ role: "connect", person });
-    const conn: Connection = { id: `C-${randomBytes(4).toString("hex")}`, person, issuedAt: new Date().toISOString(), token, revoked: false };
+    const id = `C-${randomBytes(4).toString("hex")}`;
+    const tokenFile = writeTokenFile(project, `connect-${id}`, token);
+    const conn: Connection = { id, person, issuedAt: new Date().toISOString(), token, tokenFile, revoked: false };
     connections(project).set(conn.id, conn);
     const entry = agentEntryPath();
-    const setup = setupFor(bridge.url, token, entry.path);
+    const setup = setupFor(bridge.url, tokenFile, entry.path);
     return {
       connection: conn.id,
       person,
       bridgeUrl: bridge.url,
-      token,
+      tokenFile,
       serverName: AGENT_SERVER_NAME,
       agentPath: entry.path,
       agentBuilt: entry.built,
@@ -222,6 +241,7 @@ export function registerAgentRoutes(router: Router): void {
       project.service.tokens.revoke(conn.token);
       conn.revoked = true;
     }
+    fs.rmSync(conn.tokenFile, { force: true });
     return { connection: conn.id, revoked: true };
   });
 }

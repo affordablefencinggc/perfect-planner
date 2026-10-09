@@ -10,6 +10,8 @@ import { bridgeCall } from "../../mcp/index";
 import { appendNumbered } from "../../numbering/index";
 import { asPersonRequest } from "../keys";
 import { hostCall, startTestHost } from "../testing";
+import { icaclsPath } from "../tokenFile";
+import { quoteFor, repoRefusal, workerCommands } from "./tasks";
 
 const git = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, encoding: "utf8", env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t.invalid", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t.invalid" } }).trim();
 const write = (dir: string, file: string, text: string) => {
@@ -66,16 +68,21 @@ describe("tasks routes", () => {
     expect(dispatched.status, JSON.stringify(dispatched.body)).toBe(200);
     const d = dispatched.body.result;
     expect(d).toMatchObject({ task: "T-1", branch: "pp/T-1", model: "claude-sonnet" });
-    expect(d.token).toMatch(/^pp_w_/);
+    expect(d).not.toHaveProperty("token");
+    const token = fs.readFileSync(d.tokenFile, "utf8");
+    expect(token).toMatch(/^pp_w_/);
+    if (process.platform !== "win32") expect(fs.statSync(d.tokenFile).mode & 0o077).toBe(0);
+    else expect(execFileSync(icaclsPath(), [d.tokenFile], { encoding: "utf8" })).not.toMatch(/Everyone|BUILTIN\\Users|Authenticated Users|\(I\)/i);
     expect(fs.existsSync(d.worktree)).toBe(true);
     expect(d.brief).toContain("T-1");
     expect(d.brief).toContain("propose_test");
-    expect(d.setup).toContain(`connect.mjs" ${d.bridgeUrl} ${d.token}`);
+    expect(d.setup).toContain("connect.mjs");
+    expect(`${d.setup}${d.start}${d.json}${d.brief}`).not.toContain(token);
     expect((await tasks()).tasks[0]).toMatchObject({ stage: "needs-test", worktree: { branch: "pp/T-1" }, dispatch: { model: "claude-sonnet" } });
-    expect(JSON.stringify((await tasks()))).not.toContain(d.token);
+    expect(JSON.stringify((await tasks()))).not.toContain(token);
 
     // 2. The worker checks in over the bridge and writes the test first.
-    const call = bridgeCall(d.bridgeUrl, d.token);
+    const call = bridgeCall(d.bridgeUrl, token);
     const hello = (await call({ tool: "hello", args: { name: "Worker" } })) as { agent: string; role: string; task: string };
     expect(hello).toMatchObject({ role: "worker", task: "T-1" });
     const agent = hello.agent;
@@ -88,8 +95,10 @@ describe("tasks routes", () => {
     await expect(call({ tool: "claim_task", args: { task: "T-1" }, agent })).rejects.toThrow(/waiting for the owner's approval/);
     expect((await tasks()).tasks[0]).toMatchObject({ stage: "test-proposed", test: { command: "node tests/save.check.mjs", files: ["tests/save.check.mjs"], by: { kind: "agent" } } });
 
-    // 3. The person approves; the app runs it and it fails on today's code, as it must.
-    const approved = await post("/tasks/T-1/approve-test");
+    // 3. The person approves the test they read; the app runs it and it fails on today's code, as it must.
+    const proposed = (await tasks()).tasks[0].test.entry;
+    expect((await post("/tasks/T-1/approve-test")).body.code).toBe("STALE");
+    const approved = await post("/tasks/T-1/approve-test", { test: proposed });
     expect(approved.status, JSON.stringify(approved.body)).toBe(200);
     expect(approved.body.result).toMatchObject({ approved: true, failsFirst: true });
     expect((await tasks()).tasks[0]).toMatchObject({ stage: "ready-to-claim" });
@@ -104,7 +113,7 @@ describe("tasks routes", () => {
     expect((await tasks()).tasks[0]).toMatchObject({ status: "claimed", stage: "building", proofs: [{ kind: "commit", link: head }] });
 
     // 5. Merge is refused before the test passed and before the diff is approved.
-    expect((await post("/tasks/T-1/merge")).status).toBe(409);
+    expect((await post("/tasks/T-1/merge", { commit: head })).status).toBe(409);
     const checked = await post("/tasks/T-1/check");
     expect(checked.status, JSON.stringify(checked.body)).toBe(200);
     expect(checked.body.result).toMatchObject({ passed: true, commit: head });
@@ -112,14 +121,16 @@ describe("tasks routes", () => {
     expect(diff.files).toEqual(["src/save.js", "tests/save.check.mjs"]);
     expect(diff.text).toContain("export const save");
     expect((await tasks()).tasks[0]).toMatchObject({ stage: "review-diff" });
-    const early = await post("/tasks/T-1/merge");
+    const early = await post("/tasks/T-1/merge", { commit: head });
     expect(early.status).toBe(409);
-    expect(early.body.message).toMatch(/has not been approved/);
+    expect(early.body.code).toBe("STALE");
 
-    // 6. The person approves the diff and merges; the gate reruns the test on the merge first.
-    expect((await post("/tasks/T-1/approve-diff")).status).toBe(200);
+    // 6. The person approves the diff at the commit they read and merges; the gate reruns the test on the merge first.
+    expect((await post("/tasks/T-1/approve-diff")).body.code).toBe("STALE");
+    expect((await post("/tasks/T-1/approve-diff", { commit: diff.commit })).status).toBe(200);
     expect((await tasks()).tasks[0]).toMatchObject({ stage: "ready-to-merge" });
-    const merged = await post("/tasks/T-1/merge");
+    expect((await post("/tasks/T-1/merge", { commit: "0".repeat(40) })).body.code).toBe("STALE");
+    const merged = await post("/tasks/T-1/merge", { commit: head });
     expect(merged.status, JSON.stringify(merged.body)).toBe(200);
     expect(git(repo, "show", "main:src/save.js")).toContain("export const save");
     const done = (await tasks()).tasks[0];
@@ -136,8 +147,8 @@ describe("tasks routes", () => {
     const defined = await post("/tasks/T-1/test", { command: "node tests/save.check.mjs", files: ["tests/save.check.mjs"] });
     expect(defined.status, JSON.stringify(defined.body)).toBe(200);
     expect((await tasks()).tasks[0]).toMatchObject({ stage: "test-proposed", test: { by: { kind: "person" } } });
-    expect((await post("/tasks/T-1/approve-test")).body.result).toMatchObject({ failsFirst: true });
-    const call = bridgeCall(d.bridgeUrl, d.token);
+    expect((await post("/tasks/T-1/approve-test", { test: (await tasks()).tasks[0].test.entry })).body.result).toMatchObject({ failsFirst: true });
+    const call = bridgeCall(d.bridgeUrl, fs.readFileSync(d.tokenFile, "utf8"));
     const { agent } = (await call({ tool: "hello", args: { name: "Worker" } })) as { agent: string };
     await call({ tool: "claim_task", args: { task: "T-1" }, agent });
     write(d.worktree, "src/save.js", "export const save = 1;\n");
@@ -160,5 +171,92 @@ describe("tasks routes", () => {
     const res = await post("/tasks/T-1/dispatch");
     expect(res.status).toBe(409);
     fs.rmSync(plain, { recursive: true, force: true });
+  });
+});
+
+describe("approvals are bound to what the person saw", () => {
+  it("refuses to approve a test a worker swapped after the person read it, and a diff that moved after the check", async () => {
+    const d = (await post("/tasks/T-1/dispatch", {})).body.result;
+    const call = bridgeCall(d.bridgeUrl, fs.readFileSync(d.tokenFile, "utf8"));
+    const { agent } = (await call({ tool: "hello", args: { name: "Worker" } })) as { agent: string };
+    write(d.worktree, "tests/save.check.mjs", 'import { existsSync } from "node:fs";\nprocess.exit(existsSync("src/save.js") ? 0 : 1);\n');
+    git(d.worktree, "add", "-A");
+    git(d.worktree, "commit", "-q", "-m", "Test");
+    await call({ tool: "propose_test", args: { task: "T-1", command: "node tests/save.check.mjs", files: ["tests/save.check.mjs"] }, agent });
+    const seen = (await tasks()).tasks[0].test.entry;
+    // The worker replaces the test while the person is reading it.
+    await call({ tool: "propose_test", args: { task: "T-1", command: "node -e \"process.exit(1)\"", files: ["tests/save.check.mjs"] }, agent });
+    const swapped = await post("/tasks/T-1/approve-test", { test: seen });
+    expect(swapped.status).toBe(409);
+    expect(swapped.body.code).toBe("STALE");
+    expect((await tasks()).tasks[0]).toMatchObject({ stage: "test-proposed", approval: null });
+
+    // The worker puts the real test back; the person approves that one, the worker builds, the app checks.
+    await call({ tool: "propose_test", args: { task: "T-1", command: "node tests/save.check.mjs", files: ["tests/save.check.mjs"] }, agent });
+    expect((await post("/tasks/T-1/approve-test", { test: (await tasks()).tasks[0].test.entry })).status).toBe(200);
+    await call({ tool: "claim_task", args: { task: "T-1" }, agent });
+    write(d.worktree, "src/save.js", "export const save = 1;\n");
+    git(d.worktree, "add", "-A");
+    git(d.worktree, "commit", "-q", "-m", "Save");
+    const checked = git(d.worktree, "rev-parse", "HEAD");
+    expect((await post("/tasks/T-1/check")).body.result).toMatchObject({ passed: true, commit: checked });
+    // Then the worker commits again before the person approves the diff.
+    write(d.worktree, "src/extra.js", "export const extra = 1;\n");
+    git(d.worktree, "add", "-A");
+    git(d.worktree, "commit", "-q", "-m", "Sneak in more");
+    const moved = await post("/tasks/T-1/approve-diff", { commit: checked });
+    expect(moved.body.code).toBe("STALE");
+    const tip = git(d.worktree, "rev-parse", "HEAD");
+    expect((await post("/tasks/T-1/approve-diff", { commit: tip })).body.code).toBe("STALE");
+  }, 60_000);
+});
+
+describe("choosing the repository", () => {
+  it("refuses a whole drive or the home folder, and switching folders under a running worker", async () => {
+    expect(repoRefusal(path.parse(repo).root)).toMatch(/whole drive/);
+    expect(repoRefusal(repo, repo)).toMatch(/home folder/);
+    expect(repoRefusal(repo)).toBeNull();
+    await post("/tasks/T-1/dispatch", {});
+    const other = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "pp-tasks-other-")));
+    git(other, "init", "-q", "-b", "main");
+    git(other, "-c", "user.name=t", "-c", "user.email=t@t.invalid", "commit", "-q", "--allow-empty", "-m", "x");
+    const res = await post("/tasks/repo", { root: other });
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe("WORKERS_ACTIVE");
+    fs.rmSync(other, { recursive: true, force: true });
+  });
+});
+
+describe("worker commands", () => {
+  it("single-quotes paths so they cannot run commands, in both shells", () => {
+    expect(quoteFor(false)("/tmp/$(touch pwned)/it's")).toBe("'/tmp/$(touch pwned)/it'\\''s'");
+    expect(quoteFor(true)("C:\\$(calc)\\it's")).toBe("'C:\\$(calc)\\it''s'");
+    const posix = workerCommands({ worktree: "/w/$(x)", bridgeUrl: "http://127.0.0.1:1", tokenFile: "/t/T-1.token", entry: "/a/agent.mjs", briefFile: "/b/`x`.md", platform: "linux" });
+    expect(posix.setup).toBe("cd '/w/$(x)' && node '/a/connect.mjs' http://127.0.0.1:1 '/t/T-1.token'");
+    expect(posix.start).toBe("claude \"$(cat '/b/`x`.md')\"");
+    expect(workerCommands({ worktree: "C:\\w", bridgeUrl: "http://127.0.0.1:1", tokenFile: "C:\\t", entry: "C:\\a", briefFile: "C:\\b.md", platform: "win32" }).start).toBe("claude (Get-Content -Raw 'C:\\b.md')");
+  });
+});
+
+// The reviewer's Batch 3 attack: any program on this PC asks GET /session while claiming to be the
+// app window, gets the person cookie, and then approves and runs things as the person. The fix
+// (the window gets its secret from the native shell; /session never hands it out) lands from #15.
+// Until then this test is expected to fail; when the fix merges it passes and `.fails` must go.
+describe("a forged local request is not the person", () => {
+  it.fails("cannot get the person cookie from /session, so cannot approve a plan, dispatch, set a test or approve it", async () => {
+    const origin = ctx.base.replace(/\/api\/core$/, "");
+    const session = await fetch(`${ctx.base}/session${q}`, { headers: { "sec-fetch-site": "same-origin", "sec-fetch-mode": "cors", origin } });
+    const cookie = (session.headers.get("set-cookie") ?? "").split(";")[0];
+    const forged = async (route: string, body: unknown = {}) => {
+      const res = await fetch(`${ctx.base}${route}${q}`, { method: "POST", headers: { "content-type": "application/json", origin, "sec-fetch-site": "same-origin", ...(cookie ? { cookie } : {}) }, body: JSON.stringify(body) });
+      return res.status;
+    };
+    expect(await forged("/plan/approve", { tasks: [{ id: "T-1", title: "Save notes" }] })).toBe(401);
+    expect(await forged("/tasks/T-1/dispatch")).toBe(401);
+    expect(await forged("/tasks/T-1/test", { command: "node -e 1", files: ["README.md"] })).toBe(401);
+    expect(await forged("/tasks/T-1/approve-test", { test: "L-000001" })).toBe(401);
+    const types = ctx.host.project("loop").entries().map((e) => e.type);
+    expect(types).not.toContain("plan.approved");
+    expect(types).not.toContain("test.approved");
   });
 });

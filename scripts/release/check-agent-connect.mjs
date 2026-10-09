@@ -3,33 +3,71 @@
 // showed, with a stand-in `claude` command that records what it was asked to register,
 // then start that registered MCP server and check in with hello, as Claude Code would.
 //   node scripts/release/check-agent-connect.mjs --line '<the Claude Code command from Connect agent>'
-// Prints one JSON summary; exits non-zero when any step fails. The token in the line is
-// never printed. Used by the release workflow against the installed desktop app.
+// Prints one JSON summary; exits non-zero when any step fails. The line names a token file;
+// the token itself is never read or printed here. Used by the release workflow against the installed desktop app.
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-/** Splits the pasted line into words: "quoted paths", bare words, and PowerShell's leading `&`. */
-export function parseConnectLine(line) {
+/**
+ * Splits the pasted line into words the way its shell would: 'single-quoted' (POSIX '\'' or
+ * PowerShell '' escapes), "double-quoted" and bare words, dropping PowerShell's leading `&`.
+ */
+export function shellWords(line) {
   const words = [];
-  const pattern = /"((?:[^"\\]|\\.)*)"|(\S+)/g;
-  for (const match of String(line).trim().matchAll(pattern)) words.push(match[1] !== undefined ? match[1].replace(/\\"/g, '"') : match[2]);
-  if (words[0] === "&") words.shift();
-  const [node, connect, bridgeUrl, token] = words;
-  if (words.length !== 4 || !/connect\.mjs$/.test(connect ?? "") || !/^http:\/\/127\.0\.0\.1:\d+$/.test(bridgeUrl ?? "") || !/^pp_[cw]_[\w-]{16,}$/.test(token ?? "")) {
-    throw new Error("That is not a Connect agent line (node, connect.mjs, bridge address, key).");
+  const text = String(line).trim();
+  let i = 0;
+  while (i < text.length) {
+    while (text[i] === " ") i++;
+    if (i >= text.length) break;
+    let word = "";
+    while (i < text.length && text[i] !== " ") {
+      if (text[i] === "'") {
+        i++;
+        for (;;) {
+          if (i >= text.length) throw new Error("Unclosed quote in the line.");
+          if (text[i] === "'" && text[i + 1] === "'") { word += "'"; i += 2; continue; } // PowerShell ''
+          if (text[i] === "'") { i++; break; }
+          word += text[i++];
+        }
+      } else if (text[i] === '"') {
+        i++;
+        while (i < text.length && text[i] !== '"') word += text[i++];
+        i++;
+      } else if (text[i] === "\\" && text[i + 1] === "'") { word += "'"; i += 2; } // POSIX '\''
+      else word += text[i++];
+    }
+    words.push(word);
   }
-  return { node, connect, bridgeUrl, token };
+  if (words[0] === "&") words.shift();
+  return words;
 }
 
-/** A `claude` stand-in that writes its arguments, one JSON array per call, to record. */
-function fakeClaude(dir, record) {
-  const script = path.join(dir, "fake-claude.mjs");
-  writeFileSync(script, `import { appendFileSync } from "node:fs";\nappendFileSync(${JSON.stringify(record)}, JSON.stringify(process.argv.slice(2)) + "\\n");\n`);
-  if (process.platform === "win32") writeFileSync(path.join(dir, "claude.cmd"), `@"${process.execPath}" "${script}" %*\r\n`);
-  else writeFileSync(path.join(dir, "claude"), `#!/bin/sh\nexec "${process.execPath}" "${script}" "$@"\n`, { mode: 0o755 });
+/** node, connect.mjs, bridge address and token file (plus any options such as --agent claude). */
+export function parseConnectLine(line) {
+  const words = shellWords(line);
+  const [node, connect, bridgeUrl, tokenFile, ...options] = words;
+  if (!/connect\.mjs$/.test(connect ?? "") || !/^http:\/\/127\.0\.0\.1:\d+$/.test(bridgeUrl ?? "") || !/\.token$/.test(tokenFile ?? "")) {
+    throw new Error("That is not a Connect agent line (node, connect.mjs, bridge address, token file).");
+  }
+  return { node, connect, bridgeUrl, tokenFile, options };
+}
+
+/**
+ * A `claude` stand-in that writes its arguments, one JSON array per call, to record. On Windows it is
+ * laid out like an npm install (claude.cmd + node_modules/@anthropic-ai/claude-code/cli.js), which
+ * connect.mjs runs directly with its own Node, no shell.
+ */
+function fakeClaude(bin, record) {
+  const program = `import { appendFileSync } from "node:fs";\nappendFileSync(${JSON.stringify(record)}, JSON.stringify(process.argv.slice(2)) + "\\n");\n`;
+  const cli = path.join(bin, "node_modules", "@anthropic-ai", "claude-code", "cli.js");
+  mkdirSync(path.dirname(cli), { recursive: true });
+  writeFileSync(path.join(path.dirname(cli), "package.json"), '{"type":"module"}\n');
+  writeFileSync(cli, program);
+  if (process.platform === "win32") writeFileSync(path.join(bin, "claude.cmd"), `@"${process.execPath}" "${cli}" %*\r\n`);
+  else writeFileSync(path.join(bin, "claude"), `#!/bin/sh\nexec "${process.execPath}" "${cli}" "$@"\n`, { mode: 0o755 });
 }
 
 function helloOverStdio(command, args, env, timeoutMs = 20_000) {
@@ -68,17 +106,20 @@ export async function checkAgentConnect(line) {
   const parsed = parseConnectLine(line);
   const dir = mkdtempSync(path.join(tmpdir(), "pp-connect-check-"));
   const record = path.join(dir, "claude-calls.jsonl");
-  fakeClaude(dir, record);
+  const bin = path.join(dir, "bin");
+  const work = path.join(dir, "work");
+  mkdirSync(work, { recursive: true });
+  fakeClaude(bin, record);
   const home = path.join(dir, "home");
-  const env = { ...process.env, HOME: home, USERPROFILE: home, PATH: `${dir}${path.delimiter}${process.env.PATH ?? ""}` };
+  const env = { ...process.env, HOME: home, USERPROFILE: home, PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}` };
   delete env.NODE_OPTIONS;
   try {
     const steps = {};
     if (!existsSync(parsed.node) && parsed.node !== "node") throw new Error(`The line's Node runtime is missing: ${parsed.node}`);
-    const run = spawnSync(parsed.node, [parsed.connect, parsed.bridgeUrl, parsed.token], { cwd: dir, env, encoding: "utf8", timeout: 60_000 });
+    const run = spawnSync(parsed.node, [parsed.connect, parsed.bridgeUrl, parsed.tokenFile, ...parsed.options], { cwd: work, env, encoding: "utf8", timeout: 60_000 });
     steps.connectExit = run.status;
-    steps.connectSaid = String(run.stdout).replaceAll(parsed.token, "<key>").trim();
-    if (run.status !== 0) throw new Error(`The connect line failed (${run.status}): ${String(run.stderr).replaceAll(parsed.token, "<key>")}`);
+    steps.connectSaid = String(run.stdout).trim();
+    if (run.status !== 0) throw new Error(`The connect line failed (${run.status}): ${String(run.stderr)}`);
     steps.skillInstalled = existsSync(path.join(home, ".claude", "skills", "perfect-planner-connect", "SKILL.md"));
     const calls = readFileSync(record, "utf8").trim().split("\n").map((l) => JSON.parse(l));
     const add = calls.find((args) => args[0] === "mcp" && args[1] === "add");

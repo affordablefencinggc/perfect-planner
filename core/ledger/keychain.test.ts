@@ -68,6 +68,14 @@ describe("KeychainKeyProvider", () => {
     expect(keys.sign("person:owner", Buffer.from("x")).keyId).toBe(second.keyId);
   });
 
+  it("pins another person's public key on this device without being able to sign for them", () => {
+    const keys = new KeychainKeyProvider(new FakeSecrets());
+    const other = new KeychainKeyProvider(new FakeSecrets()).ensureKey("person:owner");
+    keys.pinKey(other);
+    expect(keys.trustedKeys()).toEqual([other]);
+    expect(() => keys.sign("person:owner", Buffer.from("x"))).toThrow("no signing key");
+  });
+
   it("refuses to sign when the keychain is unavailable and says why", () => {
     const keys = new KeychainKeyProvider(new FakeSecrets("No Secret Service is running"));
     expect(keys.state()).toEqual({ available: false, reason: "No Secret Service is running" });

@@ -229,7 +229,18 @@ export class KeychainKeyProvider implements KeyProvider {
 
   trustedKeys(): TrustedKey[] {
     if (!this.state().available) return [];
-    return this.principals().flatMap((principal) => this.publicKeys(principal));
+    return [...this.principals().flatMap((principal) => this.publicKeys(principal)), ...this.pins()];
+  }
+
+  /**
+   * Trusts someone else's public key on this device only (the owner's key on
+   * a helper's device), after the person checked its fingerprint.
+   */
+  pinKey(key: TrustedKey): void {
+    this.requireAvailable();
+    if (keyIdOf(key.publicKey) !== key.keyId || !/^(person:.+|system)$/.test(key.principal)) throw new RangeError("not a valid key");
+    const pins = this.pins().filter((k) => k.keyId !== key.keyId);
+    this.store.set("pins", JSON.stringify([...pins, { keyId: key.keyId, principal: key.principal, publicKey: key.publicKey }]));
   }
 
   /** The principal's active key, made on first call. A person action in the app, never an agent's. */
@@ -261,6 +272,14 @@ export class KeychainKeyProvider implements KeyProvider {
       this.store.remove(`public.${principal}`);
     }
     this.store.remove("principals");
+    this.store.remove("pins");
+  }
+
+  private pins(): TrustedKey[] {
+    const raw = this.store.get("pins");
+    if (!raw) return [];
+    const list = JSON.parse(raw) as TrustedKey[];
+    return Array.isArray(list) ? list.filter((k) => k && typeof k.publicKey === "string" && keyIdOf(k.publicKey) === k.keyId) : [];
   }
 
   private createKey(principal: string): TrustedKey {

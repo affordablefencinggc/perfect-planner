@@ -104,7 +104,7 @@ export async function smokeInstalledApp({ installer, out, installDir = "C:\\PP S
     await until("the Connect agent card", () => client.evaluate(`document.querySelector(".core-screen-connect button.primary") !== null`), 30_000);
     await client.evaluate(clickButton("Connect agent", ".core-screen-connect"));
     const line = await until("the connect line", () => client.evaluate(`document.querySelector("[data-connect-command]")?.innerText?.trim() || ""`), 30_000);
-    summary.lineUsesBundledNode = line.startsWith(`& "${installDir}\\desktop-host\\node.exe"`);
+    summary.lineUsesBundledNode = line.startsWith(`& '${installDir}\\desktop-host\\node.exe'`);
     await client.screenshot(path.join(out, "2-connect-line.png"));
     const agent = await checkAgentConnect(line);
     summary.agent = { checkedInAs: agent.checkedInAs, registeredWithBundledNode: agent.registered.usesLineNode, skillInstalled: agent.skillInstalled };

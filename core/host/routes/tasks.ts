@@ -9,6 +9,7 @@
 // cookie the app window holds, so a person's signed entry can only come from
 // this screen. Agents never reach these routes; they use the MCP tools.
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { deriveState, type GateState } from "../../gate/index";
 import type { Actor } from "../../ledger/index";
@@ -17,7 +18,9 @@ import { WorktreeError, WorktreeManager, git, runGit, WORKTREES_ACTOR, type Work
 import type { CoreHost } from "../host";
 import type { CoreProject } from "../project";
 import { HttpError, type Router } from "../router";
-import { AGENT_SERVER_NAME, agentEntryPath, connectLine, nodeBinary } from "./agents";
+import { AGENT_SERVER_NAME, agentEntryPath, connectLine, nodeBinary, quoteFor, writeTokenFile } from "./agents";
+
+export { quoteFor };
 import { localPerson, localPersonId } from "./people";
 
 const REPO_FILE = "repo.json";
@@ -85,6 +88,22 @@ export async function repoState(project: CoreProject): Promise<RepoState> {
       ? `${chosen} is no longer a git repository with a commit. Choose your project's git folder again.`
       : "Workers need your project's git folder (with at least one commit) to branch from. Choose it below.",
   };
+}
+
+/** Folders that are never a project to hand to workers: a whole drive or the home folder itself. */
+export function repoRefusal(top: string, home = os.homedir()): string | null {
+  const real = (p: string) => {
+    try {
+      return fs.realpathSync.native(p);
+    } catch {
+      return path.resolve(p);
+    }
+  };
+  const same = (a: string, b: string) => (process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b);
+  const dir = real(top);
+  if (same(path.dirname(dir), dir)) return `${dir} is a whole drive. Choose your project's own git folder.`;
+  if (same(dir, real(home))) return `${dir} is your home folder. Choose your project's own git folder.`;
+  return null;
 }
 
 async function requireRepo(project: CoreProject): Promise<string> {
@@ -178,6 +197,14 @@ function findTask(project: CoreProject, id: string): TaskView {
   return task;
 }
 
+function stale(message: string): HttpError {
+  return new HttpError(409, "STALE", message);
+}
+
+function sameCommit(a: unknown, b: string | undefined): boolean {
+  return typeof a === "string" && /^[0-9a-f]{40}$/i.test(a) && typeof b === "string" && a.toLowerCase() === b.trim().toLowerCase();
+}
+
 function refuse(result: { ok: boolean; reason?: string }): void {
   if (!result.ok) throw new HttpError(409, "REFUSED", result.reason ?? "Refused.");
 }
@@ -191,7 +218,8 @@ async function worktreeFor(project: CoreProject, label: string): Promise<Worktre
 
 // ---------- the brief a worker gets ----------
 
-const quote = (value: string) => `"${value.replaceAll('"', '\\"')}"`;
+// Single quotes in both shells, so a path can never run $(...) or `...`: POSIX ends and reopens the
+// quote around a ', PowerShell doubles it.
 
 export function workerBrief(task: { label: string; title: string; clauses: string[] }, worktree: WorktreeInfo, test: GateState["definition"], approved: boolean): string {
   const testStep = test
@@ -214,14 +242,19 @@ export function workerBrief(task: { label: string; title: string; clauses: strin
     .join("\n");
 }
 
-export function workerCommands(options: { worktree: string; bridgeUrl: string; token: string; entry: string; briefFile: string; platform?: NodeJS.Platform }) {
-  const { worktree, bridgeUrl, token, entry, briefFile } = options;
-  // Re-runnable: a new attempt in the same worktree replaces the revoked token's registration.
-  const add = connectLine(bridgeUrl, token, entry);
+/**
+ * The worker's token stays in a file only this user can read; the commands name the file, so the
+ * token never lands on a command line, in shell history or in a process list.
+ */
+export function workerCommands(options: { worktree: string; bridgeUrl: string; tokenFile: string; entry: string; briefFile: string; platform?: NodeJS.Platform }) {
+  const { worktree, bridgeUrl, tokenFile, entry, briefFile } = options;
   const windows = (options.platform ?? process.platform) === "win32";
+  const quote = quoteFor(windows);
+  // Re-runnable: a new attempt in the same worktree replaces the older registration.
+  const add = connectLine(bridgeUrl, tokenFile, entry, windows ? "win32" : "linux");
   const setup = windows ? `cd ${quote(worktree)}; ${add}` : `cd ${quote(worktree)} && ${add}`;
   const start = windows ? `claude (Get-Content -Raw ${quote(briefFile)})` : `claude "$(cat ${quote(briefFile)})"`;
-  const json = JSON.stringify({ mcpServers: { [AGENT_SERVER_NAME]: { command: nodeBinary(), args: [entry], env: { PP_BRIDGE_URL: bridgeUrl, PP_AGENT_TOKEN: token } } } }, null, 2);
+  const json = JSON.stringify({ mcpServers: { [AGENT_SERVER_NAME]: { command: nodeBinary(), args: [entry], env: { PP_BRIDGE_URL: bridgeUrl, PP_AGENT_TOKEN_FILE: tokenFile } } } }, null, 2);
   return { setup, start, json, shell: windows ? "PowerShell" : "Terminal" };
 }
 
@@ -264,8 +297,9 @@ async function dispatch(project: CoreProject, host: CoreHost, id: string, body: 
   const briefFile = path.join(project.root, ".perfect-planner", "briefs", `${label}.md`);
   fs.mkdirSync(path.dirname(briefFile), { recursive: true });
   fs.writeFileSync(briefFile, `${brief}\n`);
+  const tokenFile = writeTokenFile(project, label, token);
   const entry = agentEntryPath();
-  const commands = workerCommands({ worktree: tree.path, bridgeUrl: bridge.url, token, entry: entry.path, briefFile });
+  const commands = workerCommands({ worktree: tree.path, bridgeUrl: bridge.url, tokenFile, entry: entry.path, briefFile });
   return {
     task: label,
     title: task.title,
@@ -273,7 +307,7 @@ async function dispatch(project: CoreProject, host: CoreHost, id: string, body: 
     branch: tree.branch,
     port: tree.port,
     bridgeUrl: bridge.url,
-    token,
+    tokenFile,
     serverName: AGENT_SERVER_NAME,
     brief,
     briefFile,
@@ -293,6 +327,13 @@ export function registerTaskRoutes(router: Router): void {
     if (typeof raw !== "string" || !raw.trim() || !path.isAbsolute(raw.trim())) throw new HttpError(400, "INVALID", "Give the full path of your project's git folder.");
     const top = await gitTop(raw.trim());
     if (!top) throw new HttpError(400, "NOT_GIT", `${raw.trim()} is not a git repository with at least one commit.`);
+    const refusal = repoRefusal(top);
+    if (refusal) throw new HttpError(400, "NOT_A_PROJECT", refusal);
+    // Switching folders under a running worker would strand its worktree and its approvals.
+    const current = await repoState(project);
+    if (current.ok && current.root !== top && (await listWorktrees(project, current)).length) {
+      throw new HttpError(409, "WORKERS_ACTIVE", `Workers still have worktrees in ${current.root}. Merge or send back their tasks before choosing another folder.`);
+    }
     fs.mkdirSync(path.dirname(repoFile(project)), { recursive: true });
     fs.writeFileSync(repoFile(project), JSON.stringify({ root: top, at: new Date().toISOString() }, null, 2));
     return overview(project);
@@ -323,12 +364,17 @@ export function registerTaskRoutes(router: Router): void {
    * POST /tasks/:id/approve-test: the person approves the proposed test (pinning its files from the
    * worktree), then the gate runs it there; it must fail on today's code before anyone can claim.
    */
-  router.post("/tasks/:id/approve-test", async ({ project, params }) => {
+  router.post("/tasks/:id/approve-test", async ({ project, params, body }) => {
     const task = findTask(project, params.id!);
     const label = attemptLabel(task);
     const tree = await worktreeFor(project, label);
     const gate = project.service.gate;
-    if (!gate.state(label).approval) refuse(gate.approve(label, localPerson(project), { cwd: tree.path }));
+    const state = gate.state(label);
+    if (!state.approval) {
+      // Bound to the definition the person read: a worker re-proposing a different test meanwhile makes this stale.
+      if (!state.definition || bodyOf(body).test !== state.definition.n) throw stale("The test changed since you looked at it. Read the new one, then approve it.");
+      refuse(gate.approve(label, localPerson(project), { cwd: tree.path }));
+    }
     const first = await gate.confirmFailsFirst(label, tree.path);
     return {
       approved: true,
@@ -366,8 +412,15 @@ export function registerTaskRoutes(router: Router): void {
   });
 
   /** POST /tasks/:id/approve-diff: the person approves the diff at the commit the test passed on. */
-  router.post("/tasks/:id/approve-diff", ({ project, params }) => {
+  router.post("/tasks/:id/approve-diff", async ({ project, params, body }) => {
     const task = findTask(project, params.id!);
+    const label = attemptLabel(task);
+    const passed = deriveState(project.entries(), label).worktree;
+    const tip = await git((await worktreeFor(project, label)).path, ["rev-parse", "HEAD"]);
+    // Bound to the commit the person reviewed, which must still be the tip the test passed on.
+    if (!sameCommit(bodyOf(body).commit, tip) || !passed?.passed || !sameCommit(passed.commit, tip)) {
+      throw stale("The work changed since you reviewed it. Check it again and read the new diff before approving.");
+    }
     refuse(project.service.gate.approveDiff(attemptLabel(task), localPerson(project)));
     return overview(project);
   });
@@ -389,11 +442,13 @@ export function registerTaskRoutes(router: Router): void {
    * POST /tasks/:id/merge: merge the worker's branch into the branch it started from. The gate merges
    * into a throwaway candidate, reruns the test there, and only on a pass moves the branch and writes done.
    */
-  router.post("/tasks/:id/merge", async ({ project, params }) => {
+  router.post("/tasks/:id/merge", async ({ project, params, body }) => {
     const task = findTask(project, params.id!);
     const label = attemptLabel(task);
     const root = await requireRepo(project);
     const tree = await worktreeFor(project, label);
+    const approved = deriveState(project.entries(), label).diffApproval?.commit;
+    if (!approved || !sameCommit(bodyOf(body).commit, approved)) throw stale("Merge the commit whose diff you approved; this screen is out of date.");
     const merged = await project.service.gate.mergeAndVerify(label, { repoRoot: root, branch: tree.branch, integrationBranch: tree.baseRef, actor: localPerson(project) });
     if (!merged.ok) throw new HttpError(409, "REFUSED", merged.reason);
     const dispatched = dispatches(project).get(label);
