@@ -146,11 +146,14 @@ function applyEntry(index, entry) {
     }
   }
   // A blocking question pauses only the asking worker. While it is open the
-  // task is not stalled; the answer counts as activity. Assumed entry shape:
-  // question.asked { blocking: true } with subject T-n or Q-n, and
-  // question.answered with subject Q-n or evidence[0] = the question's entry n.
-  if (entry.type === "question.asked" && entry.blocking === true) {
-    const task = TASK_ID.test(subject) ? subject : firstTaskIn(evidence);
+  // task is not stalled; the answer counts as activity. Strict-ledger shape
+  // (core/relay askMain): question.asked subject Q-n with data { task, blocking };
+  // question.answered subject Q-n. A top-level `blocking` flag and a task id in
+  // evidence are still accepted for older entries.
+  const data = entry.data && typeof entry.data === "object" && !Array.isArray(entry.data) ? entry.data : {};
+  if (entry.type === "question.asked" && (data.blocking === true || entry.blocking === true)) {
+    const dataTask = typeof data.task === "string" ? data.task.replace(/\.a\d+$/, "") : null;
+    const task = dataTask && TASK_ID.test(dataTask) ? dataTask : TASK_ID.test(subject) ? subject : firstTaskIn(evidence);
     const questionId = QUESTION_ID.test(subject) ? subject : entry.n;
     if (task && questionId) index.openQuestions.set(questionId, task);
   }
@@ -163,12 +166,14 @@ function applyEntry(index, entry) {
     }
   }
   if (entry.type === "task.blocked" && entry.reason === "stalled") {
-    if (evidence[0]) index.stalls.add(`${subject}|${evidence[0]}`);
+    if (evidence[0]) index.stalls.add(`${subject.replace(/\.a\d+$/, "")}|${evidence[0]}`);
     return;
   }
   if (!TASK_ID.test(subject)) return;
 
-  const state = index.tasks.get(subject) ?? newTaskState(index, subject);
+  // Every attempt of a task (T-3, T-3.a2) shares one branch and one watch state.
+  const taskKey = subject.replace(/\.a\d+$/, "");
+  const state = index.tasks.get(taskKey) ?? newTaskState(index, taskKey);
   // task.proof shows the worker is still active, so it is activity, not a release.
   const touches =
     entry.type === "task.progress" || entry.type === "commit.observed" || entry.type === "task.proof";
@@ -287,12 +292,22 @@ export function createGitWatcher({
         if (index.commits.has(commit.hash)) continue;
         const summary = commit.subject ? `${commit.hash.slice(0, 7)} ${commit.subject}` : `commit ${commit.hash.slice(0, 7)}`;
         const refs = parseImplementsRefs(commit.body ? `${commit.subject}\n${commit.body}` : commit.subject);
+        let commitFiles = [];
+        try {
+          commitFiles = parseNulList(
+            await runGit(git, worktree.path, ["diff-tree", "--no-commit-id", "--name-only", "-r", "-z", "--root", commit.hash]),
+          ).filter((file) => !isIgnoredPath(file, ignorePaths));
+        } catch (error) {
+          result.errors.push({ stage: "git", task: worktree.task, message: errorMessage(error) });
+        }
         const entry = await write({
           type: "commit.observed",
           subject: worktree.task,
           summary,
           evidence: [commit.hash],
           ...(refs.length > 0 ? { refs } : {}),
+          // The strict ledger's replay reads the commit from data (board task.commits).
+          data: { sha: commit.hash, files: commitFiles, message: commit.subject || summary },
         });
         if (entry) index.commits.add(commit.hash);
       }
@@ -316,6 +331,9 @@ export function createGitWatcher({
             subject,
             summary: `${file} changed in ${low.task} and ${high.task}`,
             evidence: [file],
+            // The subject "T-1+T-2" is not a task id, so name the tasks and file in data
+            // for the ledger's board (collisions[].tasks / .files).
+            data: { files: [file], tasks: [low.task, high.task] },
           });
           if (entry) index.collisions.add(key);
         }

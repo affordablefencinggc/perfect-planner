@@ -366,8 +366,15 @@ export function createRelay({
   const claimTask = (token, taskId) => serialize(async () => {
     const s = session(token, { role: 'worker' });
     if (typeof taskId !== 'string' || !TASK_ID.test(taskId)) throw relayError(RELAY_ERROR_CODES.INVALID, 'task must look like T-14.');
-    if (s.task && s.task !== taskId) throw relayError(RELAY_ERROR_CODES.FORBIDDEN, `Your token already covers ${s.task}; release it first.`);
-    const t = view().tasks[taskId];
+    const current = view();
+    if (s.task && s.task !== taskId) {
+      // The token only stays bound while the ledger still shows this agent holding the claim.
+      // Once that task is done, reopened or released, the worker may claim the next one.
+      const held = current.tasks[s.task];
+      if (held && held.claimedBy === s.agentId && holdsClaim(held)) throw relayError(RELAY_ERROR_CODES.FORBIDDEN, `Your token already covers ${s.task}; release it first.`);
+      s.task = null;
+    }
+    const t = current.tasks[taskId];
     if (!t || !t.exists) throw relayError(RELAY_ERROR_CODES.NOT_FOUND, `${taskId} does not exist.`);
     if (t.claimedBy === s.agentId && holdsClaim(t)) { s.task = taskId; return { task: taskId, attempt: t.attempt, alreadyClaimed: true }; }
     if (t.claimedBy) throw relayError(RELAY_ERROR_CODES.CONFLICT, `${taskId} is claimed by ${t.claimedBy}.`);
@@ -468,7 +475,10 @@ export function createRelay({
   function lookup(token, ref) {
     session(token, { allowPaused: true });
     const entries = ledger.entries();
-    return resolver(ref, { entries, view: relayView(entries) });
+    // The strict ledger's board carries the plans (board.plans[P].clauses), which a
+    // clause-aware resolver such as core/clauses lookup() needs to return clause text.
+    const board = typeof ledger.board === 'function' ? ledger.board() : null;
+    return resolver(ref, { entries, view: relayView(entries), board, plans: board?.plans ?? {} });
   }
 
   // A release always records task.blocked: the ledger only allows a new claim from created,

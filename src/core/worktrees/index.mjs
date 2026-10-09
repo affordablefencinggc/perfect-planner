@@ -16,6 +16,7 @@ import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { placeholderEnv, isEnvFileName } from "./envPlaceholders.mjs";
+import { scanText } from "./bundledSecretScan.mjs";
 
 export const WORKTREE_DIR = path.join(".perfect-planner", "worktrees");
 export const IGNORE_LINE = ".perfect-planner/worktrees/";
@@ -324,6 +325,8 @@ export function createWorktreeManager({ repoRoot, ledger, maxParallel = 4, portR
           subject: taskId,
           summary: `Worktree for ${taskId} on ${branch} from ${base} (port ${port})`,
           evidence,
+          // The strict ledger's replay reads the worktree from data (board task.worktree).
+          data: { path: relative(target), branch, port, base, head: baseCommit, ...(requestedId !== taskId ? { attempt: requestedId } : {}), hookSha256 },
         });
         return { taskId, attempt: requestedId, branch, path: target, port, baseBranch: base, baseCommit, dependencies: link ? "linked" : "none", settings, hook, hookSha256, ignoredAdded, entry };
       } catch (error) {
@@ -391,8 +394,58 @@ export function createWorktreeManager({ repoRoot, ledger, maxParallel = 4, portR
         subject: taskId,
         summary: `Removed merged worktree and branch ${branch} for ${taskId}`,
         evidence: [`branch:${branch}`, `path:${relative(target)}`, `merged-into:${integration}`, `head:${tip}`],
+        data: { branch, path: relative(target), into: integration, head: tip },
       });
       return { taskId, branch, mergedInto: integration, head: tip, entry };
+    });
+  }
+
+  /**
+   * merge(T, { into, integrationPath, actor? }) merges pp/<T> into the integration
+   * branch checked out at integrationPath (--no-ff) and records merge.done. Before
+   * merging it re-runs the secret scan on every line the branch adds (the commit
+   * hook is advisory, see hookScript), and refuses a dirty or wrong checkout.
+   */
+  async function merge(requestedId, { into, integrationPath, actor = ACTOR } = {}) {
+    checkTask(requestedId);
+    const taskId = baseTask(requestedId);
+    return serial(async () => {
+      if (typeof integrationPath !== "string" || !integrationPath) fail("WORKTREE_CONFIG", "merge needs integrationPath, a checkout of the integration branch");
+      const record = activeWorktrees(ledger.entries()).find((w) => w.taskId === taskId);
+      if (!record) fail("WORKTREE_UNKNOWN", `${taskId} has no active worktree`);
+      const branch = record.branch || branchName(taskId);
+      const target = into ?? (await runGit(git, integrationPath, ["symbolic-ref", "--short", "HEAD"])).stdout.trim();
+      await resolveCommit(target, "integration branch");
+      const checkedOut = (await runGit(git, integrationPath, ["symbolic-ref", "--short", "HEAD"], { allowFail: true })).stdout.trim();
+      if (checkedOut !== target) fail("WORKTREE_BAD_BASE", `${integrationPath} is on ${checkedOut || "a detached HEAD"}, not ${target}`);
+      const dirty = (await runGit(git, integrationPath, ["status", "--porcelain=v1", "-z", "--untracked-files=no"])).stdout;
+      if (dirty) fail("WORKTREE_DIRTY", `${integrationPath} has uncommitted changes; refusing to merge`);
+      const tip = (await runGit(git, root, ["rev-parse", "--verify", `refs/heads/${branch}`])).stdout.trim();
+      // Every commit the merge would bring in, not just the net diff: a key added and
+      // later deleted on the branch would still land in the integration history.
+      const diff = (await runGit(git, integrationPath, ["log", "--no-color", "-p", "--unified=0", "--format=commit %H", "--end-of-options", `${target}..${tip}`])).stdout;
+      const findings = [];
+      let file = null;
+      for (const line of diff.split(/\r?\n/)) {
+        if (line.startsWith("+++ ")) { file = line.slice(4).replace(/^b\//, ""); continue; }
+        if (line.startsWith("+") && file) for (const finding of scanText(file, line.slice(1))) findings.push({ path: finding.path, rule: finding.rule });
+      }
+      if (findings.length) fail("WORKTREE_SECRET", `${branch} adds what looks like a secret (${findings.map((f) => `${f.path}: ${f.rule}`).join(", ")}); refusing to merge`, { findings });
+      const merged = await runGit(git, integrationPath, ["merge", "--no-ff", "--no-edit", "-m", `Merge ${branch} (${taskId})`, tip], { allowFail: true });
+      if (!merged.ok) {
+        await runGit(git, integrationPath, ["merge", "--abort"], { allowFail: true });
+        fail("WORKTREE_MERGE_CONFLICT", `${branch} does not merge cleanly into ${target}: ${merged.stdout.trim() || merged.stderr.trim()}`);
+      }
+      const commit = (await runGit(git, integrationPath, ["rev-parse", "HEAD"])).stdout.trim();
+      const entry = await ledger.append({
+        actor,
+        type: "merge.done",
+        subject: requestedId,
+        summary: `Merged ${branch} into ${target} for ${taskId}`,
+        evidence: [commit, `branch:${branch}`, `into:${target}`, `head:${tip}`],
+        data: { commit, into: target, branch, head: tip },
+      });
+      return { taskId, branch, into: target, commit, head: tip, entry };
     });
   }
 
@@ -406,5 +459,5 @@ export function createWorktreeManager({ repoRoot, ledger, maxParallel = 4, portR
     });
   }
 
-  return { launch, remove, list, ensureIgnored, worktreePath, branchName, maxParallel, portRange: [portLow, portHigh] };
+  return { launch, remove, merge, list, ensureIgnored, worktreePath, branchName, maxParallel, portRange: [portLow, portHigh] };
 }

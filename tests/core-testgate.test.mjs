@@ -739,3 +739,32 @@ test("testGateState ignores runs bound to an older definition and resets on reop
   assert.equal(commandFromEntry({ evidence: ["command:not json"] }), null);
   assert.ok(existsSync(os.tmpdir()));
 });
+
+test("runs and definitions carry the strict ledger's data fields; Jev reviews are read from data", async () => {
+  const fx = await fixture();
+  const ledger = fakeLedger();
+  const gate = createTestGate({ ledger, timeoutMs: 30_000 });
+  // A review in core/jev's data encoding with no phase:/verdict:/confidence: markers.
+  const dataReview = (task, kind, outcome = "approve", confidence = 0.9) => ledger.append({
+    actor: JEV, type: "review.verdict", subject: task, summary: `Jev ${kind} review of ${task}: ${outcome}`, reason: "Checked.",
+    data: { kind, verdict: outcome === "approve" ? "approve" : "reject", outcome, model: JEV.model, provider: "TypeSafe", cost: 0, confidence, modelCall: true },
+  });
+  try {
+    const defined = await gate.defineTest("T-1", "node check.mjs", owner);
+    assert.deepEqual(defined.data, { command: "node check.mjs", argv: ["node", "check.mjs"] });
+    const first = await gate.confirmFailsFirst("T-1", fx.before);
+    assert.deepEqual(first.entry.data, { where: "fails-first", definition: defined.n, exitCode: 3, timedOut: false });
+    const gaps = await dataReview("T-1", "test", "gaps");
+    await assert.rejects(gate.approveTest("T-1", owner, { jevVerdict: { entry: gaps.n } }), (e) => e.code === "TEST_JEV_REJECTED");
+    const review = await dataReview("T-1", "test");
+    const approved = await gate.approveTest("T-1", owner, { jevVerdict: { entry: review.n } });
+    assert.ok(approved.evidence.includes("jev-confidence:0.9"));
+    assert.equal(approved.data.jevVerdict, review.n);
+    await worktreeCreated(ledger, "T-1", fx.worktree);
+    const run = await gate.runInWorktree("T-1", fx.worktree);
+    assert.equal(run.entry.data.where, "worktree");
+    await dataReview("T-1", "diff", "reject", 0.95);
+    await mergeDone(ledger, "T-1");
+    await assert.rejects(gate.afterMerge("T-1", fx.integration), (e) => e.code === "TEST_DIFF_NOT_REVIEWED", "a rejecting data-encoded diff review blocks");
+  } finally { await fx.cleanup(); }
+});

@@ -230,6 +230,17 @@ function validateVerdict(entry, task) {
   if (entry.actor.kind !== "jev") return;
   if (!VERDICTS.has(data.verdict)) refuse("verdict-shape", 'Jev review.verdict requires data.verdict "approve" or "reject"');
   if (!nonEmpty(entry.reason)) refuse("reason-required", "Jev review.verdict requires a non-empty reason");
+  if (data.modelCall === false) {
+    // A verdict Jev reached without calling a model (local pre-check reject, budget
+    // queueing, no independent reviewer). There is no model, provider or spend to
+    // record, so it must say so explicitly: no model, no provider, cost 0.
+    if (data.model !== undefined && data.model !== null) refuse("verdict-model", "a Jev verdict with data.modelCall false must not name a model");
+    if (entry.actor.model !== undefined) refuse("verdict-model", "a Jev verdict with data.modelCall false must not carry actor.model");
+    if (data.provider !== undefined && data.provider !== null) refuse("verdict-provider", "a Jev verdict with data.modelCall false must not name a provider");
+    if (data.cost !== 0) refuse("verdict-cost", "a Jev verdict with data.modelCall false must record data.cost 0");
+    if (data.confidence !== undefined && data.confidence !== null && !(typeof data.confidence === "number" && data.confidence >= 0 && data.confidence <= 1)) refuse("verdict-confidence", "data.confidence must be null or between 0 and 1");
+    return;
+  }
   if (!nonEmpty(data.model)) refuse("verdict-model", "Jev review.verdict requires data.model");
   if (!nonEmpty(data.provider)) refuse("verdict-provider", "Jev review.verdict requires data.provider");
   if (typeof data.cost !== "number" || !Number.isFinite(data.cost) || data.cost < 0) refuse("verdict-cost", "Jev review.verdict requires a non-negative numeric data.cost");

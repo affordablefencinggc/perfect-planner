@@ -3,7 +3,13 @@
 // finish until Perfect Planner itself has run that approved test in the
 // worktree and again on the integration branch after merge.
 //
-// Ledger encoding (the ledger has no payload field, so state lives in evidence):
+// Ledger encoding. The evidence markers below are what this module reads back; the same
+// facts also go in `data`, which is what the strict ledger's replay() and done gate read:
+//   test.defined  data { command: "<display>", argv }      (ledger task.test.command)
+//   test.passed / test.failed  data { where: phase, definition, exitCode, timedOut }
+//                 (the ledger's done gate requires the last pass to have where "integration")
+//   review.verdict is read from data { kind, outcome|verdict, confidence } when present
+//                 (core/jev's encoding), falling back to the phase:/verdict:/confidence: markers.
 //   test.defined   evidence: ["command:<JSON argv>"]                 refs: cited clauses
 //   test.failed /  evidence: ["phase:<fails-first|worktree|integration>", "definition:<L-n>",
 //   test.passed              "exit:<n|null>", "signal:<s|none>", "timed-out:<bool>", "duration-ms:<n>",
@@ -39,6 +45,20 @@ const evidenceValue = (entry, key) => {
 };
 const entryNumber = (n) => { const match = /^L-(\d+)$/.exec(String(n ?? "")); return match ? Number(match[1]) : null; };
 const isGateActor = (actor) => actor?.kind === TESTGATE_ACTOR.kind && actor?.id === TESTGATE_ACTOR.id;
+const dataOf = (entry) => (entry?.data && typeof entry.data === "object" && !Array.isArray(entry.data) ? entry.data : {});
+// review.verdict fields: core/jev writes data { kind, outcome (five-way), verdict (approve|reject), confidence, model }.
+const reviewPhase = (entry) => (typeof dataOf(entry).kind === "string" ? dataOf(entry).kind : evidenceValue(entry, "phase"));
+const reviewVerdict = (entry) => {
+  const data = dataOf(entry);
+  if (typeof data.outcome === "string") return data.outcome;
+  return evidenceValue(entry, "verdict") ?? (typeof data.verdict === "string" ? data.verdict : undefined);
+};
+const reviewConfidence = (entry) => {
+  const data = dataOf(entry);
+  if (typeof data.confidence === "number") return data.confidence;
+  const raw = evidenceValue(entry, "confidence");
+  return raw === undefined ? NaN : Number(raw);
+};
 
 /** Read the approved argv out of a test.defined entry. */
 export function commandFromEntry(entry) {
@@ -57,10 +77,10 @@ function correctedNumbers(entries) {
 }
 
 function approvingDiffReview(entry, minConfidence) {
-  if (evidenceValue(entry, "phase") !== "diff" || evidenceValue(entry, "verdict") !== "approve") return false;
+  if (reviewPhase(entry) !== "diff" || reviewVerdict(entry) !== "approve") return false;
   if (entry.actor?.kind === "person") return true;
   if (entry.actor?.kind !== "jev") return false;
-  const confidence = Number(evidenceValue(entry, "confidence"));
+  const confidence = reviewConfidence(entry);
   return Number.isFinite(confidence) && confidence >= minConfidence;
 }
 
@@ -100,7 +120,7 @@ export function testGateState(entries, task, { minJevConfidence = DEFAULT_MIN_JE
         if (!state.merge) { state.lastWorktreeRun = null; state.diffReview = null; }
         break;
       case "review.verdict":
-        if (evidenceValue(entry, "phase") === "diff" && !state.merge) state.diffReview = approvingDiffReview(entry, minJevConfidence) ? entry : null;
+        if (reviewPhase(entry) === "diff" && !state.merge) state.diffReview = approvingDiffReview(entry, minJevConfidence) ? entry : null;
         break;
       case "merge.done":
         if (state.lastWorktreeRun) state.merge = entry;
@@ -175,6 +195,7 @@ export function createTestGate({ ledger, runner = runTestCommand, timeoutMs: def
       actor: TESTGATE_ACTOR, type: ok ? "test.passed" : "test.failed", subject: task,
       summary: oneLine(`${phase} run of ${task} test ${ok ? "passed" : "failed"}: ${outcome}`),
       evidence, refs: current.definition.refs || [],
+      data: { where: phase, definition: current.definition.n, exitCode: Number.isInteger(result.exitCode) ? result.exitCode : null, timedOut: Boolean(result.timedOut) },
     });
     return { passed: ok, entry, result };
   }
@@ -186,15 +207,15 @@ export function createTestGate({ ledger, runner = runTestCommand, timeoutMs: def
     const entries = ledger.entries();
     const voided = correctedNumbers(entries);
     const review = entries.find((entry) => entry.n === n);
-    if (!review || voided.has(n) || review.type !== "review.verdict" || review.actor?.kind !== "jev" || baseTaskId(review.subject) !== baseTaskId(task) || evidenceValue(review, "phase") !== "test") {
+    if (!review || voided.has(n) || review.type !== "review.verdict" || review.actor?.kind !== "jev" || baseTaskId(review.subject) !== baseTaskId(task) || reviewPhase(review) !== "test") {
       fail("TEST_JEV_VERDICT_INVALID", `${n} is not a Jev test review of ${baseTaskId(task)}`);
     }
     if (entryNumber(n) <= entryNumber(current.definition.n)) fail("TEST_JEV_VERDICT_STALE", `${n} reviewed an earlier definition of the ${task} test`);
-    const verdict = evidenceValue(review, "verdict");
+    const verdict = reviewVerdict(review);
     if (verdict !== "approve") fail("TEST_JEV_REJECTED", `Jev did not approve the ${task} test (${verdict ?? "no verdict"})${review.reason ? `: ${oneLine(review.reason)}` : ""}`);
-    const confidence = Number(evidenceValue(review, "confidence"));
-    if (!Number.isFinite(confidence) || confidence < minJevConfidence) fail("TEST_JEV_LOW_CONFIDENCE", `Jev's approval of the ${task} test has confidence ${evidenceValue(review, "confidence") ?? "none"} (below ${minJevConfidence}); the owner must decide`);
-    const model = evidenceValue(review, "model") ?? review.actor?.model;
+    const confidence = reviewConfidence(review);
+    if (!Number.isFinite(confidence) || confidence < minJevConfidence) fail("TEST_JEV_LOW_CONFIDENCE", `Jev's approval of the ${task} test has confidence ${Number.isFinite(confidence) ? confidence : "none"} (below ${minJevConfidence}); the owner must decide`);
+    const model = (typeof dataOf(review).model === "string" ? dataOf(review).model : undefined) ?? evidenceValue(review, "model") ?? review.actor?.model;
     return [`jev-verdict:${n}`, `jev-confidence:${confidence}`, ...(model && model !== "none" ? [`jev-model:${model}`] : [])];
   }
 
@@ -226,6 +247,7 @@ export function createTestGate({ ledger, runner = runTestCommand, timeoutMs: def
         actor, type: "test.defined", subject: task,
         summary: oneLine(`Acceptance test for ${task}: ${displayCommand(argv)}${note ? ` (${note})` : ""}`),
         evidence: [`command:${JSON.stringify(argv)}`], refs,
+        data: { command: displayCommand(argv), argv },
       });
     },
 
@@ -269,7 +291,7 @@ export function createTestGate({ ledger, runner = runTestCommand, timeoutMs: def
       } else {
         evidence.push(...jevEvidence(task, current, jevVerdict));
       }
-      return ledger.append({ actor, type: "test.approved", subject: task, summary: oneLine(`Acceptance test for ${task} approved${reason ? " by owner override" : ""}`), ...(reason ? { reason } : {}), evidence, refs: current.definition.refs || [] });
+      return ledger.append({ actor, type: "test.approved", subject: task, summary: oneLine(`Acceptance test for ${task} approved${reason ? " by owner override" : ""}`), ...(reason ? { reason } : {}), evidence, refs: current.definition.refs || [], data: { definition: current.definition.n, failsFirst: current.failsFirst.n, jevVerdict: override !== undefined ? null : evidence.find((e) => e.startsWith("jev-verdict:")).slice("jev-verdict:".length), override: override !== undefined } });
     },
 
     /** Run the approved command in the task worktree. Perfect Planner runs it; the agent's claim is never trusted. */

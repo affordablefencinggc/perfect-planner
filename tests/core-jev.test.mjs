@@ -944,3 +944,31 @@ test("against the real strict ledger: outcomes with no model call are recorded",
     assert.deepEqual(queuedFromLedger(ledger.entries()).map((q) => q.task), ["T-1"]);
   });
 });
+
+test("verdicts with and without a model call are accepted by the real strict ledger", async () => {
+  const { openLedger } = await import(pathToFileURL(path.join(here, "..", "src", "core", "ledger", "index.mjs")).href);
+  const dir = await mkdtemp(path.join(os.tmpdir(), "pp-jev-real-"));
+  const ledger = await openLedger(dir);
+  try {
+    const owner = { kind: "person", id: "owner" };
+    await ledger.append({ actor: owner, type: "task.created", subject: "T-1", summary: "Task" });
+    const provider = fakeProvider((r) => confident(r));
+    const jev = createJev({ ledger, provider, budget: { monthlyCap: 10, spentThisMonth: 0 } });
+    const clauses = [{ ref: "P-1 §1", text: "Do the thing" }];
+    // Local pre-check reject: no model call, so modelCall false, cost 0.
+    const local = await jev.reviewTest({ task: { id: "T-1" }, clauses, testSource: "", buildModel: "builder-1" });
+    assert.equal(local.verdict, "reject");
+    // No independent reviewer: escalate without a call.
+    const solo = await jev.reviewTest({ task: { id: "T-1" }, clauses, testSource: "assert(x)", preRun: { command: "node t.mjs", exitCode: 1 }, buildModel: "jev-latest" });
+    assert.equal(solo.verdict, "escalate");
+    // A real (fake-provider) call.
+    const called = await jev.reviewTest({ task: { id: "T-1" }, clauses, testSource: "assert(x)", preRun: { command: "node t.mjs", exitCode: 1 }, buildModel: "builder-1" });
+    assert.equal(called.verdict, "approve");
+    const reviews = ledger.board().tasks["T-1"].reviews;
+    assert.deepEqual(reviews.map((r) => [r.verdict, r.model, r.cost]), [["reject", null, 0], ["reject", null, 0], ["approve", "jev-latest", 0.01]]);
+    assert.deepEqual(ledger.entries().filter((e) => e.type === "review.verdict").map((e) => e.data.modelCall), [false, false, true]);
+  } finally {
+    ledger.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});

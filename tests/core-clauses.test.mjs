@@ -8,7 +8,13 @@ import {
   parseImplements,
   parsePlanBlocks,
   parseRef,
+  planApprovalEntries,
+  approvePlan,
 } from "../src/core/clauses/index.mjs";
+import { openLedger } from "../src/core/ledger/index.mjs";
+import { mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 
 const ids = (result) => result.clauses.map((clause) => `${clause.id}|${clause.status}`);
 
@@ -549,7 +555,7 @@ test("lookup of a ledger entry returns that entry's summary and the entries that
 
 test("lookup accepts missing entries and plans and returns null for invalid refs", () => {
   const bare = lookup("T-3");
-  assert.deepEqual(bare, { ref: "T-3", text: null, history: [], citedBy: [] });
+  assert.deepEqual(bare, { ref: "T-3", text: null, history: [], citedBy: [], tasks: [], commits: [] });
   assert.equal(lookup("not a ref", { entries, plans }), null);
   assert.equal(lookup(undefined, { entries, plans }), null);
 });
@@ -688,4 +694,58 @@ test("parseImplements groups within one line only", () => {
     { ref: "P-2 §3.1", task: null },
     { ref: "P-2 §3.2", task: "T-14" },
   ]);
+});
+
+test("lookup reads clause text from the strict ledger board's plan shape", () => {
+  const boardPlans = { "P-1": { id: "P-1", clauses: { "§1": { clause: "§1", text: "Save plans locally", state: "active" } } } };
+  assert.equal(lookup("P-1 §1", { entries: [], plans: boardPlans }).text, "Save plans locally");
+  assert.equal(lookup("§1", { entries: [], plans: boardPlans }).text, "Save plans locally");
+});
+
+test("lookup lists the tasks and commits that cite a clause", () => {
+  const cited = [
+    { n: "L-000001", type: "task.created", subject: "T-1", summary: "Build it", refs: ["P-1 §1"] },
+    { n: "L-000002", type: "commit.observed", subject: "T-1", summary: "abc", evidence: ["abc123"], refs: ["P-1 §1"], data: { sha: "abc123" } },
+    { n: "L-000003", type: "commit.observed", subject: "T-2.a2", summary: "def", evidence: ["def456"], refs: ["P-1 §1"] },
+    { n: "L-000004", type: "task.created", subject: "T-3", summary: "Other", refs: ["P-1 §2"] },
+  ];
+  const result = lookup("P-1 §1", { entries: cited, plans: {} });
+  assert.deepEqual(result.tasks, ["T-1", "T-2"]);
+  assert.deepEqual(result.commits, [{ sha: "abc123", task: "T-1", entry: "L-000002" }, { sha: "def456", task: "T-2", entry: "L-000003" }]);
+});
+
+test("planApprovalEntries writes a plan the strict ledger accepts, and a new version only writes its changes", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "pp-core-clauses-"));
+  const ledger = await openLedger(dir);
+  try {
+    const owner = { kind: "person", id: "owner" };
+    const first = await approvePlan(ledger, { plan: "P-1", markdown: `# Save
+
+Plans save locally.
+
+# Load
+
+Plans load on start.`, actor: owner, title: "First plan" });
+    assert.deepEqual(first.entries.map((entry) => entry.type), ["clause.added", "clause.added", "clause.added", "clause.added", "plan.approved"]);
+    const board = ledger.board();
+    assert.equal(board.plans["P-1"].state, "approved");
+    assert.equal(board.plans["P-1"].clauses["§1.1"].text, "Plans save locally.");
+    const second = planApprovalEntries({ plan: "P-2", markdown: `# Save
+
+Plans save locally and to backup.
+
+# Load
+
+Plans load on start.`, previous: first.clauses, actor: owner });
+    assert.deepEqual(second.inputs.map((input) => input.type), ["clause.changed", "plan.approved"]);
+    for (const input of second.inputs) await ledger.append(input);
+    const after = ledger.board();
+    assert.equal(after.plans["P-2"].clauses["§1.1"].text, "Plans save locally and to backup.");
+    assert.equal(after.plans["P-2"].clauses["§2.1"].text, "Plans load on start.");
+    assert.equal(after.plans["P-1"].clauses["§1.1"].text, "Plans save locally.");
+    assert.throws(() => planApprovalEntries({ plan: "plan-1", markdown: "x", actor: owner }), TypeError);
+  } finally {
+    ledger.close();
+    await rm(dir, { recursive: true, force: true });
+  }
 });

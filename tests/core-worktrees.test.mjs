@@ -580,3 +580,41 @@ test("the pre-commit hook is executable on POSIX", { skip: process.platform === 
     assert.ok(((await fs.stat(hook)).mode & 0o111) !== 0, "hook has an execute bit");
   } finally { await cleanup(root); }
 });
+
+test("merge re-scans the branch diff for secrets, merges --no-ff into the integration checkout and records merge.done", async () => {
+  const root = await makeRepo({ envFiles: false });
+  const ledger = fakeLedger();
+  const manager = createWorktreeManager({ repoRoot: root, ledger, portProbe: async () => true });
+  const integration = path.join(root, ".perfect-planner", "integration");
+  try {
+    const launched = await manager.launch("T-5");
+    assert.deepEqual(launched.entry.data, { path: ".perfect-planner/worktrees/T-5", branch: "pp/T-5", port: launched.port, base: "main", head: launched.baseCommit, hookSha256: launched.hookSha256 });
+    git(root, "branch", "integration", "main");
+    git(root, "worktree", "add", "-q", integration, "integration");
+    // A worker bypasses the advisory hook: the merge-time scan still refuses it.
+    await fs.writeFile(path.join(launched.path, "config.js"), `export const k = "${FAKE_AWS}";\n`);
+    git(launched.path, "add", "config.js");
+    git(launched.path, "commit", "-q", "--no-verify", "-m", "bypass");
+    await assert.rejects(manager.merge("T-5", { into: "integration", integrationPath: integration }), (error) => error.code === "WORKTREE_SECRET" && !error.message.includes(FAKE_AWS));
+    git(launched.path, "rm", "-q", "config.js");
+    await fs.writeFile(path.join(launched.path, "app.js"), "export const x = 2;\n");
+    git(launched.path, "add", "-A");
+    git(launched.path, "commit", "-q", "-m", "work");
+    // Removing the key in a later commit is not enough: the branch history still adds it.
+    await assert.rejects(manager.merge("T-5", { into: "integration", integrationPath: integration }), { code: "WORKTREE_SECRET" });
+    git(launched.path, "reset", "-q", "--hard", launched.baseCommit);
+    await fs.writeFile(path.join(launched.path, "app.js"), "export const x = 2;\n");
+    git(launched.path, "commit", "-q", "-am", "clean work");
+    await assert.rejects(manager.merge("T-5", { into: "main", integrationPath: integration }), { code: "WORKTREE_BAD_BASE" });
+    const merged = await manager.merge("T-5", { into: "integration", integrationPath: integration });
+    assert.equal(merged.entry.type, "merge.done");
+    assert.deepEqual(merged.entry.data, { commit: merged.commit, into: "integration", branch: "pp/T-5", head: git(root, "rev-parse", "pp/T-5") });
+    assert.equal(git(integration, "rev-parse", "HEAD"), merged.commit);
+    assert.equal(git(integration, "rev-list", "--count", "--merges", "HEAD"), "1", "merged with --no-ff");
+    const removed = await manager.remove("T-5", { into: "integration" });
+    assert.deepEqual(removed.entry.data, { branch: "pp/T-5", path: ".perfect-planner/worktrees/T-5", into: "integration", head: merged.head });
+  } finally {
+    gitTry(root, "worktree", "remove", "--force", integration);
+    await cleanup(root);
+  }
+});

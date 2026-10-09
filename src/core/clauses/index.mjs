@@ -11,3 +11,4 @@
 export { numberPlan, parsePlanBlocks, matchKeys, normalizeText, CLAUSE_ID_PATTERN } from "./numbering.mjs";
 export { parseRef, parseImplements, canonicalRef } from "./refs.mjs";
 export { lookup } from "./lookup.mjs";
+export { planApprovalEntries, approvePlan } from "./planEntries.mjs";

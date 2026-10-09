@@ -36,6 +36,7 @@ function fakeLedger(clock) {
         summary: fields.summary,
         ...(fields.reason ? { reason: fields.reason } : {}),
         ...(fields.blocking ? { blocking: true } : {}),
+        ...(fields.data ? { data: fields.data } : {}),
         evidence: fields.evidence ?? [],
         refs: fields.refs ?? [],
         corrects: null,
@@ -701,6 +702,50 @@ test("a commit reachable from two task worktrees is observed once", async () => 
     const observed = ofType(ledger, "commit.observed");
     assert.equal(observed.length, 1, "one commit hash is observed once, whichever task reaches it first");
     assert.deepEqual(observed[0].evidence, [hash]);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("the strict ledger's question shape (Q-n subject, data.task and data.blocking) pauses the stall clock", async () => {
+  const clock = { t: START };
+  const ledger = fakeLedger(clock);
+  await ledger.append({ actor: { kind: "agent", id: "w1" }, type: "task.claimed", subject: "T-1.a2", summary: "claimed T-1.a2" });
+  clock.t = START + 100;
+  await ledger.append({
+    actor: { kind: "agent", id: "w1" },
+    type: "question.asked",
+    subject: "Q-1",
+    summary: "which schema version?",
+    data: { task: "T-1.a2", options: [], blocking: true },
+  });
+  const watcher = createGitWatcher({ repoRoot: ".", ledger, stallMs: 1000, now: () => new Date(clock.t), listWorktrees: async () => [] });
+  clock.t = START + 5000;
+  await watcher.tick();
+  assert.equal(ofType(ledger, "task.blocked").length, 0, "waiting on a blocking question is not a stall");
+  await ledger.append({ actor: { kind: "system", id: "relay" }, type: "question.answered", subject: "Q-1", summary: "use schema v2", data: { decision: "D-1" } });
+  clock.t = START + 6100;
+  await watcher.tick();
+  const stalls = ofType(ledger, "task.blocked");
+  assert.equal(stalls.length, 1);
+  assert.equal(stalls[0].subject, "T-1", "attempts share the base task's watch state");
+});
+
+test("commit and collision entries carry the data the strict ledger's board reads", async () => {
+  const clock = { t: START };
+  const ledger = fakeLedger(clock);
+  const { root, repo, worktrees } = await makeRepo();
+  try {
+    await commitFile(worktrees["T-1"], "shared.txt", "one\n", "T-1 work", "Implements: P-1 §1 (T-1)");
+    await commitFile(worktrees["T-2"], "shared.txt", "two\n", "T-2 work");
+    const watcher = createGitWatcher({ repoRoot: repo, ledger, listWorktrees: listFor(repo, worktrees), now: () => new Date(clock.t) });
+    const result = await watcher.tick();
+    assert.deepEqual(result.errors, []);
+    const commits = ofType(ledger, "commit.observed");
+    assert.equal(commits.length, 2);
+    assert.deepEqual(commits[0].data, { sha: commits[0].evidence[0], files: ["shared.txt"], message: "T-1 work" });
+    const [collision] = ofType(ledger, "collision.detected");
+    assert.deepEqual(collision.data, { files: ["shared.txt"], tasks: ["T-1", "T-2"] });
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }

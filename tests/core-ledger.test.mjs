@@ -697,6 +697,28 @@ test("review.verdict records model, provider, cost, confidence and reason; rejec
   ledger.close();
 });
 
+test("a Jev verdict reached without a model call says so explicitly and records no spend", async () => {
+  const repo = await tempRepo();
+  const { ledger } = await open(repo);
+  const id = await readyTask(ledger);
+  const local = { kind: "jev", id: "jev" };
+  const verdict = (data, actor = local) => ledger.append({ actor, type: "review.verdict", subject: id, summary: "Local pre-check", reason: "adds a secret", data });
+  const base = { verdict: "reject", modelCall: false, model: null, provider: null, cost: 0, confidence: 1 };
+  // Without the explicit flag a model-less Jev verdict is still refused.
+  await expectRule(verdict({ verdict: "reject", model: null, provider: null, cost: 0, confidence: 1 }), "verdict-model");
+  await expectRule(verdict({ ...base, model: "jev-latest" }), "verdict-model");
+  await expectRule(verdict(base, jev), "verdict-model");
+  await expectRule(verdict({ ...base, provider: "TypeSafe" }), "verdict-provider");
+  await expectRule(verdict({ ...base, cost: 0.01 }), "verdict-cost");
+  await expectRule(verdict({ ...base, confidence: 3 }), "verdict-confidence");
+  await expectRule(verdict({ ...base, verdict: "maybe" }), "verdict-shape");
+  await verdict(base);
+  await verdict({ ...base, confidence: null });
+  const reviews = ledger.board().tasks[id].reviews;
+  assert.deepEqual(reviews.map((review) => [review.verdict, review.model, review.cost]), [["reject", null, 0], ["reject", null, 0]]);
+  ledger.close();
+});
+
 test("a failed write blocks the ledger until acknowledged and never glues lines together", async () => {
   const repo = await tempRepo();
   const { ledger } = await open(repo);

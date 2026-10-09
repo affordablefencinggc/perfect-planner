@@ -737,3 +737,34 @@ test('stdio smoke: relay tools are listed only when write mode is enabled', asyn
     await rm(base, { recursive: true, force: true });
   }
 });
+
+test('a worker whose task was reopened or finished can claim its next task with the same token', { skip: !existsSync(realLedgerUrl) && 'src/core/ledger is not on this branch yet' }, async () => {
+  const { openLedger } = await import(realLedgerUrl.href);
+  const root = await mkdtemp(path.join(tmpdir(), 'pp-relay-next-'));
+  const ledger = await openLedger(root);
+  try {
+    const owner = { kind: 'person', id: 'owner' };
+    const seed = async (title) => {
+      const id = ledger.nextId('T');
+      await ledger.append({ actor: system, type: 'task.created', subject: id, summary: title });
+      await ledger.append({ actor: system, type: 'test.defined', subject: id, summary: `node --test tests/${id}.test.mjs` });
+      await ledger.append({ actor: owner, type: 'test.approved', subject: id, summary: 'Approved' });
+      return id;
+    };
+    const t1 = await seed('One');
+    const t2 = await seed('Two');
+    const relay = createRelay({ ledger });
+    relay.hello({ agent: 'lead' });
+    const a = relay.hello({ agent: 'a' });
+    await relay.claimTask(a.token, t1);
+    // While the claim is live, the token stays bound to it.
+    await assert.rejects(relay.claimTask(a.token, t2), { code: 'RELAY_FORBIDDEN' });
+    await ledger.append({ actor: system, type: 'task.reopened', subject: t1, summary: 'reopen', reason: 'review rejected the diff' });
+    await relay.claimTask(a.token, t2);
+    assert.equal(ledger.board().tasks[t2].claimedBy, 'a');
+    await assert.rejects(relay.reportProgress(a.token, t1, 'old task'), { code: 'RELAY_FORBIDDEN' });
+  } finally {
+    ledger.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});

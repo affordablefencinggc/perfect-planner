@@ -8,15 +8,23 @@ function planNumber(planId) {
   return parsed && parsed.kind === "plan" ? Number(planId.slice(2)) : 0;
 }
 
+// A plan's clauses as [{ id, text }]. Accepts the numberPlan shape (an array of
+// { id, text }) and the strict ledger board's shape (board.plans[P].clauses, an
+// object keyed by clause id whose values carry { clause, text, state }).
+function clausesOf(plan) {
+  const clauses = plan?.clauses;
+  if (Array.isArray(clauses)) return clauses;
+  if (!clauses || typeof clauses !== "object") return [];
+  return Object.entries(clauses).map(([key, value]) => ({ ...value, id: value?.id ?? value?.clause ?? key }));
+}
+
 // The plan to read a clause from: the named plan, or else the latest plan that has it.
 function resolveClause(parsed, plans) {
   const planIds = parsed.plan
     ? [parsed.plan]
     : Object.keys(plans ?? {}).sort((a, b) => planNumber(b) - planNumber(a));
   for (const planId of planIds) {
-    const clauses = plans?.[planId]?.clauses;
-    if (!Array.isArray(clauses)) continue;
-    const found = clauses.find((clause) => clause && clause.id === parsed.clause);
+    const found = clausesOf(plans?.[planId]).find((clause) => clause && clause.id === parsed.clause);
     if (found) return { planId, text: found.text ?? null };
   }
   return { planId: parsed.plan ?? null, text: null };
@@ -103,10 +111,26 @@ export function lookup(ref, { entries = [], plans = {} } = {}) {
     if (citesTarget(entry, target)) citedBy.push(entry);
   }
 
+  // Convenience views over citedBy: the tasks that cite the ref (any citing entry
+  // whose subject is a task, attempts folded into the base id) and the commits
+  // that implement it (commit.observed entries, sha from data.sha or evidence[0]).
+  const tasks = [];
+  const commits = [];
+  for (const entry of citedBy) {
+    const subject = subjectRef(entry);
+    if (subject?.kind === "task" && !tasks.includes(subject.id)) tasks.push(subject.id);
+    if (entry?.type === "commit.observed") {
+      const sha = (entry.data && typeof entry.data.sha === "string" ? entry.data.sha : null) ?? (Array.isArray(entry.evidence) ? entry.evidence[0] ?? null : null);
+      commits.push({ sha, task: subject?.kind === "task" ? subject.id : null, entry: entry.n ?? null });
+    }
+  }
+
   return {
     ref: canonicalRef(target),
     text: textFor(target, list, planMap, resolved),
     history,
     citedBy,
+    tasks,
+    commits,
   };
 }

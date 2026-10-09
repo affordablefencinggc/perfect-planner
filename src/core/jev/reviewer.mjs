@@ -169,6 +169,9 @@ export function createJev({
       data: {
         kind: phase,
         verdict: result.verdict === "approve" ? "approve" : "reject",
+        // A local pre-check, budget queueing or a missing independent reviewer makes no
+        // model call; the ledger then requires modelCall false, no model/provider and cost 0.
+        modelCall: Boolean(result.model),
         outcome: result.verdict,
         modelVerdict: result.modelVerdict ?? null,
         model: result.model ?? null,
