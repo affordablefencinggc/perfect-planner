@@ -2,7 +2,7 @@
 // copies this file into the managed repo's git dir, so it may import nothing but Node.
 // Patterns mirror scripts/verify-secrets.mjs.
 import { spawnSync } from "node:child_process";
-import { accessSync, constants, statSync } from "node:fs";
+import { accessSync, constants, realpathSync, statSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -60,15 +60,33 @@ const isProgram = (file, windows) => {
 export function resolveGit(env, cwd, platform = process.platform) {
   const windows = platform === "win32";
   const name = windows ? "git.exe" : "git";
-  const here = path.resolve(cwd);
+  // Compare real paths: a PATH folder can reach the repo through a symlink or junction (macOS /var -> /private/var).
+  const real = (file) => {
+    try {
+      return realpathSync.native(file);
+    } catch {
+      return null;
+    }
+  };
+  const repo = [path.resolve(cwd), real(cwd)].filter(Boolean);
+  const inRepo = (file) => repo.some((root) => within(root, file));
   // On Windows only a local drive-letter path (core/exec's isLocalWindowsPath): never UNC in any spelling.
-  const usable = (dir) => Boolean(dir) && path.isAbsolute(dir) && !(windows && !/^[A-Za-z]:[\\/]/.test(dir)) && !within(here, dir);
-  const execPath = (env.GIT_EXEC_PATH ?? "").trim();
-  if (usable(execPath) && isProgram(path.join(execPath, name), windows)) return path.join(execPath, name);
+  const usable = (dir) => Boolean(dir) && path.isAbsolute(dir) && !(windows && !/^[A-Za-z]:[\\/]/.test(dir)) && !inRepo(dir);
+  const found = (dir) => {
+    if (!usable(dir)) return null;
+    const file = path.join(dir, name);
+    const realDir = real(dir);
+    const realFile = real(file);
+    if (!realDir || !realFile || inRepo(realDir) || inRepo(realFile) || !isProgram(realFile, windows)) return null;
+    return realFile;
+  };
+  const viaExecPath = found((env.GIT_EXEC_PATH ?? "").trim());
+  if (viaExecPath) return viaExecPath;
   const pathValue = Object.entries(env).find(([key]) => (windows ? key.toUpperCase() === "PATH" : key === "PATH"))?.[1] ?? "";
   for (const entry of pathValue.split(windows ? ";" : ":")) {
     const dir = entry.trim().replace(/^"(.*)"$/, "$1");
-    if (usable(dir) && isProgram(path.join(dir, name), windows)) return path.join(dir, name);
+    const file = found(dir);
+    if (file) return file;
   }
   return null;
 }
