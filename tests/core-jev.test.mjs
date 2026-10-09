@@ -1,12 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { EventEmitter } from "node:events";
-import { readdir, readFile } from "node:fs/promises";
+import { readdir, readFile, mkdtemp, mkdir, writeFile, rm, access } from "node:fs/promises";
+import os from "node:os";
+import { execFileSync } from "node:child_process";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   createJev, sameModel, spentFromLedger, createTypeSafeProvider, createKeychainJevProvider, precheckDiff, parseUnifiedDiff,
   isTestPath, setJevKey, hasJevKey, clearJevKey, createSystemKeychain, createMemoryKeychain, JEV_KEY_SERVICE, JEV_KEY_ACCOUNT,
+  queuedFromLedger, inScope, isUnsafePath, SECRET_RULES, ESTIMATE_CHARS_PER_TOKEN, ESTIMATE_SAFETY_FACTOR,
 } from "../src/core/jev/index.mjs";
 import { windowsScript } from "../src/core/jev/keychain.mjs";
 
@@ -135,7 +138,9 @@ test("windows backend: Credential Manager via PowerShell, secret only on stdin a
     const script = decodePs(call.args);
     if (script.includes("::Write(")) { store.set("k", Buffer.from(call.stdin, "base64").toString("utf8")); return { code: 0 }; }
     if (script.includes("::Read(")) return store.has("k") ? { code: 0, stdout: Buffer.from(store.get("k")).toString("base64") } : { code: 3 };
-    return store.delete("k") ? { code: 0 } : { code: 3 };
+    if (script.includes("::Exists(")) return store.has("k") ? { code: 0 } : { code: 3 };
+    if (script.includes("::Delete(")) return store.delete("k") ? { code: 0 } : { code: 3 };
+    return { code: 1, stderr: "unexpected script" };
   });
   const keychain = createSystemKeychain({ platform: "win32", spawn });
   assert.equal(await hasJevKey({ keychain }), false);
@@ -233,7 +238,9 @@ test("real OS keychain round trip (PP_TEST_REAL_KEYCHAIN=1 only)", { skip: proce
   const account = "jev-api-key-selftest";
   const value = `selftest-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   try {
+    assert.equal(await keychain.exists(JEV_KEY_SERVICE, account), false);
     await keychain.store(JEV_KEY_SERVICE, account, value);
+    assert.equal(await keychain.exists(JEV_KEY_SERVICE, account), true);
     assert.equal(await keychain.read(JEV_KEY_SERVICE, account), value);
     await keychain.store(JEV_KEY_SERVICE, account, value + "-2");
     assert.equal(await keychain.read(JEV_KEY_SERVICE, account), value + "-2");
@@ -242,6 +249,7 @@ test("real OS keychain round trip (PP_TEST_REAL_KEYCHAIN=1 only)", { skip: proce
   }
   assert.equal(await keychain.read(JEV_KEY_SERVICE, account), null);
   assert.equal(await keychain.remove(JEV_KEY_SERVICE, account), false);
+  assert.equal(await keychain.exists(JEV_KEY_SERVICE, account), false);
 });
 
 // --------------------------------------------------------------- provider
@@ -542,6 +550,8 @@ test("reviewTest: fails-first, coverage gaps, trivial tests and approval", async
 
   const unchecked = await jev.reviewTest(base);
   assert.equal(unchecked.notes[0].rule, "fails-first-unchecked");
+  assert.equal(unchecked.verdict, "gaps", "never approved without a fails-first run");
+  assert.ok(unchecked.notes.some((n) => n.rule === "fails-first-required"));
 
   const gapProvider = fakeProvider((r) => confident(r, { clause_1: { type: "noul", noul: 0.03 } }));
   const gaps = await createJev({ ledger, provider: gapProvider, budget: { monthlyCap: 10, spentThisMonth: 0 } }).reviewTest({ ...base, preRun: { exitCode: 1 } });
@@ -614,4 +624,323 @@ test("jev sources never read the clipboard or environment for a key and stay cro
     assert.doesNotMatch(source, /console\.(log|info|warn|error|debug)/, name);
     assert.doesNotMatch(source, /shell:\s*true/, name);
   }
+});
+
+// ------------------------------------------------------- review fixes (C065)
+const diffInput = { task, diff: cleanDiff, testOutput: "ok 1", clauses, files: ["src/auth/"], buildModel: "claude-opus-5-5" };
+
+test("review.verdict and budget.warning carry the structured data the board replays", async () => {
+  const ledger = fakeLedger();
+  const provider = fakeProvider((r) => confident(r), { cost: 8.5 });
+  provider.name = "TypeSafe";
+  const jev = createJev({ ledger, provider, budget: { monthlyCap: 10, spentThisMonth: 0 } });
+  const result = await jev.reviewDiff(diffInput);
+  const entry = ledger.entries().find((e) => e.type === "review.verdict");
+  assert.deepEqual(
+    { kind: entry.data.kind, verdict: entry.data.verdict, modelVerdict: entry.data.modelVerdict, model: entry.data.model, provider: entry.data.provider, cost: entry.data.cost, confidence: entry.data.confidence },
+    { kind: "diff", verdict: "approve", modelVerdict: "approve", model: "jev-latest", provider: "TypeSafe", cost: 8.5, confidence: result.confidence },
+  );
+  assert.ok(Array.isArray(entry.data.notes));
+  const warning = ledger.entries().find((e) => e.type === "budget.warning");
+  assert.deepEqual(warning.data, { percent: 85, spent: 8.5, cap: 10, month: "2026-10" });
+  // Local rejects carry data too, with no model or provider.
+  await jev.reviewDiff({ ...diffInput, files: ["src/elsewhere/"] });
+  const reject = ledger.entries().at(-1);
+  assert.equal(reject.data.verdict, "reject");
+  assert.equal(reject.data.model, null);
+  assert.equal(reject.data.provider, null);
+  assert.equal(reject.data.notes[0].rule, "out-of-scope");
+  assert.equal(entry.data.outcome, "approve");
+  assert.equal(reject.data.outcome, "reject");
+});
+
+test("spentFromLedger prefers data.cost and falls back to the cost: tag", () => {
+  const at = "2026-10-03T00:00:00Z";
+  const entries = [
+    { type: "review.verdict", actor: { kind: "jev", id: "jev" }, at, data: { cost: 1.5 }, evidence: ["cost:99"] },
+    { type: "review.verdict", actor: { kind: "jev", id: "jev" }, at, evidence: ["cost:0.25"] },
+    { type: "review.verdict", actor: { kind: "agent", id: "a" }, at, data: { cost: 50 } },
+  ];
+  assert.equal(spentFromLedger(entries, "2026-10"), 1.75);
+});
+
+test("queued reviews survive a restart: rebuilt from the ledger and retried through a resolver", async () => {
+  const ledger = fakeLedger();
+  const provider = fakeProvider((r) => confident(r), { cost: 1 });
+  const first = createJev({ ledger, provider, budget: { monthlyCap: 10, spentThisMonth: 10 } });
+  const queued = await first.reviewDiff(diffInput);
+  assert.equal(queued.verdict, "queued");
+  assert.equal(provider.calls.length, 0);
+
+  // Restart: a fresh reviewer over the same ledger still knows the review is pending.
+  assert.deepEqual(queuedFromLedger(ledger.entries()).map((q) => [q.task, q.phase, q.ledger]), [["T-14", "diff", queued.ledger]]);
+  const restarted = createJev({ ledger, provider, budget: { monthlyCap: 100, spentThisMonth: 0 } });
+  assert.deepEqual(restarted.pending().map((p) => ({ task: p.task, phase: p.phase, ledger: p.ledger, restored: p.restored })), [{ task: "T-14", phase: "diff", ledger: queued.ledger, restored: true }]);
+  // Without a resolver there is no input to re-run, so it stays pending (no silent drop).
+  assert.deepEqual(await restarted.retryQueued(), []);
+  assert.equal(restarted.pending().length, 1);
+  const asked = [];
+  const drained = await restarted.retryQueued(async (item) => { asked.push(item); return diffInput; });
+  assert.deepEqual(asked.map((a) => [a.task, a.phase, a.ledger]), [["T-14", "diff", queued.ledger]]);
+  assert.equal(drained.length, 1);
+  assert.equal(drained[0].verdict, "approve");
+  assert.equal(restarted.pending().length, 0);
+  assert.deepEqual(queuedFromLedger(ledger.entries()), [], "a later verdict settles the queued one");
+  // A resolver that answers for the wrong task is refused and the review stays pending.
+  const again = createJev({ ledger, provider, budget: { monthlyCap: 10, spentThisMonth: 10 } });
+  await again.reviewDiff(diffInput);
+  const third = createJev({ ledger, provider, budget: { monthlyCap: 100, spentThisMonth: 0 } });
+  await assert.rejects(third.retryQueued(async () => ({ ...diffInput, task: { id: "T-99" } })), /expected T-14/);
+  assert.equal(third.pending().length, 1);
+});
+
+test("budget warning is written even when the month starts over 80% or over the cap", async () => {
+  const ledger = fakeLedger();
+  const provider = fakeProvider((r) => confident(r));
+  const jev = createJev({ ledger, provider, budget: { monthlyCap: 10, spentThisMonth: 12 } });
+  assert.equal((await jev.reviewDiff(diffInput)).verdict, "queued");
+  assert.equal((await jev.reviewDiff(diffInput)).verdict, "queued");
+  const warnings = ledger.entries().filter((e) => e.type === "budget.warning");
+  assert.equal(warnings.length, 1, "warned once, though no paid call was made");
+  assert.equal(warnings[0].data.percent, 120);
+  assert.equal(provider.calls.length, 0);
+
+  const ledger2 = fakeLedger();
+  const nearly = createJev({ ledger: ledger2, provider, budget: { monthlyCap: 10, spentThisMonth: 9 } });
+  await nearly.reviewDiff(diffInput);
+  const entries = ledger2.entries();
+  assert.equal(entries.filter((e) => e.type === "budget.warning").length, 1);
+  assert.ok(entries.findIndex((e) => e.type === "budget.warning") < entries.findIndex((e) => e.data?.verdict === "approve"), "warning precedes the paid call");
+});
+
+test("fails-first: no run caps at gaps; crashed, unrunnable or code-less runs reject without a call", async () => {
+  const ledger = fakeLedger();
+  const provider = fakeProvider((r) => confident(r));
+  const jev = createJev({ ledger, provider, budget: { monthlyCap: 10, spentThisMonth: 0 } });
+  const base = { task, clauses, testSource: "test('locks', () => { assert.equal(limit(5), true); });", buildModel: "claude-opus-5-5" };
+  for (const preRun of [{ exitCode: 127, command: "nod --test" }, { exitCode: 126 }, { exitCode: 9009 }, { error: "spawn ENOENT" }, { exitCode: 1, signal: "SIGKILL" }, { exitCode: null, timedOut: true }, {}, { exitCode: "1" }, { exitCode: 1.5 }]) {
+    const r = await jev.reviewTest({ ...base, preRun });
+    assert.equal(r.verdict, "reject", JSON.stringify(preRun));
+    assert.equal(r.notes[0].rule, "fails-first-invalid", JSON.stringify(preRun));
+  }
+  assert.equal(provider.calls.length, 0);
+  assert.equal((await jev.reviewTest({ ...base, preRun: { exitCode: 1 } })).verdict, "approve");
+  const none = await jev.reviewTest(base);
+  assert.equal(none.verdict, "gaps");
+  assert.equal(none.modelVerdict, "approve");
+  // A model reject without a fails-first run is not softened to gaps.
+  const rejecting = createJev({ ledger, provider: fakeProvider((r) => confident(r, { trivial: { type: "noul", noul: 0.97 } })), budget: { monthlyCap: 10, spentThisMonth: 0 } });
+  assert.equal((await rejecting.reviewTest(base)).verdict, "reject");
+});
+
+test("pre-call estimate is conservative (3 chars per token with a 1.5x factor)", () => {
+  assert.equal(ESTIMATE_CHARS_PER_TOKEN, 3);
+  assert.equal(ESTIMATE_SAFETY_FACTOR, 1.5);
+  const provider = createTypeSafeProvider({ getApiKey: async () => FAKE_KEY, settings: { pricePerMillionInputTokens: 1_000_000 } });
+  const state = { diff: "x".repeat(2994) };
+  const chars = JSON.stringify({ state, questions: nouls }).length;
+  assert.equal(provider.estimateCost({ state, questions: nouls }), Math.ceil((chars / 3) * 1.5));
+  assert.ok(provider.estimateCost({ state, questions: nouls }) >= chars / 2, "at least one token per 2 characters");
+});
+
+test("scope check refuses '..', absolute and drive-letter paths", () => {
+  assert.equal(inScope("src/../package.json", ["src/**"]), false);
+  assert.equal(inScope("src/auth/../../package.json", ["src/"]), false);
+  assert.equal(inScope("../outside.js", ["src/**"]), false);
+  assert.equal(inScope("/etc/passwd", ["src/**"]), false);
+  assert.equal(inScope("C:/Windows/x.js", ["src/**"]), false);
+  assert.equal(inScope("src/a.js", ["src/../**"]), false, "a climbing scope entry matches nothing");
+  assert.equal(inScope("./src//a.js", ["src/**"]), true);
+  assert.equal(isUnsafePath("src\\..\\x"), true);
+  const climbing = ["diff --git a/src/../package.json b/src/../package.json", "--- a/src/../package.json", "+++ b/src/../package.json", "@@ -1 +1 @@", "-{}", "+{\"x\":1}", ""].join("\n");
+  const out = precheckDiff({ diff: climbing, files: ["src/**"] });
+  assert.equal(out.ok, false);
+  assert.equal(out.notes[0].rule, "out-of-scope");
+  assert.equal(out.notes[0].file, "src/../package.json");
+});
+
+test("the task's own approved test may change assertions but is still checked for skips", async () => {
+  const own = [
+    "diff --git a/tests/limit.test.mjs b/tests/limit.test.mjs",
+    "--- a/tests/limit.test.mjs",
+    "+++ b/tests/limit.test.mjs",
+    "@@ -10,3 +10,4 @@",
+    "   assert.equal(limit(4), false);",
+    "-  assert.equal(limit(5), true);",
+    "+  assert.equal(limit(5), \"locked\");",
+    "+test.skip(\"later\", () => {});",
+    "   done();",
+    "",
+  ].join("\n");
+  assert.deepEqual(precheckDiff({ diff: own, files: ["tests/"] }).notes.map((n) => n.rule), ["assertion-removed", "test-skipped"]);
+  assert.deepEqual(precheckDiff({ diff: own, files: ["tests/"], taskTests: ["tests/limit.test.mjs"] }).notes.map((n) => n.rule), ["test-skipped"]);
+  assert.deepEqual(precheckDiff({ diff: own, files: ["tests/"], taskTests: ["tests/other.test.mjs"] }).notes.map((n) => n.rule), ["assertion-removed", "test-skipped"]);
+  assert.deepEqual(precheckDiff({ diff: own, files: ["tests/"], taskTests: ["tests/x/../limit.test.mjs"] }).notes.map((n) => n.rule), ["assertion-removed", "test-skipped"], "a climbing taskTests entry exempts nothing");
+  const editOnly = own.replace('+test.skip("later", () => {});\n', "").replace("@@ -10,3 +10,4 @@", "@@ -10,3 +10,3 @@");
+  const provider = fakeProvider((r) => confident(r));
+  const jev = createJev({ ledger: fakeLedger(), provider, budget: { monthlyCap: 10, spentThisMonth: 0 } });
+  const r = await jev.reviewDiff({ task, diff: editOnly, clauses, files: ["tests/"], taskTests: ["tests/limit.test.mjs"], buildModel: "x" });
+  assert.equal(r.verdict, "approve");
+  assert.equal(provider.calls.length, 1);
+  const without = await jev.reviewDiff({ task, diff: editOnly, clauses, files: ["tests/"], buildModel: "x" });
+  assert.equal(without.verdict, "reject");
+  assert.equal(without.notes[0].rule, "assertion-removed");
+});
+
+test("precheck secret rules are identical to the repository scanner's rules", async () => {
+  const source = await readFile(path.join(here, "..", "scripts", "verify-secrets.mjs"), "utf8");
+  const start = source.indexOf("const patterns = [");
+  const block = source.slice(start, source.indexOf("];", start));
+  const scanner = [...block.matchAll(/^\s*\["([a-z-]+)", \/(.+)\/([a-z]*)\],?\s*$/gm)].map((m) => [m[1], new RegExp(m[2], m[3]).source, m[3].replace("g", "")]);
+  assert.ok(scanner.length >= 9, "scanner rules were found");
+  assert.deepEqual(SECRET_RULES.map(([name, re]) => [name, re.source, re.flags]), scanner);
+});
+
+test("hasJevKey asks the keychain whether an item exists without reading the secret (Windows, macOS)", async () => {
+  const win = scriptedSpawn((call) => (decodePs(call.args).includes("::Exists(") ? { code: 0 } : { code: 1, stderr: "read was called" }));
+  assert.equal(await hasJevKey({ keychain: createSystemKeychain({ platform: "win32", spawn: win.spawn }) }), true);
+  assert.equal(win.calls.length, 1);
+  const script = decodePs(win.calls[0].args);
+  assert.match(script, /\[PerfectPlannerCred\]::Exists\(\$target\)/);
+  assert.doesNotMatch(script.split("'@").at(-1), /::Read\(|Out\.Write/, "the exists operation prints nothing");
+  const winMissing = scriptedSpawn(() => ({ code: 3 }));
+  assert.equal(await hasJevKey({ keychain: createSystemKeychain({ platform: "win32", spawn: winMissing.spawn }) }), false);
+
+  const mac = scriptedSpawn((call) => (call.args.includes("-w") || call.args.includes("-g") ? { code: 1 } : { code: 0, stdout: 'keychain: "login.keychain-db"\nattributes:\n' }));
+  assert.equal(await hasJevKey({ keychain: createSystemKeychain({ platform: "darwin", spawn: mac.spawn }) }), true);
+  assert.deepEqual(mac.calls[0].args, ["find-generic-password", "-s", "perfect-planner", "-a", "jev-api-key"]);
+  const macMissing = scriptedSpawn(() => ({ code: 44 }));
+  assert.equal(await hasJevKey({ keychain: createSystemKeychain({ platform: "darwin", spawn: macMissing.spawn }) }), false);
+});
+
+test("macOS store escapes quote and backslash for security -i exactly", async () => {
+  const tricky = 'ab"cd\\ef' + "0123";
+  const { spawn, calls } = scriptedSpawn((call) => (call.args[0] === "-i" ? { code: 0 } : { code: 0, stdout: tricky + "\n" }));
+  await createSystemKeychain({ platform: "darwin", spawn }).store(JEV_KEY_SERVICE, JEV_KEY_ACCOUNT, tricky);
+  assert.ok(calls[0].stdin.endsWith(' -w "ab\\"cd\\\\ef0123"\n'), "quote and backslash are each escaped with one backslash");
+  // A read-back mismatch (security -i parsed the escapes differently) is a hard failure, never silent.
+  const wrong = scriptedSpawn((call) => (call.args[0] === "-i" ? { code: 0 } : { code: 0, stdout: 'ab\\"cd\\\\ef0123\n' }));
+  await assert.rejects(createSystemKeychain({ platform: "darwin", spawn: wrong.spawn }).store(JEV_KEY_SERVICE, JEV_KEY_ACCOUNT, tricky), { code: "KEYCHAIN_FAILED" });
+});
+
+test("approvals record a reason built from the answers", async () => {
+  const ledger = fakeLedger();
+  const jev = createJev({ ledger, provider: fakeProvider((r) => confident(r)), budget: { monthlyCap: 10, spentThisMonth: 0 } });
+  await jev.reviewDiff(diffInput);
+  const reason = ledger.entries().at(-1).reason;
+  assert.match(reason, /All 2 cited clauses implemented \(min p=0\.97\); no weakening \(p=0\.02\)/);
+  assert.match(reason, /Verdict confidence 0\.9/);
+  await jev.reviewTest({ task, clauses, testSource: "assert.ok(limit(5))", buildModel: "x", preRun: { exitCode: 1 } });
+  assert.match(ledger.entries().at(-1).reason, /All 2 cited clauses would be caught by the test/);
+});
+
+test("Noul answers escalate only inside the unclear band (default 0.25 < p < 0.75), configurable", async () => {
+  const run = async (p, options = {}) => (await createJev({ ledger: fakeLedger(), provider: fakeProvider((r) => confident(r, { clause_0: { type: "noul", noul: p } })), budget: { monthlyCap: 10, spentThisMonth: 0 }, ...options }).reviewDiff(diffInput)).verdict;
+  assert.equal(await run(0.78), "approve");
+  assert.equal(await run(0.76), "approve");
+  assert.equal(await run(0.7), "escalate");
+  assert.equal(await run(0.5), "escalate");
+  assert.equal(await run(0.3), "escalate");
+  assert.equal(await run(0.2), "reject", "a clear 'not implemented' rejects rather than escalating");
+  assert.equal(await run(0.7, { noulCertainty: 0.3 }), "approve");
+  assert.equal(await run(0.9, { noulCertainty: 0.9 }), "escalate");
+  assert.throws(() => createJev({ ledger: fakeLedger(), provider: fakeProvider({}), budget: { monthlyCap: 1 }, noulCertainty: 2 }), /noulCertainty/);
+});
+
+test("queued entries name no model on the actor; the would-be reviewer is data.intendedModel", async () => {
+  const ledger = fakeLedger();
+  const jev = createJev({ ledger, provider: fakeProvider((r) => confident(r)), budget: { monthlyCap: 10, spentThisMonth: 10 } });
+  const result = await jev.reviewDiff(diffInput);
+  assert.equal(result.verdict, "queued");
+  assert.equal(result.model, null);
+  assert.equal(result.intendedModel, "jev-latest");
+  const entry = ledger.entries().find((e) => e.type === "review.verdict");
+  assert.deepEqual(entry.actor, { kind: "jev", id: "jev" });
+  assert.equal(entry.data.model, null);
+  assert.equal(entry.data.intendedModel, "jev-latest");
+  assert.equal(entry.data.provider, null);
+  assert.equal(entry.data.outcome, "queued");
+  assert.equal(entry.data.verdict, "reject", "the ledger's two-way verdict never says approve for a queued review");
+  assert.ok(entry.evidence.includes("model:none"));
+});
+
+// The strict ledger lives on core/ledger until both branches merge. Use it from
+// the tree when present, else from that branch via git; skip only when neither exists.
+async function loadRealLedger() {
+  const local = path.join(here, "..", "src", "core", "ledger", "index.mjs");
+  try { await access(local); return { mod: await import(pathToFileURL(local).href), cleanup: async () => {} }; } catch { /* not merged yet */ }
+  const repoRoot = path.join(here, "..");
+  let files;
+  try { files = execFileSync("git", ["ls-tree", "-r", "--name-only", "core/ledger", "src/core/ledger"], { cwd: repoRoot, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).split("\n").filter((f) => f.endsWith(".mjs")); } catch { return null; }
+  if (!files.length) return null;
+  const dir = await mkdtemp(path.join(os.tmpdir(), "pp-jev-ledger-src-"));
+  for (const file of files) {
+    const target = path.join(dir, ...file.split("/"));
+    await mkdir(path.dirname(target), { recursive: true });
+    await writeFile(target, execFileSync("git", ["show", `core/ledger:${file}`], { cwd: repoRoot, encoding: "utf8" }));
+  }
+  return { mod: await import(pathToFileURL(path.join(dir, "src", "core", "ledger", "index.mjs")).href), cleanup: () => rm(dir, { recursive: true, force: true }) };
+}
+
+const realLedger = await loadRealLedger();
+
+async function withRealLedger(fn) {
+  const repo = await mkdtemp(path.join(os.tmpdir(), "pp-jev-ledger-"));
+  const now = () => new Date("2026-10-09T10:00:00Z");
+  const ledger = await realLedger.mod.openLedger(repo, { now });
+  try {
+    await ledger.append({ actor: { kind: "person", id: "owner" }, type: "task.created", subject: "T-1", summary: "Add login rate limit" });
+    return await fn(ledger, now);
+  } finally {
+    await ledger.close?.();
+    await rm(repo, { recursive: true, force: true });
+  }
+}
+const realSkip = { skip: realLedger ? false : "core/ledger is not available" };
+test.after(async () => { await realLedger?.cleanup(); });
+
+test("against the real strict ledger: paid reviews and budget warnings are accepted and fill the board", realSkip, async () => {
+  await withRealLedger(async (ledger, now) => {
+    let answers = (r) => confident(r);
+    const provider = fakeProvider((r) => answers(r), { cost: 3 });
+    provider.name = "TypeSafe";
+    const jev = createJev({ ledger, provider, now, budget: { monthlyCap: 10, spentThisMonth: 0 } });
+    const input = { ...diffInput, task: { id: "T-1" } };
+    const approved = await jev.reviewDiff(input);
+    answers = (r) => confident(r, { clause_1: { type: "noul", noul: 0.05 } });
+    assert.equal((await jev.reviewDiff(input)).verdict, "reject");
+    answers = (r) => confident(r, { verdict: { type: "choice", choice: "approve", probabilities: {}, confidence: 0.4 } });
+    assert.equal((await jev.reviewDiff(input)).verdict, "escalate");
+    answers = () => ({ verdict: { type: "choice", choice: "maybe", confidence: 0.9 } });
+    assert.equal((await jev.reviewDiff(input)).verdict, "escalate");
+    const board = ledger.board();
+    const reviews = board.tasks["T-1"].reviews;
+    assert.deepEqual(reviews.map((r) => [r.kind, r.verdict, r.model, r.provider, r.cost]), [
+      ["diff", "approve", "jev-latest", "TypeSafe", 3],
+      ["diff", "reject", "jev-latest", "TypeSafe", 3],
+      ["diff", "reject", "jev-latest", "TypeSafe", 3],
+      ["diff", "reject", "jev-latest", "TypeSafe", 3],
+    ]);
+    assert.equal(reviews[0].confidence, approved.confidence);
+    assert.equal(reviews[3].confidence, 0, "a call with no usable answer records confidence 0");
+    assert.deepEqual(ledger.entries().filter((e) => e.type === "review.verdict").map((e) => e.data.outcome), ["approve", "reject", "escalate", "escalate"]);
+    assert.equal(board.budgetWarnings.length, 1);
+    assert.equal(board.budgetWarnings[0].percent, 90);
+    assert.equal(spentFromLedger(ledger.entries(), "2026-10"), 12);
+  });
+});
+
+// Known cross-module conflict, reported to the integrator: the strict ledger requires
+// every Jev review.verdict to name a model, provider and confidence, but local precheck
+// rejects, budget-queued reviews and independence escalations make no model call. Jev
+// will not invent a model for them, so the ledger refuses those entries (and the review
+// throws rather than returning an unrecorded verdict). Resolve in core/ledger, e.g. by
+// accepting data.outcome "queued"/"escalate"/precheck rejects without a model.
+test("against the real strict ledger: outcomes with no model call are recorded", { ...realSkip, todo: realLedger ? "needs a core/ledger rule for review.verdict entries without a model call" : false }, async () => {
+  await withRealLedger(async (ledger, now) => {
+    const jev = createJev({ ledger, provider: fakeProvider((r) => confident(r)), now, budget: { monthlyCap: 10, spentThisMonth: 10 } });
+    assert.equal((await jev.reviewDiff({ ...diffInput, task: { id: "T-1" }, files: ["src/elsewhere/"] })).verdict, "reject");
+    assert.equal((await jev.reviewDiff({ ...diffInput, task: { id: "T-1" } })).verdict, "queued");
+    assert.deepEqual(queuedFromLedger(ledger.entries()).map((q) => q.task), ["T-1"]);
+  });
 });

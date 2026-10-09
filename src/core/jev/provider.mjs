@@ -10,6 +10,9 @@
 // The response carries no cost field, so cost is computed from usage and the
 // configurable price. Base URL, path and price come from settings.
 
+export const ESTIMATE_CHARS_PER_TOKEN = 3;
+export const ESTIMATE_SAFETY_FACTOR = 1.5;
+
 export const TYPESAFE_DEFAULTS = Object.freeze({
   provider: "TypeSafe",
   baseUrl: "https://api.typesafe.ai",
@@ -115,10 +118,14 @@ export function createTypeSafeProvider({ getApiKey, settings = {}, fetchImpl = g
     }
   }
 
-  /** Cost estimate before a call (about 4 characters per token). */
+  /**
+   * Conservative cost estimate before a call: about 3 characters per token
+   * (code and JSON tokenize denser than prose) times a 1.5 safety factor, so
+   * the budget gate errs on queueing rather than overshooting the cap.
+   */
   function estimateCost({ state, questions }) {
     const chars = JSON.stringify({ state, questions }).length;
-    return (Math.ceil(chars / 4) * price) / 1_000_000;
+    return (Math.ceil((chars / ESTIMATE_CHARS_PER_TOKEN) * ESTIMATE_SAFETY_FACTOR) * price) / 1_000_000;
   }
 
   return Object.freeze({ name: config.provider, endpoint: url.href, evaluate, estimateCost });

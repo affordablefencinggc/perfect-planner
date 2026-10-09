@@ -3,25 +3,44 @@
 // deleted or weakened tests, and added secrets. Nothing in this module calls
 // a model, touches the network, or echoes a matched secret.
 
-// Mirrors the rule set in scripts/verify-secrets.mjs (that file is a CLI
-// script with top-level effects, so it cannot be imported). Keep in sync.
+
+// Mirrors the rule set in scripts/verify-secrets.mjs exactly (minus the /g
+// flag). That scanner is a CLI with top-level effects and a self-contained
+// file in the installed check profile, so it is not imported or split here;
+// instead tests/core-jev.test.mjs reads its source and fails on any drift.
 export const SECRET_RULES = Object.freeze([
   ["private-key", /-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----/],
   ["github-token", /\b(?:gh[pousr]_[A-Za-z0-9_]{30,255}|github_pat_[A-Za-z0-9_]{40,255})\b/],
   ["aws-access-key", /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/],
   ["google-api-key", /\bAIza[0-9A-Za-z_-]{35}\b/],
   ["slack-token", /\bxox[baprs]-[0-9A-Za-z-]{20,}\b/],
-  ["openai-key", /\bsk-(?:proj-|svcacct-|ant-)?[A-Za-z0-9_-]{20,255}\b/],
+  ["openai-key", /\bsk-(?:proj-|svcacct-)?[A-Za-z0-9_-]{20,255}\b/],
   ["generic-assignment", /\b(?:api[_-]?key|client[_-]?secret|access[_-]?token|auth[_-]?token|password)["']?\s*[:=]\s*["'][^"'\r\n]{12,}["']/i],
-  ["environment-secret", /^\s*(?:export\s+)?[A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD)\s*=\s*[A-Za-z0-9_./+~-]{16,}/],
-  ["bearer-token", /\bBearer\s+[A-Za-z0-9._~+/-]{20,}={0,2}/],
+  ["environment-secret", /(?:^|\n)\s*(?:export\s+)?[A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD)\s*=\s*[A-Za-z0-9_./+~-]{16,}/],
+  ["bearer-token", /\bBearer\s+[A-Za-z0-9._~+\/-]{20,}={0,2}\b/],
 ]);
 
 const ASSERTION = /\bassert(?:\.[A-Za-z]+)?\s*\(|\bexpect\s*\(|\.should\b|\bt\.(?:is|deepEqual|true|false|throws|equal|ok)\s*\(|\bself\.assert[A-Za-z]*\s*\(|^\s*assert\s|\bassert_(?:eq|ne)?!\s*\(|\bassert!\s*\(/;
 const SKIP = /\b(?:it|test|describe|suite)\.(?:skip|todo|only)\s*\(|\bx(?:it|describe|test)\s*\(|\{\s*skip\s*:\s*true|\bt\.skip\s*\(|@pytest\.mark\.skip|@unittest\.skip|#\[ignore\]|\bt\.Skip\(/;
 
+/**
+ * Normalizes separators and drops empty and "." segments. ".." segments are
+ * kept on purpose (never resolved) so isUnsafePath() can refuse them: a real
+ * git diff never names a path that climbs, so one that does is out of scope.
+ */
 export function normalizePath(file) {
-  return String(file ?? "").replaceAll("\\", "/").replace(/^\.\//, "");
+  const raw = String(file ?? "").replaceAll("\\", "/");
+  if (!raw) return "";
+  const parts = raw.split("/").filter((part) => part !== "" && part !== ".");
+  let p = (raw.startsWith("/") ? "/" : "") + parts.join("/");
+  if (raw.endsWith("/") && parts.length) p += "/";
+  return p;
+}
+
+/** Absolute paths, drive letters and any ".." segment are never inside a task scope. */
+export function isUnsafePath(file) {
+  const p = normalizePath(file);
+  return !p || p.startsWith("/") || /^[A-Za-z]:/.test(p) || p.split("/").includes("..");
 }
 
 export function isTestPath(file) {
@@ -103,8 +122,10 @@ export function parseUnifiedDiff(diff) {
 
 /** True when `file` is inside the task scope. Entries are exact paths, folder prefixes ending in "/", or prefixes ending in "/**". */
 export function inScope(file, scope) {
+  if (isUnsafePath(file)) return false;
   const p = normalizePath(file);
   return scope.some((raw) => {
+    if (isUnsafePath(raw)) return false;
     const s = normalizePath(raw);
     if (s.endsWith("/**")) return p.startsWith(s.slice(0, -2));
     if (s.endsWith("/")) return p.startsWith(s);
@@ -117,9 +138,13 @@ const norm = (text) => text.trim().replace(/\s+/g, " ");
 /**
  * Runs every deterministic check. Returns { ok, notes } where each note is
  * { file, line, rule, note }. Notes never contain secret material.
+ * `taskTests` names the task's own approved acceptance test file(s): the task
+ * may change their assertions, but they are still checked for deletion,
+ * skips and secrets like every other file.
  */
-export function precheckDiff({ diff, files: scope }) {
+export function precheckDiff({ diff, files: scope, taskTests = [] }) {
   const notes = [];
+  const ownTests = new Set((Array.isArray(taskTests) ? taskTests : [taskTests]).filter((t) => typeof t === "string" && t.trim() && !isUnsafePath(t)).map(normalizePath));
   const parsed = parseUnifiedDiff(diff);
   if (!Array.isArray(scope) || scope.length === 0) {
     notes.push({ file: null, line: null, rule: "scope-missing", note: "No task file scope was supplied, so the diff cannot be shown to stay inside the task." });
@@ -145,8 +170,9 @@ export function precheckDiff({ diff, files: scope }) {
     if (isTestPath(f.oldPath ?? f.newPath) && f.status !== "deleted") {
       const addedSet = new Map();
       for (const l of added) addedSet.set(norm(l.text), (addedSet.get(norm(l.text)) ?? 0) + 1);
+      const ownTest = ownTests.has(normalizePath(f.oldPath ?? f.newPath)) && (!f.newPath || ownTests.has(normalizePath(f.newPath)));
       for (const l of removed) {
-        if (!ASSERTION.test(l.text)) continue;
+        if (ownTest || !ASSERTION.test(l.text)) continue;
         const key = norm(l.text);
         if (addedSet.get(key)) { addedSet.set(key, addedSet.get(key) - 1); continue; }
         notes.push({ file: f.oldPath ?? f.newPath, line: l.oldLine, rule: "assertion-removed", note: `Removes or changes an assertion in ${f.oldPath ?? f.newPath} (old line ${l.oldLine}).` });

@@ -118,6 +118,16 @@ public static class PerfectPlannerCred {
       return Encoding.Unicode.GetString(bytes);
     } finally { CredFree(p); }
   }
+  public static bool Exists(string target) {
+    IntPtr p;
+    if (!CredRead(target, GENERIC, 0, out p)) {
+      int e = Marshal.GetLastWin32Error();
+      if (e == NOT_FOUND) return false;
+      throw new Win32Exception(e);
+    }
+    CredFree(p);
+    return true;
+  }
   public static bool Delete(string target) {
     if (CredDelete(target, GENERIC, 0)) return true;
     int e = Marshal.GetLastWin32Error();
@@ -139,7 +149,9 @@ export function windowsScript(op, target, user) {
       ? "$b64 = [Console]::In.ReadToEnd().Trim(); [PerfectPlannerCred]::Write($target, $user, [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($b64))); exit 0"
       : op === "read"
         ? "$s = [PerfectPlannerCred]::Read($target); if ($null -eq $s) { exit 3 }; [Console]::Out.Write([Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($s))); exit 0"
-        : "if ([PerfectPlannerCred]::Delete($target)) { exit 0 } else { exit 3 }",
+        : op === "exists"
+          ? "if ([PerfectPlannerCred]::Exists($target)) { exit 0 } else { exit 3 }"
+          : "if ([PerfectPlannerCred]::Delete($target)) { exit 0 } else { exit 3 }",
   ].join("\n");
 }
 
@@ -221,6 +233,34 @@ export function createSystemKeychain({ platform = process.platform, spawn = node
     throw unavailable(`platform ${platform} has no supported keychain.`);
   }
 
+  /**
+   * Whether an item exists, without bringing the secret into this process
+   * where the OS allows it: Windows frees the CredRead result without printing
+   * it, macOS omits -w so only attributes are printed. Linux's secret-tool has
+   * no metadata-only lookup, so the value is read and discarded at once.
+   */
+  async function exists(service, account) {
+    checkIdent(service, account);
+    let result;
+    if (platform === "win32") {
+      const { command, args } = windowsCommand("exists", service, account);
+      result = await run(command, args, "");
+      if (result.error) throw spawnFailure(result);
+      if (result.code === 3) return false;
+      if (result.code !== 0) throw failed("lookup", result);
+      return true;
+    }
+    if (platform === "darwin") {
+      result = await run("security", ["find-generic-password", "-s", service, "-a", account], "");
+      if (result.error) throw spawnFailure(result);
+      if (result.code === 44) return false;
+      if (result.code !== 0) throw failed("lookup", result);
+      return true;
+    }
+    if (platform === "linux") return (await read(service, account)) !== null;
+    throw unavailable(`platform ${platform} has no supported keychain.`);
+  }
+
   async function remove(service, account) {
     checkIdent(service, account);
     let result;
@@ -250,7 +290,7 @@ export function createSystemKeychain({ platform = process.platform, spawn = node
     throw unavailable(`platform ${platform} has no supported keychain.`);
   }
 
-  return Object.freeze({ name: tool ?? `unsupported:${platform}`, store, read, remove });
+  return Object.freeze({ name: tool ?? `unsupported:${platform}`, store, read, exists, remove });
 }
 
 /** In-memory backend for tests and previews. Never persists anything. */
@@ -260,6 +300,7 @@ export function createMemoryKeychain() {
     name: "memory",
     async store(service, account, secret) { checkIdent(service, account); validateSecret(secret); items.set(`${service}/${account}`, secret); },
     async read(service, account) { checkIdent(service, account); return items.get(`${service}/${account}`) ?? null; },
+    async exists(service, account) { checkIdent(service, account); return items.has(`${service}/${account}`); },
     async remove(service, account) { checkIdent(service, account); return items.delete(`${service}/${account}`); },
   });
 }
@@ -274,7 +315,9 @@ export async function setJevKey(secret, options) {
 
 /** Settings UI: whether a key is stored. Returns a boolean only. */
 export async function hasJevKey(options) {
-  return (await backendOf(options).read(JEV_KEY_SERVICE, JEV_KEY_ACCOUNT)) !== null;
+  const backend = backendOf(options);
+  if (typeof backend.exists === "function") return (await backend.exists(JEV_KEY_SERVICE, JEV_KEY_ACCOUNT)) === true;
+  return (await backend.read(JEV_KEY_SERVICE, JEV_KEY_ACCOUNT)) !== null;
 }
 
 /** Settings UI: removes the stored key. Returns whether one existed. */
