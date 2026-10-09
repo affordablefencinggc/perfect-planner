@@ -1,0 +1,410 @@
+/* plan polish: owned by one screen pass; uses the tokens in ../frame.css.
+   Coordinate > Plan: the map canvas, its toolbar, the page rail and the
+   imported-project "plan" view. Type scale never drops below --text-xs (12px). */
+
+.app-shell {
+  --plan-green: #2c6341; /* 7.3:1 on white */
+}
+
+/* Canvas ------------------------------------------------------------------ */
+.app-shell .plan-workspace {
+  --plan-ink: #1f2522;
+  --plan-muted: #4a534e; /* 7.9:1 on --surface */
+  --plan-row-max: 1248px;
+  font-family: var(--mono);
+}
+.app-shell .plan-workspace .plan-canvas {
+  padding: 100px 0 var(--space-7);
+}
+.app-shell .plan-workspace .spine-line {
+  bottom: var(--space-7);
+}
+.app-shell .plan-workspace .phase-row {
+  margin-bottom: 64px;
+}
+.app-shell .plan-workspace .phase-nodes {
+  max-width: var(--plan-row-max);
+  margin: var(--space-5) auto 0;
+  gap: var(--space-6);
+}
+
+/* Toolbar: one sticky surface on the same column as the map ---------------- */
+.app-shell .plan-workspace .workspace-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  height: auto;
+  min-height: 52px;
+  padding: var(--space-2) var(--space-4);
+  margin: 0 0 var(--space-2);
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--surface) 94%, transparent);
+  backdrop-filter: blur(6px);
+  box-shadow: var(--shadow-card);
+}
+.app-shell .plan-workspace .filter-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--plan-muted);
+  font: 500 var(--text-xs) var(--mono);
+}
+.app-shell .plan-workspace .filter-button {
+  min-height: 32px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--plan-ink);
+  font: 600 var(--text-sm) var(--mono);
+  cursor: pointer;
+}
+.app-shell .plan-workspace .filter-button:hover {
+  border-color: var(--green);
+  background: var(--green-soft);
+}
+.app-shell .plan-workspace .filter-button.active {
+  border-color: var(--plan-green);
+  background: var(--plan-green);
+  color: #fff;
+}
+.app-shell .plan-workspace .filter-group .legend-dot {
+  width: 10px;
+  height: 10px;
+  margin-left: var(--space-3);
+}
+.app-shell .plan-workspace .plan-toolbar-actions {
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-3);
+}
+.app-shell .plan-workspace .quick-brief-button {
+  min-height: 32px;
+  padding: 0 var(--space-3);
+  gap: var(--space-2);
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--plan-ink);
+  box-shadow: none;
+  font: 700 var(--text-sm) var(--mono);
+}
+.app-shell .plan-workspace .quick-brief-button:hover {
+  border-color: var(--green);
+  background: var(--green-soft);
+}
+.app-shell .plan-workspace .quick-brief-button small {
+  padding: 2px 6px;
+  color: var(--plan-muted);
+  font: 600 var(--text-xs) var(--mono);
+}
+.app-shell .plan-workspace .integrity-chip {
+  min-height: 28px;
+  padding: 0 var(--space-3);
+  gap: var(--space-2);
+  border: 1px solid var(--border);
+  color: var(--plan-green);
+  font: 600 var(--text-xs) var(--mono);
+}
+.app-shell .plan-workspace .integrity-chip.proof-locked {
+  background: var(--surface-header);
+  color: var(--plan-muted);
+}
+
+/* Phase capsule ---------------------------------------------------------- */
+.app-shell .plan-workspace .phase-capsule {
+  width: min(440px, 100%);
+  min-height: 0;
+  margin: 0 auto var(--space-6);
+  padding: var(--space-4) var(--space-5) var(--space-5);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+}
+.app-shell .plan-workspace .phase-capsule:hover {
+  border-color: var(--plan-green);
+}
+.app-shell .plan-workspace .phase-capsule strong {
+  color: var(--plan-ink);
+  font: 700 var(--text-lg) var(--mono) !important;
+}
+.app-shell .plan-workspace .phase-capsule span {
+  max-width: 100%;
+  margin-top: var(--space-1);
+  color: var(--plan-muted);
+  font: 400 var(--text-sm)/1.45 var(--mono) !important;
+}
+.app-shell .plan-workspace .phase-capsule small {
+  bottom: -14px;
+  padding: 2px var(--space-3);
+  border-color: var(--border-strong);
+  background: var(--surface);
+  color: var(--plan-ink);
+  font: 600 var(--text-xs) var(--mono) !important;
+}
+
+/* Node card -------------------------------------------------------------- */
+.app-shell .plan-workspace .plan-node {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start; /* a <button> centres by default: that was the empty band */
+  align-items: stretch;
+  min-height: 0;
+  padding: 0 0 var(--space-4);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+  color: var(--plan-ink);
+  font-family: var(--mono);
+  transform: none;
+  transition: box-shadow 0.15s ease, border-color 0.15s ease;
+}
+.app-shell .plan-workspace .plan-node:hover {
+  transform: none;
+  border-color: var(--plan-green);
+  box-shadow: 0 2px 4px rgba(39, 48, 43, 0.08), 0 10px 24px rgba(39, 48, 43, 0.12);
+}
+.app-shell .plan-workspace .plan-node.selected {
+  border-color: var(--plan-green);
+  box-shadow: 0 0 0 2px var(--plan-green), 0 10px 24px rgba(39, 48, 43, 0.14);
+}
+.app-shell .plan-workspace .plan-node:focus-visible {
+  outline: 2px solid var(--blue-focus);
+  outline-offset: 3px;
+}
+
+.app-shell .plan-workspace .plan-node .node-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border);
+  border-radius: calc(var(--radius-lg) - 1px) calc(var(--radius-lg) - 1px) 0 0;
+  background: var(--surface-header);
+}
+.app-shell .plan-workspace .plan-node .node-header code {
+  padding: 2px var(--space-2);
+  color: var(--plan-ink);
+  font: 800 var(--text-xs) var(--mono);
+}
+.app-shell .plan-workspace .plan-node .node-header strong {
+  flex: 1 1 120px;
+  min-width: 0;
+  color: var(--plan-ink);
+  font: 600 var(--text-md)/1.3 var(--mono) !important;
+}
+.app-shell .plan-workspace .plan-node .node-header > small {
+  color: var(--plan-muted);
+  font: 500 var(--text-xs) var(--mono) !important;
+}
+.app-shell .plan-workspace .plan-node .node-header .model-id-chip {
+  padding: 2px 6px;
+  border-color: var(--border-strong);
+  color: var(--plan-ink);
+  font: 700 var(--text-xs) var(--mono);
+}
+.app-shell .plan-workspace .plan-node .node-header .proof-counter {
+  min-height: 24px;
+  padding: 0 var(--space-2);
+  gap: var(--space-1);
+  border-color: var(--border-strong);
+  color: var(--plan-ink);
+  font: 600 var(--text-xs) var(--mono);
+}
+.app-shell .plan-workspace .plan-node .node-header .proof-counter svg {
+  width: 14px;
+  height: 14px;
+}
+.app-shell .plan-workspace .plan-node .node-header .proof-counter.proven {
+  border-color: var(--plan-green);
+  color: var(--plan-green);
+}
+
+/* Two tidy rows: identity (id, branch, title, owner), then meta chips. */
+.app-shell .plan-workspace .plan-node .node-header::after {
+  content: "";
+  order: 4;
+  flex: 0 0 100%;
+  height: 0;
+}
+.app-shell .plan-workspace .plan-node .node-header > code { order: 1; }
+.app-shell .plan-workspace .plan-node .node-header > .node-branch-ref { order: 2; }
+.app-shell .plan-workspace .plan-node .node-header > strong { order: 3; }
+.app-shell .plan-workspace .plan-node .node-header > .owner-badge { order: 4; margin-left: auto; }
+.app-shell .plan-workspace .plan-node .node-header > :is(.model-id-chip, small, .proof-counter) { order: 5; }
+
+/* Task rows: the 9-11px text becomes 13px in one family. */
+.app-shell .plan-workspace .plan-node .proof-column-labels {
+  margin: 0 var(--space-4) var(--space-1);
+  grid-template-columns: 32px 32px 52px minmax(0, 1fr);
+  gap: var(--space-2);
+  color: var(--plan-muted);
+  font: 600 var(--text-xs) var(--mono);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.app-shell .plan-workspace .plan-node .node-items {
+  margin-inline: var(--space-4);
+  gap: var(--space-3);
+}
+.app-shell .plan-workspace .plan-node .node-item {
+  grid-template-columns: 32px 32px 52px minmax(0, 1fr);
+  gap: var(--space-2);
+  color: var(--plan-ink);
+}
+.app-shell .plan-workspace .plan-node .node-item > .tiny-check {
+  justify-self: center;
+  margin-top: 2px;
+}
+.app-shell .plan-workspace .plan-node .proof-column-labels > span:nth-child(-n + 2) {
+  text-align: center;
+}
+.app-shell .plan-workspace .plan-node .node-item > span:last-child {
+  color: var(--plan-ink);
+  font: 400 var(--text-sm)/1.45 var(--mono);
+  overflow-wrap: anywhere;
+}
+.app-shell .plan-workspace .plan-node .node-item code {
+  padding: 1px var(--space-1);
+  border-color: var(--border-strong);
+  color: var(--plan-ink);
+  font: 700 var(--text-xs)/1.5 var(--mono);
+}
+.app-shell .plan-workspace .plan-node .tiny-check {
+  border-color: #6f7a74;
+  border-radius: 4px;
+}
+.app-shell .plan-workspace .plan-node .tiny-check.checked {
+  border-color: var(--plan-green);
+  background: var(--plan-green);
+}
+.app-shell .plan-workspace .plan-node .owner-badge.labeled strong {
+  font-size: var(--text-xs) !important;
+}
+
+/* Page controls (floating up/down pager) ---------------------------------- */
+.app-shell .plan-workspace .plan-page-controls {
+  width: 44px;
+  margin-top: -60px;
+  padding: var(--space-1);
+  gap: 2px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+}
+.app-shell .plan-workspace .plan-page-controls button {
+  width: 28px;
+  height: 24px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-header);
+  color: var(--plan-ink);
+}
+.app-shell .plan-workspace .plan-page-controls button:hover {
+  background: var(--green-soft);
+  box-shadow: inset 0 0 0 1px var(--plan-green);
+}
+.app-shell .plan-workspace .plan-page-controls button svg {
+  width: 12px;
+  height: 12px;
+}
+.app-shell .plan-workspace .plan-page-controls span {
+  color: var(--plan-muted);
+  font: 700 var(--text-xs) var(--mono);
+  letter-spacing: 0.02em;
+}
+
+@media (max-width: 1240px) {
+  .app-shell .plan-workspace .plan-canvas {
+    padding-top: 100px;
+  }
+}
+
+/* Imported-project "plan" view -------------------------------------------- */
+.app-shell .imported-workflow-plan {
+  max-width: var(--page-max);
+  gap: var(--space-4);
+  padding: var(--space-5) var(--frame-pad);
+}
+.app-shell .imported-workflow-plan .imported-workflow-header {
+  gap: var(--space-4);
+}
+.app-shell .imported-workflow-plan .imported-workflow-header h1 {
+  font-size: var(--text-xl);
+  line-height: 1.2;
+}
+.app-shell .imported-workflow-plan .imported-workflow-header p {
+  font-size: var(--text-md);
+  line-height: 1.5;
+}
+.app-shell .imported-workflow-plan .imported-workflow-verdict,
+.app-shell .imported-workflow-plan .imported-workflow-panel,
+.app-shell .imported-workflow-plan .imported-workflow-question-section {
+  border-color: var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+}
+.app-shell .imported-workflow-plan .imported-workflow-verdict {
+  border-left-width: 4px;
+}
+.app-shell .imported-workflow-plan .imported-workflow-context article,
+.app-shell .imported-workflow-plan .imported-workflow-summary > span {
+  padding: var(--space-3) var(--space-4);
+  border-color: var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+.app-shell .imported-workflow-plan .imported-workflow-context,
+.app-shell .imported-workflow-plan .imported-workflow-summary,
+.app-shell .imported-workflow-plan .imported-workflow-layout {
+  gap: var(--space-4);
+}
+.app-shell .imported-workflow-plan .imported-workflow-main,
+.app-shell .imported-workflow-plan .imported-workflow-aside {
+  gap: var(--space-4);
+}
+.app-shell .imported-workflow-plan .imported-workflow-panel > header,
+.app-shell .imported-workflow-plan .imported-workflow-question-section > header {
+  border-bottom-color: var(--border);
+  background: var(--surface-header);
+  padding: var(--space-3) var(--space-4);
+}
+.app-shell .imported-workflow-plan .imported-workflow-panel > p {
+  padding: var(--space-4);
+}
+.app-shell .imported-workflow-plan :is(small, code, em) {
+  font-size: var(--text-xs);
+}
+.app-shell .imported-workflow-plan .imported-workflow-requirement:focus-visible,
+.app-shell .imported-workflow-plan .imported-workflow-question:focus-visible {
+  outline: 2px solid var(--blue-focus);
+  outline-offset: 2px;
+}
+.app-shell .imported-workflow-plan [role="status"] {
+  margin: 0;
+  padding: var(--space-5) var(--space-4);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--surface-muted);
+  color: var(--plan-muted, #4a534e);
+  font-size: var(--text-sm);
+  text-align: center;
+}
+.app-shell .imported-workflow-plan .imported-workflow-search-empty {
+  text-align: center;
+  color: #4a534e;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-shell .plan-workspace .plan-node {
+    transition: none;
+  }
+}
