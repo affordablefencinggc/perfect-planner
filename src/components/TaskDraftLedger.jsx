@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { inspectTaskDraft, sameTaskDraftBinding, taskDraftBinding, parseTaskDraftImport, importTaskDraft, TASK_DRAFT_IMPORT_BYTES } from '../project/taskDraftLedger.js';
+import { inspectTaskDraft, sameTaskDraftBinding, taskDraftBinding, parseTaskDraftImport, importTaskDraft, updateTaskDraft, TASK_DRAFT_IMPORT_BYTES } from '../project/taskDraftLedger.js';
+import { parseTaskList, taskListEntryToForm, TASK_LIST_PASTE_CHARS } from '../project/taskListImport.js';
 import { createTaskDraftStore } from '../project/taskDraftStore.js';
 import { readTaskDraftLink } from '../project/taskDraftMap.js';
 import { TaskDraftDeliveryPanel } from './TaskDraftDeliveryPanel.jsx';
@@ -17,6 +18,8 @@ import {reconcileTaskFormIntent} from '../project/taskFormIntentReconciliation.j
 // Unsaved forms survive SPA page/project switching. They are not saved records.
 // A browser exit warns while any such form remains. Saving uses IndexedDB below.
 const forms=new Map();
+// Pasted task lists also survive SPA page/project switching until added or cleared.
+const pastes=new Map();
 // Retained SPA sessions share one app-lifetime connection, rather than opening
 // a new connection per mount or closing a connection while its queue is active.
 let sharedRecovery;
@@ -57,6 +60,7 @@ function BoundTaskDraftLedger({binding,project,providedStore,providedRecovery}) 
   const [reviewedTasks,setReviewedTasks]=useState([]),[inventoryReviewed,setInventoryReviewed]=useState(false);
   const [pendingImport,setPendingImport]=useState(null),[importReviewed,setImportReviewed]=useState(false);
   const handledLink=useRef(null);
+  const [pasteText,setPasteText]=useState(()=>pastes.get(formKey)??''),[pastePreview,setPastePreview]=useState(null),[pasteResult,setPasteResult]=useState(null);
   const earlierForms=[...forms].filter(([key])=>key.startsWith(`${binding.projectId}:${binding.rootIdentity}:`)&&key!==formKey);
   const findings=useMemo(()=>ledger?inspectTaskDraft(ledger):null,[ledger]);
   const stale=Boolean(ledger&&!sameTaskDraftBinding(ledger.binding,binding));
@@ -97,7 +101,7 @@ function BoundTaskDraftLedger({binding,project,providedStore,providedRecovery}) 
         setReviewedTasks([]);setInventoryReviewed(false);setImportReviewed(false);
       }).catch(e=>{if(alive.current&&read===backgroundRead&&foreground===sequence.current)setError(e.message);});
     });
-    if(typeof window!=='undefined'&&warnedWindow!==window){warnedWindow=window;window.addEventListener('beforeunload',event=>{if(forms.size){event.preventDefault();event.returnValue='';}});}
+    if(typeof window!=='undefined'&&warnedWindow!==window){warnedWindow=window;window.addEventListener('beforeunload',event=>{if(forms.size||[...pastes.values()].some(Boolean)){event.preventDefault();event.returnValue='';}});}
     return()=>{alive.current=false;sequence.current++;stop?.();};
   },[store]);
 
@@ -197,6 +201,75 @@ function BoundTaskDraftLedger({binding,project,providedStore,providedRecovery}) 
     }catch(e){if(alive.current){setError(e.message);setPendingImport(null);setImportReviewed(false);}}
     finally{if(alive.current)setBusy(false);}
   }
+  // Paste a task list. Each pasted task is turned into the exact text the
+  // "Add a task" form holds, then goes through the same form parser, Ledger
+  // validator and durable Save intent (prepare, commit, acknowledge) as a
+  // typed task. Nothing here writes the Ledger any other way.
+  function changePaste(value){setPasteText(value);if(value)pastes.set(formKey,value);else pastes.delete(formKey);setPastePreview(null);}
+  function checkPasted(base,rows){
+    // Cumulative dry run with the real validator, so the preview shows the
+    // numbers tasks would get and every refusal reason before anything is saved.
+    let next=base;
+    return rows.map(row=>{try{const taskInput=parseTask(row.form);next=updateTaskDraft(next,taskInput);return {...row,taskId:next.tasks.at(-1).id,reason:null};}catch(e){return {...row,taskId:null,reason:e.message};}});
+  }
+  function previewPaste(){
+    if(!ledger)return;
+    const parsed=parseTaskList(pasteText);
+    setPasteResult(null);
+    setPastePreview({text:pasteText,parsed,rows:checkPasted(ledger,parsed.tasks.map(entry=>({entry,form:taskListEntryToForm(entry)})))});
+  }
+  async function savePastedTask(form,base){
+    await noUnresolvedIntents();
+    const taskInput=parseTask(form);
+    try{updateTaskDraft(base,taskInput);}catch(e){e.pasteValidation=true;throw e;}
+    const pasteSession=createTaskFormSession(recovery,binding);pasteSession.update(form,base.revision);
+    const checkpoint=await pasteSession.flush();
+    const original={requestId:crypto.randomUUID(),binding:{...binding},baseLedger:structuredClone(base),taskInput,checkpoint};
+    let prepared;
+    try{prepared=validateTaskSaveIntent(await store.prepareSaveIntent(original));}
+    catch(e){
+      // Only close this task's editor checkpoint when no Save request was kept;
+      // a retained request stays under Original Save recovery for retry or withdrawal.
+      const kept=await store.readSaveIntent(binding,original.requestId).catch(()=>undefined);
+      if(kept===null)await pasteSession.resolve('discarded',checkpoint).catch(()=>{});
+      if(kept===undefined)throw Error(`${e?.message??e} Whether a Save request was kept could not be checked; look under Original Save recovery before adding more.`);
+      if(kept!==null)throw Error(`${e?.message??e} Its Save request is kept under Original Save recovery; retry or withdraw it there.`);
+      throw e;
+    }
+    if(recoveryWire(prepared.original)!==recoveryWire(original))throw Error('Prepared Save differs from its original. Nothing was dispatched.');
+    let record;
+    try{record=validateTaskSaveIntent(await store.commitSaveIntent(binding,original.requestId));if(record.outcome?.kind!=='committed'||recoveryWire(record.original)!==recoveryWire(original))throw Error('Original Save receipt did not match.');}
+    catch(e){throw Error(`${e?.message??e} Its Save request is kept under Original Save recovery; retry or withdraw it there.`);}
+    await reconcileTaskFormIntent({binding,requestId:original.requestId,store,recovery});
+    return record.outcome.ledger;
+  }
+  async function addPasted(){
+    if(cannotEdit||dirty||!pastePreview||pastePreview.text!==pasteText||taskFormOperations.read(binding))return;
+    const {rows,parsed,text}=pastePreview,results=[];
+    setBusy(true);setError('');setPasteResult(null);
+    let current=ledger,stopped=false;
+    try{
+      for(const [index,row] of rows.entries()){
+        const label={line:row.entry.line,title:row.entry.title};
+        if(row.reason){results.push({...label,status:'refused',reason:row.reason});continue;}
+        if(stopped){results.push({...label,status:'skipped'});continue;}
+        if(alive.current)setNotice(`Adding pasted task ${index+1} of ${rows.length}… Nothing is approved or executed.`);
+        try{current=await savePastedTask(row.form,current);results.push({...label,status:'added',taskId:current.tasks.at(-1).id});}
+        catch(e){results.push({...label,status:'refused',reason:e?.message??String(e)});if(!e?.pasteValidation)stopped=true;}
+      }
+    }finally{
+      const added=results.filter(r=>r.status==='added').length;
+      if(alive.current){
+        if(added)setLedger(value=>!value||current.revision>value.revision?current:value);
+        setPastePreview(null);
+        setPasteResult({results,total:rows.length,unreadable:parsed.errors,stopped});
+        if(added===rows.length&&!parsed.errors.length&&pasteText===text)changePaste('');
+        setNotice(added?`Added ${added} pasted task${added===1?'':'s'} as local drafts (revision ${current.revision}). No work was approved or executed.`:'No pasted tasks were added. Your pasted text is kept.');
+        setBusy(false);
+        void inspectRecovery();void inspectIntents().catch(()=>{});
+      }
+    }
+  }
   async function continueWithInventory(){
     if(!canReview||busy||!inventoryReviewed||reviewedTasks.length!==ledger.tasks.length||taskFormOperations.read(binding))return;
     setBusy(true);setError('');
@@ -276,6 +349,20 @@ function BoundTaskDraftLedger({binding,project,providedStore,providedRecovery}) 
     <TaskDraftDeliveryPanel project={project} binding={binding} ledger={ledger} store={store} disabled={cannotEdit} dirty={dirty||recoveryBlocked}/>
     <PlanApprovalPanel project={project} binding={binding} ledger={ledger} store={store} disabled={cannotEdit} dirty={dirty||recoveryBlocked}/>
     {typeof store.importDraft==='function'&&<details className="task-draft-rebind"><summary>Import an exported draft</summary><section aria-label="Import planning draft"><h3>Recover tasks from an exported draft</h3><p>Choose an exported LOCAL_DRAFT JSON file for this exact project, folder and inventory. Existing tasks are never replaced. Imported tasks receive new numbers when this ledger already has history; dependencies between imported tasks follow the displayed mapping. Importing the same file again creates another set of task copies. This is local draft recovery, not approval or a backup of revision history.</p><label>Draft JSON file <input type="file" accept=".json,application/json" onChange={readImport} disabled={cannotEdit||dirty}/></label>{dirty&&<p>Save or discard the current unsaved form before importing. Your text has been kept.</p>}{pendingImport&&<div><h4>Review {pendingImport.source.tasks.length} task copies</h4><p>Source revision {pendingImport.source.revision} → new local revision {pendingImport.preview.ledger.revision}. Existing tasks: {pendingImport.targetTaskCount}; tasks after import: {pendingImport.preview.ledger.tasks.length}.</p>{pendingImport.source.tasks.map((task,index)=><details key={task.id}><summary>{task.id} → {pendingImport.preview.references[index].taskId} · {task.title}{task.archived?' · archived':''}</summary><p>{task.description||'Description unanswered'}</p><p>Proposed owner: {task.owner||'unanswered'}</p><p>Imported dependencies: {pendingImport.preview.ledger.tasks[pendingImport.targetTaskCount+index].dependsOn.join(', ')||'none recorded'}</p><pre tabIndex={0}>{task.claims.map(claim=>`${claim.access} ${claim.path}`).join('\n')||'File scope unanswered'}</pre><p>Acceptance: {task.acceptance||'unanswered'}</p><p>Recovery: {task.recovery||'unanswered'}</p></details>)}<p>{inspectTaskDraft(pendingImport.preview.ledger).findings.length} planning findings after import. Import does not clear conflicts or verify files.</p><label className="task-draft-archived"><input type="checkbox" checked={importReviewed} disabled={cannotEdit||dirty} onChange={e=>setImportReviewed(e.target.checked)}/> I reviewed the task copies and number mapping; keep them unapproved</label><button type="button" disabled={cannotEdit||dirty||!importReviewed} onClick={confirmImport}>Import reviewed task copies</button><button type="button" disabled={busy} onClick={()=>{setPendingImport(null);setImportReviewed(false);}}>Cancel import</button></div>}</section></details>}
+    <details className="task-draft-rebind"><summary>Paste a task list{pasteText?' · your pasted text is kept':''}</summary><section aria-label="Paste a task list">
+      <h3>Add several tasks at once</h3>
+      <p>Paste one task per line starting with "- " or "1.", or a "## heading" per task. Under a task you can add lines such as <code>owner: Sam</code>, <code>write: src/app.js</code>, <code>read: package.json</code>, <code>done when: it works</code> or <code>description: …</code>. A CSV or TSV table with a header row also works (columns: title, description, write, read, done_when, owner; other columns are ignored). Each task is checked and saved exactly like the form. Nothing is approved or run.</p>
+      <label>Task list<textarea rows={8} maxLength={TASK_LIST_PASTE_CHARS} value={pasteText} onChange={e=>changePaste(e.target.value)} spellCheck={false}/></label>
+      <div className="task-draft-tools"><button type="button" onClick={previewPaste} disabled={!ledger||busy||!pasteText.trim()}>Preview</button>{pastePreview&&<button type="button" className="primary-button" onClick={addPasted} disabled={cannotEdit||dirty||!pastePreview.rows.some(row=>!row.reason)}>Add {pastePreview.rows.filter(row=>!row.reason).length} task{pastePreview.rows.filter(row=>!row.reason).length===1?'':'s'}</button>}{(pasteText||pastePreview)&&<button type="button" disabled={busy} onClick={()=>{changePaste('');setPasteResult(null);}}>Clear pasted text</button>}</div>
+      {pastePreview&&(dirty?<p>Save or discard the task you are typing in the form before adding pasted tasks. Your pasted text is kept.</p>:cannotEdit&&!busy?<p>Adding is paused: {!ledger?'saved tasks are still opening.':stale?'the folder census changed; review the draft above first.':['stale','unavailable'].includes(project.state)?'the project folder is unavailable right now.':intentBlocked?'an earlier Save must be finished under Original Save recovery first.':'an editor operation above needs review first.'} Your pasted text is kept.</p>:null)}
+      {pastePreview&&<section aria-label="Paste preview"><h4>Preview ({pastePreview.parsed.format==='markdown'?'Markdown list':pastePreview.parsed.format.toUpperCase()+' table'})</h4>
+        {pastePreview.rows.length>0?<ol>{pastePreview.rows.map(row=><li key={row.entry.line}><b>{row.reason?'Will not be added':`Will be ${row.taskId}`}</b> · {row.entry.title} <small>(line {row.entry.line})</small>{row.reason?<p role="note">Refused: {row.reason}</p>:<small> · owner: {row.entry.owner||'unanswered'} · files: {[...row.entry.write.map(path=>`write ${path}`),...row.entry.read.map(path=>`read ${path}`)].join(', ')||'none'} · done when: {row.entry.acceptance||'unanswered'}</small>}</li>)}</ol>:<p>No tasks were found in the pasted text.</p>}
+        {pastePreview.parsed.errors.length>0&&<><h4>Lines that could not be read</h4><ul>{pastePreview.parsed.errors.map((item,index)=><li key={index}>Line {item.line}{item.text?<> <code>{item.text}</code></>:null}: {item.reason}</li>)}</ul></>}
+        {pastePreview.parsed.notes.length>0&&<ul>{pastePreview.parsed.notes.map((item,index)=><li key={index}>Line {item.line} <code>{item.text}</code>: {item.reason}</li>)}</ul>}
+        {pastePreview.parsed.ignoredColumns.length>0&&<p>Ignored columns: {pastePreview.parsed.ignoredColumns.join(', ')}.</p>}
+      </section>}
+      {pasteResult&&<section aria-label="Paste result"><h4>Added {pasteResult.results.filter(r=>r.status==='added').length} of {pasteResult.total} pasted tasks</h4><ul>{pasteResult.results.map((r,index)=><li key={index}>{r.status==='added'?`Added ${r.taskId} · ${r.title}`:r.status==='refused'?`Refused · ${r.title} (line ${r.line}): ${r.reason}`:`Not tried · ${r.title} (line ${r.line}): adding stopped after an earlier task was refused.`}</li>)}</ul>{pasteResult.unreadable.length>0&&<p>{pasteResult.unreadable.length} line{pasteResult.unreadable.length===1?'':'s'} could not be read and {pasteResult.unreadable.length===1?'was':'were'} not used.</p>}{pasteResult.results.some(r=>r.status!=='added')&&<p>Your pasted text is kept. Fix the refused tasks, refresh the draft if another window saved, then Preview again. Tasks already added are listed above, so remove them from the text before adding again.</p>}</section>}
+    </section></details>
     {canReview&&<section aria-label="Review changed folder inventory" className="task-draft-rebind"><h3>Continue planning after a folder change</h3><p>This keeps every task and records a new device-local draft revision. Earlier revisions keep their original inventory. This does not verify files, approve work, resolve conflicts or enable workers.</p><dl><dt>Saved draft inventory</dt><dd><code>{ledger.binding.censusDigest}</code></dd><dt>Current project inventory</dt><dd><code>{binding.censusDigest}</code></dd></dl><p>Review each task's full details and file scope against your current app. File existence and contents are not checked here. Keep outdated obligations as drafts to revise after continuing; do not treat them as verified.</p><fieldset disabled={intentBlocked||busy||Boolean(operation)}><legend>Tasks in saved revision {ledger.revision}</legend>{ledger.tasks.map(task=><details key={task.id}><summary>{task.id} · {task.title}{task.archived?' · archived':''}</summary><p>{task.description||'Description unanswered'}</p><p>Owner: {task.owner||'unanswered'} · Dependencies: {task.dependsOn.join(', ')||'none recorded'}</p><pre tabIndex={0}>{task.claims.map(claim=>`${claim.access} ${claim.path}`).join('\n')||'File scope unanswered'}</pre><p>Acceptance: {task.acceptance||'unanswered'}</p><p>Recovery: {task.recovery||'unanswered'}</p><label className="task-draft-archived"><input type="checkbox" checked={reviewedTasks.includes(task.id)} onChange={e=>setReviewedTasks(ids=>e.target.checked?[...ids,task.id]:ids.filter(id=>id!==task.id))}/> I reviewed {task.id} for continued draft planning</label></details>)}<label className="task-draft-archived"><input type="checkbox" checked={inventoryReviewed} onChange={e=>setInventoryReviewed(e.target.checked)}/> Keep these tasks as unapproved drafts for the current inventory</label><button type="button" onClick={continueWithInventory} disabled={!inventoryReviewed||reviewedTasks.length!==ledger.tasks.length}>Continue drafts with current inventory</button></fieldset></section>}
     {earlierForms.length>0&&<section aria-label="Recover earlier unsaved forms" className="task-draft-error"><h3>Unsaved text from an earlier folder census</h3><p>Your text has not been rebound or discarded. Review or export it before closing the app. The recovery file is an unsaved form, not an approved task ledger.</p>{earlierForms.map(([key,value])=><details key={key}><summary>{value.form.title||'Untitled task'} · earlier census {key.split(':')[2].slice(0,12)}</summary><pre tabIndex={0}>{JSON.stringify(value.form,null,2)}</pre><button type="button" onClick={()=>exportEarlierForm(key,value)}>Export this unsaved form</button></details>)}</section>}
     <div className="task-draft-layout">
