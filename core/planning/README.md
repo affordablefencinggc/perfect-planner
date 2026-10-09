@@ -82,6 +82,35 @@ cannot answer (pricing, offline, sign-in) stay open for a person. Found running 
 Looplet, where planning recommended Tauri, Expo and SQLite for an Electron,
 Capacitor and Supabase app.
 
+## The person's own description (`description.ts`)
+
+The idea text is authoritative. `readDescription(idea)` is rule based (fixed
+word lists, no model). Explicit negatives rule an area out: "no accounts",
+"no login", "no sign-in/sign-up", "no passwords", "single user", "for one
+person", "just me" (no sign-in, one role); "no cloud sync" (no sync engine,
+no conflict rule); "no backend", "no server", "no cloud", "local only" (no
+server); "offline only" (works offline, nothing syncs); "works offline", "no
+internet" (works offline); "no payments", "no billing", "no subscriptions"
+(not in v1, free); "no AI", "no LLM" (no AI); "no sharing", "no teams" (solo).
+One negation covers a list ("no accounts, payments or AI") but never the
+words after it ("no login that syncs" still syncs). Explicit positives answer
+one question: TypeScript, Python, Next.js, SvelteKit, Vite, React, Vercel,
+Fly.io, Cloudflare, SQLite, Postgres, Supabase, MySQL, MongoDB, Firebase,
+IndexedDB, Prisma, Drizzle, magic link, Google/GitHub sign-in, email and
+password, Clerk, Auth.js, Stripe, Paddle, one-time/usage/subscription
+pricing, Tauri, Electron, Expo, React Native, Flutter, Swift/Kotlin, PWA. A
+negative beats a positive for the same question; a stated sign-in method beats
+"single user". `profileIdea` drops what a negative rules out from the signals
+and puts every settled question in `known` and `described`;
+`session.recordDescriptionFacts(person, profile)` writes each as the person's
+decision with reason `From your description: "<their words>"` and
+`data.source: "description"`. `session.reopen(person, q)` asks one again.
+
+The person can also add their own task (`session.addTask`, a person-signed
+`task.created` with `data.source: "person"`, on the agent board at once) and
+leave a draft roadmap task out before approval (`dropRoadmapTask` /
+`restoreRoadmapTask`, recorded as their `decision.made` with `data.roadmap`).
+
 ## Live research (`research.ts`)
 
 `ResearchProvider { name; available(); research(query, signal?) }` with

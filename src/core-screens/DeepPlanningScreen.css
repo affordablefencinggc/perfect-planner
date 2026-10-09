@@ -11,7 +11,8 @@
 }
 .core-screen-planning .planning-done { margin: var(--space-2) 0 0; color: var(--green); font-weight: 600; }
 .core-screen-planning input,
-.core-screen-planning textarea {
+.core-screen-planning textarea,
+.core-screen-planning select {
   width: 100%;
   box-sizing: border-box;
   padding: var(--space-2) var(--space-3);
@@ -24,6 +25,7 @@
 }
 .core-screen-planning input:focus-visible,
 .core-screen-planning textarea:focus-visible,
+.core-screen-planning select:focus-visible,
 .core-screen-planning .planning-option:focus-visible,
 .core-screen-planning .planning-tabs button:focus-visible,
 .core-screen-planning .planning-card:focus-visible { outline: none; box-shadow: var(--focus-ring); }
@@ -231,6 +233,30 @@
 .core-screen-planning .planning-phase ul { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-3); }
 .core-screen-planning .planning-task { display: grid; gap: 2px; padding-top: var(--space-2); border-top: 1px solid var(--border); font-size: var(--text-sm); }
 .core-screen-planning .planning-task .core-muted { font-size: var(--text-xs); }
+.core-screen-planning .planning-task.is-own { border-top-color: var(--border-strong); }
+.core-screen-planning .planning-task .core-pill { margin-left: var(--space-1); vertical-align: middle; }
+.core-screen-planning .planning-task-action { justify-self: start; min-height: 30px; padding: 0 var(--space-3); margin-top: var(--space-1); }
+.core-screen-planning .planning-own-task { display: grid; gap: var(--space-1); max-width: 640px; }
+.core-screen-planning .planning-own-task h3 { margin: 0 0 var(--space-1); font-size: var(--text-md); }
+.core-screen-planning .planning-own-task .core-button { justify-self: start; margin-top: var(--space-2); }
+.core-screen-planning .planning-dropped h3 { margin: 0 0 var(--space-2); font-size: var(--text-md); }
+.core-screen-planning .planning-dropped ul { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-2); }
+
+/* Settled by the person's own description */
+.core-screen-planning .planning-described { display: grid; gap: var(--space-2); }
+.core-screen-planning .planning-described h3 { margin: 0; font-size: var(--text-md); }
+.core-screen-planning .planning-described > p { margin: 0; font-size: var(--text-sm); }
+.core-screen-planning .planning-ruled-out { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-4); font-size: var(--text-sm); }
+.core-screen-planning .planning-settled {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr));
+  gap: var(--space-2) var(--space-4);
+}
+.core-screen-planning .planning-settled li { display: grid; gap: 2px; padding: var(--space-2) 0; border-top: 1px solid var(--border); font-size: var(--text-sm); }
+.core-screen-planning .planning-settled .core-button { justify-self: start; min-height: 30px; padding: 0 var(--space-3); margin-top: var(--space-1); }
 
 @media (max-width: 900px) {
   .core-screen-planning .planning-progress { grid-template-columns: 1fr; }
