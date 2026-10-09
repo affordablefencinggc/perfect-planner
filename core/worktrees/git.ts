@@ -1,5 +1,5 @@
 import { execFileSync, spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, lstatSync, mkdtempSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { gitExecutable, NO_CWD_SEARCH_ENV } from "../exec/index";
@@ -53,6 +53,11 @@ const fixedConfig = (hooksPath: string, attributesFile: string): string[] => [
   `diff.orderFile=${attributesFile}`,
   "diff.ignoreSubmodules=none",
   "color.ui=false",
+  // Signature checks run gpg.program (or gpg.ssh.program) from the repo config.
+  "log.showSignature=false",
+  "merge.verifySignatures=false",
+  // The host never talks to a remote; ext:: and the other transports (ssh, a remote's uploadpack) run programs.
+  "protocol.allow=never",
 ];
 
 /** Commands whose output is a diff: never through an external diff program or a textconv filter. */
@@ -84,12 +89,22 @@ interface Hardening {
 
 let hardening: Hardening | undefined;
 
-/** The app's empty hooks folder, empty attributes file and private global config, made once per process. */
+/**
+ * A hooks path that can never hold a hook, so nothing written by another program is ever run. On
+ * POSIX that is /dev/null (a device, so /dev/null/pre-commit cannot exist). Not on Windows: there
+ * Git looks /dev/null up as C:\dev\null, a folder any user may create, and NUL is relative to the repo
+ * (<repo>\NUL\<hook>, makeable with \\?\ paths). It uses the git program's own path instead: while git.exe
+ * is a file nothing can sit inside it, and whoever can replace git.exe needs no hook.
+ */
+export function hooklessPath(program: string, platform: NodeJS.Platform = process.platform): string {
+  return platform === "win32" ? program : "/dev/null";
+}
+
+/** The app's empty attributes file and private global config, made once per process. */
 function hardeningFiles(program: string): Hardening {
   if (hardening) return hardening;
   const root = mkdtempSync(path.join(os.tmpdir(), "pp-git-"));
-  const hooksPath = path.join(root, "no-hooks");
-  mkdirSync(hooksPath);
+  const hooksPath = hooklessPath(program);
   const attributesFile = path.join(root, "attributes");
   writeFileSync(attributesFile, "");
   const globalConfig = path.join(root, "gitconfig");
@@ -109,8 +124,25 @@ function hardeningFiles(program: string): Hardening {
       }
     }
   }
+  chmodSync(attributesFile, 0o444);
   hardening = { hooksPath, attributesFile, globalConfig };
   return hardening;
+}
+
+export class GitHardeningError extends Error {}
+
+/** The attributes file (also the diff order file) must still be an empty file; git is not run otherwise. */
+function checkHardening(files: Hardening): void {
+  let size = -1;
+  try {
+    const stat = lstatSync(files.attributesFile);
+    if (stat.isFile()) size = stat.size;
+  } catch {
+    // missing
+  }
+  if (size !== 0) {
+    throw new GitHardeningError(`Perfect Planner's empty git attributes file (${files.attributesFile}) was changed, so git could be told to run a program. Git was not run. Restart Perfect Planner; it makes a fresh one.`);
+  }
 }
 
 const baseEnv = (globalConfig: string): NodeJS.ProcessEnv => {
@@ -126,13 +158,14 @@ const baseEnv = (globalConfig: string): NodeJS.ProcessEnv => {
     GIT_CONFIG_NOSYSTEM: "1",
     GIT_CONFIG_GLOBAL: globalConfig,
     GIT_ATTR_NOSYSTEM: "1",
+    GIT_PROTOCOL_FROM_USER: "0",
   };
   // A hook or parent git process can export these; they would silently point us at another repo,
   // inject config, or name programs for git to run.
   for (const key of Object.keys(env)) {
     if (/^GIT_CONFIG_(COUNT|KEY_\d+|VALUE_\d+|PARAMETERS|SYSTEM)$/.test(key)) delete env[key];
   }
-  for (const key of ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_EXEC_PATH", "GIT_EXTERNAL_DIFF", "GIT_ASKPASS", "SSH_ASKPASS", "GIT_SSH", "GIT_SSH_COMMAND", "GIT_TEMPLATE_DIR", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_OBJECT_DIRECTORY"]) delete env[key];
+  for (const key of ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_EXEC_PATH", "GIT_EXTERNAL_DIFF", "GIT_ASKPASS", "SSH_ASKPASS", "GIT_SSH", "GIT_SSH_COMMAND", "GIT_TEMPLATE_DIR", "GIT_ALLOW_PROTOCOL", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_OBJECT_DIRECTORY"]) delete env[key];
   return env;
 };
 
@@ -185,6 +218,7 @@ function spawnGit(cwd: string, args: string[], options: GitOptions): Promise<Git
     try {
       program = gitExecutable(cwd);
       files = hardeningFiles(program);
+      checkHardening(files);
     } catch (error) {
       reject(error);
       return;

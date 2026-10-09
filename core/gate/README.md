@@ -28,6 +28,15 @@ when any differ. Every proof entry carries the approved pin, and only passes wit
 that pin count towards finishing. To change the test, define it again and get it
 approved again.
 
+The test command runs with a PATH that cannot lead into the project (`testEnv`): only
+absolute, local, resolvable folders outside the run folder, the repo's checkout, every
+worktree git lists and the roots the host passes as `protect`, checked as written and as
+real paths, with the app's own Node folder first (`PP_NODE_BINARY`, else this Node). The
+program its first word starts (`resolveCommand`, after any `NAME=value` and `exec`/`env`)
+is refused when it sits inside one of those folders, as written or through a link, or
+when shell syntax hides which program it is. Programs named later in the command are only
+looked up through that PATH; an explicit path later in the command is not checked.
+
 `task.done` is written by the gate only (actor `system:gate`, with `data.approvedBy`
 naming the person who merged); `gateRule()` refuses it from anyone else.
 

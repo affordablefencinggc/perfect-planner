@@ -1,12 +1,19 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { statSync } from "node:fs";
+import { realpathSync, statSync } from "node:fs";
 import path from "node:path";
+import { isLocalWindowsPath, isWithin, NO_CWD_SEARCH_ENV } from "../exec/index";
 
 export interface TestRunOptions {
   /** Kill the whole process tree after this long. Default 10 minutes. */
   timeoutMs?: number;
   /** Extra variables on top of the allow-listed environment (see TEST_ENV_ALLOW). */
   env?: Record<string, string>;
+  /**
+   * Folders no program the test starts may come from, beyond `cwd`: the repo, its worktrees, the
+   * candidate, the project folder. Their PATH entries are dropped and a command that starts a program
+   * inside one is refused (see testEnv and resolveCommand).
+   */
+  protect?: readonly string[];
 }
 
 export interface TestRunResult {
@@ -68,6 +75,69 @@ export function scrubbedEnv(source: NodeJS.ProcessEnv = process.env, extra: Reco
   return { ...env, ...extra };
 }
 
+/**
+ * Folder of the Node the app runs tests with: the desktop app's own (PP_NODE_BINARY, an absolute path
+ * set by the app) or, failing that, the Node running this process.
+ */
+export function appNodeDir(nodeBinary = process.env.PP_NODE_BINARY, execPath = process.execPath): string {
+  return path.dirname(nodeBinary && path.isAbsolute(nodeBinary) ? nodeBinary : execPath);
+}
+
+/** Every root as written and as a real path, for the inside-a-root checks. */
+function rootSet(cwd: string, protect: readonly string[]): string[] {
+  const roots = new Set<string>();
+  for (const root of [cwd, ...protect]) {
+    if (!root) continue;
+    roots.add(path.resolve(root));
+    const real = realOrNull(root);
+    if (real) roots.add(real);
+  }
+  return [...roots];
+}
+
+function realOrNull(p: string): string | null {
+  try {
+    return realpathSync.native(p);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The test command's environment with a PATH it could not have been planted into. Same rules as the
+ * agent connect line's childEnv: keep only folders that are absolute, local (a drive-letter path on
+ * Windows), resolvable, and neither as written nor as a real path inside `cwd` or a protected root.
+ * The app's Node folder goes first (when it passes the same check), so `node` is the app's own Node even
+ * on a PC with no Node installed. NoDefaultCurrentDirectoryInExePath stops cmd.exe searching `cwd`.
+ */
+export function testEnv(
+  env: NodeJS.ProcessEnv,
+  options: { cwd: string; protect?: readonly string[]; platform?: NodeJS.Platform; nodeDir?: string },
+): NodeJS.ProcessEnv {
+  const platform = options.platform ?? process.platform;
+  const windows = platform === "win32";
+  const p = windows ? path.win32 : path.posix;
+  const roots = rootSet(options.cwd, options.protect ?? []);
+  const inside = (dir: string) => roots.some((root) => isWithin(root, dir));
+  const usable = (dir: string) => {
+    if (!dir || !p.isAbsolute(dir) || (windows && !isLocalWindowsPath(dir))) return false;
+    const real = realOrNull(dir);
+    return !!real && !(windows && !isLocalWindowsPath(real)) && !inside(path.resolve(dir)) && !inside(real);
+  };
+  const keys = Object.keys(env).filter((name) => (windows ? name.toUpperCase() === "PATH" : name === "PATH"));
+  const value = keys.map((key) => env[key]).find((v) => typeof v === "string") ?? "";
+  const kept: string[] = [];
+  for (const entry of value.split(p.delimiter)) {
+    const dir = entry.trim().replace(/^"(.*)"$/, "$1");
+    if (usable(dir) && !kept.includes(dir)) kept.push(dir);
+  }
+  const node = options.nodeDir ?? appNodeDir();
+  const out: NodeJS.ProcessEnv = { ...env };
+  for (const key of keys) delete out[key];
+  out[windows ? "Path" : "PATH"] = [...(usable(node) ? [node] : []), ...kept.filter((dir) => dir !== node)].join(p.delimiter);
+  return { ...out, ...NO_CWD_SEARCH_ENV };
+}
+
 /** A run proves the test fails only if the test itself ran and reported failure. */
 export function isConclusiveFailure(run: TestRunResult): boolean {
   if (run.passed || run.timedOut || run.exitCode === null) return false;
@@ -89,23 +159,75 @@ function isFile(file: string): boolean {
   }
 }
 
+export type ResolvedCommand =
+  /** A shell builtin: nothing is started by name. */
+  | { kind: "builtin" }
+  | { kind: "found"; file: string }
+  | { kind: "missing"; program: string }
+  /** The program would be started from inside cwd or a protected root (as written or through a link). */
+  | { kind: "inside"; program: string; file: string }
+  /** Shell syntax (a variable, a glob, ~, a subshell) hides which program starts. */
+  | { kind: "unclear"; program: string };
+
+/** Commands that start the program named after them; their next word is what runs. */
+const PREFIXES = new Set(isWindows ? [] : ["exec", "command", "nohup", "env", "time"]);
+
 /**
- * Whether the program a command starts with exists, looked up the way the shell will (PATH, and
- * PATHEXT on Windows) in the environment the test gets. Shell syntax we can't judge counts as found,
- * so this only ever rules out commands that plainly can't start. It doesn't depend on the shell's
- * exit code or its (localised) error message.
+ * The program a test command starts, looked up the way the shell will in the environment the test gets
+ * (PATH, and PATHEXT on Windows; never the current folder once testEnv set NoDefaultCurrentDirectoryInExePath).
+ * Leading NAME=value assignments are skipped. A path is resolved against `cwd`. The first match counts,
+ * since that is what the shell runs, and its real path is checked against `cwd` and `protect`.
  */
-export function commandExists(command: string, cwd: string, env: NodeJS.ProcessEnv): boolean {
-  const match = /^\s*(?:"([^"]+)"|'([^']+)'|([^\s;&|<>()]+))/.exec(command);
-  const program = match?.[1] ?? match?.[2] ?? match?.[3];
-  if (!program || /[=$%`*?{}~!^]/.test(program) || SHELL_BUILTINS.has(program.toLowerCase())) return true;
+export function resolveCommand(command: string, cwd: string, env: NodeJS.ProcessEnv, protect: readonly string[] = []): ResolvedCommand {
+  let rest = command;
+  let program: string | undefined;
+  for (;;) {
+    const match = /^\s*(?:"([^"]+)"|'([^']+)'|([^\s;&|<>()]+))/.exec(rest);
+    if (!match) return { kind: "unclear", program: rest.trim() };
+    program = match[1] ?? match[2] ?? match[3]!;
+    rest = rest.slice(match[0].length);
+    // POSIX `NAME=value cmd` and `exec cmd`: the program is a later word.
+    if (!isWindows && match[3] && /^[A-Za-z_][A-Za-z0-9_]*=/.test(program)) continue;
+    if (PREFIXES.has(program)) {
+      if (/^\s+-/.test(rest)) return { kind: "unclear", program };
+      continue;
+    }
+    break;
+  }
+  if (/[=$%`*?{}~!^\[\]]/.test(program)) return { kind: "unclear", program };
+  if (SHELL_BUILTINS.has(program.toLowerCase())) return { kind: "builtin" };
+  const roots = rootSet(cwd, protect);
+  const inside = (file: string) => {
+    const real = realOrNull(file) ?? path.resolve(file);
+    return roots.some((root) => isWithin(root, path.resolve(file)) || isWithin(root, real)) || (isWindows && !isLocalWindowsPath(real));
+  };
   const lookup = (name: string) => Object.entries(env).find(([key]) => key.toUpperCase() === name)?.[1] ?? "";
   const extensions = isWindows ? ["", ...(lookup("PATHEXT") || ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean)] : [""];
-  const has = (base: string) => extensions.some((ext) => isFile(base + ext) || isFile(base + ext.toLowerCase()));
-  if (/[\\/]/.test(program)) return has(path.resolve(cwd, program));
-  // cmd.exe looks in the current folder before PATH.
-  const dirs = [...(isWindows ? [cwd] : []), ...lookup("PATH").split(path.delimiter).filter(Boolean)];
-  return dirs.some((dir) => has(path.join(dir, program)));
+  const first = (base: string) => {
+    for (const ext of extensions) for (const file of [base + ext, base + ext.toLowerCase()]) if (isFile(file)) return file;
+    return undefined;
+  };
+  const check = (file: string): ResolvedCommand => (inside(file) ? { kind: "inside", program, file } : { kind: "found", file });
+  if (/[\\/]/.test(program)) {
+    const file = first(path.resolve(cwd, program));
+    return file ? check(file) : { kind: "missing", program };
+  }
+  // Without NoDefaultCurrentDirectoryInExePath cmd.exe looks in the current folder before PATH.
+  const searchCwd = isWindows && !lookup("NODEFAULTCURRENTDIRECTORYINEXEPATH");
+  const dirs = [...(searchCwd ? [cwd] : []), ...lookup("PATH").split(path.delimiter).filter(Boolean)];
+  for (const dir of dirs) {
+    const file = first(path.join(dir, program));
+    if (file) return check(file);
+  }
+  return { kind: "missing", program };
+}
+
+/**
+ * Whether the program a command starts with exists (see resolveCommand). Shell syntax we can't judge
+ * counts as found, so this only ever rules out commands that plainly can't start.
+ */
+export function commandExists(command: string, cwd: string, env: NodeJS.ProcessEnv): boolean {
+  return resolveCommand(command, cwd, env).kind !== "missing";
 }
 
 /** Kill the child and everything it started. */
@@ -156,9 +278,16 @@ export function runTestCommand(command: string, cwd: string, options: TestRunOpt
         finish(null);
       }, 5000);
     }, timeoutMs);
-    const env = scrubbedEnv(process.env, options.env);
-    if (!commandExists(command, cwd, env)) {
-      tail.push(Buffer.from(`[perfect-planner] command not found: ${command.trim().split(/\s+/)[0]}\n`));
+    const protect = options.protect ?? [];
+    const env = testEnv(scrubbedEnv(process.env, options.env), { cwd, protect });
+    const resolved = resolveCommand(command, cwd, env, protect);
+    const refusal =
+      resolved.kind === "missing" ? `command not found: ${resolved.program}`
+      : resolved.kind === "inside" ? `refused: ${resolved.program} is ${resolved.file}, inside the project or one of its worktrees, so it could be a planted copy that reports a pass without running the test. Start the test with an installed program (node, npm, npx, python), then a script path.`
+      : resolved.kind === "unclear" ? `refused: Perfect Planner can't tell which program "${resolved.program}" starts. Start the test with a plain program name or path.`
+      : undefined;
+    if (refusal) {
+      tail.push(Buffer.from(`[perfect-planner] ${refusal}\n`));
       finish(null);
       return;
     }

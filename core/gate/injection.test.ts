@@ -1,8 +1,9 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { Actor } from "../ledger/index";
-import { git, runGit } from "../worktrees/git";
+import { gitExecutable } from "../exec/index";
+import { git, GitHardeningError, GitProgramRefusedError, runGit } from "../worktrees/git";
 import { WorktreeManager } from "../worktrees/manager";
 import { commitAll, makeRepo, memoryLedger, writeFiles } from "../worktrees/testing";
 import { TestGate, sensitiveChanges, verifyMergeCommit } from "./index";
@@ -136,6 +137,76 @@ describe("only an allow-list of git commands skips the filter check", () => {
     // Reading objects and refs stays possible.
     expect((await runGit(ctx.root, ["cat-file", "blob", "HEAD:feature.txt"])).stdout).toBe("disabled\n");
     expect((await runGit(ctx.root, ["rev-parse", "HEAD"])).code).toBe(0);
+    expect(existsSync(ctx.marker)).toBe(false);
+  }, SLOW);
+});
+
+describe("the app's own git settings cannot be used to run a program", () => {
+  it("points hooks at a path that can never hold one, so a hook planted where the old empty folder was never runs", async () => {
+    const ctx = await approvedRepo();
+    // Through the hardened runner the hooks folder is /dev/null (git.exe's own path on Windows), not a temp folder.
+    const hooks = await git(ctx.root, ["rev-parse", "--git-path", "hooks"]);
+    expect(hooks).toBe(process.platform === "win32" ? gitExecutable(ctx.root).replace(/\\/g, "/") : "/dev/null");
+    // The old layout: an empty no-hooks folder beside the app's attributes file. Plant every hook there.
+    const attributes = await git(ctx.root, ["config", "--get", "core.attributesFile"]);
+    for (const hook of HOOKS) plant(path.join(path.dirname(attributes), "no-hooks", hook), ctx.marker);
+    cleanups.push(() => rmSync(path.join(path.dirname(attributes), "no-hooks"), { recursive: true, force: true }));
+    const { merged } = await wholeLoop(ctx);
+    expect(merged.ok).toBe(true);
+    expect(existsSync(ctx.marker)).toBe(false);
+  }, SLOW);
+
+  it("refuses to run git once its empty attributes file is changed", async () => {
+    const repo = await makeRepo({ "a.txt": "a\n" });
+    cleanups.push(repo.cleanup);
+    const attributes = await git(repo.root, ["config", "--get", "core.attributesFile"]);
+    chmodSync(attributes, 0o644);
+    writeFileSync(attributes, "* diff=planted\n");
+    try {
+      await expect(runGit(repo.root, ["rev-parse", "HEAD"])).rejects.toBeInstanceOf(GitHardeningError);
+    } finally {
+      writeFileSync(attributes, "");
+      chmodSync(attributes, 0o444);
+    }
+    expect((await runGit(repo.root, ["rev-parse", "HEAD"])).code).toBe(0);
+  });
+
+  it("never reaches a remote: ext::, a local remote's uploadpack and ssh commands do not run", async () => {
+    const ctx = await approvedRepo();
+    const other = await makeRepo({ "b.txt": "b\n" });
+    cleanups.push(other.cleanup);
+    const program = plant(path.join(path.dirname(ctx.root), "remote-program"), ctx.marker);
+    await git(ctx.root, ["config", "remote.ext.url", `ext::sh ${program} %S`]);
+    await git(ctx.root, ["config", "remote.local.url", other.root.replace(/\\/g, "/")]);
+    await git(ctx.root, ["config", "remote.local.uploadpack", program]);
+    await git(ctx.root, ["config", "remote.ssh.url", "ssh://example.invalid/repo.git"]);
+    await git(ctx.root, ["config", "core.sshCommand", program]);
+    // A variable inherited from whoever started the app must not re-allow them either.
+    process.env.GIT_ALLOW_PROTOCOL = "ext:file:ssh";
+    try {
+      for (const remote of ["ext", "local", "ssh"]) {
+        expect((await runGit(ctx.root, ["fetch", remote], { timeoutMs: 10_000 })).code).not.toBe(0);
+        expect((await runGit(ctx.root, ["ls-remote", remote], { timeoutMs: 10_000 })).code).not.toBe(0);
+      }
+    } finally {
+      delete process.env.GIT_ALLOW_PROTOCOL;
+    }
+    expect(existsSync(ctx.marker)).toBe(false);
+  }, SLOW);
+
+  it("follows include.path in the project config to a planted filter or fsmonitor and still runs nothing", async () => {
+    const ctx = await approvedRepo();
+    const program = plant(path.join(path.dirname(ctx.root), "included-program"), ctx.marker);
+    const included = path.join(path.dirname(ctx.root), "included.gitconfig");
+    writeFileSync(included, `[core]\n\tfsmonitor = ${program}\n[log]\n\tshowSignature = true\n[gpg]\n\tprogram = ${program}\n`);
+    await git(ctx.root, ["config", "include.path", included.replace(/\\/g, "/")]);
+    const { merged } = await wholeLoop(ctx);
+    expect(merged.ok).toBe(true);
+    expect(existsSync(ctx.marker)).toBe(false);
+
+    writeFileSync(included, `[filter "x"]\n\tclean = ${program}\n`);
+    writeFileSync(path.join(ctx.root, ".gitattributes"), "* filter=x\n");
+    await expect(runGit(ctx.root, ["status"])).rejects.toBeInstanceOf(GitProgramRefusedError);
     expect(existsSync(ctx.marker)).toBe(false);
   }, SLOW);
 });
