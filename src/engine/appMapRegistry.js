@@ -84,7 +84,8 @@ export const appMapRegistry = {
     // Execution ledgers describe acceptance; they are not product modules.
     exact: ["APP-COMPLETION-LEDGER.md", "FINISH-LINE-2026-09-27.md", "docs/JEV-FINISH-LINE-REVIEW.md", "docs/RETAINED-PROJECT-EXECUTION.md", "docs/build-chat-orchestration.md", "docs/task-route-planning.md", "scripts/verify-dans1-source.mjs", "scripts/verify-onboarding-browser.mjs", "vite.preview-local.config.mjs", "FINISH-LINE-EXECUTION-PLAN.md", ".github/workflows/guardrail-ci.yml", "scripts/prepare-native-ci-env.mjs", ".openai/hosting.json", "AGENTS.md", "BUILD-LEDGER.md", "design-qa.md", "docs/foundation-gap-audit.md", "docs/research/developer-experience-2026-09-05.md", "EXECUTION-PLAN.md", "package-lock.json", "package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml", "PRODUCT-CONTRACT.md", "SOURCE-GAP-AUDIT.md", "SYSTEM-MAP.md", "vite.config.mjs", "vitest.config.mjs", "vitest.core.config.mjs", "tsconfig.core.json", ".github/workflows/core-ci.yml", ".github/workflows/keychain-ci.yml"],
     // The core loop modules (ledger, numbering, lookup, worktrees, gate, relay)
-    // are built beside the app and carry their own READMEs and tests.
-    prefixes: ["docs/architecture/maps/", "core/"],
+    // are built beside the app and carry their own READMEs and tests. The
+    // People panel (src/people/) is self-contained until a UI thread mounts it.
+    prefixes: ["docs/architecture/maps/", "core/", "src/people/", "tests-ui/people/"],
   },
 };
