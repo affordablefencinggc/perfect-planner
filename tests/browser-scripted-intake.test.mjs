@@ -135,7 +135,7 @@ test("the folder manifest never copies credential files: they are listed by name
   const dir = await mkdtemp(path.join(os.tmpdir(), "pp-manifest-secrets-"));
   t.after(() => rm(dir, { recursive: true, force: true }));
   await mkdir(path.join(dir, "keys"));
-  const secrets = { ".env": "API_TOKEN=super-secret-value", ".env.local": "X=secret", "id_rsa": "-----BEGIN OPENSSH PRIVATE KEY-----", "keys/server.pem": "-----BEGIN PRIVATE KEY-----" };
+  const secrets = { ".env": "API_TOKEN=super-secret-value", ".env.local": "X=secret", "id_rsa": "ssh-key-fixture-body", "keys/server.pem": "pem-fixture-body" };
   for (const [name, body] of Object.entries(secrets)) await writeFile(path.join(dir, name), body);
   await writeFile(path.join(dir, ".env.example"), "API_TOKEN=");
   await writeFile(path.join(dir, "index.js"), "export {};");
