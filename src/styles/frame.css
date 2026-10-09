@@ -395,6 +395,7 @@
 @media (max-height: 640px) {
   body { overflow-y: auto; }
   #root { height: auto; min-height: 100%; }
-  .app-shell { height: auto; min-height: 100%; overflow: visible; }
-  .app-main { position: relative; inset: auto; height: max(360px, calc(100dvh - var(--app-header-height) - 42px)); margin-bottom: 42px; }
+  /* Padding, not a margin on .app-main: a trailing margin collapses out and adds no scroll room, leaving the bottom of the page under the dock. */
+  .app-shell { height: auto; min-height: 100%; overflow: visible; padding-bottom: 42px; }
+  .app-main { position: relative; inset: auto; height: max(360px, calc(100dvh - var(--app-header-height) - 42px)); }
 }

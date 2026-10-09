@@ -4,7 +4,7 @@ import { act, cleanup, render, screen, waitFor, within } from "@testing-library/
 import userEvent from "@testing-library/user-event";
 
 // An in-memory native journal with real compare-and-swap, so double sends and refusals behave like the real one.
-const { journal } = vi.hoisted(() => ({ journal: { state: null, calls: [], gate: null, failNext: null } }));
+const { journal } = vi.hoisted(() => ({ journal: { state: null, calls: [], gate: null, failNext: null, failInspect: null } }));
 vi.mock("../src/native/collisionAuthority.js", async () => {
   const { appendLedgerEntry } = await import("../src/engine/collisionEngine.js");
   const snapshot = (planId, censusDigest) => {
@@ -21,7 +21,7 @@ vi.mock("../src/native/collisionAuthority.js", async () => {
     return snapshot(request.planId, request.censusDigest);
   };
   return { createNativeCollisionAuthorityAdapter: () => ({
-    inspect: async (request) => { journal.calls.push("inspect"); return snapshot(request.planId, request.censusDigest); },
+    inspect: async (request) => { journal.calls.push("inspect"); if (journal.failInspect) throw new Error(journal.failInspect); return snapshot(request.planId, request.censusDigest); },
     approve: async (request) => {
       const result = await write("approve", request, "collision.order-approved", { collisionId: request.collision.id, censusDigest: request.censusDigest });
       journal.state.approvedIds.push(request.collision.id);
@@ -33,7 +33,7 @@ vi.mock("../src/native/collisionAuthority.js", async () => {
 
 import { CollisionWorkspace } from "../src/components/CollisionWorkspace.jsx";
 
-beforeEach(() => { journal.state = null; journal.calls = []; journal.gate = null; journal.failNext = null; });
+beforeEach(() => { journal.state = null; journal.calls = []; journal.gate = null; journal.failNext = null; journal.failInspect = null; });
 afterEach(cleanup);
 
 const cards = () => screen.getAllByRole("button", { name: /Request approval|Recorded by authority|Requesting…/ });
@@ -89,4 +89,35 @@ test("commit runs once and then reads as committed instead of staying clickable"
   expect(journal.calls.filter((call) => call === "commit")).toHaveLength(1);
   expect(onToast).toHaveBeenCalledWith("Collision assessment committed by native authority.");
   expect(within(screen.getByRole("note")).getByText(/Demo journal:/)).toBeTruthy();
+});
+
+test("when the re-read after a refusal fails too, the record is labelled last known and its actions pause", async () => {
+  const onToast = vi.fn(), onGateChange = vi.fn();
+  const user = userEvent.setup();
+  render(<CollisionWorkspace onGateChange={onGateChange} onToast={onToast} />);
+  await waitFor(() => expect(screen.getAllByRole("button", { name: "Request approval" }).length).toBeGreaterThan(1));
+  await user.click(cards()[0]);
+  await waitFor(() => expect(cards()[0].textContent).toContain("Recorded by authority"));
+  journal.failNext = "compare-and-swap failed"; journal.failInspect = "journal locked";
+  await user.click(screen.getAllByRole("button", { name: "Request approval" })[0]);
+  const alert = await screen.findByRole("alert");
+  expect(alert.textContent).toContain("Last known record, re-read failed");
+  expect(alert.textContent).toContain("journal locked");
+  const toast = onToast.mock.calls.at(-1)[0];
+  expect(toast).toMatch(/^Not recorded: Authority rejected: compare-and-swap failed/);
+  expect(toast).toContain("last known record, not live");
+  expect(toast).not.toContain("current record");
+  expect(cards()[0].textContent).toContain("Recorded by authority");
+  expect(screen.getAllByRole("button", { name: "Request approval" }).every((button) => button.disabled)).toBe(true);
+  expect(screen.getByRole("button", { name: /Commit assessment/ }).disabled).toBe(true);
+  expect(screen.getByRole("button", { name: /Verify chain/ }).disabled).toBe(true);
+  expect(screen.getByText("last known · not live")).toBeTruthy();
+  expect(onGateChange.mock.calls.at(-1)[0]).toMatchObject({ ready: false, authorityAvailable: false, authorityReason: expect.stringContaining("re-read failed") });
+
+  journal.failInspect = null;
+  await user.click(screen.getByRole("button", { name: "Re-read authority" }));
+  await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+  expect(screen.getAllByRole("button", { name: "Request approval" }).some((button) => !button.disabled)).toBe(true);
+  expect(onGateChange.mock.calls.at(-1)[0]).toMatchObject({ authorityAvailable: true });
+  expect(onToast).toHaveBeenLastCalledWith("Authority re-read; showing its current record.");
 });

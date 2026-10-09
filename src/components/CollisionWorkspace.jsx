@@ -35,6 +35,8 @@ export function CollisionWorkspace({ onGateChange, onToast }) {
   const [pending, setPending] = useState(null);
   const inFlight = useRef(false);
   const [authority, setAuthority] = useState({ authoritative: false, approvedIds: [], ledger: [], reason: "Calculating plan census…" });
+  // Set when a refused write's re-read also failed: the record on screen is last known, not live.
+  const [staleReason, setStaleReason] = useState(null);
   const [stagedIds, setStagedIds] = useState(new Set());
   const [censusDigest, setCensusDigest] = useState("");
   const [ledgerIntegrity, setLedgerIntegrity] = useState("unchecked");
@@ -43,33 +45,49 @@ export function CollisionWorkspace({ onGateChange, onToast }) {
   const approvedIds = useMemo(() => new Set(authority.approvedIds), [authority.approvedIds]);
   const ledger = authority.ledger;
   const remaining = assessment.collisions.filter((collision) => !approvedIds.has(collision.id));
-  const gateReady = authority.authoritative === true && assessment.manifestErrors.length === 0 && remaining.length === 0;
-  const committed = authority.authoritative === true && committedFor(ledger, censusDigest);
+  const live = authority.authoritative === true && staleReason === null;
+  const gateReady = live && assessment.manifestErrors.length === 0 && remaining.length === 0;
+  const committed = live && committedFor(ledger, censusDigest);
+  const gateAuthority = useMemo(() => staleReason === null ? authority : { ...authority, authoritative: false, reason: `Last known record; re-read failed: ${staleReason}` }, [authority, staleReason]);
 
   useEffect(() => {
     let current = true;
     collisionCensusDigest(manifests).then(async (digest) => {
       const snapshot = await authorityClient.inspect(digest);
-      if (current) { setCensusDigest(digest); setAuthority(snapshot); setStagedIds(new Set()); setLedgerIntegrity("unchecked"); }
+      if (current) { setCensusDigest(digest); setAuthority(snapshot); setStaleReason(null); setStagedIds(new Set()); setLedgerIntegrity("unchecked"); }
     });
     return () => { current = false; };
   }, [authorityClient, manifests]);
 
   useEffect(() => {
-    if (censusDigest) onGateChange(collisionGateFrom(assessment, authority));
-  }, [authority, assessment, censusDigest, onGateChange]);
+    if (censusDigest) onGateChange(collisionGateFrom(assessment, gateAuthority));
+  }, [gateAuthority, assessment, censusDigest, onGateChange]);
 
+  const reread = async () => {
+    const current = await authorityClient.inspect(censusDigest);
+    if (current.authoritative || !authority.authoritative) { setAuthority(current); setStaleReason(null); setLedgerIntegrity("unchecked"); return current; }
+    setStaleReason(current.reason ?? "the authority did not answer");
+    return current;
+  };
   // A refused write never replaces what the authority already proved: keep it, say why, and re-read.
+  // If the re-read fails too, the kept record is labelled last known and its actions are paused.
   const send = async (key, request, success, after) => {
     if (inFlight.current) return;
     inFlight.current = true; setPending(key);
     try {
       const snapshot = await request();
-      if (snapshot.authoritative) { setAuthority(snapshot); setLedgerIntegrity("unchecked"); if (success) onToast(success); after?.(snapshot); return; }
-      onToast(`Not recorded: ${snapshot.reason} Showing the authority's current record.`);
-      const current = await authorityClient.inspect(censusDigest);
-      if (current.authoritative || !authority.authoritative) { setAuthority(current); setLedgerIntegrity("unchecked"); }
+      if (snapshot.authoritative) { setAuthority(snapshot); setStaleReason(null); setLedgerIntegrity("unchecked"); if (success) onToast(success); after?.(snapshot); return; }
+      const current = await reread();
+      onToast(current.authoritative || !authority.authoritative
+        ? `Not recorded: ${snapshot.reason} Showing the authority's current record.`
+        : `Not recorded: ${snapshot.reason} Re-read failed (${current.reason}), so this is the last known record, not live. Actions are paused until a re-read succeeds.`);
     } finally { inFlight.current = false; setPending(null); }
+  };
+  const retryRead = async () => {
+    if (inFlight.current) return;
+    inFlight.current = true; setPending("reread");
+    try { const current = await reread(); if (current.authoritative) onToast("Authority re-read; showing its current record."); }
+    finally { inFlight.current = false; setPending(null); }
   };
   const approveCollision = (collision) => {
     if (!authorityClient.available) {
@@ -107,16 +125,17 @@ export function CollisionWorkspace({ onGateChange, onToast }) {
         <div className="collision-actions"><label className="soft-button manifest-import"><HardDrivesIcon /> Import manifests<input type="file" accept="application/json,.json" multiple onChange={importManifests} /></label><button className="soft-button" onClick={resetCensus}>Reset demo census</button></div>
       </header>
       <div className="collision-metrics"><div><strong>{manifests.length}</strong><span>plan manifests</span></div><div><strong>{assessment.claims.length}</strong><span>normalized claims</span></div><div><strong>{assessment.collisions.length}</strong><span>detected collisions</span></div><div className={remaining.length ? "metric-danger" : "metric-success"}><strong>{remaining.length}</strong><span>unresolved</span></div><div><strong>{ledger.length}</strong><span>ledger entries</span></div></div>
+      {staleReason !== null && <section className="manifest-errors collision-stale" role="alert"><WarningIcon weight="fill" /><div><strong>Last known record, re-read failed</strong><span>The authority could not be read again ({staleReason}). Approvals and the commit are paused because this may not match the journal now.</span><button className="soft-button" disabled={pending !== null} aria-busy={pending === "reread" || undefined} onClick={retryRead}>{pending === "reread" ? "Re-reading…" : "Re-read authority"}</button></div></section>}
       {(importErrors.length > 0 || assessment.manifestErrors.length > 0) && <section className="manifest-errors"><WarningIcon weight="fill" /><div><strong>Manifest rejected before assessment</strong>{[...importErrors, ...assessment.manifestErrors.map((error) => `${error.planId}: ${error.message}`)].map((error) => <span key={error}>{error}</span>)}</div></section>}
       <div className="collision-grid">
         <section className="collision-panel manifest-panel"><div className="collision-panel-title"><HardDrivesIcon /><strong>Active plan census</strong><span>{assessment.safeClaims.length} non-colliding claims</span></div><div className="manifest-list">{manifests.map((manifest) => <article className="manifest-card" key={manifest.planId}><header><code>{manifest.planId}</code><strong>{manifest.title}</strong><span>P{manifest.priority}</span></header>{manifest.tasks.map((task) => <div className="manifest-task" key={task.taskId}><span><code>{task.taskId}</code>{task.title}</span><small>{task.claims.length} claims · depends on {(task.dependsOn ?? []).join(", ") || "none"}</small></div>)}</article>)}</div></section>
         <section className="collision-panel collision-results-panel"><div className="collision-panel-title"><WarningIcon /><strong>Deterministic resolution queue</strong><span>{remaining.length ? "allocation blocked" : "allocation ready"}</span></div><div className="collision-list">{assessment.collisions.map((collision) => {
           const approved = approvedIds.has(collision.id); const staged = stagedIds.has(collision.id);
-          return <article className={`collision-card ${approved ? "collision-approved" : ""}`} key={collision.id}><header><code>{collision.id}</code><strong>{collision.displaySurface ?? collision.surface}</strong><StatusChip status={approved ? "verified" : collision.severity === "hard-stop" ? "blocked" : "risk"}>{approved ? "order approved" : staged ? "staged only" : collision.severity}</StatusChip></header><p>{collision.reason}</p><div className="collision-pair"><span><small>FIRST</small><strong>{collision.first.planId} · {collision.first.taskId}</strong><code>{collision.first.access}</code></span><ArrowRightIcon /><span><small>THEN</small><strong>{collision.then.planId} · {collision.then.taskId}</strong><code>{collision.then.access}</code></span></div><div className="collision-contingency"><span>CONTINGENCY</span><p>{collision.contingency}</p></div><button disabled={approved || staged || pending !== null || committed} aria-busy={pending === collision.id || undefined} onClick={() => approveCollision(collision)}>{approved ? <CheckCircleIcon weight="fill" /> : <ShieldCheckIcon />}{approved ? "Recorded by authority" : pending === collision.id ? "Requesting…" : staged ? "Staged · gate locked" : authorityClient.available ? "Request approval" : "Stage proposed order"}</button></article>;
+          return <article className={`collision-card ${approved ? "collision-approved" : ""}`} key={collision.id}><header><code>{collision.id}</code><strong>{collision.displaySurface ?? collision.surface}</strong><StatusChip status={approved ? "verified" : collision.severity === "hard-stop" ? "blocked" : "risk"}>{approved ? "order approved" : staged ? "staged only" : collision.severity}</StatusChip></header><p>{collision.reason}</p><div className="collision-pair"><span><small>FIRST</small><strong>{collision.first.planId} · {collision.first.taskId}</strong><code>{collision.first.access}</code></span><ArrowRightIcon /><span><small>THEN</small><strong>{collision.then.planId} · {collision.then.taskId}</strong><code>{collision.then.access}</code></span></div><div className="collision-contingency"><span>CONTINGENCY</span><p>{collision.contingency}</p></div><button disabled={approved || staged || pending !== null || committed || staleReason !== null} aria-busy={pending === collision.id || undefined} onClick={() => approveCollision(collision)}>{approved ? <CheckCircleIcon weight="fill" /> : <ShieldCheckIcon />}{approved ? "Recorded by authority" : pending === collision.id ? "Requesting…" : staged ? "Staged · gate locked" : authorityClient.available ? "Request approval" : "Stage proposed order"}</button></article>;
         })}</div></section>
       </div>
-      <section className={`collision-gate ${gateReady ? "gate-ready" : "gate-locked"}`}><div>{gateReady ? <CheckCircleIcon weight="fill" /> : <XCircleIcon weight="fill" />}<span><strong>{gateReady ? "Allocation conveyor unlocked" : "Allocation conveyor blocked"}</strong><small>{committed ? "Assessment committed. Every collision has an authoritative order bound to this census." : gateReady ? "Every collision has an authoritative order bound to this census." : authority.authoritative ? `${remaining.length} collision decisions still require approval.` : authority.reason}</small></span></div><button className="primary-button" disabled={!gateReady || committed || pending !== null} aria-busy={pending === "commit" || undefined} onClick={commitAssessment}>{committed ? <CheckCircleIcon weight="fill" /> : <ListChecksIcon />} {committed ? "Assessment committed" : pending === "commit" ? "Committing…" : "Commit assessment"}</button></section>
-      <section className="integrity-ledger-panel"><header><div><span className="eyebrow">DURABLE APPEND-ONLY AUTHORITY</span><strong>Collision integrity ledger</strong></div><button className="soft-button" disabled={!authority.authoritative} onClick={verifyChain}><ShieldCheckIcon /> Verify chain</button></header><div className="integrity-ledger-summary"><StatusChip status={authority.authoritative ? ledgerIntegrity === "verified" ? "verified" : "queued" : "blocked"}>{authority.authoritative ? ledgerIntegrity : "authority unavailable"}</StatusChip><span>{ledger.length ? `head ${ledger.at(-1).hash.slice(0, 12)}` : `census ${censusDigest.slice(0, 12) || "calculating"} · no authoritative decisions`}</span></div><div className="integrity-ledger-entries">{ledger.slice().reverse().slice(0, 5).map((entry) => <div key={entry.hash}><code>{String(entry.sequence).padStart(3, "0")}</code><strong>{entry.type}</strong><span>{entry.actor}</span><code>{entry.hash.slice(0, 12)}</code></div>)}</div></section>
+      <section className={`collision-gate ${gateReady ? "gate-ready" : "gate-locked"}`}><div>{gateReady ? <CheckCircleIcon weight="fill" /> : <XCircleIcon weight="fill" />}<span><strong>{gateReady ? "Allocation conveyor unlocked" : "Allocation conveyor blocked"}</strong><small>{committed ? "Assessment committed. Every collision has an authoritative order bound to this census." : gateReady ? "Every collision has an authoritative order bound to this census." : live ? `${remaining.length} collision decisions still require approval.` : gateAuthority.reason}</small></span></div><button className="primary-button" disabled={!gateReady || committed || pending !== null} aria-busy={pending === "commit" || undefined} onClick={commitAssessment}>{committed ? <CheckCircleIcon weight="fill" /> : <ListChecksIcon />} {committed ? "Assessment committed" : pending === "commit" ? "Committing…" : "Commit assessment"}</button></section>
+      <section className="integrity-ledger-panel"><header><div><span className="eyebrow">DURABLE APPEND-ONLY AUTHORITY</span><strong>Collision integrity ledger</strong></div><button className="soft-button" disabled={!live} onClick={verifyChain}><ShieldCheckIcon /> Verify chain</button></header><div className="integrity-ledger-summary"><StatusChip status={live ? ledgerIntegrity === "verified" ? "verified" : "queued" : staleReason !== null ? "risk" : "blocked"}>{live ? ledgerIntegrity : staleReason !== null ? "last known · not live" : "authority unavailable"}</StatusChip><span>{ledger.length ? `head ${ledger.at(-1).hash.slice(0, 12)}` : `census ${censusDigest.slice(0, 12) || "calculating"} · no authoritative decisions`}</span></div><div className="integrity-ledger-entries">{ledger.slice().reverse().slice(0, 5).map((entry) => <div key={entry.hash}><code>{String(entry.sequence).padStart(3, "0")}</code><strong>{entry.type}</strong><span>{entry.actor}</span><code>{entry.hash.slice(0, 12)}</code></div>)}</div></section>
     </section>
   );
 }
