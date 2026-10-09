@@ -50,6 +50,8 @@ test("Plan and Ledger count overlaps as decided once Collision saves a decision;
   const view = render(<Pages store={store} />);
 
   await screen.findByRole("heading", { name: "Cache" });
+  // Each page reads the saved tasks on its own; wait for Plan and Ledger, not just the Ledger heading.
+  await screen.findByRole("group", { name: "Plan overlaps" }); await screen.findByRole("group", { name: "Ledger overlaps" });
   expect(headline("Plan overlaps")).toBe("2 of 2 overlaps still need a decision");
   expect(headline("Ledger overlaps")).toBe("2 of 2 overlaps still need a decision");
   expect(screen.queryByText(/task details? still missing/)).toBeNull();
@@ -78,6 +80,8 @@ test("Plan and Ledger count overlaps as decided once Collision saves a decision;
   await store.saveTask(binding, ledger.revision, { ...ledger.tasks[3], claims: [{ access: "write", path: "src/cache.js" }] });
   render(<Pages store={store} />);
   await screen.findByRole("heading", { name: "Cache" });
+  // Each page reads the saved tasks on its own; wait for Plan and Ledger, not just the Ledger heading.
+  await screen.findByRole("group", { name: "Plan overlaps" }); await screen.findByRole("group", { name: "Ledger overlaps" });
   expect(headline("Plan overlaps")).toBe("2 overlaps decided");
   expect(headline("Ledger overlaps")).toBe("2 overlaps decided");
   expect(within(screen.getByRole("group", { name: "Ledger overlaps" })).getByText(/T0003 and T0004: split done/)).toBeTruthy();
