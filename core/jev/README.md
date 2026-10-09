@@ -14,8 +14,11 @@ Perfect Planner decides with fixed rules (`REVIEW_POLICY = "pp-review-v1"`).
 - Verdicts: `approve` only with no gaps and every answer at or above
   `approveConfidence` (0.8); below `escalateBelow` (0.6) or in between with no
   gaps it is `escalate` (to the main chat, §6.9); a failed call is
-  `unavailable`; over the monthly cap it is `queued` (§6.7). Jev's own output
-  is always `escalate`.
+  `unavailable`; over the monthly cap it is `queued` (§6.7).
+- Independence (§6.4, §6.9): every review names who built the work (`author`,
+  with model). Work built by Jev, by the reviewing model (settings or the
+  model Jev reports it ran), or by a builder with no named model is never
+  approved; it escalates to the main chat (`independenceProblem`).
 - Every review writes one `review.verdict` with model, Jev's reported model,
   policy, cost (estimated when Jev does not report one), confidence and notes
   (§6.8). Spend crossing 80% and 100% of `monthlyLimit` writes `budget.warning`.

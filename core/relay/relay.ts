@@ -54,10 +54,11 @@ export interface Digest {
   person: string;
   open: number;
   blocking: number;
-  /** One short line per open question, blocking first. */
+  /** One short line per question: open ones (blocking first), then new auto-answered ones. */
   lines: string[];
-  questions: Question[];
-  /** Questions answered without the main chat since its last check. */
+  /** Open questions, then auto-answered ones the main chat has not seen, each marked. */
+  questions: (Question & { autoAnswered: boolean })[];
+  /** Questions answered without the main chat (earlier decision or the plan) since its last check. */
   autoAnswered: string[];
 }
 
@@ -90,7 +91,8 @@ export class Relay {
   private readonly questions = new Map<string, Question>();
   /** decision key -> { D number, answer } */
   private readonly decisions = new Map<string, { d: string; answer: string }>();
-  private readonly lastChecked = new Map<string, number>();
+  /** person -> auto-answered Q numbers their main chat has already been shown */
+  private readonly shownAuto = new Map<string, Set<string>>();
   private readonly waiters = new Map<string, ((q: Question) => void)[]>();
   private pausedAll: { reason: string } | null = null;
   private readonly unsubscribe: () => void;
@@ -201,22 +203,27 @@ export class Relay {
     return { q, status: "open", paused: blocking };
   }
 
-  /** The main chat's digest of open questions (spec §4.3). */
-  digest(person: string, now: number = Date.now()): Digest {
-    const since = this.lastChecked.get(person) ?? 0;
-    this.lastChecked.set(person, now);
+  /**
+   * The main chat's digest (spec §4.3): every open question, blocking first,
+   * plus each question answered without it (from an earlier decision or the
+   * plan) until the main chat has seen it once, marked as auto-answered.
+   */
+  digest(person: string): Digest {
+    const shown = this.shownAuto.get(person) ?? new Set<string>();
+    this.shownAuto.set(person, shown);
+    const byNumber = (a: Question, b: Question) => a.q.localeCompare(b.q, undefined, { numeric: true });
     const mine = [...this.questions.values()].filter((q) => q.person === person);
-    const open = mine.filter((q) => q.status === "open").sort((a, b) => Number(b.blocking) - Number(a.blocking) || a.q.localeCompare(b.q, undefined, { numeric: true }));
-    const autoAnswered = mine
-      .filter((q) => q.status === "answered" && q.answeredVia !== "main" && Date.parse(q.askedAt) >= since - 1000)
-      .map((q) => `${q.q} (${q.task}) answered ${q.answeredVia === "decision" ? `from ${q.decision}` : "from the plan"}: ${q.answer}`);
+    const open = mine.filter((q) => q.status === "open").sort((a, b) => Number(b.blocking) - Number(a.blocking) || byNumber(a, b));
+    const auto = mine.filter((q) => q.status === "answered" && q.answeredVia !== "main" && !shown.has(q.q)).sort(byNumber);
+    for (const q of auto) shown.add(q.q);
+    const autoLines = auto.map((q) => `${q.q} (${q.task}) auto-answered ${q.answeredVia === "decision" ? `from ${q.decision}` : "from the plan"}: ${q.answer}`);
     return {
       person,
       open: open.length,
       blocking: open.filter((q) => q.blocking).length,
-      lines: open.map((q) => `${q.q} (${q.task}${q.blocking ? ", blocking" : ""}) ${q.question}${q.options.length ? ` Options: ${q.options.join(" | ")}` : ""}`),
-      questions: open.map((q) => ({ ...q })),
-      autoAnswered,
+      lines: [...open.map((q) => `${q.q} (${q.task}${q.blocking ? ", blocking" : ""}) ${q.question}${q.options.length ? ` Options: ${q.options.join(" | ")}` : ""}`), ...autoLines],
+      questions: [...open.map((q) => ({ ...q, autoAnswered: false })), ...auto.map((q) => ({ ...q, autoAnswered: true }))],
+      autoAnswered: autoLines,
     };
   }
 

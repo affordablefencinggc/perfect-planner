@@ -8,8 +8,9 @@ A worker's question gets the next `Q-n` and lands in its person's main chat.
 2. Otherwise an optional `SettledAnswerer` may answer: `JevReviewer` does so
    only for multiple-choice questions, only from the approved plan's clauses,
    and only at or above its approve confidence.
-3. Otherwise it waits in `digest(person)`: open questions, blocking first, plus
-   what was answered automatically since the last check.
+3. Otherwise it waits in `digest(person)`: open questions, blocking first.
+   Questions answered automatically (steps 1 and 2) also appear there, marked
+   `autoAnswered: true`, until the main chat has seen them once.
 4. `answer(main, person, Q, text)` writes `decision.made` (`D-n`, with the
    question key so step 1 can reuse it) and `question.answered`, then wakes any
    `waitFor(Q)` and queues the answer for `answersFor(worker)`.

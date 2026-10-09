@@ -2,7 +2,7 @@ import { inspect } from "node:util";
 import { describe, expect, it, vi } from "vitest";
 import { Ledger, MemoryStore, type Actor } from "../ledger/index";
 import { Relay } from "../relay/index";
-import { JevReviewer, MemoryKeyProvider, SecretKey, checkDiff, createJevTransport, parseDiff, validateKey, type JevCallResult, type JevRequest } from "./index";
+import { JevReviewer, MemoryKeyProvider, independenceProblem, SecretKey, checkDiff, createJevTransport, parseDiff, validateKey, type JevCallResult, type JevRequest } from "./index";
 
 const KEY = "ts_live_FAKE0123456789abcdef";
 
@@ -31,6 +31,7 @@ const TEST_INPUT = {
   clauses: [{ ref: "P-1 §2.1", text: "A new invoice keeps its id after a reload." }],
   test: { command: "npm test -- invoice-id", source: "it('keeps id', () => { expect(reload(make()).id).toBe(id) })" },
   failsFirst: true,
+  author: { kind: "agent", id: "worker-1", model: "claude-builder-1" } as Actor,
 };
 
 const GOOD = { covers_clauses: "all", trivially_passing: "no", weakest_clause: "none", weakens_tests: "no", stays_in_scope: "yes" };
@@ -137,6 +138,36 @@ describe("test review (§6.2)", () => {
     expect(transport).not.toHaveBeenCalled();
   });
 
+  it("refuses to approve work built by the reviewing model, or by a builder whose model is unknown", async () => {
+    for (const model of ["jev-latest", "JEV-LATEST", "jev-2026-09", "unknown", undefined]) {
+      const { transport } = fakeTransport(GOOD);
+      const ledger = newLedger();
+      const author: Actor = { kind: "agent", id: "worker-1", ...(model ? { model } : {}) };
+      const result = await new JevReviewer({ ledger, transport }).reviewDiff({ task: "T-1", clauses: TEST_INPUT.clauses, diff: IN_SCOPE_DIFF, testOutput: "ok", allowedFiles: [], author });
+      expect(result.verdict, String(model)).toBe("escalate");
+      expect(result.reason).toMatch(/^Not independent/);
+      expect(transport).not.toHaveBeenCalled();
+      expect(ledger.get(result.entry!)!.data).toMatchObject({ verdict: "escalate", builtBy: author });
+    }
+  });
+
+  it("downgrades an approval when Jev reports it ran the builder's model", async () => {
+    const transport = async (r: JevRequest): Promise<JevCallResult> => ({
+      ok: true,
+      model: "claude-builder-1",
+      cost: 0.01,
+      status: 200,
+      answers: Object.fromEntries(Object.keys(r.questions).map((q) => [q, { choice: (GOOD as Record<string, string>)[q]!, confidence: 0.99 }])),
+    });
+    const result = await new JevReviewer({ ledger: newLedger(), transport }).reviewTest(TEST_INPUT);
+    expect(result).toMatchObject({ verdict: "escalate", reason: expect.stringContaining("same model") });
+  });
+
+  it("approves when the builder is a different, named model", () => {
+    expect(independenceProblem({ kind: "agent", id: "w", model: "claude-builder-1" }, "jev-latest")).toBeNull();
+    expect(independenceProblem({ kind: "person", id: "owner", model: "human" }, "jev-latest")).toBeNull();
+  });
+
   it("records an unavailable verdict, never an approval, when Jev cannot be reached", async () => {
     const ledger = newLedger();
     const transport = async (): Promise<JevCallResult> => ({ ok: false, problem: "no_key", detail: "No Jev key is saved." });
@@ -158,7 +189,7 @@ const IN_SCOPE_DIFF = `diff --git a/src/invoice/id.ts b/src/invoice/id.ts
 `;
 
 describe("diff review (§6.3)", () => {
-  const input = { task: "T-1", clauses: TEST_INPUT.clauses, diff: IN_SCOPE_DIFF, testOutput: "1 passed", allowedFiles: ["src/invoice/"] };
+  const input = { task: "T-1", clauses: TEST_INPUT.clauses, diff: IN_SCOPE_DIFF, testOutput: "1 passed", allowedFiles: ["src/invoice/"], author: TEST_INPUT.author };
 
   it("approves a clean in-scope diff when Jev agrees", async () => {
     const { transport, calls } = fakeTransport(GOOD);

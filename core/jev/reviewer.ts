@@ -42,8 +42,8 @@ export interface TestReviewInput {
   test: { command: string; source?: string };
   /** Perfect Planner ran the test on the current code: true when it failed, as it must (§6.2). */
   failsFirst: boolean;
-  /** Who wrote the test. Jev never approves its own output. */
-  author?: Actor;
+  /** Who wrote the test, with their model. Jev only approves work built by a different model (§6.4). */
+  author: Actor;
 }
 
 export interface DiffReviewInput {
@@ -53,7 +53,8 @@ export interface DiffReviewInput {
   testOutput: string;
   /** Paths or folders ("src/invoice/") the task may touch. Empty = no scope rule. */
   allowedFiles: string[];
-  author?: Actor;
+  /** Who built the change, with their model. Jev only approves work built by a different model (§6.4). */
+  author: Actor;
   attempt?: number;
 }
 
@@ -67,6 +68,22 @@ const cut = (text: string, max: number) => (text.length > max ? `${text.slice(0,
 
 function monthOf(iso: string): string {
   return iso.slice(0, 7);
+}
+
+const sameModel = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
+
+/**
+ * Spec §6.4 and §6.9: work is never judged by the model that built it. Returns
+ * why Jev may not judge this work, or null when the builder is a different,
+ * named model. An unknown builder model cannot be shown to be different.
+ */
+export function independenceProblem(author: Actor | undefined, reviewingModel: string): string | null {
+  if (!author) return "nobody is recorded as the builder, so independence cannot be checked";
+  if (author.kind === "jev") return "Jev built this, and Jev never approves its own output";
+  const model = author.model?.trim();
+  if (!model || model.toLowerCase() === "unknown") return `the builder (${author.id}) did not name its model, so independence cannot be checked`;
+  if (sameModel(model, reviewingModel) || /^jev\b/i.test(model)) return `the builder used ${model}, the same model that would review it`;
+  return null;
 }
 
 export class JevReviewer implements SettledAnswerer {
@@ -182,9 +199,10 @@ export class JevReviewer implements SettledAnswerer {
 
   async reviewTest(input: TestReviewInput): Promise<ReviewResult> {
     const refs = input.clauses.map((c) => c.ref);
-    if (input.author?.kind === "jev") {
-      const result: ReviewResult = { verdict: "escalate", notes: [], reason: "Jev wrote this test, and Jev never approves its own output (§6.9)", confidence: null };
-      return { ...result, entry: this.record(input.task, "test", result, { called: null, refs, summary: `Test for ${input.task} goes to the main chat: Jev wrote it` }).n };
+    const notIndependent = independenceProblem(input.author, this.settings.model);
+    if (notIndependent) {
+      const result: ReviewResult = { verdict: "escalate", notes: [], reason: `Not independent: ${notIndependent} (§6.4)`, confidence: null };
+      return { ...result, entry: this.record(input.task, "test", result, { called: null, refs, summary: `Test for ${input.task} goes to the main chat: Jev cannot review it independently`, data: { builtBy: input.author ?? null } }).n };
     }
     if (!input.failsFirst) {
       const result: ReviewResult = { verdict: "reject", notes: ["The test passes on the current code, so it cannot prove the task (it must fail first)."], reason: "Test does not fail before the work (§6.2)", confidence: null };
@@ -233,8 +251,8 @@ export class JevReviewer implements SettledAnswerer {
     }
     if (a.trivially_passing!.choice !== "no") gaps.push("The test could pass without the work being done.");
     const confidence = this.minConfidence(a);
-    const result = this.decide(gaps, confidence, `the test for ${input.task}`);
-    const summary = result.verdict === "approve" ? `Jev approves the test for ${input.task}` : result.verdict === "reject" ? `Jev found ${gaps.length} gap(s) in the test for ${input.task}` : `Test for ${input.task} goes to the main chat: Jev is unsure`;
+    const result = this.independent(this.decide(gaps, confidence, `the test for ${input.task}`), input.author, called.model);
+    const summary = result.verdict === "approve" ? `Jev approves the test for ${input.task}` : result.verdict === "reject" ? `Jev found ${gaps.length} gap(s) in the test for ${input.task}` : `Test for ${input.task} goes to the main chat: ${result.reason.startsWith("Not independent") ? "Jev cannot review it independently" : "Jev is unsure"}`;
     const entry = this.record(input.task, "test", result, { called, refs, summary });
     this.warnIfNeeded();
     return { ...result, entry: entry.n };
@@ -245,9 +263,10 @@ export class JevReviewer implements SettledAnswerer {
   async reviewDiff(input: DiffReviewInput): Promise<ReviewResult> {
     const refs = input.clauses.map((c) => c.ref);
     const data = input.attempt ? { attempt: input.attempt } : {};
-    if (input.author?.kind === "jev") {
-      const result: ReviewResult = { verdict: "escalate", notes: [], reason: "Jev wrote this change, and Jev never approves its own output (§6.9)", confidence: null };
-      return { ...result, entry: this.record(input.task, "diff", result, { called: null, refs, summary: `Diff for ${input.task} goes to the main chat: Jev wrote it`, data }).n };
+    const notIndependent = independenceProblem(input.author, this.settings.model);
+    if (notIndependent) {
+      const result: ReviewResult = { verdict: "escalate", notes: [], reason: `Not independent: ${notIndependent} (§6.4)`, confidence: null };
+      return { ...result, entry: this.record(input.task, "diff", result, { called: null, refs, summary: `Diff for ${input.task} goes to the main chat: Jev cannot review it independently`, data: { ...data, builtBy: input.author ?? null } }).n };
     }
     const files = parseDiff(input.diff);
     const notes = checkDiff(files, input.allowedFiles);
@@ -297,11 +316,18 @@ export class JevReviewer implements SettledAnswerer {
     if (a.weakens_tests!.choice !== "no") gaps.push(`A test or check is weakened${a.weakens_tests!.reason ? `: ${a.weakens_tests!.reason}` : "."}`);
     if (a.stays_in_scope!.choice !== "yes") gaps.push(`The change goes beyond the task${a.stays_in_scope!.reason ? `: ${a.stays_in_scope!.reason}` : "."}`);
     const confidence = this.minConfidence(a);
-    const result = this.decide(gaps, confidence, `the diff for ${input.task}`);
-    const summary = result.verdict === "approve" ? `Jev approves the diff for ${input.task}` : result.verdict === "reject" ? `Jev rejects the diff for ${input.task}` : `Diff for ${input.task} goes to the main chat: Jev is unsure`;
+    const result = this.independent(this.decide(gaps, confidence, `the diff for ${input.task}`), input.author, called.model);
+    const summary = result.verdict === "approve" ? `Jev approves the diff for ${input.task}` : result.verdict === "reject" ? `Jev rejects the diff for ${input.task}` : `Diff for ${input.task} goes to the main chat: ${result.reason.startsWith("Not independent") ? "Jev cannot review it independently" : "Jev is unsure"}`;
     const entry = this.record(input.task, "diff", result, { called, refs, summary, data });
     this.warnIfNeeded();
     return { ...result, entry: entry.n };
+  }
+
+  /** Jev reports the model it actually ran; an approval from the builder's own model becomes an escalation. */
+  private independent(result: ReviewResult, author: Actor, ranAs: string): ReviewResult {
+    if (result.verdict !== "approve") return result;
+    const problem = independenceProblem(author, ranAs);
+    return problem ? { ...result, verdict: "escalate", reason: `Not independent: ${problem} (§6.4)` } : result;
   }
 
   /** The fixed verdict rules of REVIEW_POLICY. */

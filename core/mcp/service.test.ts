@@ -148,7 +148,7 @@ describe("the one-chat relay through the tools", () => {
     const again = await service.call(b, "ask_main", { task: "T-2", question: "use iso dates in the invoice ID", options: ["Locale", "ISO"] });
     expect(again).toMatchObject({ q: "Q-2", status: "answered", answer: "ISO", decision: "D-1", via: "decision" });
     expect(ledger.entries().filter((e) => e.type === "decision.made")).toHaveLength(1);
-    expect((await service.call(main, "check_inbox", {})) as { autoAnswered: string[] }).toMatchObject({ open: 0, autoAnswered: [expect.stringContaining("Q-2 (T-2) answered from D-1")] });
+    expect((await service.call(main, "check_inbox", {})) as { autoAnswered: string[] }).toMatchObject({ open: 0, autoAnswered: [expect.stringContaining("Q-2 (T-2) auto-answered from D-1")] });
   });
 
   it("pauses only the worker with a blocking question, and wait_seconds returns the answer in the same call", async () => {
@@ -187,6 +187,44 @@ describe("the one-chat relay through the tools", () => {
     service.resumeAll(owner);
     expect(service.board().get("T-1")?.status).toBe("claimed");
     await service.call(b, "report_progress", { task: "T-2", text: "back" });
+  });
+});
+
+describe("auto-answered questions in the main chat's inbox", () => {
+  it("shows a question answered from an earlier decision, marked, once, whatever the ledger's clock says", async () => {
+    // A ledger clock years behind the machine clock: the inbox must not depend on comparing the two.
+    const ledger = Ledger.openSync(new MemoryStore(), { now: () => new Date("2020-01-01T00:00:00Z") });
+    installNumberingRules(ledger);
+    for (const id of ["T-1", "T-2"]) ledger.append({ actor: owner, type: "task.created", subject: id, summary: `Task ${id}` });
+    const tokens = new TokenStore();
+    const service = new AgentService({ ledger, tokens });
+    const main = await hello(service, tokens.issue({ role: "connect", person: "owner" }), "main");
+    const a = await hello(service, tokens.issue({ role: "worker", person: "owner", task: "T-1" }), "w1");
+    const b = await hello(service, tokens.issue({ role: "worker", person: "owner", task: "T-2" }), "w2");
+
+    await service.call(a, "ask_main", { task: "T-1", question: "Which currency?" });
+    await service.call(main, "check_inbox", {});
+    await service.call(main, "answer", { question: "Q-1", text: "EUR" });
+    expect(await service.call(b, "ask_main", { task: "T-2", question: "Which currency?" })).toMatchObject({ status: "answered", via: "decision" });
+
+    const inbox = (await service.call(main, "check_inbox", {})) as { open: number; lines: string[]; questions: { q: string; autoAnswered: boolean; answer?: string }[] };
+    expect(inbox.open).toBe(0);
+    expect(inbox.lines).toEqual(["Q-2 (T-2) auto-answered from D-1: EUR"]);
+    expect(inbox.questions).toEqual([expect.objectContaining({ q: "Q-2", autoAnswered: true, answer: "EUR" })]);
+    expect(await service.call(main, "check_inbox", {})).toMatchObject({ lines: [], questions: [] });
+  });
+
+  it("lists open questions before auto-answered ones, each marked", async () => {
+    const { service, connect, w1, w2 } = setup();
+    const main = await hello(service, connect, "main");
+    const a = await hello(service, w1, "w1");
+    const b = await hello(service, w2, "w2");
+    await service.call(a, "ask_main", { task: "T-1", question: "Rounding?" });
+    await service.call(main, "answer", { question: "Q-1", text: "Half up" });
+    await service.call(b, "ask_main", { task: "T-2", question: "Rounding?" });
+    await service.call(a, "ask_main", { task: "T-1", question: "Paper size?", blocking: true });
+    const inbox = (await service.call(main, "check_inbox", {})) as { questions: { q: string; autoAnswered: boolean }[] };
+    expect(inbox.questions.map((q) => [q.q, q.autoAnswered])).toEqual([["Q-3", false], ["Q-2", true]]);
   });
 });
 
