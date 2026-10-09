@@ -15,6 +15,7 @@ import {
 
 const owner = { kind: "person" as const, id: "owner" };
 const agent = { kind: "agent" as const, id: "claude-code", model: "m1" };
+const system = { kind: "system" as const, id: "gate" };
 const jev = { kind: "jev" as const, id: "jev", model: "m1" };
 
 function setup(start = "2026-10-09T00:00:00Z") {
@@ -22,7 +23,7 @@ function setup(start = "2026-10-09T00:00:00Z") {
   const now = () => clock.t;
   const ledger = Ledger.openSync(new MemoryStore(), { now });
   installNumberingRules(ledger);
-  for (const summary of ["first task", "second task"]) appendNumbered(ledger, { actor: agent, type: "task.created", summary, evidence: [], refs: [] });
+  for (const summary of ["first task", "second task"]) appendNumbered(ledger, { actor: system, type: "task.created", summary, evidence: [], refs: [] });
   installBudgetRule(ledger, { now });
   return { ledger, clock, now };
 }
@@ -92,7 +93,7 @@ describe("budget config", () => {
     const { ledger, now } = setup();
     spend(ledger, 999999);
     expect(currentBudget(ledger.entries())).toBeUndefined();
-    const s = checkBudget(ledger, jev, now());
+    const s = checkBudget(ledger, system, now());
     expect(s.state).toBe("uncapped");
     expect(s.budgetCents).toBeUndefined();
     expect(s.remainingCents).toBeUndefined();
@@ -176,22 +177,22 @@ describe("checkBudget", () => {
     const { ledger, now } = setup();
     setBudget(ledger, owner, { monthlyCents: 1000, reason: "cap" });
     spend(ledger, 500);
-    checkBudget(ledger, jev, now());
+    checkBudget(ledger, system, now());
     expect(ledger.entries().filter((e) => e.type === "budget.warning")).toHaveLength(0);
 
     spend(ledger, 300);
-    const s1 = checkBudget(ledger, jev, now());
+    const s1 = checkBudget(ledger, system, now());
     expect(s1.state).toBe("warning");
-    checkBudget(ledger, jev, now());
-    checkBudget(ledger, jev, now());
+    checkBudget(ledger, system, now());
+    checkBudget(ledger, system, now());
     let warnings = ledger.entries().filter((e) => e.type === "budget.warning");
     expect(warnings).toHaveLength(1);
     expect(warnings[0]!.subject).toBe("budget");
     expect(warnings[0]!.data).toEqual({ month: "2026-10", threshold: "warn", spentCents: 800, budgetCents: 1000 });
 
     spend(ledger, 200);
-    expect(checkBudget(ledger, jev, now()).state).toBe("stopped");
-    checkBudget(ledger, jev, now());
+    expect(checkBudget(ledger, system, now()).state).toBe("stopped");
+    checkBudget(ledger, system, now());
     warnings = ledger.entries().filter((e) => e.type === "budget.warning");
     expect(warnings).toHaveLength(2);
     expect(warnings[1]!.data?.threshold).toBe("stop");
@@ -202,16 +203,16 @@ describe("checkBudget", () => {
     const { ledger, clock } = setup();
     setBudget(ledger, owner, { monthlyCents: 1000, reason: "cap" });
     spend(ledger, 900);
-    checkBudget(ledger, jev, clock.t);
+    checkBudget(ledger, system, clock.t);
     clock.t = new Date("2026-11-02T00:00:00Z");
     expect(budgetStatus(ledger.entries(), clock.t).state).toBe("ok");
     spend(ledger, 850);
-    checkBudget(ledger, jev, clock.t);
+    checkBudget(ledger, system, clock.t);
     expect(ledger.entries().filter((e) => e.type === "budget.warning")).toHaveLength(2);
 
     setBudget(ledger, owner, { monthlyCents: 1000 + 100, reason: "bump" });
     spend(ledger, 100);
-    checkBudget(ledger, jev, clock.t); // 950 of 1100 -> warn at new amount
+    checkBudget(ledger, system, clock.t); // 950 of 1100 -> warn at new amount
     expect(ledger.entries().filter((e) => e.type === "budget.warning")).toHaveLength(3);
   });
 
@@ -219,7 +220,7 @@ describe("checkBudget", () => {
     const { ledger, now } = setup();
     setBudget(ledger, owner, { monthlyCents: 1000, reason: "cap" });
     spend(ledger, 5000);
-    expect(checkBudget(ledger, jev, now()).state).toBe("stopped");
+    expect(checkBudget(ledger, system, now()).state).toBe("stopped");
     const w = ledger.entries().filter((e) => e.type === "budget.warning");
     expect(w).toHaveLength(1);
     expect(w[0]!.data?.threshold).toBe("stop");
@@ -246,14 +247,14 @@ describe("installBudgetRule", () => {
       "Monthly budget reached ($10.00 of $10.00); raise it in Settings to start new runs",
     );
     expect(() =>
-      ledger.append({ actor: agent, type: "worktree.created", subject: "T-2", summary: "wt", evidence: [], refs: [] }),
+      ledger.append({ actor: system, type: "worktree.created", subject: "T-2", summary: "wt", evidence: [], refs: [] }),
     ).toThrow(/Monthly budget reached/);
 
     // in-flight work finishes
     expect(() => spend(ledger, 10)).not.toThrow();
     expect(() => ledger.append({ actor: agent, type: "task.proof", subject: "T-1", summary: "proof", evidence: [], refs: [] })).not.toThrow();
-    expect(() => ledger.append({ actor: agent, type: "commit.observed", subject: "T-1", summary: "commit", evidence: [], refs: [] })).not.toThrow();
-    expect(() => checkBudget(ledger, jev, new Date("2026-10-09T00:00:00Z"))).not.toThrow();
+    expect(() => ledger.append({ actor: system, type: "commit.observed", subject: "T-1", summary: "commit", evidence: [], refs: [] })).not.toThrow();
+    expect(() => checkBudget(ledger, system, new Date("2026-10-09T00:00:00Z"))).not.toThrow();
   });
 
   it("allows new runs after the budget is raised", () => {
@@ -286,5 +287,21 @@ describe("installBudgetRule", () => {
     const { ledger } = setup();
     spend(ledger, 10_000_000);
     expect(() => claim(ledger)).not.toThrow();
+  });
+});
+
+describe("budget an agent cannot lift", () => {
+  it("leaves the agent no way to write the decision at all", () => {
+    const { ledger } = setup();
+    expect(() =>
+      appendNumbered(ledger, { actor: agent, type: "decision.made", summary: "raise", reason: "need more", evidence: [], refs: [], data: { topic: "budget", budget: { monthlyCents: 999999 } } }),
+    ).toThrow(/may not write decision.made/);
+  });
+
+  it("ignores a budget decision written by anyone but a person", () => {
+    const { ledger } = setup();
+    setBudget(ledger, owner, { monthlyCents: 1000, reason: "monthly cap" });
+    appendNumbered(ledger, { actor: system, type: "decision.made", summary: "raise", reason: "need more", evidence: [], refs: [], data: { topic: "budget", budget: { monthlyCents: 999999 } } });
+    expect(currentBudget(ledger.entries())?.monthlyCents).toBe(1000);
   });
 });

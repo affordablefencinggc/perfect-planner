@@ -7,9 +7,9 @@ import type { ChangeSet, RiskLevel } from "./types";
 // Two halves: a deterministic path heuristic that always runs and can never
 // be argued down, and an optional small-model rating that can only raise it.
 
-export type SensitiveArea = "auth" | "payments" | "migrations" | "secrets" | "ci" | "oversize";
+export type SensitiveArea = "auth" | "payments" | "migrations" | "secrets" | "ci" | "tests" | "oversize";
 
-const AREA_PATTERNS: ReadonlyArray<[Exclude<SensitiveArea, "oversize">, RegExp]> = [
+const AREA_PATTERNS: ReadonlyArray<[Exclude<SensitiveArea, "oversize" | "tests">, RegExp]> = [
   ["auth", /(^|[/_.-])(auth|login|logout|session|oauth|sso|jwt|permission|permissions|acl|rbac|password|signin|signup)([/_.-]|$)/i],
   ["payments", /(^|[/_.-])(payment|payments|billing|invoice|checkout|stripe|paypal|subscription|refund|charge)s?([/_.-]|$)/i],
   ["migrations", /(^|\/)(migrations?|schema|seeds?)(\/|\.)|\.sql$|(^|[/_.-])migrat/i],
@@ -64,6 +64,9 @@ export function heuristicRisk(change: ChangeSet): Triage {
 
   const deletedTests = change.files.filter((file) => /\.(test|spec)\.[cm]?[jt]sx?$/.test(file.path) && (file.deleted || file.removed > file.added));
   if (deletedTests.length > 0) {
+    // Weakening tests is how a change slips past its own proof, so it always
+    // earns the deep review, whatever the preset (see needsDeepReview).
+    areas.add("tests");
     reasons.push(`removes test lines in ${deletedTests.map((file) => file.path).join(", ")}`);
     level = maxRisk(level, "medium");
   }

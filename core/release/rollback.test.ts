@@ -5,12 +5,13 @@ import { RollbackError, oneClickRollback, rollbackCandidates } from "./rollback"
 
 const owner = { kind: "person" as const, id: "owner" };
 const agent = { kind: "agent" as const, id: "claude-code", model: "m1" };
+const system = { kind: "system" as const, id: "gate" };
 
 function withReleases(count: number): Ledger {
   const ledger = Ledger.openSync(new MemoryStore(), { now: () => new Date("2026-10-09T00:00:00Z") });
   installNumberingRules(ledger);
   for (let i = 1; i <= count; i++) {
-    ledger.append({ actor: agent, type: "task.created", subject: `T-${i}`, summary: `work ${i}`, evidence: [], refs: [] });
+    ledger.append({ actor: system, type: "task.created", subject: `T-${i}`, summary: `work ${i}`, evidence: [], refs: [] });
     cutRelease(ledger, owner, { commit: `c0ffee${i}` });
   }
   return ledger;
