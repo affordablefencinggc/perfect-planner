@@ -111,6 +111,11 @@ export function connectLine(bridgeUrl: string, token: string, entry: string): st
   return `node ${quote(entry.replace(/agent\.mjs$/, "connect.mjs"))} ${bridgeUrl} ${token}`;
 }
 
+/** Installs only the skill, user-wide; no token, so it is safe to show at any time. */
+export function skillLine(entry: string): string {
+  return `node ${quote(entry.replace(/agent\.mjs$/, "connect.mjs"))} --skill-only`;
+}
+
 export function setupFor(bridgeUrl: string, token: string, entry: string) {
   const claudeCode = connectLine(bridgeUrl, token, entry);
   const json = JSON.stringify({ mcpServers: { [AGENT_SERVER_NAME]: { command: "node", args: [entry], env: { PP_BRIDGE_URL: bridgeUrl, PP_AGENT_TOKEN: token } } } }, null, 2);
@@ -157,7 +162,8 @@ function viewAgents(project: CoreProject): { agents: AgentView[]; connections: C
 export function registerAgentRoutes(router: Router): void {
   router.get("/agents", ({ project, host }) => {
     const url = project.state.get(BRIDGE_URL) as string | undefined;
-    return { bridge: { enabled: host.bridgeEnabled, ...(url ? { url } : {}) }, ...viewAgents(project) };
+    const entry = agentEntryPath();
+    return { bridge: { enabled: host.bridgeEnabled, ...(url ? { url } : {}) }, skillLine: skillLine(entry.path), agentBuilt: entry.built, ...viewAgents(project) };
   });
 
   router.post("/agents/connect", async ({ project, host, body }) => {

@@ -170,6 +170,25 @@ export function CoreAgentConnect() {
             !pending && <p className="core-empty">No agents are connected yet.</p>
           )}
 
+          {data?.skillLine && (
+            <details className="core-agent-connect-json" data-skill-only>
+              <summary>Install the skill only</summary>
+              <p className="core-muted">
+                Teaches every Claude Code session on this computer, in every folder, how to work with Perfect Planner. No key, nothing connected.
+                Paste it into any terminal once; run it again after updating Perfect Planner.
+              </p>
+              <div className="core-agent-connect-snippet">
+                <div className="core-agent-connect-snippet-head">
+                  <strong>Skill install</strong>
+                  <button type="button" className="core-button" onClick={() => copy("skill", data.skillLine)} aria-label="Copy the skill install line">
+                    {copied?.id === "skill" && copied.ok ? <><CheckCircleIcon aria-hidden="true" /> Copied</> : <><CopyIcon aria-hidden="true" /> Copy</>}
+                  </button>
+                </div>
+                <pre tabIndex={0} aria-label="Skill install line"><code>{data.skillLine}</code></pre>
+              </div>
+            </details>
+          )}
+
           {advanced && (
             <dl className="core-agent-connect-advanced core-advanced">
               <dt>Bridge</dt>

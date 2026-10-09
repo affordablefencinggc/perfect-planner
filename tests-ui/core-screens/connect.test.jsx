@@ -15,7 +15,8 @@ const CONNECT = {
   json: JSON.stringify({ mcpServers: { "perfect-planner-core": { command: "node", args: ["/repo/dist/core-host/agent.mjs"], env: { PP_BRIDGE_URL: "http://127.0.0.1:5555", PP_AGENT_TOKEN: TOKEN } } } }, null, 2),
 };
 const MAIN = { id: "claude-code-ab12cd", name: "Claude Code", model: "claude-opus", role: "main", person: "owner", connection: "C-1", connectedAt: "2026-10-09T10:00:00Z" };
-const list = (agents = [], connections = []) => ({ bridge: { enabled: true, url: "http://127.0.0.1:5555" }, agents, connections });
+const SKILL_LINE = 'node "/repo/dist/core-host/connect.mjs" --skill-only';
+const list = (agents = [], connections = []) => ({ bridge: { enabled: true, url: "http://127.0.0.1:5555" }, skillLine: SKILL_LINE, agents, connections });
 
 const ok = (result) => ({ ok: true, status: 200, json: async () => ({ ok: true, result }) });
 
@@ -129,5 +130,15 @@ describe("CoreAgentConnect", () => {
     renderWith();
     fireEvent.click(await screen.findByRole("button", { name: /Connect agent/ }));
     expect(await screen.findByText("Agent connections are turned off for this app.")).toBeTruthy();
+  });
+
+  test("offers the skill on its own, with no key in it", async () => {
+    routeFetch({ "GET /agents": () => ok(list()) });
+    renderWith();
+    const summary = await screen.findByText("Install the skill only");
+    fireEvent.click(summary);
+    const line = screen.getByLabelText("Skill install line");
+    expect(line.textContent).toBe(SKILL_LINE);
+    expect(line.textContent).not.toMatch(/pp_[cw]_/);
   });
 });

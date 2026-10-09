@@ -3,6 +3,8 @@
 // MCP server with Claude Code for that folder (replacing an older registration,
 // so pasting a fresh line after an app restart just works) and installs the
 // perfect-planner-connect skill for the user, so the agent knows the loop rules.
+// `node connect.mjs --skill-only` installs just the skill, with no token, so every
+// Claude Code session on this computer has it before anything is connected.
 // Bundled to dist/core-host/connect.mjs next to agent.mjs and skill/SKILL.md.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -38,7 +40,24 @@ function claude(args: string[]) {
   return spawnSync("claude", windows ? args.map(winQuote) : args, { encoding: "utf8", shell: windows });
 }
 
+/** Copies the skill to the user's own Claude folder (every repo on this computer), replacing an older copy. */
+export function installSkill(plan: Pick<ConnectPlan, "skillFrom" | "skillTo">): void {
+  fs.mkdirSync(path.dirname(plan.skillTo), { recursive: true });
+  fs.copyFileSync(plan.skillFrom, plan.skillTo);
+}
+
 function main(argv: string[]): number {
+  if (argv[0] === "--skill-only") {
+    const plan = connectPlan({ bridgeUrl: "", token: "", here: path.dirname(fileURLToPath(import.meta.url)), home: os.homedir() });
+    try {
+      installSkill(plan);
+    } catch (error) {
+      process.stderr.write(`Perfect Planner: could not install the skill (${(error as Error).message}).\n`);
+      return 1;
+    }
+    process.stdout.write(`Installed the ${SKILL} skill for every Claude Code session on this computer (${plan.skillTo}).\n`);
+    return 0;
+  }
   const [bridgeUrl, token] = argv;
   if (!bridgeUrl || !/^http:\/\/127\.0\.0\.1:\d+$/.test(bridgeUrl) || !token || !/^pp_[cw]_[\w-]{16,}$/.test(token)) {
     process.stderr.write("Perfect Planner: copy the whole line from Connect agent in the app; it ends with the bridge address and a pp_ key.\n");
@@ -49,8 +68,7 @@ function main(argv: string[]): number {
 
   let skill = false;
   try {
-    fs.mkdirSync(path.dirname(plan.skillTo), { recursive: true });
-    fs.copyFileSync(plan.skillFrom, plan.skillTo);
+    installSkill(plan);
     skill = true;
   } catch (error) {
     process.stderr.write(`Perfect Planner: could not install the skill (${(error as Error).message}). Connecting anyway.\n`);
@@ -70,7 +88,7 @@ function main(argv: string[]): number {
   process.stdout.write(
     [
       `Connected this folder (${process.cwd()}) to Perfect Planner.`,
-      skill ? `Installed the ${SKILL} skill for Claude Code.` : "",
+      skill ? `Installed the ${SKILL} skill for every Claude Code session on this computer.` : "",
       "Next: start Claude Code in this folder and say: check in with Perfect Planner",
     ]
       .filter(Boolean)

@@ -38,6 +38,8 @@ describe("agents routes", () => {
     const list = await hostCall(base, "GET", "/agents?project=demo");
     expect(list.body.result.bridge.url).toBe(result.bridgeUrl);
     expect(list.body.result.agents).toEqual([]);
+    expect(list.body.result.skillLine).toBe(`node "${result.agentPath.replace(/agent\.mjs$/, "connect.mjs")}" --skill-only`);
+    expect(list.body.result.skillLine).not.toContain(result.token);
     expect(list.body.result.connections).toEqual([expect.objectContaining({ id: result.connection, person: "owner", revoked: false })]);
     expect(JSON.stringify(list.body)).not.toContain(result.token);
     for (const call of log.mock.calls) expect(JSON.stringify(call)).not.toContain(result.token);
