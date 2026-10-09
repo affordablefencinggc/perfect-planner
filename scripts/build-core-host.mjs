@@ -2,6 +2,7 @@
 // Bundles the core host (core/host) and the agent's stdio MCP entry into plain
 // Node ESM under dist/core-host, so the production server and connected agents
 // run the TypeScript core without a TypeScript loader.
+import { copyFileSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
@@ -21,6 +22,9 @@ export async function buildCoreHost() {
     packages: "external",
     logLevel: "warning",
   });
+  // The worktree manager copies its commit-time secret scan from ./hooks next to its own module.
+  mkdirSync(path.join(CORE_HOST_OUT, "hooks"), { recursive: true });
+  copyFileSync(path.join(projectRoot, "core/worktrees/hooks/secret-scan.mjs"), path.join(CORE_HOST_OUT, "hooks", "secret-scan.mjs"));
   return CORE_HOST_OUT;
 }
 

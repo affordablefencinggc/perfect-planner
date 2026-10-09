@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { FileStore, Ledger, type LedgerEntry } from "../ledger/index";
 import { installClauseRules } from "../lookup/index";
+import { TestGate, gateRule } from "../gate/index";
 import { AgentService } from "../mcp/index";
 import type { HostKeys } from "./keys";
 import { installNumberingRules } from "../numbering/index";
@@ -39,6 +40,10 @@ export function openCoreProject(baseRoot: string, key: string, override: string 
   installClauseRules(ledger);
   installPeopleRules(ledger);
   installPlanningRules(ledger);
-  const service = new AgentService({ ledger });
+  // Test first, on by default (spec 5.1): no claim until a person approved the test and it failed
+  // on the current code, and only the gate writes task.done after the test passes on the merge.
+  ledger.addRule(gateRule());
+  const gate = new TestGate({ ledger });
+  const service = new AgentService({ ledger, gate });
   return { key, root, ledger, service, state: new Map(), entries: () => ledger.entries() };
 }

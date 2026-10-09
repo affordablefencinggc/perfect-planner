@@ -360,7 +360,7 @@ describe("transports", () => {
     const client = new Client({ name: "test", version: "1.0.0" });
     await client.connect(clientSide);
     const { tools } = await client.listTools();
-    expect(tools.map((t) => t.name).sort()).toEqual(["answer", "ask_main", "attach_proof", "check_inbox", "claim_task", "hello", "list_tasks", "lookup", "release_task", "report_progress"]);
+    expect(tools.map((t) => t.name).sort()).toEqual(["answer", "ask_main", "attach_proof", "check_inbox", "claim_task", "hello", "list_tasks", "lookup", "propose_test", "release_task", "report_progress"]);
     await client.callTool({ name: "hello", arguments: { name: "mcp worker", model: "m" } });
     const claimed = await client.callTool({ name: "claim_task", arguments: { task: "T-1" } });
     expect(claimed.isError).toBeFalsy();
@@ -384,5 +384,21 @@ describe("transports", () => {
     } finally {
       await bridge.close();
     }
+  });
+});
+
+describe("propose_test (test first)", () => {
+  it("lets a worker propose its test before claiming; the claim waits for a person's approval", async () => {
+    const { service, ledger, w1, w2 } = setup({ approveTests: false });
+    ledger.addRule(gateRule());
+    const a = await hello(service, w1, "w1");
+    const proposed = (await service.call(a, "propose_test", { task: "T-1", command: "node --test tests/t1.test.mjs", files: ["tests/t1.test.mjs"] })) as { task: string; entry: string; status: string };
+    expect(proposed).toMatchObject({ task: "T-1", status: "waiting for approval" });
+    expect(ledger.get(proposed.entry)).toMatchObject({ type: "test.defined", subject: "T-1", actor: { kind: "agent", id: a.agent }, refs: ["P-1 §2.1"], data: { test: "node --test tests/t1.test.mjs", files: ["tests/t1.test.mjs"] } });
+    await expectCode(service.call(a, "claim_task", { task: "T-1" }), "REFUSED", /waiting for the owner's approval/);
+    // A worker token still covers only its own task.
+    await expectCode(service.call(a, "propose_test", { task: "T-2", command: "x", files: ["t.mjs"] }), "FORBIDDEN");
+    const b = await hello(service, w2, "w2");
+    await expectCode(service.call(b, "propose_test", { task: "T-2", command: "node t.mjs", files: ["../outside.mjs"] }), "INVALID", /not a test file path/);
   });
 });
