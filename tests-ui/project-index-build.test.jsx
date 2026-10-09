@@ -34,8 +34,46 @@ test("build board waits for an approved plan instead of inventing cards", async 
   render(<Live Panel={ProjectBuildBoard} context={{ planStatuses: {} }} onWorkspace={onWorkspace} />);
   expect(await screen.findByText(/No approved plan yet/)).toBeTruthy();
   expect(screen.queryByRole("article")).toBeNull();
-  fireEvent.click(screen.getByRole("button", { name: /Open Ledger/ }));
-  expect(onWorkspace).toHaveBeenCalledWith("ledger");
+  fireEvent.click(screen.getByRole("button", { name: /Open Plan/ }));
+  expect(onWorkspace).toHaveBeenCalledWith("plan");
+});
+
+test("a never-approved project is sent to the Plan page even when the planning ledger reports stale", async () => {
+  const onWorkspace = vi.fn();
+  render(<Live Panel={ProjectBuildBoard} context={{ planStatuses: { [project.projectId]: { state: "stale", projectId: project.projectId } } }} onWorkspace={onWorkspace} />);
+  expect(await screen.findByText(/No approved plan yet. Approve the tasks on the Plan page/)).toBeTruthy();
+  expect(screen.queryByText(/out of date/)).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: /Open Plan/ }));
+  expect(onWorkspace).toHaveBeenCalledWith("plan");
+});
+
+test("Done is refused inline while something is in the way, and a self-reported Done is not shown as verified", async () => {
+  // T0002 loses its owner in Allocation: the saved row wins over the draft owner.
+  writeSection(project.projectId, "allocation", { taskIds: ["T0001", "T0002"], assignments: { T0001: { owner: "Sam", wave: 1 }, T0002: { owner: "", wave: 1 } } });
+  render(<Live Panel={ProjectBuildBoard} />);
+  const second = await screen.findByRole("article", { name: "T0002 Write cart tests" });
+  expect(within(second).getByText(/No owner named yet/)).toBeTruthy();
+  fireEvent.change(within(second).getByLabelText("Status for T0002"), { target: { value: "done" } });
+  expect(within(second).getByRole("alert").textContent).toMatch(/Can’t mark Done while 1 thing is in the way: No owner named yet/);
+  expect(within(second).getByRole("button", { name: "Save status" }).disabled).toBe(true);
+  expect(within(second).getByText("Unsaved changes")).toBeTruthy();
+  expect(readSection(project.projectId, "build")).toBeNull();
+
+  const first = screen.getByRole("article", { name: "T0001 Add checkout page" });
+  fireEvent.change(within(first).getByLabelText("Status for T0001"), { target: { value: "done" } });
+  fireEvent.click(within(first).getByRole("button", { name: "Save status" }));
+  await waitFor(() => expect(within(first).getByText(/Done \(self-reported, no proof yet\)/)).toBeTruthy());
+});
+
+test("unsaved build edits ask before the page is left", async () => {
+  render(<Live Panel={ProjectBuildBoard} />);
+  const card = await screen.findByRole("article", { name: "T0001 Add checkout page" });
+  const unload = () => { const event = new Event("beforeunload", { cancelable: true }); window.dispatchEvent(event); return event.defaultPrevented; };
+  expect(unload()).toBe(false);
+  fireEvent.change(within(card).getByLabelText("Note for T0001"), { target: { value: "half way" } });
+  expect(unload()).toBe(true);
+  fireEvent.change(within(card).getByLabelText("Note for T0001"), { target: { value: "" } });
+  expect(unload()).toBe(false);
 });
 
 test("each approved task gets a card whose status is saved to the project and drives BUILD-RUN", async () => {
