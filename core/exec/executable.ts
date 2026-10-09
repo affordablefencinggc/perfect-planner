@@ -7,11 +7,18 @@ import path from "node:path";
  */
 export const NO_CWD_SEARCH_ENV = { NoDefaultCurrentDirectoryInExePath: "1" } as const;
 
-const isNetworkPath = (dir: string, platform: NodeJS.Platform) => platform === "win32" && /^[\\/]{2}/.test(dir);
+/**
+ * On Windows, true only for a local drive-letter path (C:\ or C:/). Refuses every network and device
+ * spelling: \\server, //server, mixed slashes, \\?\UNC\, \??\UNC\, \\.\ and drive-relative \dir.
+ * Use it for any path the core will run or trust on Windows.
+ */
+export function isLocalWindowsPath(file: string): boolean {
+  return /^[A-Za-z]:[\\/]/.test(file);
+}
 
 /**
  * Absolute path of `name` from PATH, never from the current folder: relative and empty PATH entries,
- * network shares and any entry inside `cwd` are skipped. On Windows only `.exe` counts, since a
+ * network shares (on Windows anything but a local drive-letter path) and any entry inside `cwd` are skipped. On Windows only `.exe` counts, since a
  * .cmd/.bat cannot be started without a shell. Returns null when nothing qualifies.
  */
 export function findExecutable(name: string, env: NodeJS.ProcessEnv, cwd: string, platform: NodeJS.Platform = process.platform): string | null {
@@ -21,7 +28,7 @@ export function findExecutable(name: string, env: NodeJS.ProcessEnv, cwd: string
   const extensions = windows ? [".exe"] : [""];
   for (const entry of pathValue.split(windows ? ";" : ":")) {
     const dir = entry.trim().replace(/^"(.*)"$/, "$1");
-    if (!dir || !path.isAbsolute(dir) || isNetworkPath(dir, platform)) continue;
+    if (!dir || !path.isAbsolute(dir) || (windows && !isLocalWindowsPath(dir))) continue;
     if (isWithin(here, path.resolve(dir))) continue;
     for (const extension of extensions) {
       const candidate = path.join(dir, `${name}${extension}`);

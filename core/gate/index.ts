@@ -8,6 +8,7 @@ export {
   parseTaskId,
   attemptId,
   nextAttemptId,
+  type GatePolicy,
   type GateState,
   type TestOutcome,
   type Phase,

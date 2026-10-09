@@ -109,6 +109,17 @@ export interface TestGateOptions {
   run?: TestRunner;
   /** Per test run. Default 10 minutes. */
   timeoutMs?: number;
+  /** See GatePolicy.requireJevTestReview. Default false. */
+  requireJevTestReview?: boolean;
+}
+
+export interface GatePolicy {
+  /**
+   * Work on a task waits until Jev has approved its current test (reviewTest or approve's jevVerdict),
+   * not only until open gaps are cleared. Default false, so the loop runs before Jev's key is set up;
+   * the app should turn it on once Jev is configured. Pass the same value to gateRule.
+   */
+  requireJevTestReview?: boolean;
 }
 
 export class GateError extends Error {
@@ -366,7 +377,7 @@ export function deriveState(entries: readonly LedgerEntry[], taskId: string): Ga
 }
 
 /** Why a task may not start yet, or null when it may (spec 5.1). */
-export function startRefusal(state: GateState): string | null {
+export function startRefusal(state: GateState, policy: GatePolicy = {}): string | null {
   const id = state.taskId;
   if (state.done) return `${id} is already done.`;
   if (state.reopenedAs) return `${id} was reopened as ${state.reopenedAs}.`;
@@ -376,6 +387,7 @@ export function startRefusal(state: GateState): string | null {
   if (state.baseline.passed) return `${id}'s test already passes on the current code.`;
   // Jev may review the test after the person approved it; open gaps stop work until Jev clears them.
   if (state.jev?.verdict === "gaps") return `Jev found gaps in ${id}'s test: ${state.jev.gaps.join("; ")}. Jev has to clear them, or the test has to be redefined and approved again.`;
+  if (policy.requireJevTestReview && state.jev?.verdict !== "approve") return `Jev has not reviewed ${id}'s test yet, and this project requires Jev's review before work starts.`;
   return null;
 }
 
@@ -383,14 +395,14 @@ export function startRefusal(state: GateState): string | null {
  * A ledger rule (register with ledger.addRule): task.claimed is refused for a task whose
  * current done-when test is not approved (spec 5.1).
  */
-export function gateRule(): (draft: EntryDraft, ledger: LedgerReader) => string | null {
+export function gateRule(policy: GatePolicy = {}): (draft: EntryDraft, ledger: LedgerReader) => string | null {
   return (draft, ledger) => {
     if (draft.type !== "task.claimed" && draft.type !== "task.done") return null;
     const subject = draft.subject.trim();
     if (!TASK_ID.test(subject)) return null;
     const state = deriveState(ledger.entries(), subject);
     if (draft.type === "task.claimed") {
-      const refusal = startRefusal(state);
+      const refusal = startRefusal(state, policy);
       return refusal ? `${subject} cannot be claimed: ${refusal}` : null;
     }
     if (draft.actor.kind !== GATE_ACTOR.kind || draft.actor.id !== GATE_ACTOR.id) {
@@ -518,12 +530,14 @@ export class TestGate {
   private readonly now: () => Date;
   private readonly run: TestRunner;
   private readonly timeoutMs: number;
+  private readonly policy: GatePolicy;
 
   constructor(options: TestGateOptions) {
     this.ledger = options.ledger;
     this.now = options.now ?? (() => new Date());
     this.run = options.run ?? runTestCommand;
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    this.policy = { requireJevTestReview: options.requireJevTestReview ?? false };
   }
 
   state(taskId: string): GateState {
@@ -697,14 +711,14 @@ export class TestGate {
 
   canStart(taskId: string): { ok: boolean; reason: string } {
     const state = this.state(taskId);
-    const refusal = startRefusal(state);
+    const refusal = startRefusal(state, this.policy);
     return refusal ? { ok: false, reason: refusal } : { ok: true, reason: `${taskId}'s test is approved (${state.approval!.n}).` };
   }
 
   /** Run the approved test in the worker's worktree at its HEAD; the worker's own report is never trusted (spec 5.4). */
   async prove(taskId: string, worktreePath: string): Promise<Ok<RunReport & { commit: string }> | (Refusal & Partial<RunReport> & { output?: string })> {
     const state = this.state(taskId);
-    const refusal = startRefusal(state);
+    const refusal = startRefusal(state, this.policy);
     if (refusal) return { ok: false, reason: refusal };
     const definition = state.definition!;
     const commit = await headOf(worktreePath);
@@ -807,7 +821,7 @@ export class TestGate {
     const entries: LedgerEntry[] = [];
     const refuse = (reason: string, extra: { output?: string; run?: TestRunResult; mergeCommit?: string } = {}) => ({ ok: false as const, reason, entries, ...extra });
     const state = this.state(taskId);
-    const refusal = startRefusal(state);
+    const refusal = startRefusal(state, this.policy);
     if (refusal) return refuse(refusal);
     const definition = state.definition!;
     const approval = state.approval!;
@@ -987,6 +1001,7 @@ export class TestGate {
     if (options.verdict !== undefined) {
       verdict = this.ledger.entries().find((entry) => entry.n === options.verdict);
       if (!verdict || verdict.type !== "review.verdict" || verdict.subject !== taskId) throw new GateError(`${options.verdict} is not a review verdict on ${taskId}.`);
+      if (!isAuthoritative(verdict)) throw new GateError(`${options.verdict} is not signed, so it cannot stand as the rejection; let the gate write it.`);
       if (evidenceValue(verdict, "scope") !== "diff" || evidenceValue(verdict, "verdict") !== "reject") throw new GateError(`${options.verdict} is not a rejection of ${taskId}'s diff.`);
     }
     const written: LedgerEntry[] = [];
