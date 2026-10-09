@@ -27,11 +27,11 @@ export function platformDataDirectory(env = process.env, platform = process.plat
   }
   if (platform === "darwin") {
     if (!homeDir) throw new Error("Perfect Planner cannot find a folder to save in: HOME is not set.");
-    return path.join(canonical(homeDir), "Library", "Application Support");
+    return path.posix.join(canonical(homeDir), "Library", "Application Support");
   }
-  if (env.XDG_DATA_HOME && path.isAbsolute(env.XDG_DATA_HOME)) return canonical(env.XDG_DATA_HOME);
+  if (env.XDG_DATA_HOME && path.posix.isAbsolute(env.XDG_DATA_HOME)) return canonical(env.XDG_DATA_HOME);
   if (!homeDir) throw new Error("Perfect Planner cannot find a folder to save in: HOME and XDG_DATA_HOME are not set.");
-  return path.join(canonical(homeDir), ".local", "share");
+  return path.posix.join(canonical(homeDir), ".local", "share");
 }
 
 export const localAuthorityRoot = (env = process.env, platform = process.platform) => (platform === "win32" ? path.win32 : path.posix).join(platformDataDirectory(env, platform), "PerfectPlannerCleanroom", "authority");

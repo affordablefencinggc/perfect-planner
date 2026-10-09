@@ -18,17 +18,18 @@ const underTemp = (target, platform) => {
 
 test("saved work and core ledgers live in the platform app-data folder, never the temp folder", () => {
   const cases = [
-    [{ HOME: MAC_HOME }, "darwin", path.join(MAC_HOME, "Library", "Application Support", "PerfectPlannerCleanroom", "authority")],
-    [{ HOME }, "linux", path.join(HOME, ".local", "share", "PerfectPlannerCleanroom", "authority")],
-    [{ HOME, XDG_DATA_HOME: "/data/riley" }, "linux", path.join("/data/riley", "PerfectPlannerCleanroom", "authority")],
-    [{ HOME, XDG_DATA_HOME: "relative/dir" }, "linux", path.join(HOME, ".local", "share", "PerfectPlannerCleanroom", "authority")],
+    [{ HOME: MAC_HOME }, "darwin", path.posix.join(MAC_HOME, "Library", "Application Support", "PerfectPlannerCleanroom", "authority")],
+    [{ HOME }, "linux", path.posix.join(HOME, ".local", "share", "PerfectPlannerCleanroom", "authority")],
+    [{ HOME, XDG_DATA_HOME: "/data/riley" }, "linux", path.posix.join("/data/riley", "PerfectPlannerCleanroom", "authority")],
+    [{ HOME, XDG_DATA_HOME: "relative/dir" }, "linux", path.posix.join(HOME, ".local", "share", "PerfectPlannerCleanroom", "authority")],
     [{ LOCALAPPDATA: "C:\\Users\\riley\\AppData\\Local" }, "win32", path.win32.join("C:\\Users\\riley\\AppData\\Local", "PerfectPlannerCleanroom", "authority")],
   ];
   for (const [env, platform, expected] of cases) {
     const root = localAuthorityRoot(env, platform);
     assert.equal(root, expected, `${platform} ${JSON.stringify(env)}`);
     assert.equal(underTemp(root, platform), false, `${platform} root ${root} is under the temp folder`);
-    if (platform !== "win32") assert.equal(underTemp(coreHostRoot(root), platform), false, `${platform} core ledgers under the temp folder`);
+    // coreHostRoot joins with the host's own path rules, so it is checked only for the host's platform.
+    if (platform === process.platform) assert.equal(underTemp(coreHostRoot(root), platform), false, `${platform} core ledgers under the temp folder`);
   }
 });
 
