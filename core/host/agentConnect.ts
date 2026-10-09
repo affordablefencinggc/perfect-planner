@@ -23,6 +23,43 @@ const SERVER = "perfect-planner-core";
 const SKILL = "perfect-planner-connect";
 /** Replaced on install with this program's absolute path: the only line the skill may run. */
 export const SKILL_PROGRAM_PLACEHOLDER = "{{PP_CONNECT_PROGRAM}}";
+/** Replaced on install with the desktop app's bundled Node, the one other first word a line may have. */
+export const SKILL_NODE_PLACEHOLDER = "{{PP_NODE_PROGRAM}}";
+
+/**
+ * The bundled Node the installed app puts first in its lines: <app>/desktop-host/node[.exe] next to
+ * <app>/desktop-host/core-host/connect.mjs. Without a bundled Node the line starts with plain node.
+ */
+export function bundledNodePath(here: string, platform: NodeJS.Platform = process.platform): string {
+  const p = platform === "win32" ? path.win32 : path.posix;
+  return p.join(p.dirname(here), platform === "win32" ? "node.exe" : "node");
+}
+
+/**
+ * The skill's line check, in code, so the lines the app shows (core/host/routes/agents.ts) and the
+ * rule the skill follows cannot drift apart. A line is exactly: the first word (node, or the bundled
+ * Node by its exact path, quoted, after PowerShell's & on Windows), this connect.mjs by its exact
+ * path, an optional --agent claude|gemini|codex, the loopback bridge, and a local .token file.
+ */
+export function connectLineProblem(line: string, here: string, platform: NodeJS.Platform = process.platform): string | null {
+  const windows = platform === "win32";
+  const p = windows ? path.win32 : path.posix;
+  if (/[\r\n]/.test(line)) return "It must be one line.";
+  if (/pp_[cw]_/.test(line)) return "It contains a key. Never paste keys; copy a fresh line from Connect agent.";
+  const quoted = windows ? "'((?:[^']|'')*)'" : "'((?:[^']|'\\\\'')*)'";
+  const unquote = (value: string) => (windows ? value.replaceAll("''", "'") : value.replaceAll("'\\''", "'"));
+  const first = windows ? `(?:node|& ${quoted})` : `(?:node|${quoted})`;
+  const shape = new RegExp(`^${first} ${quoted}(?: --agent (claude|gemini|codex))? (http://127\\.0\\.0\\.1:\\d{1,5}) ${quoted}$`);
+  const match = shape.exec(line.trim());
+  if (!match) return "It is not the shape Connect agent shows: node, connect.mjs, the bridge address and the token file, nothing else.";
+  const [, node, program, , , tokenFile] = match as unknown as [string, string | undefined, string, string | undefined, string, string];
+  if (node !== undefined && unquote(node) !== bundledNodePath(here, platform)) return "The Node program is not the one that ships with Perfect Planner.";
+  if (unquote(program) !== p.join(here, "connect.mjs")) return "The program is not Perfect Planner's own connect.mjs.";
+  const file = unquote(tokenFile);
+  if (isNetworkPath(file, platform)) return "The token file must be on this computer, not a network share.";
+  if (!p.isAbsolute(file) || !file.endsWith(".token")) return "The last part must be the full path of the .token file the app wrote.";
+  return null;
+}
 
 export interface ConnectPlan {
   agent: AgentKind;
@@ -80,9 +117,23 @@ export function connectArgsProblem(argv: string[], platform: NodeJS.Platform = p
   return null;
 }
 
+/**
+ * The same check keyed by connect.mjs's absolute path, for callers that know the program rather
+ * than its folder (a release run asserting the installed app's line passes, with no live agent).
+ */
+export function validateConnectLine(line: string, options: { connectProgram: string; platform?: NodeJS.Platform }): string | null {
+  const platform = options.platform ?? process.platform;
+  const p = platform === "win32" ? path.win32 : path.posix;
+  if (p.basename(options.connectProgram) !== "connect.mjs") return "The connect program must be connect.mjs.";
+  return connectLineProblem(line, p.dirname(options.connectProgram), platform);
+}
+
 /** Copies the skill to the user's own agent folders (every repo on this computer), replacing older copies. */
 export function installSkill(plan: Pick<ConnectPlan, "skillFrom" | "skillTo">, here: string): void {
-  const text = fs.readFileSync(plan.skillFrom, "utf8").replaceAll(SKILL_PROGRAM_PLACEHOLDER, path.join(here, "connect.mjs"));
+  const text = fs
+    .readFileSync(plan.skillFrom, "utf8")
+    .replaceAll(SKILL_PROGRAM_PLACEHOLDER, path.join(here, "connect.mjs"))
+    .replaceAll(SKILL_NODE_PLACEHOLDER, bundledNodePath(here));
   for (const to of plan.skillTo) {
     fs.mkdirSync(path.dirname(to), { recursive: true });
     fs.writeFileSync(to, text);
