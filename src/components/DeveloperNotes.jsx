@@ -8,7 +8,9 @@ import {validateExchangeReport} from '../runtime/agentExchangeReport.js';
 
 export function DeveloperNotes({project,events=getRuntimeEventSession(),invoke}){
   if(!isProjectId(project?.projectId)||!Number.isSafeInteger(project?.generation))return null;
-  return <Notes key={`${project.projectId}:${project.generation}`} project={project} events={events} invoke={invoke}/>;
+  // Keyed by project only: the generation advances on every view change, and remounting on it
+  // discarded the open panel and any unsaved draft. Reads use the latest generation via a ref.
+  return <Notes key={project.projectId} project={project} events={events} invoke={invoke}/>;
 }
 function Notes({project,events,invoke}){
   const [open,setOpen]=useState(false),[snapshot,setSnapshot]=useState(()=>events.getSnapshot(project.projectId));
@@ -17,11 +19,16 @@ function Notes({project,events,invoke}){
   const [agent,setAgent]=useState({records:[],total:null,nextOffset:null,status:'Not checked'});
   const [loading,setLoading]=useState(false),[browsingHistory,setBrowsingHistory]=useState(false);
   const alive=useRef(true),busy=useRef(false),following=useRef(true);
+  const latest=useRef(project);latest.current=project;
   useEffect(()=>{alive.current=true;return()=>{alive.current=false;};},[]);
   const registration=project.registration;
   const native=registration?.adapter==='native'&&(invoke||isTauriRuntime(globalThis));
+  const bindingKey=`${registration?.workspaceId}:${registration?.registryRevision}:${registration?.rootIdentity}`;
+  const shownBinding=useRef(bindingKey);
+  useEffect(()=>{if(shownBinding.current===bindingKey)return;shownBinding.current=bindingKey;setAgent({records:[],total:null,nextOffset:null,status:'Not checked'});setBrowsingHistory(false);},[bindingKey]);
   async function readReports(offset=0){
     if(!native||busy.current)return;
+    const project=latest.current,registration=project.registration;
     following.current=offset===0;
     busy.current=true;setLoading(true);setBrowsingHistory(offset!==0);
     try{
@@ -29,6 +36,8 @@ function Notes({project,events,invoke}){
       const call=invoke??(await import('@tauri-apps/api/core')).invoke;
       const reply=await call('read_agent_exchange_notes',{request:{schemaVersion:1,...binding,generation:project.generation},offset});
       if(!alive.current)return;
+      const now=latest.current.registration;
+      if(['workspaceId','registryRevision','rootIdentity'].some(k=>now?.[k]!==binding[k]))return;
       const data=reply?.data;
       if(reply.projectId!==project.projectId||reply.generation!==project.generation||Object.keys(binding).some(k=>data?.binding?.[k]!==binding[k])||data.executionAuthorized!==false||data.coverage!=='reported-exchanges-only'||!Array.isArray(data.records)||data.records.length>1||!Number.isSafeInteger(data.total)||data.total<0||data.total>1000||!(data.nextOffset===null||(Number.isSafeInteger(data.nextOffset)&&data.nextOffset===offset+1)))throw Error('Invalid report receipt');
       for(const r of data.records){validateExchangeReport({binding:r.binding,exchangeId:r.exchangeId,summary:r.summary},binding);if(r.origin!=='authenticated-agent-report'||r.verification!=='not-verified'||!/^[a-f0-9]{32}$/.test(r.sessionId)||!/^[a-f0-9]{64}$/.test(r.digest)||!Number.isFinite(Date.parse(r.receivedAt)))throw Error('Invalid report receipt');}
@@ -39,7 +48,7 @@ function Notes({project,events,invoke}){
   useEffect(()=>{
     if(!open||!native)return;
     following.current=true;void readReports();const timer=setInterval(()=>{if(following.current)void readReports();},5000);return()=>clearInterval(timer);
-  },[open,native]);
+  },[open,native,bindingKey]);
   useEffect(()=>events.subscribe(project.projectId,()=>setSnapshot(events.getSnapshot(project.projectId))),[events,project.projectId]);
   useEffect(()=>{if(open)heading.current?.focus();},[open]);
   const notes=developerNotes(snapshot);
