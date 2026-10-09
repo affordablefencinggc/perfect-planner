@@ -9,7 +9,7 @@ import type { Feature, Journey, MvpAdvisor, MvpProposal, ScanResult } from "./ty
 export * from "./types";
 export { MockJev, dependencyClosure, proposeWith, validateProposal } from "./advisor";
 export {
-  boardFromLedger, confirmMvp, featuresIn, isOneLineReason, missingDependencies, moveFeature,
+  MVP_STAGER, boardFromLedger, confirmMvp, featuresIn, isOneLineReason, missingDependencies, moveFeature,
   mvpDoneWhen, recordProposal, renameStage, setJourney, stageOf,
 } from "./board";
 export { classify, folderSource, plannedSource, registrySource, scanFeatures, type DeclaredFeature, type FeatureSource } from "./scan";

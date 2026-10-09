@@ -20,6 +20,7 @@ import { MvpError, type Journey, type MvpProposal, type ScannedFeature } from ".
 const person: Actor = { kind: "person", id: "owner" };
 const jev: Actor = { kind: "jev", id: "jev", model: "mock" };
 const agent: Actor = { kind: "agent", id: "claude-code", model: "x" };
+const gate: Actor = { kind: "system", id: "gate" };
 
 const journey: Journey = { name: "Import and sign off", steps: ["Import", "Sign off"], test: "npm run test:e2e", features: ["a"] };
 const proposal: MvpProposal = {
@@ -211,17 +212,17 @@ describe("mvpDoneWhen", () => {
 
   it("is done only when confirmed, journey passed and all MVP features done", () => {
     const l = ready();
-    l.append({ actor: agent, type: "test.passed", subject: "T-1", summary: "ok", data: { test: "npm run test:e2e" } });
+    l.append({ actor: gate, type: "test.passed", subject: "T-1", summary: "ok", data: { test: "npm run test:e2e" } });
     const r = run(l);
     expect(r).toEqual({ done: true, journeyPassed: true, blocking: [] });
   });
 
   it("uses the latest run of the journey test", () => {
     const l = ready();
-    l.append({ actor: agent, type: "test.passed", subject: "T-1", summary: "ok", data: { test: "npm run test:e2e" } });
-    l.append({ actor: agent, type: "test.passed", subject: "T-1", summary: "other", data: { test: "npm test" } });
+    l.append({ actor: gate, type: "test.passed", subject: "T-1", summary: "ok", data: { test: "npm run test:e2e" } });
+    l.append({ actor: gate, type: "test.passed", subject: "T-1", summary: "other", data: { test: "npm test" } });
     expect(run(l).journeyPassed).toBe(true);
-    l.append({ actor: agent, type: "test.failed", subject: "T-1", summary: "bad", data: { test: "npm run test:e2e" } });
+    l.append({ actor: gate, type: "test.failed", subject: "T-1", summary: "bad", data: { test: "npm run test:e2e" } });
     const r = run(l);
     expect(r.journeyPassed).toBe(false);
     expect(r.done).toBe(false);
@@ -229,7 +230,7 @@ describe("mvpDoneWhen", () => {
 
   it("is blocked by a move after confirmation, a missing feature, and no journey", () => {
     const l = ready();
-    l.append({ actor: agent, type: "test.passed", subject: "T-1", summary: "ok", data: { test: "npm run test:e2e" } });
+    l.append({ actor: gate, type: "test.passed", subject: "T-1", summary: "ok", data: { test: "npm run test:e2e" } });
     expect(run(l, []).blocking).toEqual(["a was not found in the scan"]);
     moveFeature(l, person, "b", "mvp", "");
     expect(run(l, [feat("a", "done"), feat("b", "missing")]).blocking).toEqual(["MVP line not confirmed", "b Feature b is missing"]);
