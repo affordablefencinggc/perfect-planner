@@ -1,0 +1,615 @@
+/* Coordinate stage: Collisions and Allocation pages.
+   Owned by one screen pass; uses the tokens in ../frame.css. Selectors carry
+   .app-shell so they out-rank the long styles.css cascade. */
+
+/* ---- Shared page rhythm ------------------------------------------------- */
+.app-shell :is(.collision-workspace, .allocation-workspace) {
+  padding-block: var(--space-5) var(--space-7);
+  background: transparent;
+  color: var(--ink);
+}
+.app-shell :is(.collision-workspace, .allocation-workspace) .eyebrow {
+  display: block;
+  margin: 0 0 var(--space-1);
+  color: var(--muted);
+  font: 600 var(--text-xs)/1.4 var(--mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.app-shell :is(.collision-workspace .collision-page-header h1, .allocation-workspace .timeline-heading h1) {
+  margin: 0;
+  font: 700 var(--text-xl)/1.25 var(--mono);
+  letter-spacing: -0.01em;
+}
+.app-shell :is(.collision-workspace, .allocation-workspace) :is(.soft-button, .primary-button) {
+  min-height: 36px;
+  padding: 0 var(--space-3);
+  gap: var(--space-2);
+  border-radius: var(--radius-sm);
+  font: 600 var(--text-sm)/1.2 var(--mono);
+  white-space: nowrap;
+}
+.app-shell :is(.collision-workspace, .allocation-workspace) :is(.soft-button, .primary-button):disabled {
+  border-color: var(--border);
+  background: var(--surface-header);
+  color: #4f5752;
+  opacity: 1;
+  cursor: not-allowed;
+}
+.app-shell .collision-workspace .manifest-import:focus-within {
+  outline: 2px solid var(--blue-focus);
+  outline-offset: 2px;
+}
+
+/* ---- Collisions: header + metrics --------------------------------------- */
+.app-shell .collision-workspace .collision-page-header {
+  align-items: flex-end;
+  gap: var(--space-4) var(--space-5);
+  flex-wrap: wrap;
+  padding-bottom: var(--space-4);
+  border-bottom: 1px solid var(--border);
+}
+.app-shell .collision-workspace .collision-page-header p {
+  max-width: 68ch;
+  margin: var(--space-2) 0 0;
+  font: var(--text-sm)/1.5 var(--mono);
+}
+.app-shell .collision-workspace .collision-actions {
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+.app-shell .collision-workspace .collision-metrics {
+  margin: var(--space-4) 0;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+.app-shell .collision-workspace .collision-metrics > div {
+  min-height: 72px;
+  padding: var(--space-3) var(--space-4);
+  gap: var(--space-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+}
+.app-shell .collision-workspace .collision-metrics strong {
+  font: 700 var(--text-xl)/1.1 var(--mono);
+}
+.app-shell .collision-workspace .collision-metrics .metric-danger {
+  border-color: var(--red);
+  background: var(--red-soft);
+}
+.app-shell .collision-workspace .collision-metrics .metric-danger span,
+.app-shell .collision-workspace .collision-metrics .metric-danger strong {
+  color: #7a2f2a;
+}
+.app-shell .collision-workspace .collision-metrics .metric-success {
+  border-color: var(--green);
+  background: var(--green-soft);
+}
+
+/* ---- Collisions: error banner ------------------------------------------- */
+.app-shell .collision-workspace .manifest-errors {
+  margin-bottom: var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  gap: var(--space-3);
+  border-radius: var(--radius-md);
+  color: #7a2f2a;
+}
+.app-shell .collision-workspace .manifest-errors > div {
+  font: var(--text-sm)/1.45 var(--mono);
+  overflow-wrap: anywhere;
+}
+
+/* ---- Collisions: two panels, equal height ------------------------------- */
+.app-shell .collision-workspace .collision-grid {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr);
+  gap: var(--space-4);
+  align-items: stretch;
+}
+@media (max-width: 1100px) {
+  .app-shell .collision-workspace .collision-grid {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+}
+.app-shell .collision-workspace .collision-panel {
+  min-width: 0;
+  padding: 0 !important;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+}
+.app-shell .collision-workspace .collision-panel-title {
+  min-height: 48px;
+  padding: var(--space-2) var(--space-4);
+  gap: var(--space-2);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-header);
+}
+.app-shell .collision-workspace .collision-panel-title svg {
+  width: 18px;
+  height: 18px;
+  color: var(--muted);
+}
+.app-shell .collision-workspace .collision-panel-title span {
+  text-align: right;
+}
+.app-shell .collision-workspace :is(.manifest-list, .collision-list) {
+  padding: var(--space-4);
+  gap: var(--space-3);
+  align-content: start;
+}
+/* Empty states, drawn in CSS so the markup and tests stay as they are. */
+.app-shell .collision-workspace :is(.manifest-list, .collision-list, .integrity-ledger-entries):empty {
+  display: grid;
+  place-items: center;
+  min-height: 96px;
+  margin: var(--space-4);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--surface-muted);
+  color: var(--muted);
+  font: var(--text-sm)/1.4 var(--mono);
+  padding: var(--space-4);
+}
+.app-shell .collision-workspace .manifest-list:empty::before {
+  content: "No plan manifests loaded. Import manifests or reset the demo census.";
+}
+.app-shell .collision-workspace .collision-list:empty::before {
+  content: "No collisions detected. Every claim is safe to allocate.";
+}
+.app-shell .collision-workspace .integrity-ledger-entries:empty::before {
+  content: "No ledger entries yet.";
+}
+
+/* Manifest cards */
+.app-shell .collision-workspace .manifest-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+.app-shell .collision-workspace .manifest-card > header {
+  min-height: 40px;
+  padding: var(--space-2) var(--space-3);
+  grid-template-columns: 64px minmax(0, 1fr) auto;
+  gap: var(--space-2);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-muted);
+}
+.app-shell .collision-workspace .manifest-card > header code,
+.app-shell .collision-workspace .collision-card > header code {
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+.app-shell .collision-workspace .manifest-task {
+  min-height: 48px;
+  padding: var(--space-2) var(--space-3);
+  gap: var(--space-1);
+  border-top: 1px solid var(--border);
+}
+.app-shell .collision-workspace .manifest-task:first-of-type {
+  border-top: 0;
+}
+.app-shell .collision-workspace .manifest-task > span {
+  align-items: baseline;
+}
+.app-shell .collision-workspace .manifest-task > span code {
+  min-width: 44px;
+  font-size: var(--text-xs);
+}
+.app-shell .collision-workspace .manifest-task small {
+  padding-left: 52px;
+  color: var(--muted);
+  font: var(--text-xs)/1.4 var(--mono);
+}
+
+/* Collision cards */
+.app-shell .collision-workspace .collision-card {
+  padding: var(--space-4);
+  gap: var(--space-3);
+  border: 1px solid #d68e88;
+  border-radius: var(--radius-md);
+  background: #fffaf8;
+}
+.app-shell .collision-workspace .collision-card.collision-approved {
+  border-color: #9bc4a7;
+  background: #f7fbf8;
+}
+.app-shell .collision-workspace .collision-card > header {
+  grid-template-columns: 64px minmax(0, 1fr) auto;
+  gap: var(--space-2);
+}
+.app-shell .collision-workspace .collision-card > p {
+  font: var(--text-sm)/1.5 var(--mono);
+  color: #4a524d;
+}
+.app-shell .collision-workspace .collision-pair {
+  gap: var(--space-2);
+}
+.app-shell .collision-workspace .collision-pair > span {
+  padding: var(--space-2) var(--space-3);
+  gap: 2px;
+  border-radius: var(--radius-sm);
+}
+.app-shell .collision-workspace .collision-pair small,
+.app-shell .collision-workspace .collision-contingency > span {
+  color: var(--muted);
+  font: 700 var(--text-xs)/1.3 var(--mono);
+  letter-spacing: 0.06em;
+}
+.app-shell .collision-workspace .collision-pair code {
+  font-size: var(--text-xs);
+}
+.app-shell .collision-workspace .collision-contingency {
+  padding: var(--space-2) var(--space-3);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+.app-shell .collision-workspace .collision-contingency p {
+  margin: var(--space-1) 0 0;
+  font: var(--text-sm)/1.5 var(--mono);
+}
+.app-shell .collision-workspace .collision-card > button {
+  min-height: 36px;
+  padding: 0 var(--space-3);
+  justify-self: start;
+  border-radius: var(--radius-sm);
+  font: 700 var(--text-sm)/1.2 var(--mono);
+}
+.app-shell .collision-workspace .collision-card > button:disabled {
+  color: #24553a;
+}
+
+/* Gate + ledger */
+.app-shell .collision-workspace .collision-gate {
+  margin-top: var(--space-4);
+  min-height: 72px;
+  padding: var(--space-3) var(--space-4);
+  flex-wrap: wrap;
+  gap: var(--space-3) var(--space-4);
+  border-width: 1px;
+  border-radius: var(--radius-lg);
+}
+.app-shell .collision-workspace .collision-gate small {
+  font: var(--text-sm)/1.45 var(--mono);
+}
+.app-shell .collision-workspace .collision-gate.gate-locked {
+  color: #7a2f2a;
+}
+.app-shell .collision-workspace .integrity-ledger-panel {
+  margin-top: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+}
+.app-shell .collision-workspace .integrity-ledger-panel > header {
+  min-height: 56px;
+  padding: var(--space-2) var(--space-4);
+  gap: var(--space-3);
+  background: var(--surface-header);
+}
+.app-shell .collision-workspace .integrity-ledger-panel > header strong {
+  font: 700 var(--text-sm)/1.3 var(--mono);
+}
+.app-shell .collision-workspace .integrity-ledger-summary {
+  min-height: 44px;
+  padding: var(--space-2) var(--space-4);
+  gap: var(--space-3);
+  border-bottom: 1px solid var(--border);
+  font: var(--text-xs)/1.4 var(--mono);
+  overflow-wrap: anywhere;
+}
+.app-shell .collision-workspace .integrity-ledger-entries > div {
+  min-height: 40px;
+  padding: var(--space-2) var(--space-4);
+  gap: var(--space-3);
+  font: var(--text-xs)/1.4 var(--mono);
+}
+.app-shell .collision-workspace .integrity-ledger-entries > div:first-child {
+  border-top: 0;
+}
+.app-shell .collision-workspace .integrity-ledger-entries:empty {
+  margin: var(--space-4);
+}
+
+/* ---- Allocation: summary chips ------------------------------------------ */
+.app-shell .allocation-workspace .allocation-summary {
+  height: auto;
+  min-height: 0;
+  padding: 0;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  border-bottom: 0;
+}
+.app-shell .allocation-workspace .allocation-summary span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  padding: 0 var(--space-3);
+  gap: var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--ink);
+}
+.app-shell .allocation-workspace .allocation-summary span:first-child {
+  padding-left: var(--space-3);
+}
+.app-shell .allocation-workspace .allocation-summary svg {
+  width: 16px;
+  height: 16px;
+  color: var(--muted);
+}
+.app-shell .allocation-workspace .timeline-heading {
+  padding: var(--space-4) 0 var(--space-3) !important;
+  gap: var(--space-3) var(--space-5);
+  flex-wrap: wrap;
+  align-items: flex-end;
+}
+.app-shell .allocation-workspace .timeline-actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+/* ---- Allocation: timeline that fits the frame --------------------------- */
+.app-shell .allocation-workspace .timeline-grid {
+  min-width: 0;
+  margin-top: 0 !important;
+  grid-template-columns: 176px minmax(0, 1fr);
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+}
+.app-shell .allocation-workspace .timeline-corner {
+  height: auto;
+  min-height: 40px;
+  padding: var(--space-3) var(--space-4);
+  display: flex;
+  align-items: center;
+  background: var(--surface-header);
+  color: var(--muted);
+  font: 600 var(--text-xs)/1.3 var(--mono);
+  letter-spacing: 0.06em;
+}
+.app-shell .allocation-workspace .timeline-days {
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  background: var(--surface-header);
+}
+.app-shell .allocation-workspace .timeline-days span {
+  padding: var(--space-3) var(--space-1);
+  overflow: hidden;
+  border-right: 1px solid var(--border);
+  color: var(--muted);
+  font: var(--text-xs)/1.3 var(--mono);
+  white-space: nowrap;
+}
+.app-shell .allocation-workspace .timeline-days span:last-child {
+  border-right: 0;
+}
+.app-shell .allocation-workspace .timeline-row {
+  min-height: 64px;
+  grid-template-columns: 176px minmax(0, 1fr);
+  border-bottom: 1px solid var(--border);
+}
+.app-shell .allocation-workspace .worker-cell {
+  min-height: 0 !important;
+  padding: var(--space-3) var(--space-3) !important;
+  gap: var(--space-3);
+  background: var(--surface-muted);
+  border-right: 1px solid var(--border);
+}
+.app-shell .allocation-workspace .worker-cell:hover {
+  background: var(--surface-header);
+}
+.app-shell .allocation-workspace .worker-cell:focus-visible {
+  outline-offset: -3px;
+}
+.app-shell .allocation-workspace .worker-cell strong {
+  font: 700 var(--text-sm)/1.3 var(--mono);
+  overflow-wrap: anywhere;
+}
+.app-shell .allocation-workspace .worker-cell small {
+  color: var(--muted);
+  font: var(--text-xs)/1.3 var(--mono);
+}
+.app-shell .allocation-workspace .worker-avatar {
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+  border-radius: var(--radius-sm);
+  font: 700 var(--text-xs) var(--mono);
+}
+.app-shell .allocation-workspace .schedule-track {
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  align-content: center;
+  padding-block: var(--space-1);
+  background: var(--surface);
+}
+.app-shell .allocation-workspace .assignment {
+  min-height: 40px !important;
+  margin: var(--space-1) var(--space-1);
+  padding: var(--space-1) var(--space-2) !important;
+  gap: var(--space-2);
+  border-radius: var(--radius-sm);
+  box-shadow: none;
+  overflow: hidden;
+}
+.app-shell .allocation-workspace .assignment:hover {
+  box-shadow: var(--shadow-card);
+}
+.app-shell .allocation-workspace .assignment code {
+  font: 700 var(--text-xs) var(--mono);
+}
+.app-shell .allocation-workspace .assignment svg {
+  width: 14px;
+  height: 14px;
+}
+.app-shell .allocation-workspace .assignment-risk {
+  color: #6b4a14;
+}
+.app-shell .allocation-workspace .assignment-blocked {
+  color: #7a2f2a;
+}
+.app-shell .allocation-workspace .assignment-done {
+  color: #24553a;
+}
+
+/* ---- Allocation: gate strip + forecast ---------------------------------- */
+.app-shell .allocation-workspace .collision-strip {
+  min-width: 0;
+  margin-top: var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  flex-wrap: wrap;
+  gap: var(--space-3) var(--space-4);
+  border-radius: var(--radius-lg);
+}
+.app-shell .allocation-workspace .collision-strip > div:nth-child(2) {
+  min-width: 220px;
+  gap: var(--space-1);
+}
+.app-shell .allocation-workspace .collision-strip strong {
+  line-height: 1.4;
+}
+.app-shell .allocation-workspace .collision-strip span {
+  line-height: 1.45;
+}
+.app-shell .allocation-workspace .forecast-row {
+  min-width: 0;
+  margin-top: var(--space-4);
+  padding: var(--space-4);
+  grid-template-columns: repeat(4, minmax(0, 1fr)) auto;
+  align-items: center;
+  gap: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+}
+.app-shell .allocation-workspace .forecast-row > div {
+  gap: var(--space-1);
+}
+.app-shell .allocation-workspace .forecast-row strong {
+  font: 700 var(--text-lg)/1.2 var(--mono);
+}
+@media (max-width: 1100px) {
+  .app-shell .allocation-workspace .forecast-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .app-shell .allocation-workspace .forecast-row > button {
+    grid-column: 1 / -1;
+  }
+  .app-shell .allocation-workspace .timeline-grid,
+  .app-shell .allocation-workspace .timeline-row {
+    grid-template-columns: 136px minmax(0, 1fr);
+  }
+  .app-shell .allocation-workspace .worker-avatar {
+    display: none;
+  }
+}
+@media (max-width: 760px) {
+  .app-shell .collision-workspace .collision-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .app-shell .collision-workspace .collision-pair {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .app-shell .collision-workspace .collision-pair > svg {
+    justify-self: center;
+    transform: rotate(90deg);
+  }
+}
+
+/* ---- Real-project coordination panels (coord-*) -------------------------- */
+.app-shell .coord-panel {
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+  margin-bottom: var(--space-4);
+}
+.app-shell .coord-panel > header {
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border);
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  background: var(--surface-header);
+}
+.app-shell .coord-panel > :not(header) {
+  margin-inline: var(--space-4);
+}
+.app-shell .coord-panel > :last-child {
+  margin-bottom: var(--space-4);
+}
+.app-shell .coord-panel h2 {
+  font-size: var(--text-lg);
+}
+.app-shell .coord-panel p {
+  font-size: var(--text-sm);
+  margin: var(--space-3) var(--space-4) 0;
+}
+.app-shell .coord-panel button {
+  min-height: 36px;
+  font-size: var(--text-sm);
+  border-radius: var(--radius-sm);
+}
+.app-shell .coord-card {
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-md);
+}
+.app-shell .coord-card > header strong {
+  font-size: var(--text-md);
+}
+.app-shell .coord-empty {
+  margin: var(--space-4);
+  padding: var(--space-5);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--surface-muted);
+  color: var(--muted);
+}
+.app-shell .coord-row {
+  padding: var(--space-2) var(--space-3);
+}
+
+/* Owner cell: the input never collapses. A Ledger proposal note shortens with an
+   ellipsis (full text in its title) and the row wraps before anything squeezes. */
+.app-shell .coord-row:not(.head) {
+  grid-template-columns: minmax(0, 1.5fr) minmax(300px, 1.6fr) 90px;
+}
+.app-shell .coord-row.head {
+  grid-template-columns: minmax(0, 1.5fr) minmax(300px, 1.6fr) 90px;
+}
+.app-shell .coord-owner {
+  flex-wrap: wrap;
+  row-gap: var(--space-1);
+  min-width: 0;
+}
+.app-shell .coord-owner > svg {
+  flex: 0 0 auto;
+}
+.app-shell .coord-owner > input {
+  flex: 1 1 140px;
+  min-width: 140px;
+  text-overflow: ellipsis;
+}
+.app-shell .coord-owner > small {
+  flex: 1 1 120px;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+}
+.app-shell .coord-owner > button {
+  flex: 0 0 auto;
+}
+@media (max-width: 700px) {
+  .app-shell .coord-row:not(.head) {
+    grid-template-columns: 1fr;
+  }
+}
