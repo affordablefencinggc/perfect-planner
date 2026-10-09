@@ -31,6 +31,17 @@ describe("people routes", () => {
     expect(res.body.result.view.owner.person).toBe("dana");
   });
 
+  it("names the person who started the project as the only one who can become its owner", async () => {
+    expect((await call("POST", "/planning/start", { idea: "A notes app that syncs" })).status).toBe(200); // makes the person's key
+    ctx.host.project("p1").ledger.append({ actor: { kind: "person", id: "owner" }, type: "task.created", subject: "T-1", summary: "Worked on before adding people" });
+    const before = await call("GET", "/people");
+    expect(before.body.result).toMatchObject({ firstRun: true, starter: "owner" });
+    const res = await call("POST", "/people/members", { person: "owner", name: "Riley Owner", role: "owner" });
+    expect(res.status).toBe(200);
+    expect(res.body.result.view.owner).toMatchObject({ person: "owner", name: "Riley Owner" });
+    expect(res.body.result).not.toHaveProperty("starter");
+  });
+
   it("refuses a first person who is not the owner", async () => {
     const res = await call("POST", "/people/members", { person: "eli", name: "Eli", role: "helper" });
     expect(res.status).toBe(422);

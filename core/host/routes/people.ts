@@ -15,6 +15,7 @@ import {
   isSlug,
   photoSources,
   removeMember,
+  replayRoster,
   setPhoto,
   shareDoc,
   validatePhoto,
@@ -77,6 +78,12 @@ export interface PeopleResult {
   me: string;
   /** True when nobody is on the roster yet: the first person added becomes the owner. */
   firstRun: boolean;
+  /** The person who first wrote to this project; only they may become its owner. */
+  starter?: string;
+}
+
+function starter(project: CoreProject): string | undefined {
+  return replayRoster(project.entries()).starter;
 }
 
 function peopleResult(project: CoreProject): PeopleResult {
@@ -86,6 +93,7 @@ function peopleResult(project: CoreProject): PeopleResult {
     photos: photoSources(view, new FilePhotoStore(project.root)),
     me: view.owner?.person ?? DEFAULT_LOCAL_PERSON,
     firstRun: view.members.length === 0,
+    ...(view.members.length === 0 && starter(project) ? { starter: starter(project) } : {}),
   };
 }
 

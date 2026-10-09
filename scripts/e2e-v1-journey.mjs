@@ -214,10 +214,12 @@ async function openPage(cdp) {
 
 async function startServer(appData) {
   const port = await freePort();
-  const child = spawn(process.execPath, [path.join(projectRoot, "scripts", "serve-local.mjs")], { cwd: projectRoot, env: { ...process.env, LOCALAPPDATA: appData, PORT: String(port), PP_OPEN: "0" }, stdio: ["ignore", "pipe", "pipe"] });
+  const child = spawn(process.execPath, [path.join(projectRoot, "scripts", "serve-local.mjs")], { cwd: projectRoot, env: { ...process.env, LOCALAPPDATA: appData, PORT: String(port), PP_OPEN: "0", PP_CORE_KEYS: "memory" }, stdio: ["ignore", "pipe", "pipe"] });
   let output = ""; child.stdout.on("data", (d) => { output += d; }); child.stderr.on("data", (d) => { output += d; });
   const url = await waitFor(() => output.match(/running at (http:\/\/\S+)/)?.[1], { label: `server start (${output.trim()})` });
-  return { url: url.endsWith("/") ? url : `${url}/`, stop: () => new Promise((resolve) => { child.once("exit", resolve); child.kill(); setTimeout(resolve, 2000); }), output: () => output };
+  // The one-time link that lets this window make changes as the person (core/host/session.ts).
+  const launch = await waitFor(() => output.match(/one-time link\): (http:\/\/\S+#pp-launch=[\w-]+)/)?.[1], { label: `launch link (${output.trim()})` });
+  return { url: url.endsWith("/") ? url : `${url}/`, launch, stop: () => new Promise((resolve) => { child.once("exit", resolve); child.kill(); setTimeout(resolve, 2000); }), output: () => output };
 }
 
 // ---------- seed ----------
@@ -294,7 +296,9 @@ async function main() {
 
   try {
     await step("seed-imported-project", async () => {
-      await page.goto(server.url);
+      await page.goto(server.launch);
+      // The window claims the link once and strips it from the address bar.
+      await waitFor(async () => (await page.eval(`Boolean(sessionStorage.getItem("pp.core.csrf")) && !location.hash.includes("pp-launch")`)) || null, { label: "launch link claimed" });
       await page.eval(`localStorage.setItem(${JSON.stringify(DEFAULT_PROJECT_REGISTRY_KEY)}, ${JSON.stringify(seeded.value)}); true`);
       await page.goto(at("home"));
       await page.expectText("E2E Notes App");

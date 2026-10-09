@@ -131,7 +131,12 @@ describe("planning routes", () => {
     expect(draft.written).toBe(false);
     expect(draft.phases.map((p: any) => p.id)).toEqual(["foundation", "core", "integrations", "hardening", "release"]);
 
-    const ok = await hostCall(base, "POST", `/planning/approve${P}`, {});
+    // Approval is bound to the plan as shown: none, or a stale fingerprint, is refused.
+    expect((await hostCall(base, "POST", `/planning/approve${P}`, {})).body.code).toBe("FINGERPRINT_REQUIRED");
+    const stale = await hostCall(base, "POST", `/planning/approve${P}`, { fingerprint: view.fingerprint });
+    expect(stale.status).toBe(409);
+    expect(stale.body.code).toBe("STALE");
+    const ok = await hostCall(base, "POST", `/planning/approve${P}`, { fingerprint: current.fingerprint });
     expect(ok.status).toBe(200);
     expect(ok.body.result.plan).toBe("P-1");
     expect(Object.values(ok.body.result.tasks).every((t) => /^T-\d+$/.test(String(t)))).toBe(true);
@@ -144,7 +149,7 @@ describe("planning routes", () => {
     expect(release.dependsOnTasks.every((d: string) => /^T-\d+$/.test(d))).toBe(true);
 
     // A second approval adds P-2 without writing the roadmap twice.
-    const again = await hostCall(base, "POST", `/planning/approve${P}`, {});
+    const again = await hostCall(base, "POST", `/planning/approve${P}`, { fingerprint: current.fingerprint });
     expect(again.body.result.plan).toBe("P-2");
     expect(again.body.result.tasks).toEqual({});
   });
