@@ -39,8 +39,8 @@
 }
 @media (min-width: 2200px) {
   :root {
-    --page-max: 1760px;
-    --header-max: 1760px;
+    --page-max: 1840px;
+    --header-max: 1840px;
   }
 }
 
@@ -211,4 +211,26 @@
   align-items: center;
   gap: 6px;
   min-width: 0;
+}
+
+/* Keep brand, stage tabs and status chips on one header row down to ~1800px wide. */
+.app-shell .topbar .top-metric-button,
+.app-shell .topbar .top-metric-button :is(span, small, strong) {
+  font-size: 11.5px !important;
+}
+.app-shell .topbar .top-metric-button {
+  gap: 6px;
+  padding-inline: 9px;
+}
+.app-shell .topbar .workspace-tab {
+  padding-inline: 10px;
+}
+.app-shell .topbar-primary {
+  column-gap: 10px;
+}
+.app-shell .brand-lockup {
+  max-width: 190px;
+}
+.app-shell .top-metrics {
+  gap: 4px;
 }
