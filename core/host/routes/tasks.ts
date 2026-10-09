@@ -110,6 +110,7 @@ export async function repoState(project: CoreProject): Promise<RepoState> {
 
 /** Folders that are never a project to hand to workers: a whole drive or the home folder itself. */
 export function repoRefusal(top: string, home = os.homedir()): string | null {
+  // Same test as isHomeOrDrive (project.ts), with the home folder passable for tests.
   const real = (p: string) => {
     try {
       return fs.realpathSync.native(p);

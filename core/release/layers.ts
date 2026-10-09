@@ -98,14 +98,21 @@ export function secretPosture(input: PostureInput): Posture {
 
 const SHIM_MARK = "# Perfect Planner: whole-branch secret scan before any push (layer 3).";
 
+/** A path for sh: forward slashes, single-quoted so nothing in it ($, backticks) is expanded. */
+const shQuote = (value: string) => `'${value.replace(/\\/g, "/").replace(/'/g, `'\\''`)}'`;
+
 /**
  * A git hook shim that runs the pre-push scan. Git runs hooks through sh on
  * every platform (Git for Windows ships one), so the same text works on
- * Windows, macOS and Linux. Paths use forward slashes.
+ * Windows, macOS and Linux. Node is named by absolute path, never a bare
+ * `node` that sh would look up on PATH (a PATH folder inside or linked into
+ * the repo could hold a planted one): the desktop app's own Node
+ * (PP_NODE_BINARY) when set, so a person without Node can still push, else
+ * the Node the host runs on. Both paths are single-quoted.
  */
-export function prePushShim(hookScriptPath: string): string {
-  const path = hookScriptPath.replace(/\\/g, "/").replace(/"/g, '\\"');
-  return `#!/bin/sh\n${SHIM_MARK}\nexec node "${path}" "$@"\n`;
+export function prePushShim(hookScriptPath: string, env: NodeJS.ProcessEnv = process.env, execPath: string = process.execPath): string {
+  const node = env.PP_NODE_BINARY || execPath;
+  return `#!/bin/sh\n${SHIM_MARK}\nexec ${shQuote(node)} ${shQuote(hookScriptPath)} "$@"\n`;
 }
 
 async function hooksDir(run: CommandRunner, cwd: string): Promise<string> {
@@ -130,16 +137,22 @@ export async function prePushInstalled(run: CommandRunner, options: { cwd: strin
 export async function installPrePushHook(
   run: CommandRunner,
   options: { cwd: string; hookScript: string },
-): Promise<{ installed: boolean; path: string; reason?: string }> {
+): Promise<{ installed: boolean; path: string; reason?: string; updated?: boolean }> {
   const dir = await hooksDir(run, options.cwd);
   const file = join(dir, "pre-push");
   if (existsSync(file) && !readFileSync(file, "utf8").includes(SHIM_MARK)) {
     return { installed: false, path: file, reason: "This repository already has its own pre-push hook; add the Perfect Planner scan to it by hand" };
   }
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(file, prePushShim(options.hookScript), { mode: 0o755 });
+  // Ours is rewritten whenever its text changed (a new Node path after an app update, a moved
+  // hook script), so pushes never fail closed on a stale path; protectProject runs this on open.
+  const shim = prePushShim(options.hookScript);
+  const current = existsSync(file) ? readFileSync(file, "utf8") : undefined;
+  if (current !== shim) {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(file, shim, { mode: 0o755 });
+  }
   chmodSync(file, 0o755);
-  return { installed: true, path: file };
+  return { installed: true, path: file, ...(current !== undefined && current !== shim ? { updated: true } : {}) };
 }
 
 /** Removes the pre-push scan, but only when the hook is ours; someone else's hook is left alone. */

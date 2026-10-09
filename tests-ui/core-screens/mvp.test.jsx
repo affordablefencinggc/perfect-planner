@@ -75,6 +75,7 @@ describe("MVP board", () => {
     routeFetch({ "GET /mvp": () => new Promise((resolve) => { release = () => resolve(ok(EMPTY)); }) });
     renderWith();
     expect(screen.getByRole("status", { name: "Loading mvp board" })).toBeTruthy();
+    await waitFor(() => expect(release).toBeTypeOf("function")); // the read starts after the window's launch claim
     await act(async () => release());
     expect(await screen.findByRole("button", { name: "Scan this project's code" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Plan a new project" })).toBeTruthy();

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { ArrowClockwiseIcon, CheckCircleIcon, CopyIcon, PlugsConnectedIcon, SpinnerGapIcon, WarningCircleIcon } from "@phosphor-icons/react";
 import { copyText } from "../project/connectAgentSetup.js";
-import { CoreLoading, useAdvanced } from "./CoreScreen.jsx";
+import { CoreLoading, ReadOnlyNotice, useAdvanced } from "./CoreScreen.jsx";
 import { useCoreResource } from "./coreApi.js";
 import "./coreScreens.css";
 import "./CoreAgentConnect.css";
@@ -86,6 +86,8 @@ export function CoreAgentConnect() {
       </div>
 
       {resource.status === "loading" && <CoreLoading label="Loading connected agents" />}
+
+      {resource.status === "no-session" && <ReadOnlyNotice />}
 
       {resource.status === "error" && (
         <div className="core-agent-connect-error" role="status">

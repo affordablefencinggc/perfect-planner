@@ -47,10 +47,22 @@ describe("secret posture", () => {
     expect(secretPosture({ pushProtection: { status: "unknown", detail: "no access" } }).layers[3].state).toBe("unchecked");
   });
 
-  it("writes a hook shim with forward slashes", () => {
-    const shim = prePushShim("C:\\repos\\pp\\core\\release\\hooks\\pre-push.mjs");
+  it("writes a hook shim with forward slashes, single-quoted so sh expands nothing", () => {
+    const shim = prePushShim("C:\\repos\\pp\\core\\release\\hooks\\pre-push.mjs", {}, "C:\\Program Files\\nodejs\\node.exe");
     expect(shim.startsWith("#!/bin/sh\n")).toBe(true);
-    expect(shim).toContain('exec node "C:/repos/pp/core/release/hooks/pre-push.mjs" "$@"');
+    expect(shim).toContain(`exec 'C:/Program Files/nodejs/node.exe' 'C:/repos/pp/core/release/hooks/pre-push.mjs' "$@"`);
+    expect(prePushShim("/opt/it's $(x)/pre-push.mjs", {}, "/usr/bin/node")).toContain(`exec '/usr/bin/node' '/opt/it'\\''s $(x)/pre-push.mjs' "$@"`);
+  });
+
+  it("runs the desktop app's own Node when it names one", () => {
+    const shim = prePushShim("C:\\PP\\desktop-host\\core-host\\hooks\\pre-push.mjs", { PP_NODE_BINARY: "C:\\Program Files\\PP\\desktop-host\\node.exe" });
+    expect(shim).toContain(`exec 'C:/Program Files/PP/desktop-host/node.exe' 'C:/PP/desktop-host/core-host/hooks/pre-push.mjs' "$@"`);
+  });
+
+  it("otherwise names the host's own Node by absolute path, never a bare node", () => {
+    const shim = prePushShim("/opt/pp/pre-push.mjs", {});
+    expect(shim).toContain(`exec '${process.execPath.replace(/\\/g, "/")}' '/opt/pp/pre-push.mjs'`);
+    expect(shim).not.toMatch(/exec node /);
   });
 });
 

@@ -453,6 +453,7 @@ function MindMapView() {
   const resource = useCoreResource("/planning/mindmap");
   if (resource.status === "loading") return <CoreLoading label="Loading the mind map" />;
   if (resource.status === "error") return <CoreError error={resource.error} onRetry={resource.reload} />;
+  if (resource.status === "no-session") return null; // the screen shows the shared notice
   const { map, depth, answered } = resource.data;
   const root = map.nodes[map.root];
   return (
@@ -509,6 +510,7 @@ function RoadmapView() {
   const resource = useCoreResource("/planning/roadmap");
   if (resource.status === "loading") return <CoreLoading label="Loading the roadmap" />;
   if (resource.status === "error") return <CoreError error={resource.error} onRetry={resource.reload} />;
+  if (resource.status === "no-session") return null; // the screen shows the shared notice
   const { phases, written, answered } = resource.data;
   const dropped = resource.data.dropped ?? [];
   return (

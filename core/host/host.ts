@@ -1,13 +1,14 @@
 // The core host: serves the core loop modules to the app's screens as JSON under
 // /api/core/*. Mounted by the Vite dev server (src/node/coreHostVitePlugin.mjs)
 // and by the production server (scripts/serve-local.mjs, from the bundle that
-// scripts/build-core-host.mjs writes). Loopback, same-origin callers only.
+// scripts/build-core-host.mjs writes). Loopback, same-origin callers only, and every route
+// except /session/claim needs the session cookie of a window opened from a one-time link.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { LedgerError } from "../ledger/index";
 import { startBridge, ToolError, type Bridge } from "../mcp/index";
 import { PeopleError } from "../people/index";
 import { asPersonRequest, hostKeys, type HostKeys } from "./keys";
-import { excludePrivateFolder, ledgerIntegrity, openCoreProject, pinOwnerAfterWrite, projectKey, projectRootFor, type CoreProject, type OwnerKeySource } from "./project";
+import { excludePrivateFolder, isHomeOrDrive, ledgerIntegrity, openCoreProject, pinOwnerAfterWrite, priorUseSignals, projectKey, projectRootFor, type CoreProject, type OwnerKeySource } from "./project";
 import { HttpError, Router } from "./router";
 import { PersonSessions } from "./session";
 import { registerRoutes } from "./routes/index";
@@ -43,6 +44,8 @@ export class CoreHost {
   readonly router = new Router();
   private readonly projects = new Map<string, CoreProject>();
   private readonly bridges = new Map<string, Promise<Bridge>>();
+  /** Signs of earlier Perfect Planner use in each project's repo, read before its first open touched it. */
+  private readonly priorUse = new Map<string, string[]>();
   readonly sessions = new PersonSessions();
   readonly keys: HostKeys;
 
@@ -52,11 +55,20 @@ export class CoreHost {
     // The person's own window asks for a one-time link for another window (POST, so it needs the
     // window's cookie, CSRF token and Origin). A process without the person's session cannot get one.
     this.router.post("/session/new-window", () => ({ launch: this.issueLaunch() }));
+    // A folder nobody has written to as a person gets its history only from this explicit action in the
+    // person's window: nothing is pinned as a side effect of some other first write.
+    // A folder nobody has written to as a person gets its history only after this explicit action in the
+    // person's window: no first write pins an owner as a side effect. The pin follows the next write.
+    this.router.post("/owner/start", ({ project }) => {
+      if (project.owner.state !== "new") throw new HttpError(409, "NOT_NEW", "This project already has a history on this computer.");
+      project.owner.started = true;
+      return { started: true, signals: project.owner.signals ?? [] };
+    });
     this.router.get("/status", ({ project }) => ({
       project: project.key,
       ledger: project.ledger.status,
       keys: { description: this.keys.description, ...this.keys.state() },
-      owner: { state: project.owner.state, ...(project.owner.reason ? { reason: project.owner.reason } : {}) },
+      owner: { state: project.owner.state, ...(project.owner.reason ? { reason: project.owner.reason } : {}), ...(project.owner.state === "new" ? { signals: project.owner.signals ?? [], started: Boolean(project.owner.started) } : {}) },
       integrity: ledgerIntegrity(project.ledger),
     }));
   }
@@ -108,14 +120,17 @@ export class CoreHost {
       // The project folder and the repo the person picked are protected before the first git run.
       const root = projectRootFor(this.options.root, key, this.options.projectRootOverride);
       const chosen = chosenRepoRoot(root);
-      const release = protectRoots([root, ...(chosen ? [chosen] : [])]);
+      const release = protectRoots([root, ...(chosen ? [chosen] : [])].filter((dir) => !isHomeOrDrive(dir)));
       try {
+        // Read before the open adds its own exclude line and hook, so they never count as earlier use.
+        this.priorUse.set(key, await priorUseSignals(chosen ?? root));
         await excludePrivateFolder(root);
       } finally {
         release();
       }
     }
     const project = this.project(key);
+    if (project.owner.state === "new" && !project.owner.signals) project.owner.signals = this.priorUse.get(key) ?? [];
     const chosen = chosenRepoRoot(project.root);
     if (chosen) project.protectRoots([chosen]);
     await project.ready;
@@ -160,7 +175,7 @@ export class CoreHost {
       let body: unknown;
       try { body = await readJson(req); } catch { body = {}; }
       const claimed = sameOriginRequest(req) ? this.sessions.claim((body as { launch?: unknown })?.launch) : null;
-      if (!claimed) return send(401, { ok: false, code: "LAUNCH_REQUIRED", message: "Open Perfect Planner from its launcher to make changes. This window can only read." });
+      if (!claimed) return send(401, { ok: false, code: "LAUNCH_REQUIRED", message: "Open Perfect Planner from a one-time link. This window cannot show or change anything until then." });
       res.setHeader("set-cookie", this.sessions.setCookieHeader(claimed.cookie, CORE_PREFIX));
       return send(200, { ok: true, result: { csrf: claimed.csrf } });
     }
@@ -172,9 +187,17 @@ export class CoreHost {
     if (method === "POST" && !this.sessions.isPerson(req)) {
       return send(401, { ok: false, code: "PERSON_REQUIRED", message: "Only the person using Perfect Planner, in a window opened from its launcher, can do this. Agents act through the MCP tools." });
     }
+    // Every read needs the window's session cookie too. Origin and sec-fetch-site headers are not
+    // proof: any local process can send them. Agents read through the MCP bridge with their own tokens.
+    if (method !== "POST" && !this.sessions.hasSession(req)) {
+      return send(401, { ok: false, code: "PERSON_REQUIRED", message: "Open Perfect Planner from a one-time link to see this project. This window has no session, so it cannot show or change anything." });
+    }
     try {
       const body = method === "POST" ? await readJson(req) : undefined;
       const project = await this.openProject(projectKey(url.searchParams.get("project")));
+      if (method === "POST" && project.owner.state === "new" && !project.owner.started && path !== "/owner/start") {
+        throw new HttpError(409, "START_HISTORY", "Start a new history for this folder first: nothing is written to a project until you do.");
+      }
       const call = () => match.handler({ path, params: match.params, query: url.searchParams, body, project, host: this });
       // A person's POST may make their signing key on first use (keys.ts); nothing else can.
       const result = await (method === "POST" ? asPersonRequest(call) : call());

@@ -38,6 +38,13 @@ export interface OwnerPin {
   reason?: string;
   /** The ledger's first entry hash, when it has one. */
   genesis?: string;
+  /**
+   * For a "new" project: signs in the folder's repo that Perfect Planner was used there before (seen before
+   * this open touched anything). Signals, not proof: shown when the person starts a new history.
+   */
+  signals?: string[];
+  /** For a "new" project: the person chose "Start a new history for this folder" in their window. */
+  started?: boolean;
 }
 
 interface PinFile {
