@@ -69,6 +69,13 @@ describe("plan approval routes", () => {
     expect(view.approval.approved[0]).toMatchObject({ plan: "P-1" });
   });
 
+  it("refuses to approve an empty plan: no tasks and no Deep planning", async () => {
+    const refused = await hostCall(base, "POST", `/plan/approve${P}`, {});
+    expect(refused.status).toBe(409);
+    expect(refused.body.code).toBe("NOTHING_TO_APPROVE");
+    expect((await hostCall(base, "GET", `/plan${P}`)).body.result.approved).toBe(false);
+  });
+
   it("refuses a Plan page approval while a blocking planning question is open", async () => {
     await hostCall(base, "POST", `/planning/start${P}`, { idea: IDEA });
     const refused = await hostCall(base, "POST", `/plan/approve${P}`, {});

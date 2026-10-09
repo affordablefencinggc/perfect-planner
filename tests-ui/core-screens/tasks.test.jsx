@@ -63,7 +63,7 @@ describe("TasksScreen", () => {
       "POST /tasks/T-1/dispatch": async (init) => {
         expect(JSON.parse(init.body)).toEqual({ model: "claude-sonnet-4-5" });
         tasks = [task({ worktree: { path: "/work/notes/.perfect-planner/worktrees/T-1", branch: "pp/T-1", base: "main", port: 5200 }, dispatch: { issuedAt: "now", model: "claude-sonnet-4-5" } })];
-        return ok({ task: "T-1", title: "Save notes", worktree: "/work/notes/.perfect-planner/worktrees/T-1", branch: "pp/T-1", token: TOKEN, brief: "You are a Perfect Planner worker on T-1: Save notes.\n2. Test first: … propose_test", setup: `cd "/w" && claude mcp add perfect-planner-core --env PP_AGENT_TOKEN=${TOKEN} -- node "/a"`, start: 'claude "$(cat "/b/T-1.md")"', json: "{}", shell: "Terminal", agentBuilt: true });
+        return ok({ task: "T-1", title: "Save notes", worktree: "/work/notes/.perfect-planner/worktrees/T-1", branch: "pp/T-1", tokenFile: "/p/.perfect-planner/tokens/T-1.token", brief: "You are a Perfect Planner worker on T-1: Save notes.\n2. Test first: … propose_test", setup: `cd "/w" && claude mcp add perfect-planner-core --env 'PP_AGENT_TOKEN_FILE=/p/.perfect-planner/tokens/T-1.token' -- node '/a'`, start: 'claude "$(cat "/b/T-1.md")"', json: "{}", shell: "Terminal", agentBuilt: true });
       },
     });
     renderScreen();
@@ -72,21 +72,23 @@ describe("TasksScreen", () => {
     fireEvent.change(within(t1).getByLabelText("Worker model"), { target: { value: "claude-sonnet-4-5" } });
     fireEvent.click(within(t1).getByRole("button", { name: "Start worker" }));
     const setup = await screen.findByLabelText("Set-up command for T-1");
-    expect(setup.textContent).toContain(TOKEN);
+    expect(setup.textContent).toContain("PP_AGENT_TOKEN_FILE=");
+    expect(document.body.textContent).not.toContain(TOKEN);
     expect(screen.getByLabelText("Brief for T-1").textContent).toContain("propose_test");
     expect(screen.getByLabelText("Start command for T-1").textContent).toContain("claude");
     expect(fetch.mock.calls.filter(([u]) => String(u).includes("/dispatch"))).toHaveLength(1);
-    // Hiding the command drops the token from the page.
     fireEvent.click(screen.getByRole("button", { name: "Hide command" }));
-    expect(document.body.textContent).not.toContain(TOKEN);
+    expect(screen.queryByLabelText("Set-up command for T-1")).toBeNull();
   });
 
   test("a proposed test shows its command and who wrote it; Approve test runs it and reports that it fails first", async () => {
-    let tasks = [task({ stage: "test-proposed", worktree: { path: "/w", branch: "pp/T-1", base: "main", port: 5200 }, test: { command: "node tests/save.check.mjs", files: ["tests/save.check.mjs"], by: { kind: "agent", id: "worker-1", model: "claude-sonnet-4-5" } } })];
+    let tasks = [task({ stage: "test-proposed", worktree: { path: "/w", branch: "pp/T-1", base: "main", port: 5200 }, test: { command: "node tests/save.check.mjs", files: ["tests/save.check.mjs"], entry: "L-000007", by: { kind: "agent", id: "worker-1", model: "claude-sonnet-4-5" } } })];
     tasks[0].stage = "test-proposed";
     routeFetch({
       "GET /tasks": async () => ok(view(tasks)),
-      "POST /tasks/T-1/approve-test": async () => {
+      "POST /tasks/T-1/approve-test": async (init) => {
+        // The approval names the exact test the person read.
+        expect(JSON.parse(init.body)).toEqual({ test: "L-000007" });
         tasks = [{ ...tasks[0], stage: "ready-to-claim", approval: { by: { kind: "person", id: "owner" } }, baseline: { passed: false } }];
         return ok({ approved: true, failsFirst: true, output: "save.js missing", ...view(tasks) });
       },
@@ -107,8 +109,13 @@ describe("TasksScreen", () => {
       "GET /tasks": async () => ok(view(tasks)),
       "POST /tasks/T-1/check": async () => { tasks = [{ ...tasks[0], stage: "review-diff", check: { passed: true, commit: "abc123" } }]; return ok({ passed: true, commit: "abc123", ...view(tasks) }); },
       "GET /tasks/T-1/diff": async () => ok({ task: "T-1", files: ["src/save.js"], text: "+export const save = 1;", commit: "abc123" }),
-      "POST /tasks/T-1/approve-diff": async () => { tasks = [{ ...tasks[0], stage: "ready-to-merge" }]; return ok(view(tasks)); },
-      "POST /tasks/T-1/merge": async () => { tasks = [{ ...tasks[0], status: "done", stage: "done", worktree: null, merged: { commit: "def456" } }]; return ok({ merged: true, commit: "def456", into: "main", ...view(tasks) }); },
+      "POST /tasks/T-1/approve-diff": async (init) => {
+        expect(JSON.parse(init.body)).toEqual({ commit: "abc123" });
+        tasks = [{ ...tasks[0], stage: "ready-to-merge", diffApproval: { commit: "abc123" } }];
+        return ok(view(tasks));
+      },
+      "POST /tasks/T-1/merge": async (init) => {
+        expect(JSON.parse(init.body)).toEqual({ commit: "abc123" }); tasks = [{ ...tasks[0], status: "done", stage: "done", worktree: null, merged: { commit: "def456" } }]; return ok({ merged: true, commit: "def456", into: "main", ...view(tasks) }); },
     });
     renderScreen();
     let t1 = await card("T-1 Save notes");
@@ -116,9 +123,11 @@ describe("TasksScreen", () => {
     fireEvent.click(within(t1).getByRole("button", { name: "Check the work" }));
     expect(await screen.findByText(/passes in the worktree/)).toBeTruthy();
     t1 = await card("T-1 Save notes");
+    // Approve diff waits until the person has read the diff, and names that commit.
+    expect(within(t1).getByRole("button", { name: "Approve diff" }).disabled).toBe(true);
     fireEvent.click(within(t1).getByRole("button", { name: "Show diff" }));
     expect(await screen.findByText("+export const save = 1;")).toBeTruthy();
-    fireEvent.click(within(await card("T-1 Save notes")).getByRole("button", { name: "Approve diff" }));
+    fireEvent.click(within(await card("T-1 Save notes")).getByRole("button", { name: "Approve diff at abc123" }));
     const merge = await within(await card("T-1 Save notes")).findByRole("button", { name: "Merge into main" });
     fireEvent.click(merge);
     expect(await screen.findByText(/Merged into main/)).toBeTruthy();

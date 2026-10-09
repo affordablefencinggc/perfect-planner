@@ -1,8 +1,10 @@
-// The one line Connect agent hands out: `node connect.mjs <bridge url> <token>`.
+// The one line Connect agent hands out: `node connect.mjs <bridge url> <token file>`.
 // Run in the folder the agent will work in, it registers the perfect-planner-core
 // MCP server with Claude Code for that folder (replacing an older registration,
 // so pasting a fresh line after an app restart just works) and installs the
 // perfect-planner-connect skill for the user, so the agent knows the loop rules.
+// The line names the file the app wrote the token to, never the token itself, so
+// nothing secret lands in shell history, a chat transcript or ~/.claude.json.
 // `node connect.mjs --skill-only` installs just the skill, with no token, so every
 // Claude Code session on this computer has it before anything is connected.
 // Bundled to dist/core-host/connect.mjs next to agent.mjs and skill/SKILL.md.
@@ -14,6 +16,8 @@ import { fileURLToPath } from "node:url";
 
 const SERVER = "perfect-planner-core";
 const SKILL = "perfect-planner-connect";
+/** Replaced on install with this program's absolute path: the only line the skill may run. */
+export const SKILL_PROGRAM_PLACEHOLDER = "{{PP_CONNECT_PROGRAM}}";
 
 export interface ConnectPlan {
   remove: string[];
@@ -22,35 +26,50 @@ export interface ConnectPlan {
   skillTo: string;
 }
 
-export function connectPlan(options: { bridgeUrl: string; token: string; here: string; home: string }): ConnectPlan {
+export function connectPlan(options: { bridgeUrl: string; tokenFile: string; here: string; home: string }): ConnectPlan {
   const agent = path.join(options.here, "agent.mjs");
   return {
     remove: ["mcp", "remove", SERVER, "-s", "local"],
-    add: ["mcp", "add", SERVER, "-s", "local", "--env", `PP_BRIDGE_URL=${options.bridgeUrl}`, "--env", `PP_AGENT_TOKEN=${options.token}`, "--", process.execPath, agent],
+    add: ["mcp", "add", SERVER, "-s", "local", "--env", `PP_BRIDGE_URL=${options.bridgeUrl}`, "--env", `PP_AGENT_TOKEN_FILE=${options.tokenFile}`, "--", process.execPath, agent],
     skillFrom: path.join(options.here, "skill", "SKILL.md"),
     skillTo: path.join(options.home, ".claude", "skills", SKILL, "SKILL.md"),
   };
 }
 
-/** cmd.exe needs claude.cmd through a shell; quote anything with spaces for it. */
-const winQuote = (arg: string) => (/[\s"&|<>^]/.test(arg) ? `"${arg.replaceAll('"', '""')}"` : arg);
-
-function claude(args: string[]) {
-  const windows = process.platform === "win32";
-  return spawnSync("claude", windows ? args.map(winQuote) : args, { encoding: "utf8", shell: windows });
+/** Why these arguments are not a connect line from the app, or null when they are. */
+export function connectArgsProblem(argv: string[], platform: NodeJS.Platform = process.platform): string | null {
+  if (argv.length !== 2) return "Copy the whole line from Connect agent in the app: the bridge address and the token file, nothing else.";
+  const [bridgeUrl, tokenFile] = argv as [string, string];
+  if (!/^http:\/\/127\.0\.0\.1:\d{1,5}$/.test(bridgeUrl)) return "The bridge address must be the app's loopback address, http://127.0.0.1:<port>.";
+  if (/pp_[cw]_/.test(tokenFile)) return "That looks like a key. Never paste keys; copy the line from Connect agent, which names the token file instead.";
+  const absolute = platform === "win32" ? path.win32.isAbsolute(tokenFile) : path.posix.isAbsolute(tokenFile);
+  if (!absolute || !tokenFile.endsWith(".token")) return "The second part must be the full path of the .token file the app wrote.";
+  if (platform === "win32") {
+    // claude is claude.cmd on Windows, so it runs through cmd.exe, which expands % and splits on ".
+    for (const bad of ["%", '"']) if (argv.some((arg) => arg.includes(bad))) return `The path contains ${bad}, which Windows would rewrite. Move Perfect Planner's data to a folder without it.`;
+  }
+  return null;
 }
 
 /** Copies the skill to the user's own Claude folder (every repo on this computer), replacing an older copy. */
-export function installSkill(plan: Pick<ConnectPlan, "skillFrom" | "skillTo">): void {
+export function installSkill(plan: Pick<ConnectPlan, "skillFrom" | "skillTo">, here: string): void {
+  const text = fs.readFileSync(plan.skillFrom, "utf8").replaceAll(SKILL_PROGRAM_PLACEHOLDER, path.join(here, "connect.mjs"));
   fs.mkdirSync(path.dirname(plan.skillTo), { recursive: true });
-  fs.copyFileSync(plan.skillFrom, plan.skillTo);
+  fs.writeFileSync(plan.skillTo, text);
+}
+
+function claude(args: string[]) {
+  const windows = process.platform === "win32";
+  const quoted = windows ? args.map((arg) => (/[\s&|<>^()]/.test(arg) ? `"${arg}"` : arg)) : args;
+  return spawnSync("claude", quoted, { encoding: "utf8", shell: windows });
 }
 
 function main(argv: string[]): number {
-  if (argv[0] === "--skill-only") {
-    const plan = connectPlan({ bridgeUrl: "", token: "", here: path.dirname(fileURLToPath(import.meta.url)), home: os.homedir() });
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  if (argv.length === 1 && argv[0] === "--skill-only") {
+    const plan = connectPlan({ bridgeUrl: "", tokenFile: "", here, home: os.homedir() });
     try {
-      installSkill(plan);
+      installSkill(plan, here);
     } catch (error) {
       process.stderr.write(`Perfect Planner: could not install the skill (${(error as Error).message}).\n`);
       return 1;
@@ -58,17 +77,21 @@ function main(argv: string[]): number {
     process.stdout.write(`Installed the ${SKILL} skill for every Claude Code session on this computer (${plan.skillTo}).\n`);
     return 0;
   }
-  const [bridgeUrl, token] = argv;
-  if (!bridgeUrl || !/^http:\/\/127\.0\.0\.1:\d+$/.test(bridgeUrl) || !token || !/^pp_[cw]_[\w-]{16,}$/.test(token)) {
-    process.stderr.write("Perfect Planner: copy the whole line from Connect agent in the app; it ends with the bridge address and a pp_ key.\n");
+  const problem = connectArgsProblem(argv) ?? (process.platform === "win32" && /[%"]/.test(here + process.execPath) ? "Perfect Planner or Node.js is installed in a folder whose name has % or \", which Windows would rewrite." : null);
+  if (problem) {
+    process.stderr.write(`Perfect Planner: ${problem}\n`);
     return 2;
   }
-  const here = path.dirname(fileURLToPath(import.meta.url));
-  const plan = connectPlan({ bridgeUrl, token, here, home: os.homedir() });
+  const [bridgeUrl, tokenFile] = argv as [string, string];
+  if (!fs.existsSync(tokenFile)) {
+    process.stderr.write("Perfect Planner: the token file is gone (the app restarted, or you disconnected). Click Connect agent again for a fresh line.\n");
+    return 2;
+  }
+  const plan = connectPlan({ bridgeUrl, tokenFile, here, home: os.homedir() });
 
   let skill = false;
   try {
-    installSkill(plan);
+    installSkill(plan, here);
     skill = true;
   } catch (error) {
     process.stderr.write(`Perfect Planner: could not install the skill (${(error as Error).message}). Connecting anyway.\n`);
