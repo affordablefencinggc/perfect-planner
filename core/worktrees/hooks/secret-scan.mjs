@@ -61,7 +61,8 @@ export function resolveGit(env, cwd, platform = process.platform) {
   const windows = platform === "win32";
   const name = windows ? "git.exe" : "git";
   const here = path.resolve(cwd);
-  const usable = (dir) => Boolean(dir) && path.isAbsolute(dir) && !(windows && /^[\\/]{2}/.test(dir)) && !within(here, dir);
+  // On Windows only a local drive-letter path (core/exec's isLocalWindowsPath): never UNC in any spelling.
+  const usable = (dir) => Boolean(dir) && path.isAbsolute(dir) && !(windows && !/^[A-Za-z]:[\\/]/.test(dir)) && !within(here, dir);
   const execPath = (env.GIT_EXEC_PATH ?? "").trim();
   if (usable(execPath) && isProgram(path.join(execPath, name), windows)) return path.join(execPath, name);
   const pathValue = Object.entries(env).find(([key]) => (windows ? key.toUpperCase() === "PATH" : key === "PATH"))?.[1] ?? "";

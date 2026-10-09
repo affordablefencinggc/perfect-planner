@@ -36,6 +36,11 @@ whose gaps refuse the approval) or afterwards (`reviewTest`). Gaps found after
 approval stop work: `canStart`, `prove` and `mergeAndVerify` refuse until Jev records
 "approve" or the test is redefined and approved again.
 
+`requireJevTestReview` (a `TestGate` option and `gateRule({ requireJevTestReview })`,
+default `false`) makes work wait until Jev has approved the current test, not only
+until open gaps are cleared. It stays off so the loop runs before Jev's key is set up;
+the app should turn it on once Jev is configured.
+
 Redefining a test (a new `test.defined`) voids the baseline, Jev verdict and
 approval tied to the previous definition. A reopened attempt (`T-14.a2`)
 inherits the test, baseline and approval of earlier attempts; worktree and
@@ -58,7 +63,7 @@ gate.approveDiff(taskId, reviewer, commit?)       // Jev or a person; default co
 gate.approveMerge(taskId, person, commit?)        // the person's own signed entry; default commit: the approved diff
 await gate.mergeAndVerify(taskId, { repoRoot, branch, integrationBranch, actor, prepare? })
 gate.reviewTest(taskId, jev, "approve" | gaps)    // Jev's test review, before or after approval; gaps stop work
-gate.reject(taskId, reviewer, notes, { verdict? }) // { ok, newTaskId }; verdict cites a rejection already written
+gate.reject(taskId, reviewer, notes, { verdict? }) // { ok, newTaskId }; verdict cites a signed diff rejection already written
 gate.assertCanFinish(taskId, headSha)             // throws GateError (mirror of the ledger's 2.4 check)
 gate.state(taskId)                                // GateState
 await runTestCommand(command, cwd, { timeoutMs }) // { passed, exitCode, timedOut, durationMs, outputTail }

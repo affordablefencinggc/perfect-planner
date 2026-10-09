@@ -3,7 +3,7 @@ import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, realpathSy
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { findExecutable, gitExecutable, NO_CWD_SEARCH_ENV } from "./executable";
+import { findExecutable, gitExecutable, isLocalWindowsPath, NO_CWD_SEARCH_ENV } from "./executable";
 
 const isWindows = process.platform === "win32";
 const cleanups: (() => void)[] = [];
@@ -76,5 +76,25 @@ describe("git resolver", () => {
       if (inherited !== undefined) process.env.NoDefaultCurrentDirectoryInExePath = inherited;
     });
     expect(git(repo, ["-c", "alias.showenv=!env", "showenv"])).toContain("NoDefaultCurrentDirectoryInExePath=1");
+  });
+});
+
+describe("isLocalWindowsPath", () => {
+  it("accepts only local drive-letter paths and refuses UNC in every spelling", () => {
+    for (const ok of ["C:\\Program Files\\Git\\cmd", "c:/tools/git", "D:\\"]) expect(isLocalWindowsPath(ok)).toBe(true);
+    for (const bad of [
+      "\\\\server\\share\\git",
+      "//server/share/git",
+      "\\/server\\share",
+      "/\\server/share",
+      "\\\\?\\UNC\\server\\share",
+      "\\??\\UNC\\server\\share",
+      "\\\\?\\C:\\tools",
+      "\\\\.\\pipe\\x",
+      "\\tools\\git",
+      "C:tools",
+      "tools\\git",
+      "",
+    ]) expect(isLocalWindowsPath(bad)).toBe(false);
   });
 });
