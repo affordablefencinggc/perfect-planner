@@ -223,6 +223,7 @@ export function ProjectProvider({ children, registry: suppliedRegistry = null, s
     activeProjectId: snapshot.activeProjectId,
     activeProject: displaySnapshot.activeProject,
     registryHealth: snapshot.health,
+    registryBackupKey: registry.unreadableBackupKey ?? null,
     refreshArchitecture,
     refreshFolder,
     refreshComponent,
