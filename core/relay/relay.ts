@@ -131,8 +131,7 @@ export class Relay {
       if (!q) return;
       q.status = "answered";
       q.answer = String(d.answer ?? e.summary);
-      const settledBy = d.settledBy as { id?: unknown } | undefined;
-      q.answeredBy = typeof settledBy?.id === "string" ? settledBy.id : e.actor.id;
+      q.answeredBy = e.actor.id;
       q.answeredVia = (d.via as Question["answeredVia"]) ?? "main";
       if (typeof d.decision === "string") q.decision = d.decision;
       this.notify(q);
@@ -189,16 +188,16 @@ export class Relay {
       // The main chat may have answered while the settled source was thinking.
       if (asked.status === "answered") return { q, status: "answered", answer: asked.answer!, via: asked.answeredVia!, ...(asked.decision ? { decision: asked.decision } : {}), paused: false };
       if (settled) {
-        // Jev may only write verdicts (ledger permissions), so the relay records the
-        // answer itself, as it does for an earlier decision, and names who settled it.
         this.write({
+          // The ledger lets Jev write only review.verdict, so Perfect Planner records the
+          // answer itself and names the source; Jev's own review.verdict is already logged.
           actor: SYSTEM,
           type: "question.answered",
           subject: q,
           summary: settled.answer,
           reason: settled.reason,
           refs: [...settled.refs, input.task],
-          data: { answer: settled.answer, via: "settled", settledBy: { ...settled.actor } },
+          data: { answer: settled.answer, via: "settled", source: settled.actor },
         });
         return { q, status: "answered", answer: settled.answer, via: "settled", paused: false };
       }

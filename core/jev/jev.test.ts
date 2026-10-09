@@ -313,6 +313,7 @@ describe("questions the plan already settles", () => {
     const result = await relay.ask({ kind: "agent", id: "w1", model: "m" }, "owner", { task: "T-1", question: "Date format?", options: ["Locale", "ISO"] });
     expect(result).toMatchObject({ status: "answered", answer: "ISO", via: "settled" });
     expect(ledger.entries().map((e) => e.type)).toEqual(["question.asked", "review.verdict", "question.answered"]);
+    expect(ledger.entries()[2]).toMatchObject({ actor: { kind: "system" }, data: { via: "settled", source: { kind: "jev", model: "jev-2026-09" } } });
     expect(relay.digest("owner").autoAnswered[0]).toContain("from the plan");
   });
 
