@@ -1,55 +1,35 @@
 #!/usr/bin/env node
 // Perfect Planner pre-push hook (layer 3): last local stop before secrets leave
-// the machine. Standalone and dependency-free, so it cannot import TypeScript.
-//
-// The rules below MIRROR core/release/secrets.ts. secrets.test.ts runs
-// `node pre-push.mjs --rules` and fails if they drift apart.
+// the machine. No dependencies: it imports only secrets-detector.mjs,
+// git-exec.mjs and git-runner.mjs beside it, generated JS copies of
+// core/secrets, core/exec and core/worktrees' git runner, so it detects exactly
+// what the review gate and Jev's diff check detect, and runs git the same safe
+// way as the host. secrets.test.ts fails if a copy is stale
+// or if this file's forbidden names and fingerprints drift from secrets.ts.
 //
 // Git feeds stdin lines: <local ref> <local sha> <remote ref> <remote sha>.
 // Findings are printed masked to stderr; any finding exits 1.
 // Testing modes: --scan-text <file> [allowlist.json]  (JSON findings), --rules,
 // --placeholder, --check-name <path>, --check-config <path>.
 //
-// There is no inline "allow this line" marker. A reviewed exception is an exact
-// fingerprint in .perfect-planner/secret-allowlist.json, read from the BASE
-// commit (the remote's current tip, or the merge-base for a new branch) and never
-// from the pushed commit, so a push cannot allowlist its own secret.
+// This hook is a local, best-effort layer. The binding check is the review
+// gate's scanBranch with person-approved ledger fingerprints, plus GitHub push
+// protection. There is no inline "allow this line" marker. A file entry in
+// .perfect-planner/secret-allowlist.json is honoured here ONLY as it exists on
+// the repository's default branch on the remote (origin/HEAD, else origin/main,
+// else origin/master); never from the pushed ref, its remote tip or a merge-base
+// of the pushed branch, so pushes to a feature branch cannot approve their own
+// secret (an entry only reaches the default branch through review). With no
+// resolvable default branch, no allowlist applies.
 
-import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { scryptSync } from "node:crypto";
 import { readFileSync } from "node:fs";
+// Generated from core/secrets by build-detector.mjs: the same detector as the review gate and Jev.
+import { PLACEHOLDER, SECRET_RULES, detectSecrets, isConfigLikeFile, maskSecret } from "./secrets-detector.mjs";
+// Generated from core/worktrees/git.ts (which imports git-exec.mjs, from core/exec) by build-detector.mjs.
+import { runGit } from "./git-runner.mjs";
 
 const ALLOWLIST_PATH = ".perfect-planner/secret-allowlist.json";
-
-const RULES = [
-  { id: "aws-access-key", pattern: /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g },
-  { id: "github-token", pattern: /\b(?:gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{22,})/g },
-  { id: "anthropic-key", pattern: /\bsk-ant-[A-Za-z0-9_-]{20,}/g },
-  { id: "openai-key", pattern: /\bsk-proj-[A-Za-z0-9_-]{20,}|\bsk-(?!ant-)[A-Za-z0-9]{32,}/g },
-  { id: "slack-token", pattern: /\bxox[abposr]-[A-Za-z0-9-]{10,}/g },
-  { id: "stripe-key", pattern: /\b[sr]k_live_[A-Za-z0-9]{16,}/g },
-  { id: "google-api-key", pattern: /\bAIza[0-9A-Za-z_-]{35}/g },
-  { id: "private-key", pattern: /-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?-----/g },
-  { id: "jwt", pattern: /\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g },
-  {
-    id: "aws-secret-key",
-    pattern: /\baws[_-]?secret[_-]?access[_-]?key["']?\s*[:=]\s*["']?([A-Za-z0-9/+]{40})(?![A-Za-z0-9/+])/gi,
-    valueGroup: 1,
-  },
-  {
-    id: "generic-assignment",
-    pattern: /\b([A-Za-z0-9_.-]*(?:api[_-]?key|secret|token|password|passwd|client[_-]?secret)[A-Za-z0-9_.-]*)["']?\s*[:=]\s*["']([^"'\s]{8,})["']/gi,
-    valueGroup: 2,
-    nameGroup: 1,
-  },
-  {
-    id: "generic-assignment-unquoted",
-    pattern: /^\s*(?:-\s+)?(?:export\s+)?([A-Za-z0-9_.-]*(?:api[_-]?key|secret|token|password|passwd|client[_-]?secret)[A-Za-z0-9_.-]*)\s*[:=]\s*([^\s"'#;]{8,})\s*(?:[#;].*)?$/gi,
-    valueGroup: 2,
-    nameGroup: 1,
-    configOnly: true,
-  },
-];
 
 const FORBIDDEN = [
   { id: "env-file", pattern: /^\.env(?:\..+)?$/ },
@@ -62,16 +42,15 @@ const FORBIDDEN = [
   { id: "service-account-file", pattern: /^service-account.*\.json$/ },
 ];
 const ENV_TEMPLATE = /^\.env\.(?:example|sample|template)$/;
-const PLACEHOLDER = /^(?:placeholder|changeme|x{3,}|<[^>]*>|\$\{[^}]*\}|\{\{[^}]*\}\}|process\.env\.[\w.]+|your[_-][\w-]*|example|dummy|test|redacted|\*{3,}|none|null|undefined|todo)$|^(?:secret:\/\/|keychain:|keyring:|vault:|dpapi:|op:\/\/|credentials:)/i;
-const CONFIG_NAME = /\.(?:ya?ml|ini|cfg|conf|properties|toml)$|^\.env(?:\..+)?$|^\.npmrc$|^dockerfile(?:\..+)?$|^docker-compose/;
+const PLANNER_STATE = /(^|\/)\.perfect-planner\//i;
 const NPMRC_TOKEN = /_authToken\s*=\s*(\S+)/;
 
-const mask = (s) => `${s.slice(0, 4)}…(${s.length})`;
 const baseName = (p) => { const q = p.replace(/\\/g, "/"); return q.slice(q.lastIndexOf("/") + 1); };
 
-const minLength = (name) => (/password|passwd|secret/i.test(name) ? 8 : 12);
-const isConfigLike = (path) => CONFIG_NAME.test(baseName(path).toLowerCase());
-const fingerprintOf = (file, rule, value) => `${file.replace(/\\/g, "/")}:${rule}:${createHash("sha256").update(value).digest("hex")}`;
+const fingerprintOf = (file, rule, value) => {
+  const f = file.replace(/\\/g, "/");
+  return `${f}:${rule}:${scryptSync(value, `perfect-planner:${f}:${rule}`, 32).toString("hex")}`;
+};
 
 function parseAllowlist(text) {
   const out = new Set();
@@ -87,6 +66,8 @@ function parseAllowlist(text) {
 
 function forbiddenRule(path) {
   if (path.replace(/\\/g, "/") === ALLOWLIST_PATH) return null;
+  // Perfect Planner's own state (ledger, worker tokens, briefs, keys) never leaves the machine.
+  if (PLANNER_STATE.test(path.replace(/\\/g, "/"))) return "planner-state";
   const name = baseName(path).toLowerCase();
   if (ENV_TEMPLATE.test(name)) return null;
   for (const r of FORBIDDEN) if (r.pattern.test(name)) return r.id;
@@ -96,37 +77,26 @@ function forbiddenRule(path) {
 function scanText(file, text, allow) {
   const findings = [];
   const isNpmrc = baseName(file).toLowerCase() === ".npmrc";
-  const config = isConfigLike(file);
   const lines = text.split(/\r?\n/);
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    const taken = [];
     const add = (rule, secret) => {
       const fingerprint = fingerprintOf(file, rule, secret);
       if (allow && allow.has(fingerprint)) return;
-      findings.push({ file, line: i + 1, rule, preview: mask(secret), fingerprint });
+      findings.push({ file, line: i + 1, rule, preview: maskSecret(secret), fingerprint });
     };
-    for (const rule of RULES) {
-      if (rule.configOnly && !config) continue;
-      for (const m of line.matchAll(rule.pattern)) {
-        const start = m.index ?? 0;
-        if (rule.valueGroup === undefined) {
-          taken.push([start, start + m[0].length]);
-          add(rule.id, m[0]);
-          continue;
-        }
-        const value = m[rule.valueGroup];
-        const valueStart = start + m[0].lastIndexOf(value);
-        if (taken.some(([a, b]) => valueStart >= a && valueStart < b)) continue;
-        taken.push([valueStart, valueStart + value.length]);
-        if (rule.nameGroup !== undefined && value.length < minLength(m[rule.nameGroup])) continue;
-        if (PLACEHOLDER.test(value) || !/[A-Za-z]/.test(value)) continue;
-        add(rule.id, value);
-      }
-    }
+    // An .npmrc auth token is reported under its own rule; the detector skips that span.
+    let npmStart;
     if (isNpmrc) {
       const m = NPMRC_TOKEN.exec(line);
-      if (m && !PLACEHOLDER.test(m[1])) add("npmrc-auth-token", m[1]);
+      if (m && !PLACEHOLDER.test(m[1])) {
+        npmStart = (m.index ?? 0) + m[0].length - m[1].length;
+        add("npmrc-auth-token", m[1]);
+      }
+    }
+    for (const span of detectSecrets(file, line)) {
+      if (npmStart !== undefined && span.end > npmStart) continue;
+      add(span.rule, line.slice(span.start, span.end));
     }
   }
   return findings;
@@ -134,50 +104,73 @@ function scanText(file, text, allow) {
 
 const ZERO = /^0+$/;
 
-function git(args) {
-  return execFileSync("git", args, { encoding: "utf8", maxBuffer: 256 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] });
+// git through the host's runner: by absolute path from PATH, never a git planted in the repo, and
+// never the repo's own hooks, fsmonitor, external diff, textconv or filter programs. Throws on a
+// non-zero exit. Git runs this hook at the top of the worktree, so cwd is the repo it protects.
+async function git(args) {
+  const result = await runGit(process.cwd(), args);
+  if (result.code !== 0) throw new Error(`git ${args[0]} failed (${result.code}): ${result.stderr.trim().split(/\r?\n/)[0] ?? ""}`);
+  return result.stdout;
 }
 const lines = (s) => s.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
 
-// The commit the push is measured against: the remote tip, else the merge-base
-// with origin/HEAD, else null (brand-new history: no trusted allowlist exists).
-function baseForPush(localSha, remoteSha) {
+// What the push is measured against: the remote tip, else the merge-base with
+// the default branch, else null (brand-new history: scan everything).
+async function baseForPush(localSha, remoteSha, defaultRef) {
   if (!ZERO.test(remoteSha)) return remoteSha;
-  try { return git(["merge-base", localSha, "origin/HEAD"]).trim(); } catch { return null; }
+  if (!defaultRef) return null;
+  try { return (await git(["merge-base", localSha, defaultRef])).trim(); } catch { return null; }
 }
 
-function filesForPush(localSha, base) {
-  if (base) return lines(git(["diff", "--name-only", "--diff-filter=ACMR", `${base}..${localSha}`]));
-  return lines(git(["ls-tree", "-r", "--name-only", localSha]));
+// Tree-to-tree, so nothing reads the working tree and no filter program can run.
+async function filesForPush(localSha, base) {
+  if (base) return lines(await git(["diff-tree", "-r", "--name-only", "--no-commit-id", "--diff-filter=ACMR", base, localSha]));
+  return lines(await git(["ls-tree", "-r", "--name-only", localSha]));
 }
 
-function allowlistAt(base) {
-  if (!base) return new Set();
-  try { return parseAllowlist(git(["show", `${base}:${ALLOWLIST_PATH}`])); } catch { return new Set(); }
+// The remote's default branch as last fetched: origin/HEAD, else origin/main,
+// else origin/master. Null when none resolves.
+async function defaultBranchRef() {
+  const candidates = [];
+  try {
+    const head = (await git(["symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"])).trim();
+    if (head) candidates.push(head);
+  } catch { /* origin/HEAD not set */ }
+  candidates.push("refs/remotes/origin/main", "refs/remotes/origin/master");
+  for (const ref of candidates) {
+    try { await git(["rev-parse", "--verify", "--quiet", `${ref}^{commit}`]); return ref; } catch { /* try next */ }
+  }
+  return null;
 }
 
-function scanPush(localSha, remoteSha) {
-  const base = baseForPush(localSha, remoteSha);
-  const allow = allowlistAt(base);
+async function allowlistFromDefaultBranch(defaultRef) {
+  if (!defaultRef) return new Set();
+  try { return parseAllowlist(await git(["show", `${defaultRef}:${ALLOWLIST_PATH}`])); } catch { return new Set(); }
+}
+
+async function scanPush(localSha, remoteSha) {
+  const defaultRef = await defaultBranchRef();
+  const base = await baseForPush(localSha, remoteSha, defaultRef);
+  const allow = await allowlistFromDefaultBranch(defaultRef);
   const findings = [];
-  for (const path of filesForPush(localSha, base)) {
+  for (const path of await filesForPush(localSha, base)) {
     const rule = forbiddenRule(path);
     if (rule) {
       const fingerprint = fingerprintOf(path, rule, path);
       if (!allow.has(fingerprint)) findings.push({ file: path, rule, preview: "(forbidden file)", fingerprint });
     }
     let content;
-    try { content = git(["show", `${localSha}:${path}`]); } catch { continue; }
+    try { content = await git(["show", `${localSha}:${path}`]); } catch { continue; }
     if (content.includes("\0")) continue;
     findings.push(...scanText(path, content, allow));
   }
   return findings;
 }
 
-function main() {
+async function main() {
   const args = process.argv.slice(2);
   if (args[0] === "--rules") {
-    console.log(JSON.stringify(RULES.map((r) => ({
+    console.log(JSON.stringify(SECRET_RULES.map((r) => ({
       id: r.id, source: r.pattern.source, flags: r.pattern.flags,
       valueGroup: r.valueGroup ?? null, nameGroup: r.nameGroup ?? null, configOnly: r.configOnly === true,
     }))));
@@ -188,7 +181,7 @@ function main() {
     return 0;
   }
   if (args[0] === "--check-config") {
-    console.log(JSON.stringify(isConfigLike(args[1] ?? "")));
+    console.log(JSON.stringify(isConfigLikeFile(args[1] ?? "")));
     return 0;
   }
   if (args[0] === "--check-name") {
@@ -206,7 +199,7 @@ function main() {
     const [, localSha, , remoteSha] = row.split(/\s+/);
     if (!localSha || ZERO.test(localSha)) continue; // deleting a ref
     try {
-      findings.push(...scanPush(localSha, remoteSha ?? "0"));
+      findings.push(...(await scanPush(localSha, remoteSha ?? "0")));
     } catch (err) {
       process.stderr.write(`pre-push: could not scan ${localSha.slice(0, 8)}: ${err instanceof Error ? err.message.split("\n")[0] : "error"}\n`);
       return 1;
@@ -215,8 +208,12 @@ function main() {
   if (findings.length === 0) return 0;
   process.stderr.write("Push blocked: possible secrets found (values masked).\n");
   for (const f of findings) process.stderr.write(`  ${f.file}${f.line ? `:${f.line}` : ""}  ${f.rule}  ${f.preview}  ${f.fingerprint}\n`);
-  process.stderr.write(`Remove them, or have a reviewer add the fingerprint to ${ALLOWLIST_PATH} on the remote base branch first.\n`);
+  process.stderr.write(`Remove them, or have a reviewer add the fingerprint to ${ALLOWLIST_PATH} on the remote default branch first.\n`);
   return 1;
 }
 
-process.exit(main());
+// A crash must block the push, never let it through.
+main().then((code) => process.exit(code), (err) => {
+  process.stderr.write(`pre-push: ${err instanceof Error ? err.message.split("\n")[0] : "error"}\n`);
+  process.exit(1);
+});

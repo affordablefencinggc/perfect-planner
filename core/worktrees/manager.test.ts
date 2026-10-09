@@ -6,7 +6,8 @@ import type { Ledger } from "../ledger/index";
 import { git, runGit } from "./git";
 import { WorktreeManager } from "./manager";
 import { lines, samePath } from "./platform";
-import { commitAll, makeRepo, memoryLedger, writeFiles } from "./testing";
+import { PLACEHOLDER } from "./settings";
+import { commitAll, makeRepo, memoryLedger, workerGit, writeFiles } from "./testing";
 
 const person = { kind: "person", id: "looplet-spare" } as const;
 const SLOW = 60_000;
@@ -82,23 +83,24 @@ describe("WorktreeManager", () => {
     const fakeKey = ["sk", "live", "abcdefghijklmnopqrstuvwxyz"].join("-");
     writeFiles(repo.root, { ".env": `API_KEY=${fakeKey}\r\nPORT=3000\r\nDB_PASSWORD=hunter2hunter2\r\n`, ".env.example": "API_KEY=\n" });
     const info = await manager.create({ taskId: "T-5", actor: person });
-    expect(readFileSync(path.join(info.path, ".env"), "utf8")).toBe("API_KEY=PLACEHOLDER\r\nPORT=3000\r\nDB_PASSWORD=PLACEHOLDER\r\n");
+    expect(readFileSync(path.join(info.path, ".env"), "utf8")).toBe(`API_KEY=${PLACEHOLDER}\r\nPORT=3000\r\nDB_PASSWORD=${PLACEHOLDER}\r\n`);
     expect(readFileSync(path.join(info.path, ".env.example"), "utf8")).toBe("API_KEY=\n");
   }, SLOW);
 
   it("installs a commit-time secret scan that blocks a planted key in the task worktree only", async () => {
     const info = await manager.create({ taskId: "T-6", actor: person });
     writeFiles(info.path, { "src/config.ts": `export const key = "AKIA${"A".repeat(16)}";\n` });
+    // The worker commits with its own git, which runs the worktree's hooks (the app's own git never does).
     await git(info.path, ["add", "-A"]);
-    const blocked = await runGit(info.path, ["commit", "-m", "add config"]);
+    const blocked = workerGit(info.path, ["commit", "-m", "add config"]);
     expect(blocked.code).not.toBe(0);
     expect(blocked.stderr).toMatch(/blocked this commit[\s\S]*src\/config\.ts:1 \(aws-access-key\)/);
     expect(blocked.stderr).not.toContain("AKIA");
     writeFiles(info.path, { "src/config.ts": "export const key = process.env.KEY;\n" });
     await git(info.path, ["add", "-A"]);
-    expect((await runGit(info.path, ["commit", "-m", "read key from env"])).code).toBe(0);
+    expect(workerGit(info.path, ["commit", "-m", "read key from env"]).code).toBe(0);
     // The main checkout keeps its own hooks.
-    expect((await runGit(repo.root, ["config", "--get", "core.hooksPath"])).stdout.trim()).toBe("");
+    expect((await runGit(repo.root, ["config", "--local", "--get", "core.hooksPath"])).stdout.trim()).toBe("");
   }, SLOW);
 
   it("runs the dependency installer in the new worktree and rolls back if it fails", async () => {
@@ -148,7 +150,7 @@ describe("WorktreeManager", () => {
     writeFiles(info.path, { ".env": "PORT=3000\nAPI_KEY=real-value-typed-in\n" });
     rmSync(path.join(info.path, "ideas.local.md"));
     await expect(manager.remove("T-18")).rejects.toThrow(/\.env/);
-    writeFiles(info.path, { ".env": "PORT=3000\nAPI_KEY=PLACEHOLDER\n" });
+    writeFiles(info.path, { ".env": `PORT=3000\nAPI_KEY=${PLACEHOLDER}\n` });
     expect((await manager.remove("T-18")).taskId).toBe("T-18");
     expect(existsSync(info.path)).toBe(false);
   }, SLOW);
@@ -182,6 +184,6 @@ describe("WorktreeManager", () => {
     writeFileSync(exclude, "*.log");
     await manager.create({ taskId: "T-15", actor: person });
     await manager.create({ taskId: "T-16", actor: person });
-    expect(readFileSync(exclude, "utf8")).toBe("*.log\n/.perfect-planner/worktrees/\n");
+    expect(readFileSync(exclude, "utf8")).toBe("*.log\n/.perfect-planner/\n");
   }, SLOW);
 });

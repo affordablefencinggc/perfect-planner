@@ -59,7 +59,7 @@ describe("check-in and roles", () => {
 
   it("refuses bad tokens, missing hello and invalid input", async () => {
     const { service, w1 } = setup();
-    await expectCode(service.call({ token: "pp_w_not-a-real-token-at-all" }, "hello", { name: "x" }), "UNAUTHORIZED");
+    await expectCode(service.call({ token: ["pp_w_", "not-a-real-token-at-all"].join("") }, "hello", { name: "x" }), "UNAUTHORIZED");
     await expectCode(service.call({ token: w1, agent: "nobody" }, "list_tasks", {}), "UNAUTHORIZED", /hello/);
     const a = await hello(service, w1, "w");
     await expectCode(service.call(a, "claim_task", { task: "14" }), "INVALID", /T-14/);
@@ -285,6 +285,38 @@ describe("auto-answered questions in the main chat's inbox", () => {
     await service.call(a, "ask_main", { task: "T-1", question: "Paper size?", blocking: true });
     const inbox = (await service.call(main, "check_inbox", {})) as { questions: { q: string; autoAnswered: boolean }[] };
     expect(inbox.questions.map((q) => [q.q, q.autoAnswered])).toEqual([["Q-3", false], ["Q-2", true]]);
+  });
+});
+
+describe("secrets in agent text", () => {
+  it("redacts a private key pasted into a question before it reaches the ledger, the digest or the answer", async () => {
+    const { service, ledger, connect, w1 } = setup();
+    const main = await hello(service, connect, "main");
+    const a = await hello(service, w1, "w1");
+    const key = [`-----BEGIN OPENSSH ${"PRIVATE"} KEY-----`, "SSHFAKEBODYaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "SSHFAKETAIL==", `-----END OPENSSH ${"PRIVATE"} KEY-----`].join("\n");
+    await service.call(a, "claim_task", { task: "T-1" });
+    await service.call(a, "ask_main", { task: "T-1", question: `Is this the deploy key?\n${key}`, options: ["DB_PASSWORD=optionleak123", "No"] });
+    await service.call(a, "report_progress", { task: "T-1", text: "Set API_TOKEN=progressleak123 for the run" });
+    const digest = await service.call(main, "check_inbox", {});
+    await service.call(main, "answer", { question: "Q-1", text: "Use SECRET_KEY=answerleak1234 instead" });
+    const answers = await service.call(a, "check_inbox", {});
+    await service.call(a, "release_task", { task: "T-1", reason: "PASSWORD=releaseleak123 expired", blocked: true });
+    const everything = JSON.stringify([ledger.entries(), digest, answers]);
+    for (const leak of ["SSHFAKE", "optionleak123", "progressleak123", "answerleak1234", "releaseleak123"]) expect(everything).not.toContain(leak);
+    expect(everything).toContain("[redacted-secret]");
+  });
+});
+
+describe("blocked tasks after a restart", () => {
+  it("clears a dead owner from a blocked task so the task can be picked up again", async () => {
+    const { service, ledger, tokens, w1 } = setup();
+    await service.call(await hello(service, w1, "w1"), "claim_task", { task: "T-1" });
+    service.pauseAll(owner, "Stop for lunch");
+    const restarted = new AgentService({ ledger, tokens });
+    expect(restarted.releaseOrphanedHolds(owner, "Perfect Planner restarted")).toEqual(["T-1"]);
+    expect(restarted.board().get("T-1")).toMatchObject({ status: "blocked", owner: null });
+    restarted.resumeAll(owner);
+    expect(restarted.board().get("T-1")).toMatchObject({ status: "open", owner: null });
   });
 });
 
