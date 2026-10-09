@@ -117,3 +117,10 @@ export function checkDiff(files: readonly DiffFile[], allowed: readonly string[]
   }
   return notes;
 }
+
+/** Replace anything that looks like a secret before text leaves the machine. */
+export function redactSecrets(text: string): string {
+  let out = text;
+  for (const { pattern } of SECRET_PATTERNS) out = out.replace(new RegExp(pattern.source, pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`), "[redacted-secret]");
+  return out;
+}

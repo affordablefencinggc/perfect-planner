@@ -78,6 +78,8 @@ export function questionKey(question: string, options: readonly string[] = []): 
   return opts.length ? `${norm(question)} :: ${opts.join(" | ")}` : norm(question);
 }
 
+const decisionKey = (person: string, key: string) => `${person}\u0000${key}`;
+
 const SYSTEM: Actor = { kind: "system", id: "perfect-planner" };
 
 export interface RelayOptions {
@@ -89,7 +91,7 @@ export class Relay {
   private readonly ledger: Ledger;
   private readonly settled: SettledAnswerer | null;
   private readonly questions = new Map<string, Question>();
-  /** decision key -> { D number, answer } */
+  /** person + question key -> { D number, answer }: one person's decisions never answer another's workers */
   private readonly decisions = new Map<string, { d: string; answer: string }>();
   /** person -> auto-answered Q numbers their main chat has already been shown */
   private readonly shownAuto = new Map<string, Set<string>>();
@@ -136,7 +138,8 @@ export class Relay {
       if (typeof d.decision === "string") q.decision = d.decision;
       this.notify(q);
     } else if (e.type === "decision.made" && typeof d.key === "string") {
-      this.decisions.set(d.key, { d: e.subject, answer: String(d.answer ?? e.summary) });
+      const person = typeof d.person === "string" ? d.person : typeof d.question === "string" ? this.questions.get(d.question)?.person : undefined;
+      if (person !== undefined) this.decisions.set(decisionKey(person, d.key), { d: e.subject, answer: String(d.answer ?? e.summary) });
     } else if (e.type === "task.blocked" && d.pauseAll === true) {
       this.pausedAll = { reason: e.reason ?? "Paused" };
     } else if (e.type === "task.progress" && d.resumeAll === true) {
@@ -168,7 +171,7 @@ export class Relay {
       data: { task: input.task, person, question, options, blocking },
     });
 
-    const prior = this.decisions.get(questionKey(question, options));
+    const prior = this.decisions.get(decisionKey(person, questionKey(question, options)));
     if (prior) {
       this.write({
         actor: SYSTEM,
@@ -245,7 +248,7 @@ export class Relay {
       summary: answer,
       reason: `Answer to ${q} from ${asked.task}`,
       refs: [q, asked.task],
-      data: { key: questionKey(asked.question, asked.options), question: q, questionText: asked.question, answer },
+      data: { key: questionKey(asked.question, asked.options), person: asked.person, question: q, questionText: asked.question, answer },
     });
     this.write({
       actor: main,

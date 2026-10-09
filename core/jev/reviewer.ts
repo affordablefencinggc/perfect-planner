@@ -5,7 +5,7 @@
 // failure, a low score or the cost cap turn into an approval (§6.7, §6.9).
 import type { Actor, Ledger, LedgerEntry } from "../ledger/index";
 import type { Question, SettledAnswer, SettledAnswerer } from "../relay/relay";
-import { checkDiff, parseDiff, type LineNote } from "./diffChecks";
+import { checkDiff, parseDiff, redactSecrets, type LineNote } from "./diffChecks";
 import { JEV_MODEL, type JevAnswer, type JevCallResult, type JevRequest } from "./transport";
 
 export const REVIEW_POLICY = "pp-review-v1";
@@ -64,7 +64,12 @@ const SYSTEM: Actor = { kind: "system", id: "perfect-planner" };
 const MAX_DIFF = 60_000;
 const MAX_TEXT = 12_000;
 
-const cut = (text: string, max: number) => (text.length > max ? `${text.slice(0, max)}\n[... ${text.length - max} more characters not sent]` : text);
+// Everything sent to TypeSafe passes through here: secrets anywhere in it (added,
+// removed or context lines, test output, test source, clause text) are redacted first.
+const cut = (text: string, max: number) => {
+  const clean = redactSecrets(text);
+  return clean.length > max ? `${clean.slice(0, max)}\n[... ${clean.length - max} more characters not sent]` : clean;
+};
 
 function monthOf(iso: string): string {
   return iso.slice(0, 7);
@@ -82,6 +87,7 @@ export function independenceProblem(author: Actor | undefined, reviewingModel: s
   if (author.kind === "jev") return "Jev built this, and Jev never approves its own output";
   const model = author.model?.trim();
   if (!model || model.toLowerCase() === "unknown") return `the builder (${author.id}) did not name its model, so independence cannot be checked`;
+  if (/^unverified:/i.test(model)) return `the builder's model (${model.slice(11)}) was declared by the agent, not set by a person when it connected, so independence cannot be checked`;
   if (sameModel(model, reviewingModel) || /^jev\b/i.test(model)) return `the builder used ${model}, the same model that would review it`;
   return null;
 }
@@ -353,10 +359,10 @@ export class JevReviewer implements SettledAnswerer {
     const clauses = this.planClauses();
     if (question.options.length < 2 || clauses.length === 0 || this.overCap()) return null;
     const criteria: Record<string, string> = { not_settled: "The plan does not decide this; a person must answer" };
-    question.options.forEach((option, i) => (criteria[`option_${i + 1}`] = option));
+    question.options.forEach((option, i) => (criteria[`option_${i + 1}`] = cut(option, 300)));
     const called = await this.transport({
       model: this.settings.model,
-      state: { plan: clauses.map((c) => ({ ref: c.ref, text: cut(c.text, 2000) })).slice(0, 200), question: question.question, task: question.task },
+      state: { plan: clauses.map((c) => ({ ref: c.ref, text: cut(c.text, 2000) })).slice(0, 200), question: cut(question.question, 2000), task: question.task },
       questions: {
         settled: {
           type: "choice",
@@ -373,9 +379,9 @@ export class JevReviewer implements SettledAnswerer {
     const result: ReviewResult = chosen && confident
       ? { verdict: "approve", notes: [], reason: `The plan settles ${question.q}: ${chosen}`, confidence: answer.confidence }
       : { verdict: "escalate", notes: [], reason: `The plan does not clearly settle ${question.q}; it goes to the main chat`, confidence: answer.confidence };
-    this.record(question.task, "question", result, { called, refs: [question.q], summary: chosen && confident ? `Jev: the plan settles ${question.q}` : `Jev: ${question.q} needs the main chat` });
+    const verdict = this.record(question.task, "question", result, { called, refs: [question.q], summary: chosen && confident ? `Jev: the plan settles ${question.q}` : `Jev: ${question.q} needs the main chat` });
     this.warnIfNeeded();
     if (!chosen || !confident) return null;
-    return { answer: chosen, reason: `The approved plan settles this (Jev, confidence ${answer.confidence!.toFixed(2)})`, refs: [], actor: { kind: "jev", id: "jev", model: called.model } };
+    return { answer: chosen, reason: `The approved plan settles this (Jev, confidence ${answer.confidence!.toFixed(2)})`, refs: [verdict.n], actor: { kind: "jev", id: "jev", model: called.model } };
   }
 }

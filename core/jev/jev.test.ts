@@ -139,7 +139,7 @@ describe("test review (§6.2)", () => {
   });
 
   it("refuses to approve work built by the reviewing model, or by a builder whose model is unknown", async () => {
-    for (const model of ["jev-latest", "JEV-LATEST", "jev-2026-09", "unknown", undefined]) {
+    for (const model of ["jev-latest", "JEV-LATEST", "jev-2026-09", "unknown", "unverified:claude-builder-1", undefined]) {
       const { transport } = fakeTransport(GOOD);
       const ledger = newLedger();
       const author: Actor = { kind: "agent", id: "worker-1", ...(model ? { model } : {}) };
@@ -257,6 +257,29 @@ deleted file mode 100644
   });
 });
 
+describe("nothing secret reaches TypeSafe", () => {
+  it("redacts secrets in removed and context lines, test output and test source before sending", async () => {
+    const stripe = `sk_live_${"b".repeat(24)}`;
+    const diff = `diff --git a/src/invoice/id.ts b/src/invoice/id.ts
+--- a/src/invoice/id.ts
++++ b/src/invoice/id.ts
+@@ -1,3 +1,3 @@
+ const old = "${stripe}";
+-const key = "${stripe}";
++const key = process.env.KEY;
+`;
+    const { transport, calls } = fakeTransport(GOOD);
+    const reviewer = new JevReviewer({ ledger: newLedger(), transport });
+    await reviewer.reviewDiff({ task: "T-1", clauses: TEST_INPUT.clauses, diff, testOutput: `token=${stripe}`, allowedFiles: [], author: TEST_INPUT.author });
+    await reviewer.reviewTest({ ...TEST_INPUT, test: { command: "npm test", source: `const k = "${stripe}"` } });
+    expect(calls).toHaveLength(2);
+    for (const call of calls) {
+      expect(JSON.stringify(call)).not.toContain(stripe);
+      expect(JSON.stringify(call)).toContain("[redacted-secret]");
+    }
+  });
+});
+
 describe("cost cap (§6.7)", () => {
   it("warns at 80%, queues at 100% without approving, and runs the queue when the cap is raised", async () => {
     const ledger = newLedger();
@@ -300,7 +323,7 @@ describe("questions the plan already settles", () => {
     const result = await relay.ask({ kind: "agent", id: "w1", model: "m" }, "owner", { task: "T-1", question: "Date format?", options: ["Locale", "ISO"] });
     expect(result).toMatchObject({ status: "answered", answer: "ISO", via: "settled" });
     expect(ledger.entries().map((e) => e.type)).toEqual(["question.asked", "review.verdict", "question.answered"]);
-    expect(ledger.entries()[2]).toMatchObject({ actor: { kind: "system" }, data: { via: "settled", source: { kind: "jev", model: "jev-2026-09" } } });
+    expect(ledger.entries()[2]).toMatchObject({ actor: { kind: "system" }, refs: [ledger.entries()[1]!.n, "T-1"], data: { via: "settled", source: { kind: "jev", model: "jev-2026-09" } } });
     expect(relay.digest("owner").autoAnswered[0]).toContain("from the plan");
   });
 

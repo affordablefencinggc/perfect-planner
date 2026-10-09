@@ -83,7 +83,8 @@ describe("worker tools", () => {
     await service.call(a, "attach_proof", { task: "T-1", kind: "commit", link: "9f3c2e1" });
     const mine = ledger.bySubject("T-1").filter((e) => e.actor.id === a.agent);
     expect(mine.map((e) => e.type)).toEqual(["task.claimed", "task.progress", "task.proof"]);
-    expect(mine[0]!.actor).toEqual({ kind: "agent", id: a.agent, model: "claude-x" });
+    // The agent named its own model in hello, so it is recorded as unverified.
+    expect(mine[0]!.actor).toEqual({ kind: "agent", id: a.agent, model: "unverified:claude-x" });
     expect(mine[2]!.evidence).toEqual(["commit:9f3c2e1"]);
     const board = (await service.call(a, "list_tasks", {})) as { tasks: { id: string; status: string; owner: string | null; proofs: unknown[] }[] };
     expect(board.tasks.find((t) => t.id === "T-1")).toMatchObject({ status: "claimed", owner: a.agent });
@@ -187,6 +188,51 @@ describe("the one-chat relay through the tools", () => {
     service.resumeAll(owner);
     expect(service.board().get("T-1")?.status).toBe("claimed");
     await service.call(b, "report_progress", { task: "T-2", text: "back" });
+  });
+});
+
+describe("identity", () => {
+  it("records the model the person set on the token, not the one the agent declares", async () => {
+    const { service, ledger, tokens } = setup();
+    const token = tokens.issue({ role: "worker", person: "owner", task: "T-1", model: "claude-builder-1" });
+    const a = await hello(service, token, "w", "something-else");
+    await service.call(a, "claim_task", { task: "T-1" });
+    expect(ledger.last()!.actor).toEqual({ kind: "agent", id: a.agent, model: "claude-builder-1" });
+  });
+
+  it("keeps an agent's id across a restart with the same token, so its claim stays valid", async () => {
+    const { service, ledger, tokens, w1 } = setup();
+    const a = await hello(service, w1, "Worker one");
+    await service.call(a, "claim_task", { task: "T-1" });
+    const restarted = new AgentService({ ledger, tokens });
+    const again = await hello(restarted, w1, "Worker one");
+    expect(again.agent).toBe(a.agent);
+    await restarted.call(again, "report_progress", { task: "T-1", text: "still mine after restart" });
+  });
+
+  it("releases tasks held by agents that did not reconnect after a restart", async () => {
+    const { service, ledger, tokens, w1, w2 } = setup();
+    await service.call(await hello(service, w1, "w1"), "claim_task", { task: "T-1" });
+    await service.call(await hello(service, w2, "w2"), "claim_task", { task: "T-2" });
+    const restarted = new AgentService({ ledger, tokens });
+    await hello(restarted, w1, "w1");
+    expect(restarted.releaseOrphanedHolds(owner, "Perfect Planner restarted")).toEqual(["T-2"]);
+    expect(restarted.board().get("T-2")).toMatchObject({ status: "open", owner: null });
+    expect(restarted.board().get("T-1")?.status).toBe("claimed");
+  });
+});
+
+describe("decisions belong to one person", () => {
+  it("a helper's decision never auto-answers the owner's workers", async () => {
+    const { service, tokens } = setup();
+    const ownerMain = await hello(service, tokens.issue({ role: "connect", person: "owner" }), "owner main");
+    const helperMain = await hello(service, tokens.issue({ role: "connect", person: "helper" }), "helper main");
+    const helperWorker = await hello(service, tokens.issue({ role: "worker", person: "helper", task: "T-1" }), "hw");
+    const ownerWorker = await hello(service, tokens.issue({ role: "worker", person: "owner", task: "T-2" }), "ow");
+    await service.call(helperWorker, "ask_main", { task: "T-1", question: "Ship on Friday?" });
+    await service.call(helperMain, "answer", { question: "Q-1", text: "Yes" });
+    expect(await service.call(ownerWorker, "ask_main", { task: "T-2", question: "Ship on Friday?" })).toMatchObject({ status: "open" });
+    expect((await service.call(ownerMain, "check_inbox", {})) as { open: number }).toMatchObject({ open: 1 });
   });
 });
 

@@ -32,6 +32,14 @@ const mcp = createAgentMcpServer(bridgeCall(bridge.url, token));   // connect to
 service.pauseAll(owner, "reason"); service.resumeAll(owner);
 ```
 
+Identity: issue each token with the agent's `model` (the person sets it at
+connect time); that is what the ledger records and what Jev's independence
+check trusts. A model an agent only declares in `hello` is recorded as
+`unverified:<model>`, and Jev will not approve that agent's work. Agent ids
+come from the token, so reconnecting keeps the id and its claims; after a
+restart, `releaseOrphanedHolds(owner, reason)` frees tasks whose holder did
+not come back.
+
 `AgentService` checks who may call what, then writes through the ledger; gate
 rules registered with `ledger.addRule` refuse with their own message, which
 the agent receives as a `REFUSED` error. Error codes: `UNAUTHORIZED`,
