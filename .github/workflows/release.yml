@@ -117,6 +117,8 @@ jobs:
     needs: build
     if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && inputs.draft_release && inputs.release != 'dry-run')
     runs-on: ubuntu-latest
+    # Protect this in Settings -> Environments -> release (see README "Making a release").
+    environment: release
     permissions:
       contents: write
     steps:
