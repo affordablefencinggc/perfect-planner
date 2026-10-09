@@ -32,7 +32,7 @@ concurrency:
 
 env:
   # Push-triggered trials use these Release runs: PR #31 (core host bundled) and PR #12 head (main + pipeline).
-  DEFAULT_SOURCE_RUNS: '["37922463124","37918632579"]'
+  DEFAULT_SOURCE_RUNS: '["37925540925","37918632579"]'
 
 jobs:
   plan:

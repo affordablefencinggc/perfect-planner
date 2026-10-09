@@ -43,14 +43,33 @@ Check "start menu shortcut" $(if ($lnk) { "pass" } else { "fail" }) "$(($lnk | F
 # 2. Smoke test the installed app. msedgedriver cannot launch this app ("DevToolsActivePort file
 # doesn't exist"), so start it like a person would, with WebView2's DevTools port open, and attach.
 if ($exe) {
+  # Both routes WebView2 documents for extra browser arguments: the environment variable and the
+  # per-executable policy key (the policy applies even when the app sets its own arguments).
   $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-port=9222"
+  $policy = "HKCU:\Software\Policies\Microsoft\Edge\WebView2\AdditionalBrowserArguments"
+  New-Item -Path $policy -Force | Out-Null
+  New-ItemProperty -Path $policy -Name $exe.Name -Value "--remote-debugging-port=9222" -PropertyType String -Force | Out-Null
   $sw = [Diagnostics.Stopwatch]::StartNew()
   $app = Start-Process -FilePath $exe.FullName -PassThru
   Remove-Item Env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS
   $ready = $null
   for ($i = 0; $i -lt 60 -and -not $ready; $i++) { try { $ready = Invoke-RestMethod http://127.0.0.1:9222/json/version -TimeoutSec 2 } catch { Start-Sleep -Milliseconds 500 } }
   if ($ready) { Check "launch" pass "window up, WebView2 $($ready.Browser) after $([int]$sw.Elapsed.TotalSeconds) s" }
-  else { Check "launch" fail "no WebView2 DevTools endpoint within 30 s; app process alive: $(-not $app.HasExited)" }
+  else {
+    $wv = Get-CimInstance Win32_Process -Filter "Name='msedgewebview2.exe'" -ErrorAction SilentlyContinue
+    $wvDesc = ($wv | Select-Object -First 3 | ForEach-Object { ($_.CommandLine -replace '\s+', ' ').Substring(0, [Math]::Min(220, $_.CommandLine.Length)) }) -join ' || '
+    $port = Get-ChildItem "$env:LOCALAPPDATA\com.perfectplanner.desktop" -Recurse -Filter DevToolsActivePort -ErrorAction SilentlyContinue | Select-Object -First 1
+    $windows = Get-Process -Id $app.Id -ErrorAction SilentlyContinue | ForEach-Object { "'$($_.MainWindowTitle)' handle $($_.MainWindowHandle)" }
+    Check "launch" fail "no WebView2 DevTools endpoint within 30 s; app alive: $(-not $app.HasExited) (exit $(if ($app.HasExited) { $app.ExitCode } else { '-' })); main window: $windows; msedgewebview2 processes: $(@($wv).Count); DevToolsActivePort file: $(if ($port) { $port.FullName } else { 'none' }); first webview cmdlines: $wvDesc"
+  }
+  # A desktop screenshot shows what a person would see, whether or not WebDriver can attach.
+  try {
+    Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+    $b = [System.Windows.Forms.SystemInformation]::VirtualScreen
+    $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+    [System.Drawing.Graphics]::FromImage($bmp).CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
+    $bmp.Save((Join-Path $Out "$label-00-desktop.png"), [System.Drawing.Imaging.ImageFormat]::Png)
+  } catch { Write-Output "desktop screenshot failed: $_" }
   $driver = Start-Process $NativeDriver -ArgumentList "--port=4444" -PassThru -RedirectStandardOutput (Join-Path $Out "$label-driver.out.log") -RedirectStandardError (Join-Path $Out "$label-driver.err.log")
   Start-Sleep -Seconds 2
   if ($ready) { node scripts/release/trial/smoke-app.mjs --app $exe.FullName --folder $Folder --out $Out --label $label --attach 127.0.0.1:9222 }
@@ -66,6 +85,7 @@ if ($exe) {
   $left | Stop-Process -Force -ErrorAction SilentlyContinue
   $webviews | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
   Stop-Process -Id $driver.Id -Force -ErrorAction SilentlyContinue
+  Remove-ItemProperty -Path $policy -Name $exe.Name -ErrorAction SilentlyContinue
 }
 
 # 3. Silent uninstall and leftovers.
