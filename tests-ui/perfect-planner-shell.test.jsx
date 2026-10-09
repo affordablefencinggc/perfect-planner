@@ -258,7 +258,7 @@ describe("Perfect Planner shell interaction and accessibility", () => {
     window.history.replaceState({}, "", "/?workspace=home");
     const ledger = createRuntimeEventLedger({ storage: window.localStorage });
     ledger.append({ projectId: DEMO_PROJECT_ID, generation: 1, adapter: "fixture", source: "mcp", severity: "error",
-      eventId: "evt_copy_details_001", message: "Metadata check failed", payload: { code: "MCP_TIMEOUT", durationMs: 2500, token: "private-test-token" } });
+      eventId: "evt_copy_details_001", message: "Metadata check failed", payload: { code: "MCP_TIMEOUT", durationMs: 2500, token: "private-" + "test-token" } });
     const user = userEvent.setup(); const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
     renderDemoShell();

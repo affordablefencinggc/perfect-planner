@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 // Perfect Planner pre-push hook (layer 3): last local stop before secrets leave
-// the machine. No dependencies: it imports only secrets-detector.mjs beside it,
-// the generated JS copy of core/secrets, so it detects exactly what the review
-// gate and Jev's diff check detect. secrets.test.ts fails if that copy is stale
+// the machine. No dependencies: it imports only secrets-detector.mjs and
+// git-exec.mjs beside it, generated JS copies of core/secrets and core/exec, so
+// it detects exactly what the review gate and Jev's diff check detect, and runs
+// git the same safe way. secrets.test.ts fails if a copy is stale
 // or if this file's forbidden names and fingerprints drift from secrets.ts.
 //
 // Git feeds stdin lines: <local ref> <local sha> <remote ref> <remote sha>.
@@ -25,6 +26,8 @@ import { scryptSync } from "node:crypto";
 import { readFileSync } from "node:fs";
 // Generated from core/secrets by build-detector.mjs: the same detector as the review gate and Jev.
 import { PLACEHOLDER, SECRET_RULES, detectSecrets, isConfigLikeFile, maskSecret } from "./secrets-detector.mjs";
+// Generated from core/exec by build-detector.mjs.
+import { NO_CWD_SEARCH_ENV, gitExecutable } from "./git-exec.mjs";
 
 const ALLOWLIST_PATH = ".perfect-planner/secret-allowlist.json";
 
@@ -101,8 +104,13 @@ function scanText(file, text, allow) {
 
 const ZERO = /^0+$/;
 
+// git by absolute path from PATH, never a git.exe planted in the repo (Windows searches the
+// current folder first); NO_CWD_SEARCH_ENV stops git's own children doing the same.
 function git(args) {
-  return execFileSync("git", args, { encoding: "utf8", maxBuffer: 256 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] });
+  return execFileSync(gitExecutable(process.cwd()), args, {
+    encoding: "utf8", maxBuffer: 256 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"], windowsHide: true,
+    env: { ...process.env, ...NO_CWD_SEARCH_ENV },
+  });
 }
 const lines = (s) => s.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
 

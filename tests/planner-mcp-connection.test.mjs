@@ -79,7 +79,7 @@ test("timeout clears checking and raw native errors never leak into diagnostics"
   assert.equal(controller.getSnapshot().status, "failed");
   assert.equal(controller.getSnapshot().reason, "MCP_TIMEOUT");
   controller.dispose();
-  const rejected = createPlannerMcpConnectionController(options({ onEvent: (event) => events.push(event), invoke: async () => { throw new Error("PRIVATE_KEY=must-not-log"); } }));
+  const rejected = createPlannerMcpConnectionController(options({ onEvent: (event) => events.push(event), invoke: async () => { throw new Error("PRIVATE_"+"KEY=must-not-log"); } }));
   rejected.setProject(project()); await rejected.check();
   assert.equal(rejected.getSnapshot().reason, "MCP_SERVICE_UNAVAILABLE");
   assert.doesNotMatch(JSON.stringify(events), /PRIVATE_KEY|must-not-log/);

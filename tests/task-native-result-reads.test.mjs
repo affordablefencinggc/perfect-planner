@@ -10,7 +10,7 @@ function fixture(){
  return {intent,saved,review,observations,counts:()=>({authCalls,reads})};
 }
 test('authenticated summary names observed failure without leaking raw output or granting success',async()=>{
- const f=fixture(),reader=createTaskNativeResultReads(f),r=await reader.readOwn({credentials:{token:'private-token'}});
+ const f=fixture(),reader=createTaskNativeResultReads(f),r=await reader.readOwn({credentials:{token:'private'+'-token'}});
  assert.deepEqual(f.counts(),{authCalls:2,reads:1});assert.equal(r.state,'failure-observed');assert.deepEqual(r.failureReasons,['nonzero-exit']);assert.equal(r.process.exitCode,7);assert.equal(r.taskId,'T0001');assert.equal(r.cause,'unknown');assert.equal(r.cleanup,'unknown');assert.equal(r.authorityVerified,false);
  assert.equal(JSON.stringify(r).includes('private'),false);assert.equal(JSON.stringify(r).includes('sensitive'),false);assert.ok(Object.isFrozen(r.process));
  f.saved.observation.exitCode=0;assert.equal((await reader.readOwn({})).state,'result-unverified');

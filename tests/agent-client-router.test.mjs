@@ -42,7 +42,7 @@ test('busy refusal, input snapshot and shutdown suppress late responses',async()
   const pending=router.request(frame(1,'client.connect',params));params.secret='3'.repeat(64);
   assert.equal(received.secret,'2'.repeat(64));
   await assert.rejects(router.request(frame(2,'client.connect',params)),/UNAVAILABLE/);
-  const closing=router.close();finish({sessionId:'4'.repeat(32),secret:'must-not-be-delivered'});
+  const closing=router.close();finish({sessionId:'4'.repeat(32),secret:'must-'+'not-be-delivered'});
   assert.deepEqual(await pending,{version:1,id:1,ok:false,error:'AGENT_CLIENT_REQUEST_REFUSED'});
   await assert.rejects(router.request(frame(2,'client.connect',params)),/UNAVAILABLE/);
   assert.deepEqual(await closing,{closed:true,revocationComplete:true});

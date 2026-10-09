@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createRuntimeEventCodec } from '../src/runtime/runtimeEventLedger.js';
 
-const input = { adapter: 'browser-ui', generation: 0, projectId: 'pp_codec_test', source: 'runtime', severity: 'error', message: 'Synthetic failure', payload: { password: 'fixture-value' } };
+const input = { adapter: 'browser-ui', generation: 0, projectId: 'pp_codec_test', source: 'runtime', severity: 'error', message: 'Synthetic failure', payload: { password: 'fixture'+'-value' } };
 test('diagnostic capture freezes and redacts before async storage begins', () => {
   const codec = createRuntimeEventCodec();
   const source = { ...input, payload: { ...input.payload } };

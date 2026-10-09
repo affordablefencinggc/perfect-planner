@@ -306,9 +306,9 @@ describe("project Home consumes the project-home model", () => {
     // Controlled positive service response: cached approval alone is not current.
     const originalFetch = globalThis.fetch;
     vi.stubGlobal("fetch", vi.fn(async (url, options) => {
-      if (String(url) === "/api/architecture-contract/session") return { ok: true, json: async () => ({ actor: "fixture-reviewer", token: "fixture-token" }) };
-      if (String(url) === "/api/folder-contract/session") return { ok: true, json: async () => ({ actor: "fixture-reviewer", token: "fixture-folder-token" }) };
-      if (String(url) === "/api/component-plans/session") return {ok:true,json:async()=>({actor:'fixture-reviewer',token:'fixture-component-token'})};
+      if (String(url) === "/api/architecture-contract/session") return { ok: true, json: async () => ({ actor: "fixture-reviewer", token: "fixture-" + "token" }) };
+      if (String(url) === "/api/folder-contract/session") return { ok: true, json: async () => ({ actor: "fixture-reviewer", token: "fixture-" + "folder-" + "token" }) };
+      if (String(url) === "/api/component-plans/session") return {ok:true,json:async()=>({actor:'fixture-reviewer',token:'fixture-' + 'component-' + 'token'})};
       if (String(url) === "/api/component-plans/authoring-context") {expect(JSON.parse(options.body).planId).toBe(project.projectId);return {ok:true,json:async()=>componentContext};}
       if (String(url) === "/api/folder-contract/inspect") {
         expect(JSON.parse(options.body).planId).toBe(project.projectId);

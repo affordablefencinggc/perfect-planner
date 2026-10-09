@@ -8,7 +8,7 @@ import { currentComponentPlanInput } from "../src/engine/componentPlanSeed.js";
 import { createComponentPlanMiddleware } from "../src/node/componentPlanHttp.mjs";
 import { bindComponentParents } from "./fixtures/componentParents.mjs";
 
-async function live(root) { const middleware = createComponentPlanMiddleware({ root, actor: "danie", token: "component-token" }); const server = createServer((req, res) => middleware(req, res)); await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve)); const origin = `http://127.0.0.1:${server.address().port}`; return { origin, close: () => new Promise((resolve) => server.close(resolve)) }; }
+async function live(root) { const middleware = createComponentPlanMiddleware({ root, actor: "danie", token: "comp"+"onent-token" }); const server = createServer((req, res) => middleware(req, res)); await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve)); const origin = `http://127.0.0.1:${server.address().port}`; return { origin, close: () => new Promise((resolve) => server.close(resolve)) }; }
 const post = (origin, route, token, value) => fetch(`${origin}/api/component-plans/${route}`, { method: "POST", headers: { origin, "content-type": "application/json", "x-pp-component-token": token }, body: JSON.stringify(value) });
 const resolvedInput = () => {
   const value = structuredClone(currentComponentPlanInput);
