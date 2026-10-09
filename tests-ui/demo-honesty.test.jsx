@@ -130,3 +130,24 @@ describe("Demo controls are honest about being sample data", () => {
     expect(freeze.parentElement.textContent).toContain("Demo only — sample data");
   });
 });
+
+describe("Plan quick brief copy and demo drawer labels", () => {
+  test("Copy handoff says so when the clipboard is unavailable instead of claiming Copied", async () => {
+    vi.stubGlobal("navigator", { ...window.navigator, clipboard: undefined });
+    renderShell({ demo: true, route: "plan" });
+    fireEvent.click(screen.getByRole("button", { name: /Quick brief/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Copy handoff" }));
+    expect(await screen.findByRole("button", { name: /Copy failed/ })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Copied" })).toBeNull();
+  });
+
+  test("Copy handoff reports Copied only after the clipboard write resolves", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { ...window.navigator, clipboard: { writeText } });
+    renderShell({ demo: true, route: "plan" });
+    fireEvent.click(screen.getByRole("button", { name: /Quick brief/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Copy handoff" }));
+    expect(await screen.findByRole("button", { name: "Copied" })).toBeTruthy();
+    expect(writeText).toHaveBeenCalledTimes(1);
+  });
+});
