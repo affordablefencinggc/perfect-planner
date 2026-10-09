@@ -357,6 +357,43 @@ describe("TestGate", () => {
     expect(existsSync(path.join(repo.root, "node_modules", "pp-fake-dep", "index.js"))).toBe(true);
   }, SLOW);
 
+  it("never lets a worker's own node_modules decide the merge check", async () => {
+    const dep = (body: string) => ({ "node_modules/pp-fake-dep/package.json": '{"name":"pp-fake-dep","type":"module","main":"index.js"}\n', "node_modules/pp-fake-dep/index.js": body });
+    const repo = await makeRepo({ "needs-dep.mjs": 'import { enabled } from "pp-fake-dep";\nimport { readFileSync } from "node:fs";\nprocess.exit(enabled(readFileSync("feature.txt", "utf8")) ? 0 : 1);\n', "feature.txt": "disabled\n", ".gitignore": "node_modules/\n" });
+    cleanups.push(repo.cleanup);
+    writeFiles(repo.root, dep('export const enabled = (text) => text.includes("enabled") && !text.includes("disabled");\n'));
+    const ledger = await memoryLedger();
+    const gate = new TestGate({ ledger, timeoutMs: 30_000 });
+    gate.define("T-1", "node needs-dep.mjs", WORKER);
+    expect(gate.approve("T-1", OWNER, { cwd: repo.root }).ok).toBe(true);
+    expect((await gate.confirmFailsFirst("T-1", repo.root)).ok).toBe(true);
+    const worktree = path.join(path.dirname(repo.root), "wt-cheat");
+    cleanups.push(() => rmSync(worktree, { recursive: true, force: true }));
+    await git(repo.root, ["worktree", "add", "-q", "-b", "pp/T-1", worktree, "main"]);
+    // The worker leaves the feature off but rewrites its ignored copy of the dependency to always say yes.
+    writeFiles(worktree, { ...dep("export const enabled = () => true;\n"), "notes.txt": "no real change\n" });
+    await commitAll(worktree, "looks done");
+    expect((await gate.prove("T-1", worktree)).ok).toBe(true);
+    const merged = await reviewAndMerge({ root: repo.root, gate, branch: "pp/T-1" });
+    expect(merged.ok).toBe(false);
+    expect(types(ledger)).not.toContain("task.done");
+  }, SLOW);
+
+  it("asks a person, not only Jev, to approve a diff that touches package files, configs or test helpers", async () => {
+    for (const [file, content] of [["package.json", '{"scripts":{"test":"exit 0"}}\n'], ["vitest.config.mjs", "export default {};\n"], ["tests/helpers/check-helper.mjs", "export const ok = true;\n"]] as const) {
+      const ctx = await approved();
+      await ctx.addWorktree();
+      writeFiles(ctx.worktree, { "feature.txt": "enabled\n", [file]: content });
+      const tip = await commitAll(ctx.worktree, `enable feature and touch ${file}`);
+      expect((await ctx.gate.prove("T-1", ctx.worktree)).ok).toBe(true);
+      expect(ctx.gate.approveDiff("T-1", JEV, tip).ok).toBe(true);
+      const merge = () => ctx.gate.mergeAndVerify("T-1", { repoRoot: ctx.root, branch: ctx.branch, integrationBranch: "main", actor: OWNER });
+      expect(await merge()).toMatchObject({ ok: false, reason: expect.stringContaining(file) });
+      expect(ctx.gate.approveDiff("T-1", OWNER, tip).ok).toBe(true);
+      expect((await merge()).ok).toBe(true);
+    }
+  }, SLOW);
+
   it("reject bumps the attempt and the new attempt keeps the approved test", async () => {
     const { gate, ledger } = await approved("T-14");
     expect(nextAttemptId("T-14")).toBe("T-14.a2");

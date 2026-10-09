@@ -67,10 +67,19 @@ integration branch: `git merge --ff-only` in its checkout if it is checked out
 `git update-ref` with the expected old value. Conflicts and failures leave
 the integration branch untouched. The temporary worktree is always removed.
 It merges only when the branch tip has an approving diff verdict, and the merge
-actor must be a person. Before the test runs, `node_modules` from the task's
-worktree (or the main checkout) is linked into the candidate (a junction on
-Windows), or `prepare(candidateDir)` runs instead; the link is removed before
-the candidate, so the real dependencies are never deleted.
+actor must be a person. When the diff touches package files (package.json,
+lockfiles, .npmrc), tool configuration (`*.config.*`, tsconfig, rc files) or test
+support (tests/, helpers/, fixtures/, mocks/, `*.test.*`, files beside a pinned
+test), Jev's approval is not enough: a person has to approve that diff.
+
+The task's own `node_modules` is never used for the merge check, because it is
+ignored by git and a worker could edit it unseen. When the candidate's package
+files match the integration checkout's, that checkout's `node_modules` is linked
+in (a junction on Windows); otherwise a clean `npm ci` (or `npm install` without
+a lockfile) runs in the candidate. `prepare(candidateDir)` replaces this. The link
+is removed before the candidate, so the real dependencies are never deleted. The
+test still runs code, so it could write through the link; the gate does not
+sandbox it.
 
 Test commands run through the platform shell; on timeout the whole process
 tree is killed (`taskkill /T /F` on Windows, process group kill elsewhere).

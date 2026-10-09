@@ -376,23 +376,57 @@ async function headOf(cwd: string): Promise<string | undefined> {
   return result?.code === 0 ? result.stdout.trim() : undefined;
 }
 
+const DEPENDENCY_FILES = ["package.json", "package-lock.json", "npm-shrinkwrap.json", "pnpm-lock.yaml", "yarn.lock", ".npmrc"];
+
+function sameFile(a: string, b: string): boolean {
+  const read = (file: string) => (existsSync(file) ? contentHash(readFileSync(file)) : "missing");
+  return read(a) === read(b);
+}
+
 /**
- * Link node_modules into the merge candidate from the task's own worktree (its dependencies may
- * have changed) or else the main checkout. A junction on Windows needs no special rights.
- * Returns the link path so the caller can remove it, or undefined when there was nothing to link.
+ * Give the merge candidate dependencies the worker never touched. The task's own node_modules is
+ * never used: it is ignored by git, so edits to it (vitest itself, say) would pass unseen. When the
+ * candidate's package files match the integration checkout's, its node_modules is linked in (a
+ * junction on Windows); when the task changed them, a clean `npm ci` (or `npm install` without a
+ * lockfile) runs in the candidate.
+ * Returns the link path so the caller can remove it before the candidate.
  */
-async function linkDependencies(repoRoot: string, branch: string, candidate: string): Promise<string | undefined> {
-  let taskCheckout: string | undefined;
+async function cleanDependencies(repoRoot: string, integrationBranch: string, candidate: string, run: TestRunner, timeoutMs: number): Promise<{ linked?: string; failure?: string }> {
+  let checkout = repoRoot;
   let current: string | undefined;
   for (const line of lines(await git(repoRoot, ["worktree", "list", "--porcelain"]))) {
     if (line.startsWith("worktree ")) current = line.slice("worktree ".length);
-    else if (line === `branch refs/heads/${branch}`) taskCheckout = current;
+    else if (line === `branch refs/heads/${integrationBranch}` && current) checkout = current;
   }
-  const source = [taskCheckout, repoRoot].map((dir) => dir && path.join(dir, "node_modules")).find((dir) => dir && existsSync(dir));
+  const source = path.join(checkout, "node_modules");
   const target = path.join(candidate, "node_modules");
-  if (!source || existsSync(target)) return undefined;
-  symlinkSync(source, target, process.platform === "win32" ? "junction" : "dir");
-  return target;
+  if (existsSync(target)) return { failure: "The merged code contains a node_modules folder; dependencies must come from a clean install." };
+  const unchanged = DEPENDENCY_FILES.every((file) => sameFile(path.join(candidate, file), path.join(checkout, file)));
+  if (unchanged && existsSync(source)) {
+    symlinkSync(source, target, process.platform === "win32" ? "junction" : "dir");
+    return { linked: target };
+  }
+  if (unchanged || !existsSync(path.join(candidate, "package.json"))) return {};
+  const lock = ["package-lock.json", "npm-shrinkwrap.json"].some((file) => existsSync(path.join(candidate, file)));
+  const command = lock ? "npm ci --prefer-offline --no-audit --no-fund" : "npm install --prefer-offline --no-audit --no-fund --no-package-lock";
+  const install = await run(command, candidate, { timeoutMs });
+  return install.passed ? {} : { failure: `A clean dependency install in the merge candidate failed (${describeRun(install)}).` };
+}
+
+/** Files whose change can alter what the approved test checks without touching the test itself. */
+export function sensitiveChanges(changed: readonly string[], pinned: readonly string[]): string[] {
+  const pinnedDirs = new Set(pinned.map((file) => path.posix.dirname(file)));
+  return changed.filter((file) => {
+    const base = path.posix.basename(file);
+    if (DEPENDENCY_FILES.includes(base)) return true;
+    // Tool and build configuration: vitest.config.ts, tsconfig.json, babel, jest, .mocharc and the like.
+    if (/(^|\.)config\.[cm]?[jt]s$|^tsconfig.*\.json$|^\.?(babel|jest|mocha|vitest|vite|eslint|prettier)rc/i.test(base)) return true;
+    // Test support: helpers, fixtures, mocks and other tests can change what the approved test sees.
+    if (/(^|\/)(tests?|__tests__|specs?|fixtures|helpers|mocks|__mocks__)\//i.test(file) || /\.(test|spec)\.[cm]?[jt]sx?$/i.test(base)) return true;
+    // Anything beside a pinned test file (outside the project root) is treated as one of its helpers.
+    const dir = path.posix.dirname(file);
+    return dir !== "." && pinnedDirs.has(dir);
+  });
 }
 
 /**
@@ -655,6 +689,14 @@ export class TestGate {
     if (state.diffApproval?.commit !== branchTip.toLowerCase()) {
       return refuse(`The diff at ${branchTip.slice(0, 12)} has not been approved by Jev or a person.`);
     }
+    const forkPoint = await runGit(repoRoot, ["merge-base", `refs/heads/${integrationBranch}`, branchTip]);
+    if (forkPoint.code === 0) {
+      const changed = lines((await runGit(repoRoot, ["diff", "--name-only", "--no-renames", forkPoint.stdout.trim(), branchTip])).stdout);
+      const sensitive = sensitiveChanges(changed, Object.keys(approval.pins));
+      if (sensitive.length && state.diffApproval.actor.kind !== "person") {
+        return refuse(`The diff changes ${sensitive.join(", ")}, which can change what the approved test checks; a person has to approve this diff.`);
+      }
+    }
     if (actor.kind !== "person") return refuse(`A person approves the merge, not ${actor.kind} ${actor.id}.`);
     const base = await runGit(repoRoot, ["rev-parse", "--verify", `refs/heads/${integrationBranch}^{commit}`]);
     if (base.code !== 0) return refuse(`Integration branch ${integrationBranch} does not exist.`);
@@ -707,7 +749,11 @@ export class TestGate {
       }
       // The candidate is a bare checkout; the test usually needs the project's dependencies.
       if (prepare) await prepare(candidate);
-      else linked = await linkDependencies(repoRoot, branch, candidate);
+      else {
+        const deps = await cleanDependencies(repoRoot, integrationBranch, candidate, this.run, this.timeoutMs);
+        linked = deps.linked;
+        if (deps.failure) return refuse(`${deps.failure} ${integrationBranch} was left untouched.`, { mergeCommit });
+      }
       const run = await this.run(definition.command, candidate, { timeoutMs: this.timeoutMs });
       if (!run.passed) {
         entries.push(this.ledger.append({ ...proof(mergeCommit, run), type: "test.failed", summary: `Done-when test for ${taskId} fails after merging into ${integrationBranch}`, reason: failureReason(run) }));
