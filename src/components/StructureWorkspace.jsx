@@ -14,6 +14,7 @@ import {
   analyzeWorkspaceStructure,
   assessFolderContract,
   folderDraftStructureDigest,
+  folderPlanHeadline,
   prepareFolderOrganizationReview,
 } from "../engine/folderContractEngine.js";
 import {
@@ -249,6 +250,7 @@ export function StructureWorkspace({
     return () => { current = false; };
   }, [canRemember, activeProject?.projectId, workspaceAdapter]);
   const assessment = useMemo(() => assessFolderContract(draft), [draft]);
+  const headline = folderPlanHeadline(assessment, { imported });
   const [draftFingerprint, setDraftFingerprint] = useState(null);
   useEffect(() => {
     let current = true;
@@ -982,20 +984,20 @@ export function StructureWorkspace({
           </p>
         </div>
         <div
-          className={`structure-state ${assessment.ready ? "ready" : "blocked"}`}
+          className={`structure-state ${headline.tone}`}
         >
-          {assessment.ready ? (
+          {headline.tone !== "blocked" ? (
             <CheckCircleIcon weight="fill" />
           ) : (
             <WarningIcon weight="fill" />
           )}
           <span>
             <small>Contract state</small>
-            <strong>{matchesSavedRevision ? `SAVED REVISION ${registry.revision}` : assessment.verdict}</strong>
+            <strong>{matchesSavedRevision ? `SAVED REVISION ${registry.revision}` : headline.verdict}</strong>
             <em>
               {matchesSavedRevision ? "This draft matches the saved contract · no files created" : assessment.ready
                 ? registry.head ? "Unsaved draft · saved revision remains unchanged" : "Valid draft · approval to lock pending"
-                : `${assessment.blockers.length} blockers`}
+                : headline.detail}
             </em>
           </span>
         </div>
@@ -1765,12 +1767,10 @@ export function StructureWorkspace({
                   ? registry.available
                     ? `Durable registry ready · revision ${registry.revision}`
                     : "Draft valid · registry unavailable"
-                  : "Folder plan not ready for approval"}
+                  : headline.panelTitle}
               </strong>
               <small>
-                {assessment.ready
-                  ? "Approval details"
-                  : `${assessment.blockers.length} blockers · open to review`}
+                {headline.panelDetail}
               </small>
             </span>
           </button>
