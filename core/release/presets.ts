@@ -1,4 +1,4 @@
-import type { Actor, Ledger, LedgerEntry } from "../ledger/index";
+import { isAuthoritative, type Actor, type Ledger, type LedgerEntry } from "../ledger/index";
 import { nextNumber } from "../numbering/index";
 import type { Triage } from "./risk";
 import type { PresetName } from "./types";
@@ -64,8 +64,8 @@ const PRESET_TOPIC = "review-preset";
 export function currentPreset(entries: readonly LedgerEntry[]): PresetName {
   for (let i = entries.length - 1; i >= 0; i--) {
     const entry = entries[i];
-    // Only a person's decision counts: an agent may write decision.made, but never this one.
-    if (entry.type === "decision.made" && entry.actor.kind === "person" && entry.data?.topic === PRESET_TOPIC && isPresetName(entry.data?.preset)) {
+    // Only a person's decision counts, never an agent's or the system's.
+    if (entry.type === "decision.made" && isAuthoritative(entry, { personOnly: true }) && entry.data?.topic === PRESET_TOPIC && isPresetName(entry.data?.preset)) {
       return entry.data.preset;
     }
   }
@@ -80,7 +80,6 @@ export function setPreset(ledger: Ledger, actor: Actor, preset: PresetName, reas
     actor,
     type: "decision.made",
     subject: nextNumber(ledger.entries(), "D"), // decisions take the next D- number
-
     summary: `Review preset set to ${PRESETS[preset].label}`,
     reason,
     evidence: [],

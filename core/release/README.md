@@ -24,9 +24,9 @@ needsDeepReview(preset, triage)               // { deep, why }
 ```
 
 Only a person can change the preset or the budget, enforced twice: the
-readers (`currentPreset`, `currentBudget`) ignore any such decision not
-written by a person, and `installSettingsRule(ledger)` refuses an agent's or
-Jev's `decision.made` on either topic outright. The gate reads the preset
+readers (`currentPreset`, `currentBudget`) count only entries that pass
+`isAuthoritative(entry, { personOnly: true })` from `core/ledger`, and `installSettingsRule(ledger)` refuses a system `decision.made` on either topic
+outright (the ledger itself already refuses agents and Jev). The gate reads the preset
 from the ledger (`runCheapFirst(change, { entries })`); callers cannot pass
 one in.
 

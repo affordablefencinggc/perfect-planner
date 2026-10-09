@@ -1,6 +1,6 @@
 // Monthly CI and model budget. Spend and budget config both live in the
 // ledger; nothing here keeps its own state.
-import { Ledger, LedgerError } from "../ledger/index";
+import { Ledger, LedgerError, isAuthoritative } from "../ledger/index";
 import type { Actor, EntryType, LedgerEntry } from "../ledger/index";
 import { nextNumber } from "../numbering/index";
 import type { Cents } from "./types";
@@ -82,8 +82,8 @@ export function monthSpend(entries: readonly LedgerEntry[], month: string): Mont
 export function currentBudget(entries: readonly LedgerEntry[]): BudgetConfig | undefined {
   for (let i = entries.length - 1; i >= 0; i--) {
     const entry = entries[i]!;
-    // Only a person's decision counts: an agent may write decision.made, but never this one.
-    if (entry.type !== "decision.made" || entry.actor.kind !== "person" || entry.data?.topic !== "budget") continue;
+    // Only a person's decision counts, never an agent's or the system's.
+    if (entry.type !== "decision.made" || !isAuthoritative(entry, { personOnly: true }) || entry.data?.topic !== "budget") continue;
     const b = entry.data?.budget as Partial<BudgetConfig> | undefined;
     if (!b || typeof b.monthlyCents !== "number" || !(b.monthlyCents > 0)) continue;
     const config: BudgetConfig = { monthlyCents: b.monthlyCents };

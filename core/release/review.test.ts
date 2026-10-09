@@ -175,21 +175,28 @@ describe("cheap-first pipeline", () => {
 });
 
 describe("settings an agent cannot change", () => {
-  it("ignores a review-preset decision written straight to the ledger by an agent", () => {
+  it("leaves the agent no way to write the decision at all", () => {
+    const ledger = open();
+    expect(() =>
+      appendNumbered(ledger, { actor: agent, type: "decision.made", summary: "cheaper", reason: "save money", evidence: [], refs: [], data: { topic: "review-preset", preset: "cheap" } }),
+    ).toThrow(/may not write decision.made/);
+  });
+
+  it("ignores a review-preset decision written by anyone but a person", () => {
     const ledger = open();
     setPreset(ledger, owner, "thorough", "we take payments now");
-    appendNumbered(ledger, { actor: agent, type: "decision.made", summary: "cheaper", reason: "save money", evidence: [], refs: [], data: { topic: "review-preset", preset: "cheap" } });
+    appendNumbered(ledger, { actor: system, type: "decision.made", summary: "cheaper", reason: "save money", evidence: [], refs: [], data: { topic: "review-preset", preset: "cheap" } });
     expect(currentPreset(ledger.entries())).toBe("thorough");
   });
 
-  it("refuses the agent's write outright once the settings rule is installed", () => {
+  it("refuses a system write outright once the settings rule is installed", () => {
     const ledger = open();
     installSettingsRule(ledger);
     expect(() =>
-      appendNumbered(ledger, { actor: agent, type: "decision.made", summary: "cheaper", reason: "save money", evidence: [], refs: [], data: { topic: "review-preset", preset: "cheap" } }),
+      appendNumbered(ledger, { actor: system, type: "decision.made", summary: "cheaper", reason: "save money", evidence: [], refs: [], data: { topic: "review-preset", preset: "cheap" } }),
     ).toThrow(/Only a person/);
     expect(() =>
-      appendNumbered(ledger, { actor: agent, type: "decision.made", summary: "more money", reason: "x", evidence: [], refs: [], data: { topic: "budget", budget: { monthlyCents: 999999 } } }),
+      appendNumbered(ledger, { actor: system, type: "decision.made", summary: "more money", reason: "x", evidence: [], refs: [], data: { topic: "budget", budget: { monthlyCents: 999999 } } }),
     ).toThrow(/Only a person/);
     expect(() => setPreset(ledger, owner, "cheap", "solo prototype")).not.toThrow();
   });
