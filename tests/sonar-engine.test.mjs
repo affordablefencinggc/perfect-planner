@@ -1,3 +1,4 @@
+import "./helpers/hermetic-env.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { assessNameCandidates, assessRepositorySonar, generateUnverifiedNames } from "../src/engine/sonarEngine.js";
