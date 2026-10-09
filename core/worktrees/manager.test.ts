@@ -156,6 +156,12 @@ describe("WorktreeManager", () => {
     expect(listed).toContain("branch refs/heads/pp/T-13");
   }, SLOW);
 
+  it("lets an agent launch a worktree; the manager writes the entry and names the agent", async () => {
+    const agent = { kind: "agent", id: "worker-2", model: "test-model" } as const;
+    await manager.create({ taskId: "T-17", actor: agent });
+    expect(ledger.entries().at(-1)).toMatchObject({ type: "worktree.created", actor: { kind: "system", id: "worktrees" }, data: { launchedBy: agent } });
+  }, SLOW);
+
   it("leaves a user's own pre-existing exclude lines alone", async () => {
     const exclude = path.join(repo.root, ".git", "info", "exclude");
     writeFileSync(exclude, "*.log");

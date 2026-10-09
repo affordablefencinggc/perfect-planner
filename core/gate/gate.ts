@@ -564,12 +564,13 @@ export class TestGate {
     });
     const reopened = this.ledger.append({
       type: "task.reopened",
-      actor: reviewer,
+      // The reviewer (often Jev) only gives the verdict; reopening is the gate's own act.
+      actor: GATE_ACTOR,
       subject: taskId,
       summary: `${taskId} goes back to the worker as ${newTaskId}`,
       reason,
-      evidence: [`attempt:${newTaskId}`, `verdict:${verdict.n}`],
-      data: { attempt: newTaskId, notes: list },
+      evidence: [`attempt:${newTaskId}`, `verdict:${verdict.n}`, `reviewer:${reviewer.kind}:${reviewer.id}`],
+      data: { attempt: newTaskId, notes: list, reviewer },
     });
     return { ok: true, newTaskId, entries: [verdict, reopened] };
   }
