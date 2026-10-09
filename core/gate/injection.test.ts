@@ -195,7 +195,7 @@ describe("the app's own git settings cannot be used to run a program", () => {
     const ctx = await approvedRepo();
     // Through the hardened runner the hooks folder is /dev/null (git.exe's own path on Windows), not a temp folder.
     const hooks = await git(ctx.root, ["rev-parse", "--git-path", "hooks"]);
-    expect(hooks).toBe(process.platform === "win32" ? gitExecutable(ctx.root).replace(/\\/g, "/") : "/dev/null");
+    expect(process.platform === "win32" ? path.resolve(hooks) : hooks).toBe(process.platform === "win32" ? path.resolve(gitExecutable(ctx.root)) : "/dev/null");
     // The old layout: an empty no-hooks folder beside the app's attributes file. Plant every hook there.
     const attributes = await git(ctx.root, ["config", "--get", "core.attributesFile"]);
     for (const hook of HOOKS) plant(path.join(path.dirname(attributes), "no-hooks", hook), ctx.marker);
