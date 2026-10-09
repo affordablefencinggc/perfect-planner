@@ -3885,9 +3885,14 @@ code {
 }
 .assignment span {
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font: 8px var(--mono);
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.2;
+  font: 9px/1.2 var(--mono);
 }
 .assignment svg {
   width: 13px;
