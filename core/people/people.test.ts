@@ -198,8 +198,9 @@ describe("what each role may write", () => {
   it("makes viewers read-only, including their agents", () => {
     const ledger = team();
     changeMember(ledger, owner, "sam", { agents: ["sam-bot"] });
+    createTask(ledger);
     expect(refusal(() => createTask(ledger, sam))).toMatch(/viewer/);
-    expect(refusal(() => createTask(ledger, { kind: "agent", id: "sam-bot", model: "m" }))).toMatch(/working for sam/);
+    expect(refusal(() => write(ledger, { actor: { kind: "agent", id: "sam-bot", model: "m" }, type: "task.progress", subject: "T-1" }))).toMatch(/working for sam/);
   });
 
   it("lets helpers claim and progress tasks but approve only what the owner granted", () => {
@@ -208,8 +209,12 @@ describe("what each role may write", () => {
     write(ledger, { actor: mia, type: "task.claimed", subject: "T-1" });
     write(ledger, { actor: mia, type: "test.defined", subject: "T-1", data: { test: "npm test" } });
     expect(refusal(() => write(ledger, { actor: mia, type: "test.approved", subject: "T-1", data: { test: "npm test" } }))).toMatch(/without test approval/);
-    expect(refusal(() => write(ledger, { actor: miasAgent, type: "test.approved", subject: "T-1", data: { test: "npm test" } }))).toMatch(/mia-worker \(working for mia\)/);
+    write(ledger, { actor: miasAgent, type: "task.progress", subject: "T-1" });
     changeMember(ledger, owner, "mia", { approves: ["test"] });
+    // The ledger never lets an agent approve, whatever its person may do.
+    expect(() => write(ledger, { actor: miasAgent, type: "test.approved", subject: "T-1", data: { test: "npm test" } })).toThrow(
+      expect.objectContaining({ code: "NOT_PERMITTED" }),
+    );
     write(ledger, { actor: mia, type: "test.approved", subject: "T-1", data: { test: "npm test" } });
     expect(refusal(() => appendNumbered(ledger, { actor: mia, type: "plan.approved", summary: "Plan", evidence: [], refs: [] }))).toMatch(/plan approval/);
   });
@@ -225,9 +230,10 @@ describe("what each role may write", () => {
 
   it("closes the door on removed members", () => {
     const ledger = team();
+    createTask(ledger);
     removeMember(ledger, owner, "mia", "Finished her part");
     expect(refusal(() => createTask(ledger, mia))).toMatch(/not a member/);
-    expect(refusal(() => createTask(ledger, miasAgent)).length).toBeGreaterThan(0);
+    expect(refusal(() => write(ledger, { actor: miasAgent, type: "task.progress", subject: "T-1" }))).toMatch(/has left the project/);
   });
 });
 
@@ -306,11 +312,11 @@ describe("where everyone is", () => {
     createTask(ledger);
     createTask(ledger);
     write(ledger, { actor: mia, type: "task.claimed", subject: "T-1", summary: "Mia took the login screen" });
-    write(ledger, { actor: miasAgent, type: "commit.observed", subject: "T-1", summary: "Commit 9f3c2e1", data: { sha: "9f3c2e1" } });
+    write(ledger, { actor: miasAgent, type: "task.blocked", subject: "T-1", summary: "Waiting on the login API" });
     write(ledger, { actor: owner, type: "question.asked", subject: "Q-1", summary: "Which font?", data: { task: "T-2" } });
     const view = buildPeopleView(ledger.entries());
     const by = Object.fromEntries(view.members.map((m) => [m.person, m.presence]));
-    expect(by.mia).toMatchObject({ stage: "git", subject: "T-1", task: "T-1", via: "mia-worker", summary: "Commit 9f3c2e1" });
+    expect(by.mia).toMatchObject({ stage: "task", subject: "T-1", task: "T-1", via: "mia-worker", summary: "Waiting on the login API" });
     expect(by["looplet-spare"]).toMatchObject({ stage: "relay", subject: "Q-1", via: "looplet-spare", task: "T-2" });
     expect(by.sam).toBeUndefined();
   });

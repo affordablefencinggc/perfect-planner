@@ -68,6 +68,11 @@ names on every OS.
   removed or demoted. Approvals belong to helpers only.
 - Once there is a roster, a person who is not on it cannot write. Viewers
   cannot write. Helpers cannot write approval types they were not granted.
+- These rules run after the ledger's own "who may write what" table
+  (`DEFAULT_PERMISSIONS`, by actor kind), so an agent never approves, records
+  test results or creates tasks whatever its person may do. That table is per
+  actor kind; roles are per person, so they live here as a ledger rule rather
+  than in the table.
 - A member's agents (`agents`) are held to that member's role, and an agent of
   a removed member is refused. Unlisted agents, Jev and the watcher are not
   restricted, since they report into the one project ledger (§9.5).
