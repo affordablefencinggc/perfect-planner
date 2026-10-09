@@ -17,7 +17,7 @@ import { WorktreeError, WorktreeManager, git, runGit, WORKTREES_ACTOR, type Work
 import type { CoreHost } from "../host";
 import type { CoreProject } from "../project";
 import { HttpError, type Router } from "../router";
-import { AGENT_SERVER_NAME, agentEntryPath } from "./agents";
+import { AGENT_SERVER_NAME, agentEntryPath, connectLine } from "./agents";
 import { localPerson, localPersonId } from "./people";
 
 const REPO_FILE = "repo.json";
@@ -216,7 +216,8 @@ export function workerBrief(task: { label: string; title: string; clauses: strin
 
 export function workerCommands(options: { worktree: string; bridgeUrl: string; token: string; entry: string; briefFile: string; platform?: NodeJS.Platform }) {
   const { worktree, bridgeUrl, token, entry, briefFile } = options;
-  const add = `claude mcp add ${AGENT_SERVER_NAME} --env PP_BRIDGE_URL=${bridgeUrl} --env PP_AGENT_TOKEN=${token} -- node ${quote(entry)}`;
+  // Re-runnable: a new attempt in the same worktree replaces the revoked token's registration.
+  const add = connectLine(bridgeUrl, token, entry);
   const windows = (options.platform ?? process.platform) === "win32";
   const setup = windows ? `cd ${quote(worktree)}; ${add}` : `cd ${quote(worktree)} && ${add}`;
   const start = windows ? `claude (Get-Content -Raw ${quote(briefFile)})` : `claude "$(cat ${quote(briefFile)})"`;

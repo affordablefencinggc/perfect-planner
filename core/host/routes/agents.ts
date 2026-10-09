@@ -103,8 +103,16 @@ export function agentEntryPath(from: string = fileURLToPath(import.meta.url)): {
 
 const quote = (value: string) => `"${value.replaceAll('"', '\\"')}"`;
 
+/**
+ * The one line for Claude Code: connect.mjs (next to the agent entry) registers the server for the
+ * folder it runs in, replacing an older registration, and installs the perfect-planner-connect skill.
+ */
+export function connectLine(bridgeUrl: string, token: string, entry: string): string {
+  return `node ${quote(entry.replace(/agent\.mjs$/, "connect.mjs"))} ${bridgeUrl} ${token}`;
+}
+
 export function setupFor(bridgeUrl: string, token: string, entry: string) {
-  const claudeCode = `claude mcp add ${AGENT_SERVER_NAME} --env PP_BRIDGE_URL=${bridgeUrl} --env PP_AGENT_TOKEN=${token} -- node ${quote(entry)}`;
+  const claudeCode = connectLine(bridgeUrl, token, entry);
   const json = JSON.stringify({ mcpServers: { [AGENT_SERVER_NAME]: { command: "node", args: [entry], env: { PP_BRIDGE_URL: bridgeUrl, PP_AGENT_TOKEN: token } } } }, null, 2);
   return { claudeCode, json };
 }

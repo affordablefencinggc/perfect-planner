@@ -12,7 +12,7 @@ export const CORE_HOST_OUT = path.join(projectRoot, "dist", "core-host");
 
 export async function buildCoreHost() {
   await build({
-    entryPoints: { index: path.join(projectRoot, "core/host/index.ts"), agent: path.join(projectRoot, "core/host/agentStdio.ts") },
+    entryPoints: { index: path.join(projectRoot, "core/host/index.ts"), agent: path.join(projectRoot, "core/host/agentStdio.ts"), connect: path.join(projectRoot, "core/host/agentConnect.ts") },
     outdir: CORE_HOST_OUT,
     bundle: true,
     platform: "node",
@@ -25,6 +25,9 @@ export async function buildCoreHost() {
   // The worktree manager copies its commit-time secret scan from ./hooks next to its own module.
   mkdirSync(path.join(CORE_HOST_OUT, "hooks"), { recursive: true });
   copyFileSync(path.join(projectRoot, "core/worktrees/hooks/secret-scan.mjs"), path.join(CORE_HOST_OUT, "hooks", "secret-scan.mjs"));
+  // connect.mjs installs this skill so a connected agent knows the loop rules.
+  mkdirSync(path.join(CORE_HOST_OUT, "skill"), { recursive: true });
+  copyFileSync(path.join(projectRoot, "core/mcp/skill/SKILL.md"), path.join(CORE_HOST_OUT, "skill", "SKILL.md"));
   return CORE_HOST_OUT;
 }
 

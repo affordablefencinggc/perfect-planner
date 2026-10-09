@@ -11,7 +11,7 @@ const CONNECT = {
   token: TOKEN,
   agentPath: "/repo/dist/core-host/agent.mjs",
   agentBuilt: true,
-  claudeCode: `claude mcp add perfect-planner-core --env PP_BRIDGE_URL=http://127.0.0.1:5555 --env PP_AGENT_TOKEN=${TOKEN} -- node "/repo/dist/core-host/agent.mjs"`,
+  claudeCode: `node "/repo/dist/core-host/connect.mjs" http://127.0.0.1:5555 ${TOKEN}`,
   json: JSON.stringify({ mcpServers: { "perfect-planner-core": { command: "node", args: ["/repo/dist/core-host/agent.mjs"], env: { PP_BRIDGE_URL: "http://127.0.0.1:5555", PP_AGENT_TOKEN: TOKEN } } } }, null, 2),
 };
 const MAIN = { id: "claude-code-ab12cd", name: "Claude Code", model: "claude-opus", role: "main", person: "owner", connection: "C-1", connectedAt: "2026-10-09T10:00:00Z" };

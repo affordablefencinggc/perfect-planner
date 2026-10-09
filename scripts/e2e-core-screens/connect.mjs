@@ -12,8 +12,8 @@ export const steps = [
       await page.click({ within: DRAWER, role: "button", name: "Connect agent" }, "Connect agent in drawer");
       await page.expectText("Waiting for the agent to check in");
       const command = await waitFor(() => page.eval(`document.querySelector("[data-connect-command]")?.textContent ?? null`), { label: "connect command" });
-      const url = /PP_BRIDGE_URL=(\S+)/.exec(command)?.[1];
-      const token = /PP_AGENT_TOKEN=(\S+)/.exec(command)?.[1];
+      const url = /\s(http:\/\/\S+)\s/.exec(command)?.[1];
+      const token = /\s(pp_c_\S+)$/.exec(command.trim())?.[1];
       if (!url || !token) throw new Error(`Command is missing the bridge URL or token: ${command.replace(/pp_c_\S+/, "pp_c_…")}`);
       if (!/^http:\/\/127\.0\.0\.1:\d+$/.test(url)) throw new Error(`Bridge is not on loopback: ${url}`);
       const res = await fetch(`${url}/call`, {

@@ -105,7 +105,10 @@ export function CoreAgentConnect() {
 
           {pending && (
             <div className="core-agent-connect-setup">
-              <p>Paste this into a terminal on this computer. It adds Perfect Planner to Claude Code; then start Claude Code and ask it to check in.</p>
+              <p>
+                Open a terminal in the folder your agent will work in and paste this one line. It connects Claude Code to Perfect Planner and teaches it the rules.
+                Then start Claude Code there and say <strong>check in with Perfect Planner</strong>. Already in Claude Code? Paste the line into the chat instead.
+              </p>
               {pending.warning && <p className="core-agent-connect-warn">{pending.warning}</p>}
               <div className="core-agent-connect-snippet">
                 <div className="core-agent-connect-snippet-head">
