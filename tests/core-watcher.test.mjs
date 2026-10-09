@@ -35,6 +35,7 @@ function fakeLedger(clock) {
         subject: fields.subject,
         summary: fields.summary,
         ...(fields.reason ? { reason: fields.reason } : {}),
+        ...(fields.blocking ? { blocking: true } : {}),
         evidence: fields.evidence ?? [],
         refs: fields.refs ?? [],
         corrects: null,
@@ -442,6 +443,264 @@ test("start ticks on an interval and stop halts further writes", async () => {
     await commitFile(worktrees["T-2"], "later.txt", "x\n", "T-2 after stop");
     await new Promise((resolve) => setTimeout(resolve, 60));
     assert.equal(ledger.entries().length, countAtStop);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("bare clause refs inherit the plan named earlier on the same Implements line", () => {
+  assert.deepEqual(parseImplementsRefs("Work\n\nImplements: P-2 §3.1, §3.2 (T-14)"), ["P-2 §3.1", "P-2 §3.2"]);
+  assert.deepEqual(parseImplementsRefs("Implements: P-2 §3.1; §4; P-5 §1, §2"), [
+    "P-2 §3.1",
+    "P-2 §4",
+    "P-5 §1",
+    "P-5 §2",
+  ]);
+  assert.deepEqual(parseImplementsRefs("Implements: §3.2 (T-14)"), [], "a bare clause with no plan is ignored");
+  assert.deepEqual(parseImplementsRefs("Implements: P-2 §3.1\nImplements: §3.2"), ["P-2 §3.1"]);
+});
+
+test("unsafe base refs never reach git, and the integration branch is required", async () => {
+  const clock = { t: START };
+  assert.throws(() => createGitWatcher({ repoRoot: ".", ledger: fakeLedger(clock) }), TypeError);
+  assert.throws(
+    () => createGitWatcher({ repoRoot: ".", ledger: fakeLedger(clock), integrationBranch: "--output=x" }),
+    TypeError,
+  );
+
+  const { root, repo, worktrees } = await makeRepo();
+  try {
+    const ledger = fakeLedger(clock);
+    const watcher = createGitWatcher({
+      repoRoot: repo,
+      ledger,
+      now: () => new Date(clock.t),
+      listWorktrees: async () => [
+        { task: "T-1", path: worktrees["T-1"], branch: "pp/T-1", base: "--output=pwned.txt" },
+        { task: "T-2", path: worktrees["T-2"], branch: "pp/T-2", base: "main" },
+      ],
+    });
+    await commitFile(worktrees["T-2"], "ok.txt", "ok\n", "T-2 work");
+    const result = await watcher.tick();
+    assert.equal(result.errors.length, 1);
+    assert.equal(result.errors[0].stage, "git");
+    assert.equal(result.errors[0].task, "T-1");
+    await assert.rejects(fs.access(path.join(worktrees["T-1"], "pwned.txt...HEAD")));
+    await assert.rejects(fs.access(path.join(repo, "pwned.txt...HEAD")));
+    assert.equal(ofType(ledger, "commit.observed").length, 1, "the safe worktree is still read");
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a blocking question pauses the stall clock until it is answered", async () => {
+  const clock = { t: START };
+  const ledger = fakeLedger(clock);
+  await ledger.append({ actor: { kind: "agent", id: "w1" }, type: "task.claimed", subject: "T-1", summary: "claimed T-1" });
+  clock.t = START + 100;
+  const question = await ledger.append({
+    actor: { kind: "agent", id: "w1" },
+    type: "question.asked",
+    subject: "T-1",
+    summary: "which schema version?",
+    blocking: true,
+  });
+  const watcher = createGitWatcher({
+    repoRoot: ".",
+    ledger,
+    stallMs: 1000,
+    now: () => new Date(clock.t),
+    listWorktrees: async () => [],
+  });
+
+  clock.t = START + 5000;
+  await watcher.tick();
+  assert.equal(ofType(ledger, "task.blocked").length, 0, "a worker waiting on a blocking question is not stalled");
+
+  await ledger.append({
+    actor: { kind: "human", id: "owner" },
+    type: "question.answered",
+    subject: "T-1",
+    summary: "use schema v2",
+    evidence: [question.n],
+  });
+  clock.t = START + 5500;
+  await watcher.tick();
+  assert.equal(ofType(ledger, "task.blocked").length, 0, "the answer counts as activity");
+
+  clock.t = START + 6100;
+  await watcher.tick();
+  const stalls = ofType(ledger, "task.blocked");
+  assert.equal(stalls.length, 1);
+  assert.deepEqual(stalls[0].evidence, [`activity:${new Date(START + 5000).toISOString()}`]);
+});
+
+test("attaching proof counts as activity, so a proved task can still stall later", async () => {
+  const clock = { t: START };
+  const ledger = fakeLedger(clock);
+  await ledger.append({ actor: { kind: "agent", id: "w1" }, type: "task.claimed", subject: "T-1", summary: "claimed T-1" });
+  clock.t = START + 500;
+  await ledger.append({ actor: { kind: "agent", id: "w1" }, type: "task.proof", subject: "T-1", summary: "screenshot attached" });
+  const watcher = createGitWatcher({
+    repoRoot: ".",
+    ledger,
+    stallMs: 1000,
+    now: () => new Date(clock.t),
+    listWorktrees: async () => [],
+  });
+
+  clock.t = START + 1200;
+  await watcher.tick();
+  assert.equal(ofType(ledger, "task.blocked").length, 0);
+
+  clock.t = START + 1600;
+  await watcher.tick();
+  const stalls = ofType(ledger, "task.blocked");
+  assert.equal(stalls.length, 1, "proof did not end stall tracking");
+  assert.deepEqual(stalls[0].evidence, [`activity:${new Date(START + 500).toISOString()}`]);
+});
+
+test("a resolved collision is detected again if the same pair overlaps later", async () => {
+  const { root, repo, worktrees } = await makeRepo();
+  try {
+    const clock = { t: START };
+    const ledger = fakeLedger(clock);
+    const watcher = createGitWatcher({
+      repoRoot: repo,
+      ledger,
+      now: () => new Date(clock.t),
+      listWorktrees: listFor(repo, worktrees),
+    });
+    await commitFile(worktrees["T-1"], "shared.txt", "from T-1\n", "T-1 edits shared");
+    await fs.writeFile(path.join(worktrees["T-2"], "shared.txt"), "from T-2\n");
+    await watcher.tick();
+    assert.equal(ofType(ledger, "collision.detected").length, 1);
+
+    await ledger.append({
+      actor: { kind: "human", id: "owner" },
+      type: "collision.resolved",
+      subject: "T-1+T-2",
+      summary: "shared.txt reconciled",
+      evidence: ["shared.txt"],
+    });
+    await watcher.tick();
+    const collisions = ofType(ledger, "collision.detected");
+    assert.equal(collisions.length, 2, "the overlap is recorded again after resolution");
+    assert.deepEqual(collisions[1].evidence, ["shared.txt"]);
+    assert.equal(collisions[1].subject, "T-1+T-2");
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("copied local settings are not collisions, but other shared untracked files are", async () => {
+  const { root, repo, worktrees } = await makeRepo();
+  try {
+    const clock = { t: START };
+    const ledger = fakeLedger(clock);
+    const watcher = createGitWatcher({
+      repoRoot: repo,
+      ledger,
+      now: () => new Date(clock.t),
+      listWorktrees: listFor(repo, worktrees),
+    });
+    for (const task of ["T-1", "T-2"]) {
+      await fs.mkdir(path.join(worktrees[task], ".claude"), { recursive: true });
+      await fs.writeFile(path.join(worktrees[task], ".claude", "settings.local.json"), "{}\n");
+      await fs.mkdir(path.join(worktrees[task], ".perfect-planner"), { recursive: true });
+      await fs.writeFile(path.join(worktrees[task], ".perfect-planner", "state.json"), "{}\n");
+    }
+    await watcher.tick();
+    assert.equal(ofType(ledger, "collision.detected").length, 0, "copied settings are ignored");
+
+    for (const task of ["T-1", "T-2"]) {
+      await fs.writeFile(path.join(worktrees[task], "notes.txt"), "same\n");
+    }
+    await watcher.tick();
+    const collisions = ofType(ledger, "collision.detected");
+    assert.equal(collisions.length, 1);
+    assert.deepEqual(collisions[0].evidence, ["notes.txt"]);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a replaced ledger window is replayed from scratch, so no entry is skipped", async () => {
+  const { root, repo, worktrees } = await makeRepo();
+  try {
+    const clock = { t: START };
+    const base = fakeLedger(clock);
+    let view = null;
+    const ledger = { append: (fields) => base.append(fields), entries: () => view ?? base.entries() };
+    const actor = { kind: "system", id: "git-watcher" };
+
+    await commitFile(worktrees["T-1"], "a.txt", "a\n", "T-1 first");
+    const commitA = git(worktrees["T-1"], ["rev-parse", "HEAD"]);
+    await base.append({ actor, type: "commit.observed", subject: "T-1", summary: "a", evidence: [commitA] });
+    await base.append({ actor: { kind: "agent", id: "w1" }, type: "task.claimed", subject: "T-1", summary: "claimed T-1" });
+    await base.append({ actor: { kind: "agent", id: "w1" }, type: "task.progress", subject: "T-1", summary: "progress" });
+
+    const watcher = createGitWatcher({
+      repoRoot: repo,
+      ledger,
+      now: () => new Date(clock.t),
+      listWorktrees: listFor(repo, worktrees),
+    });
+    const first = await watcher.tick();
+    assert.deepEqual(first.errors, []);
+    assert.equal(first.written.length, 0, "commit A was already observed");
+
+    // A new commit on T-2 is recorded in a window that replaces the old one at the same length.
+    await commitFile(worktrees["T-2"], "b.txt", "b\n", "T-2 work");
+    const commitB = git(worktrees["T-2"], ["rev-parse", "HEAD"]);
+    const [observedA, claimed] = base.entries();
+    view = [
+      observedA,
+      claimed,
+      Object.freeze({
+        n: "L-000099",
+        at: new Date(START).toISOString(),
+        actor,
+        type: "commit.observed",
+        subject: "T-2",
+        summary: "b",
+        evidence: [commitB],
+        refs: [],
+        corrects: null,
+      }),
+    ];
+    const second = await watcher.tick();
+    assert.deepEqual(second.errors, []);
+    assert.equal(
+      second.written.filter((entry) => entry.type === "commit.observed").length,
+      0,
+      "commit B is already in the replaced window and must not be observed again",
+    );
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a commit reachable from two task worktrees is observed once", async () => {
+  const { root, repo, worktrees } = await makeRepo();
+  try {
+    const clock = { t: START };
+    const ledger = fakeLedger(clock);
+    const watcher = createGitWatcher({
+      repoRoot: repo,
+      ledger,
+      now: () => new Date(clock.t),
+      listWorktrees: listFor(repo, worktrees),
+    });
+    await commitFile(worktrees["T-1"], "same.txt", "x\n", "T-1 work");
+    const hash = git(worktrees["T-1"], ["rev-parse", "HEAD"]);
+    git(worktrees["T-2"], ["reset", "--hard", hash]);
+
+    const result = await watcher.tick();
+    assert.deepEqual(result.errors, []);
+    const observed = ofType(ledger, "commit.observed");
+    assert.equal(observed.length, 1, "one commit hash is observed once, whichever task reaches it first");
+    assert.deepEqual(observed[0].evidence, [hash]);
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }

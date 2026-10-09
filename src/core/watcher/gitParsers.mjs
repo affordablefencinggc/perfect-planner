@@ -4,9 +4,12 @@ const RECORD_SEPARATOR = "\x1e";
 const FIELD_SEPARATOR = "\x1f";
 
 // "Implements: P-2 §3.1 (T-14)" -> ["P-2 §3.1"]. Several refs may be separated
-// by commas or semicolons. Only plan-qualified clause refs are returned; the
-// trailing "(T-14)" task marker is ignored here.
+// by commas or semicolons. A bare clause ref ("§3.2") takes the plan named
+// most recently on the same Implements line: "P-2 §3.1, §3.2" -> two refs.
+// A bare clause with no earlier plan on its line is ignored. The trailing
+// "(T-14)" task marker is ignored here.
 const PLAN_CLAUSE_REF = /^(P-\d+)\s+(§\d+(?:\.\d+)*)/;
+const BARE_CLAUSE_REF = /^(§\d+(?:\.\d+)*)/;
 
 export function parseImplementsRefs(message) {
   if (typeof message !== "string" || message.length === 0) return [];
@@ -14,12 +17,19 @@ export function parseImplementsRefs(message) {
   for (const line of message.split(/\r?\n/)) {
     const match = /^\s*implements:\s*(.*)$/i.exec(line);
     if (!match) continue;
+    let plan = null;
     for (const part of match[1].split(/[,;]/)) {
-      const ref = PLAN_CLAUSE_REF.exec(part.trim());
-      if (ref) {
-        const value = `${ref[1]} ${ref[2]}`;
-        if (!refs.includes(value)) refs.push(value);
+      const text = part.trim();
+      const full = PLAN_CLAUSE_REF.exec(text);
+      let value = null;
+      if (full) {
+        plan = full[1];
+        value = `${full[1]} ${full[2]}`;
+      } else {
+        const bare = BARE_CLAUSE_REF.exec(text);
+        if (bare && plan) value = `${plan} ${bare[1]}`;
       }
+      if (value && !refs.includes(value)) refs.push(value);
     }
   }
   return refs;

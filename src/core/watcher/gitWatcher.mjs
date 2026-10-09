@@ -17,10 +17,33 @@ import {
 const execFileAsync = promisify(execFile);
 const TASK_ID = /^T-\d+(?:\.a\d+)?$/;
 const TASK_BRANCH = /^pp\/(T-\d+(?:\.a\d+)?)$/;
+const QUESTION_ID = /^Q-\d+$/;
+const SAFE_REF = /^[A-Za-z0-9][A-Za-z0-9._\/-]*$/;
 const SYSTEM_ACTOR = Object.freeze({ kind: "system", id: "git-watcher" });
 const LOG_FORMAT = "--format=%H%x1f%s%x1f%b%x1f%cI%x1e";
 const GIT_MAX_BUFFER = 64 * 1024 * 1024;
 const DEFAULT_STALL_MS = 15 * 60 * 1000;
+// Local files copied into every worktree (spec §5) must not count as collisions.
+// An entry ending in "/" ignores a whole directory; any other entry ignores one path.
+const DEFAULT_IGNORE_PATHS = Object.freeze([".claude/settings.local.json", ".perfect-planner/"]);
+
+// Git revisions are passed as argv, but a leading "-" would still be read as an
+// option (for example "--output=<file>"), so refs must match a safe shape.
+export function assertSafeRef(ref, label = "ref") {
+  if (
+    typeof ref !== "string" ||
+    !SAFE_REF.test(ref) ||
+    ref.includes("..") ||
+    ref.endsWith("/") ||
+    ref.endsWith(".lock")
+  ) {
+    throw new TypeError(`refusing unsafe git ${label}: ${JSON.stringify(ref)}`);
+  }
+}
+
+function isIgnoredPath(file, ignorePaths) {
+  return ignorePaths.some((pattern) => (pattern.endsWith("/") ? file.startsWith(pattern) : file === pattern));
+}
 
 async function runGit(gitCommand, cwd, args) {
   const { stdout } = await execFileAsync(gitCommand, args, {
@@ -34,24 +57,29 @@ async function runGit(gitCommand, cwd, args) {
 }
 
 // Files a worktree touches: committed since base plus uncommitted/untracked.
-async function readChangedFiles(gitCommand, worktreePath, base) {
+async function readChangedFiles(gitCommand, worktreePath, base, ignorePaths) {
+  assertSafeRef(base, "base");
   const committed = parseNulList(
     await runGit(gitCommand, worktreePath, ["diff", "--name-only", "-z", `${base}...HEAD`]),
   );
   const uncommitted = parseStatusZ(
     await runGit(gitCommand, worktreePath, ["status", "--porcelain=v1", "-z", "--untracked-files=all"]),
   );
-  return [...new Set([...committed, ...uncommitted])].sort();
+  return [...new Set([...committed, ...uncommitted])]
+    .filter((file) => !isIgnoredPath(file, ignorePaths))
+    .sort();
 }
 
 async function readNewCommits(gitCommand, worktreePath, base) {
+  assertSafeRef(base, "base");
   const stdout = await runGit(gitCommand, worktreePath, ["log", `${base}..HEAD`, LOG_FORMAT]);
   // git prints newest first; the ledger should receive them oldest first.
   return parseCommitLog(stdout).reverse();
 }
 
 // Default worktree discovery: every worktree on a branch named pp/T-<n>.
-export async function listTaskWorktrees({ repoRoot, git = "git", base = "main" }) {
+export async function listTaskWorktrees({ repoRoot, git = "git", base }) {
+  assertSafeRef(base, "base");
   const stdout = await runGit(git, repoRoot, ["worktree", "list", "--porcelain"]);
   const worktrees = [];
   for (const entry of parseWorktreePorcelain(stdout)) {
@@ -62,6 +90,36 @@ export async function listTaskWorktrees({ repoRoot, git = "git", base = "main" }
   return worktrees;
 }
 
+function createIndex() {
+  return {
+    processed: 0,
+    lastN: null,
+    commits: new Set(),
+    collisions: new Set(),
+    stalls: new Set(),
+    tasks: new Map(),
+    openQuestions: new Map(),
+  };
+}
+
+function newTaskState(index, task) {
+  const state = { claimed: false, lastActivity: null, lastActivityAt: null };
+  index.tasks.set(task, state);
+  return state;
+}
+
+function noteActivity(state, atMs, at) {
+  if (!Number.isFinite(atMs)) return;
+  if (state.lastActivity === null || atMs >= state.lastActivity) {
+    state.lastActivity = atMs;
+    state.lastActivityAt = at;
+  }
+}
+
+function firstTaskIn(values) {
+  return values.find((value) => typeof value === "string" && TASK_ID.test(value)) ?? null;
+}
+
 // Rebuild dedupe and stall state from one ledger entry. Replaying the full
 // ledger in order yields the same state a long-running watcher holds.
 function applyEntry(index, entry) {
@@ -69,11 +127,40 @@ function applyEntry(index, entry) {
   const subject = typeof entry.subject === "string" ? entry.subject : "";
   const atMs = Date.parse(entry.at);
 
+  // Commits are deduped by hash alone, so one commit is observed once no
+  // matter how many task worktrees reach it.
   if (entry.type === "commit.observed" && evidence[0]) {
-    index.commits.add(`${subject}|${evidence[0]}`);
+    index.commits.add(evidence[0]);
   }
   if (entry.type === "collision.detected" && evidence[0]) {
     index.collisions.add(`${subject}|${evidence[0]}`);
+  }
+  // A resolved collision may be detected again if the same pair overlaps later.
+  if (entry.type === "collision.resolved") {
+    if (evidence[0]) {
+      index.collisions.delete(`${subject}|${evidence[0]}`);
+    } else {
+      for (const key of [...index.collisions]) {
+        if (key.startsWith(`${subject}|`)) index.collisions.delete(key);
+      }
+    }
+  }
+  // A blocking question pauses only the asking worker. While it is open the
+  // task is not stalled; the answer counts as activity. Assumed entry shape:
+  // question.asked { blocking: true } with subject T-n or Q-n, and
+  // question.answered with subject Q-n or evidence[0] = the question's entry n.
+  if (entry.type === "question.asked" && entry.blocking === true) {
+    const task = TASK_ID.test(subject) ? subject : firstTaskIn(evidence);
+    const questionId = QUESTION_ID.test(subject) ? subject : entry.n;
+    if (task && questionId) index.openQuestions.set(questionId, task);
+  }
+  if (entry.type === "question.answered") {
+    const questionId = QUESTION_ID.test(subject) ? subject : evidence[0];
+    const task = index.openQuestions.get(questionId);
+    if (task) {
+      index.openQuestions.delete(questionId);
+      noteActivity(index.tasks.get(task) ?? newTaskState(index, task), atMs, entry.at);
+    }
   }
   if (entry.type === "task.blocked" && entry.reason === "stalled") {
     if (evidence[0]) index.stalls.add(`${subject}|${evidence[0]}`);
@@ -81,28 +168,24 @@ function applyEntry(index, entry) {
   }
   if (!TASK_ID.test(subject)) return;
 
-  const state = index.tasks.get(subject) ?? { claimed: false, lastActivity: null, lastActivityAt: null };
-  const touches = entry.type === "task.progress" || entry.type === "commit.observed";
+  const state = index.tasks.get(subject) ?? newTaskState(index, subject);
+  // task.proof shows the worker is still active, so it is activity, not a release.
+  const touches =
+    entry.type === "task.progress" || entry.type === "commit.observed" || entry.type === "task.proof";
   const claims = entry.type === "task.claimed" || entry.type === "task.reopened";
   const releases =
-    entry.type === "task.blocked" ||
-    entry.type === "task.proof" ||
-    entry.type === "task.done" ||
-    entry.type === "worktree.removed";
+    entry.type === "task.blocked" || entry.type === "task.done" || entry.type === "worktree.removed";
 
   if (claims) state.claimed = true;
   if (releases) state.claimed = false;
-  if ((claims || touches) && Number.isFinite(atMs)) {
-    if (state.lastActivity === null || atMs >= state.lastActivity) {
-      state.lastActivity = atMs;
-      state.lastActivityAt = entry.at;
-    }
-  }
-  index.tasks.set(subject, state);
+  if (claims || touches) noteActivity(state, atMs, entry.at);
 }
 
-function createIndex() {
-  return { processed: 0, commits: new Set(), collisions: new Set(), stalls: new Set(), tasks: new Map() };
+function hasOpenQuestion(index, task) {
+  for (const owner of index.openQuestions.values()) {
+    if (owner === task) return true;
+  }
+  return false;
 }
 
 function errorMessage(error) {
@@ -116,25 +199,43 @@ export function createGitWatcher({
   stallMs = DEFAULT_STALL_MS,
   now = () => new Date(),
   git = "git",
-  integrationBranch = "main",
+  integrationBranch,
   listWorktrees,
+  ignorePaths = DEFAULT_IGNORE_PATHS,
 } = {}) {
   if (!ledger || typeof ledger.append !== "function" || typeof ledger.entries !== "function") {
     throw new TypeError("createGitWatcher requires a ledger with append() and entries()");
   }
+  if (!Array.isArray(ignorePaths) || ignorePaths.some((path) => typeof path !== "string")) {
+    throw new TypeError("ignorePaths must be an array of path strings");
+  }
+  if (!listWorktrees) {
+    // No default integration branch: guessing "main" could diff against the wrong base.
+    if (integrationBranch === undefined) {
+      throw new TypeError("createGitWatcher requires integrationBranch when listWorktrees is not given");
+    }
+    assertSafeRef(integrationBranch, "integrationBranch");
+  }
   const discover =
     listWorktrees ?? (() => listTaskWorktrees({ repoRoot, git, base: integrationBranch }));
 
-  const index = createIndex();
+  let index = createIndex();
   let timer = null;
   let inFlight = null;
 
   async function syncIndex() {
     const entries = await ledger.entries();
+    // If the list no longer extends what was already replayed (it shrank, or it
+    // is now a different window), replay from scratch so no entry is skipped.
+    const consistent =
+      index.processed === 0 ||
+      (entries.length >= index.processed && entries[index.processed - 1]?.n === index.lastN);
+    if (!consistent) index = createIndex();
     for (let position = index.processed; position < entries.length; position += 1) {
       applyEntry(index, entries[position]);
     }
     index.processed = entries.length;
+    index.lastN = entries.length > 0 ? entries[entries.length - 1]?.n ?? null : null;
   }
 
   async function runTick() {
@@ -174,7 +275,7 @@ export function createGitWatcher({
       let files;
       let commits;
       try {
-        files = await readChangedFiles(git, worktree.path, worktree.base);
+        files = await readChangedFiles(git, worktree.path, worktree.base, ignorePaths);
         commits = await readNewCommits(git, worktree.path, worktree.base);
       } catch (error) {
         result.errors.push({ stage: "git", task: worktree.task, message: errorMessage(error) });
@@ -183,8 +284,7 @@ export function createGitWatcher({
       states.push({ task: worktree.task, files });
 
       for (const commit of commits) {
-        const key = `${worktree.task}|${commit.hash}`;
-        if (index.commits.has(key)) continue;
+        if (index.commits.has(commit.hash)) continue;
         const summary = commit.subject ? `${commit.hash.slice(0, 7)} ${commit.subject}` : `commit ${commit.hash.slice(0, 7)}`;
         const refs = parseImplementsRefs(commit.body ? `${commit.subject}\n${commit.body}` : commit.subject);
         const entry = await write({
@@ -194,7 +294,7 @@ export function createGitWatcher({
           evidence: [commit.hash],
           ...(refs.length > 0 ? { refs } : {}),
         });
-        if (entry) index.commits.add(key);
+        if (entry) index.commits.add(commit.hash);
       }
     }
 
@@ -233,6 +333,7 @@ export function createGitWatcher({
     for (const [task, state] of index.tasks) {
       if (!state.claimed || state.lastActivity === null) continue;
       if (nowMs - state.lastActivity < stallMs) continue;
+      if (hasOpenQuestion(index, task)) continue;
       const evidence = `activity:${state.lastActivityAt}`;
       const key = `${task}|${evidence}`;
       if (index.stalls.has(key)) continue;
