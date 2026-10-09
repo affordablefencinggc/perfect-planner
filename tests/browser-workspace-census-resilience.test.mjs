@@ -204,7 +204,10 @@ test("revoked folder permission and unreadable files return stable non-authorita
     workspaceId: "unreadable_app",
     registryRevision: unreadableRegistration.registryRevision,
   });
-  assertUnavailableWithoutPartialData(unreadable, "workspace-file-unreadable");
+  // One locked file is skipped and listed; it never aborts the whole scan.
+  assert.equal(unreadable.authoritative, true);
+  assert.deepEqual(unreadable.files.map((file) => file.path), ["good.js"]);
+  assert.deepEqual(unreadable.skipped.map(({ path, reason }) => [path, reason]), [["locked.js", "file-unreadable"]]);
 
   const lostMidTraversalRoot = directoryHandle("lost-mid-root", [], { entriesError: namedError("NotAllowedError") });
   const lostRegistration = await register(lostMidTraversalRoot, "lost_mid_app");
@@ -362,4 +365,33 @@ test("mid-scan directory changes fail closed before an authoritative census is r
     registryRevision: registration.registryRevision,
   });
   assertUnavailableWithoutPartialData(result, "workspace-changed-during-census");
+});
+
+test("a stalled read, a huge file, an unreadable sub-folder and archive folders are skipped while the scan completes", async () => {
+  const stalled = { kind: "file", name: "stalled.bin", async getFile() { return new Promise(() => {}); } };
+  const huge = fileHandle("huge.log", "x".repeat(64));
+  const root = directoryHandle("mixed-root", [
+    ["app.js", fileHandle("app.js", "console.log(1)")],
+    ["stalled.bin", stalled],
+    ["huge.log", huge],
+    ["locked-dir", directoryHandle("locked-dir", [["inner.js", fileHandle("inner.js", "x")]], { entriesError: namedError("NotReadableError") })],
+    ["_archive", directoryHandle("_archive", [["old.js", fileHandle("old.js", "old")]])],
+    ["node_modules", directoryHandle("node_modules", [["dep.js", fileHandle("dep.js", "dep")]])],
+  ]);
+  const registration = await register(root, "mixed_app");
+  const census = await browserWorkspaceAdapter.censusRegisteredWorkspace({
+    workspaceId: "mixed_app",
+    registryRevision: registration.registryRevision,
+    maxFileBytes: 32,
+    fileReadTimeoutMs: 50,
+  });
+  assert.equal(census.authoritative, true);
+  assert.deepEqual(census.files.map((file) => file.path), ["app.js"]);
+  assert.deepEqual(census.skipped.map(({ path, reason }) => [path, reason]), [
+    ["_archive", "generated-or-dependency-directory-excluded"],
+    ["huge.log", "file-too-large"],
+    ["locked-dir", "folder-unreadable"],
+    ["node_modules", "generated-or-dependency-directory-excluded"],
+    ["stalled.bin", "file-read-timed-out"],
+  ]);
 });

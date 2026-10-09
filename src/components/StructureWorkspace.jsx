@@ -39,6 +39,26 @@ import { describeFolderConnection } from "../project/folderReconnectModel.js";
 import { DiscoveryReviewPanel } from "./DiscoveryReviewPanel.jsx";
 import { folderPlanGuidance } from '../engine/folderPlanGuidance.js';
 
+// Plain-language text for scan stops. Unreadable files and folders no longer stop a scan (they are skipped and listed),
+// so what remains here are whole-folder problems the person can act on.
+const censusFailureMessages = Object.freeze({
+  "workspace-read-permission-lost": "The browser no longer has permission to read this folder. Choose the folder again to continue.",
+  "workspace-read-permission-check-failed": "The browser could not confirm folder access. Choose the folder again to continue.",
+  "workspace-directory-unreadable": "The top folder could not be listed. Check it still exists, then choose it again.",
+  "workspace-changed-during-census": "Files changed while the scan was running, so the result was not saved. Run the scan again.",
+  "maximum-file-count-reached": "This folder has more than 10,000 files. Choose the app folder itself rather than a parent folder.",
+  "maximum-entry-count-reached": "This folder has too many entries to scan. Choose the app folder itself rather than a parent folder.",
+  "maximum-directory-count-reached": "This folder has too many sub-folders to scan. Choose the app folder itself rather than a parent folder.",
+  "maximum-directory-depth-reached": "Folders are nested too deeply to scan. Choose the app folder itself.",
+  "maximum-path-length-reached": "A file path is too long to scan. Choose the app folder itself.",
+  "maximum-total-bytes-reached": "There is too much file content to scan in one go. Choose the app folder itself rather than a parent folder.",
+  "maximum-scan-duration-reached": "The scan took too long and was stopped. Choose the app folder itself rather than a parent folder.",
+});
+function censusFailureText(reason, path) {
+  const text = censusFailureMessages[reason] ?? (reason ? `The folder scan stopped (${reason}). Try again.` : "The folder scan stopped without a result. Try again.");
+  return path && path !== "." ? `${text} Last item: ${path}.` : text;
+}
+
 const cloneSeed = () => structuredClone(currentFolderContractInput);
 const waves = ["approval", "architecture", "build", "proof", "release"];
 const policies = ["owner-only", "collision-review", "immutable-after-approval"];
@@ -590,8 +610,7 @@ export function StructureWorkspace({
         const message =
           census?.reason === "workspace-census-aborted"
             ? "Analysis cancelled. No partial result was accepted."
-            : census?.reason ||
-              "Folder scan failed without a saved check.";
+            : censusFailureText(census?.reason, census?.path);
         setIntake({
           state: "error",
           registration,

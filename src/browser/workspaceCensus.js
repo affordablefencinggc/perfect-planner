@@ -4,7 +4,9 @@ import { findRememberedFolder, folderAccessState, loadRememberedFolder, remember
 
 const handles = new Map();
 const encoder = new TextEncoder();
-const ignoredDirectories = new Set([".git", ".next", ".turbo", "build", "coverage", "dist", "node_modules", "target", "target-codex"]);
+// Generated, dependency, cache and archive folders are skipped by default so a real repository scans quickly
+// and the map is not polluted. Each skip is listed in the census as a skipped folder.
+const ignoredDirectories = new Set([".git", ".next", ".turbo", ".cache", ".claude", ".ledger", ".local-preview-cache", ".perfect-planner", "_archive", "build", "coverage", "dist", "node_modules", "target", "target-codex"]);
 let browserSelectionSequence = 0;
 
 export const browserWorkspaceCensusDefaults = Object.freeze({
@@ -16,7 +18,8 @@ export const browserWorkspaceCensusDefaults = Object.freeze({
   maxEntries: 50_000,
   maxDepth: 64,
   maxPathLength: 4_096,
-  maxDurationMs: 30_000,
+  maxDurationMs: 120_000,
+  fileReadTimeoutMs: 15_000,
   progressThrottleMs: 150,
 });
 
@@ -32,6 +35,14 @@ class CensusInterruption extends Error {
 
 function unavailable(reason) {
   return Object.freeze({ available: false, authoritative: false, reason, schemaVersion: 1 });
+}
+
+class FileReadTimeout extends Error {}
+
+// One stalled file (locked, on a sleeping network drive, or virtualised) must never hang the whole scan.
+function withTimeout(promise, ms) {
+  let timer;
+  return Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(new FileReadTimeout("read-timeout")), ms); })]).finally(() => clearTimeout(timer));
 }
 
 async function sha256(value) {
@@ -219,16 +230,36 @@ async function walkDirectory(directory, prefix, context, depth = 0) {
         await checkpoint(context, path);
         continue;
       }
-      await walkDirectory(handle, path, context, depth + 1);
+      try {
+        await walkDirectory(handle, path, context, depth + 1);
+      } catch (error) {
+        // A sub-folder that cannot be listed is skipped and listed, like an unreadable file.
+        if (!(error instanceof CensusInterruption) || error.reason !== "workspace-directory-unreadable") throw error;
+        const inside = (candidate) => candidate === path || candidate.startsWith(`${path}/`);
+        context.skipped.push({ path, reason: "folder-unreadable", size: null });
+        context.directorySnapshots = context.directorySnapshots.filter((snapshot) => !inside(snapshot.path));
+        context.fileSnapshots = context.fileSnapshots.filter((snapshot) => !inside(snapshot.path));
+        context.files = context.files.filter((entry) => !inside(entry.path));
+        context.totalBytesHashed = context.files.reduce((sum, entry) => sum + entry.size, 0);
+        await checkpoint(context, path);
+      }
       continue;
     }
     if (handle?.kind !== "file") throw new CensusInterruption("workspace-entry-kind-unsupported", path);
 
+    // An unreadable, locked or stalled file is skipped and listed; only a lost folder permission stops the scan.
+    const skipUnreadable = async (error) => {
+      if (isPermissionError(error) && !(error instanceof FileReadTimeout)) throw classifyReadFailure(error, path, "workspace-file-unreadable");
+      context.skipped.push({ path, reason: error instanceof FileReadTimeout ? "file-read-timed-out" : "file-unreadable", size: null });
+      await checkpoint(context, path);
+    };
     let file;
     try {
-      file = await handle.getFile();
+      file = await withTimeout(handle.getFile(), context.limits.fileReadTimeoutMs);
     } catch (error) {
-      throw classifyReadFailure(error, path, "workspace-file-unreadable");
+      if (error instanceof CensusInterruption) throw error;
+      await skipUnreadable(error);
+      continue;
     }
     throwIfInterrupted(context);
     if (!Number.isSafeInteger(file?.size) || file.size < 0) throw new CensusInterruption("workspace-file-metadata-invalid", path);
@@ -241,16 +272,20 @@ async function walkDirectory(directory, prefix, context, depth = 0) {
 
     let bytes;
     try {
-      bytes = await file.arrayBuffer();
+      bytes = await withTimeout(file.arrayBuffer(), context.limits.fileReadTimeoutMs);
     } catch (error) {
-      throw classifyReadFailure(error, path, "workspace-file-unreadable");
+      if (error instanceof CensusInterruption) throw error;
+      await skipUnreadable(error);
+      continue;
     }
     throwIfInterrupted(context);
     let digest;
     try {
       digest = await sha256(bytes);
     } catch (error) {
-      throw classifyReadFailure(error, path, "workspace-file-hash-failed");
+      if (error instanceof CensusInterruption) throw error;
+      await skipUnreadable(error);
+      continue;
     }
     throwIfInterrupted(context);
     context.files.push({
@@ -405,6 +440,7 @@ export const browserWorkspaceAdapter = Object.freeze({
     maxDepth = browserWorkspaceCensusDefaults.maxDepth,
     maxPathLength = browserWorkspaceCensusDefaults.maxPathLength,
     maxDurationMs = browserWorkspaceCensusDefaults.maxDurationMs,
+    fileReadTimeoutMs = browserWorkspaceCensusDefaults.fileReadTimeoutMs,
     batchSize = browserWorkspaceCensusDefaults.batchSize,
     progressThrottleMs = browserWorkspaceCensusDefaults.progressThrottleMs,
     signal,
@@ -431,6 +467,7 @@ export const browserWorkspaceAdapter = Object.freeze({
         maxDepth,
         maxPathLength,
         maxDurationMs,
+        fileReadTimeoutMs,
         progressThrottleMs,
       },
       files: [],
