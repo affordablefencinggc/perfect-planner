@@ -104,21 +104,37 @@ export function agentEntryPath(from: string = fileURLToPath(import.meta.url)): {
 const quote = (value: string) => `"${value.replaceAll('"', '\\"')}"`;
 
 /**
+ * The Node that runs connect.mjs and agent.mjs. The desktop app ships its own Node and sets
+ * PP_NODE_BINARY to it (src/node/desktopHost.mjs), so the person needs no Node install;
+ * otherwise (npm start, the dev server) it is the node on PATH.
+ */
+export function nodeBinary(env: NodeJS.ProcessEnv = process.env): string {
+  return env.PP_NODE_BINARY || "node";
+}
+
+/** nodeBinary as the first word of a pasted line. A quoted path needs PowerShell's call operator on Windows. */
+export function nodeCommand(env: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform): string {
+  const binary = env.PP_NODE_BINARY;
+  if (!binary) return "node";
+  return platform === "win32" ? `& ${quote(binary)}` : quote(binary);
+}
+
+/**
  * The one line for Claude Code: connect.mjs (next to the agent entry) registers the server for the
  * folder it runs in, replacing an older registration, and installs the perfect-planner-connect skill.
  */
 export function connectLine(bridgeUrl: string, token: string, entry: string): string {
-  return `node ${quote(entry.replace(/agent\.mjs$/, "connect.mjs"))} ${bridgeUrl} ${token}`;
+  return `${nodeCommand()} ${quote(entry.replace(/agent\.mjs$/, "connect.mjs"))} ${bridgeUrl} ${token}`;
 }
 
 /** Installs only the skill, user-wide; no token, so it is safe to show at any time. */
 export function skillLine(entry: string): string {
-  return `node ${quote(entry.replace(/agent\.mjs$/, "connect.mjs"))} --skill-only`;
+  return `${nodeCommand()} ${quote(entry.replace(/agent\.mjs$/, "connect.mjs"))} --skill-only`;
 }
 
 export function setupFor(bridgeUrl: string, token: string, entry: string) {
   const claudeCode = connectLine(bridgeUrl, token, entry);
-  const json = JSON.stringify({ mcpServers: { [AGENT_SERVER_NAME]: { command: "node", args: [entry], env: { PP_BRIDGE_URL: bridgeUrl, PP_AGENT_TOKEN: token } } } }, null, 2);
+  const json = JSON.stringify({ mcpServers: { [AGENT_SERVER_NAME]: { command: nodeBinary(), args: [entry], env: { PP_BRIDGE_URL: bridgeUrl, PP_AGENT_TOKEN: token } } } }, null, 2);
   return { claudeCode, json };
 }
 

@@ -17,7 +17,7 @@ import { WorktreeError, WorktreeManager, git, runGit, WORKTREES_ACTOR, type Work
 import type { CoreHost } from "../host";
 import type { CoreProject } from "../project";
 import { HttpError, type Router } from "../router";
-import { AGENT_SERVER_NAME, agentEntryPath, connectLine } from "./agents";
+import { AGENT_SERVER_NAME, agentEntryPath, connectLine, nodeBinary } from "./agents";
 import { localPerson, localPersonId } from "./people";
 
 const REPO_FILE = "repo.json";
@@ -221,7 +221,7 @@ export function workerCommands(options: { worktree: string; bridgeUrl: string; t
   const windows = (options.platform ?? process.platform) === "win32";
   const setup = windows ? `cd ${quote(worktree)}; ${add}` : `cd ${quote(worktree)} && ${add}`;
   const start = windows ? `claude (Get-Content -Raw ${quote(briefFile)})` : `claude "$(cat ${quote(briefFile)})"`;
-  const json = JSON.stringify({ mcpServers: { [AGENT_SERVER_NAME]: { command: "node", args: [entry], env: { PP_BRIDGE_URL: bridgeUrl, PP_AGENT_TOKEN: token } } } }, null, 2);
+  const json = JSON.stringify({ mcpServers: { [AGENT_SERVER_NAME]: { command: nodeBinary(), args: [entry], env: { PP_BRIDGE_URL: bridgeUrl, PP_AGENT_TOKEN: token } } } }, null, 2);
   return { setup, start, json, shell: windows ? "PowerShell" : "Terminal" };
 }
 

@@ -7,7 +7,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { bridgeCall, createAgentMcpServer } from "../../mcp/index";
 import { hostCall, startTestHost } from "../testing";
-import { agentEntryPath, setupFor } from "./agents";
+import { agentEntryPath, nodeBinary, nodeCommand, setupFor } from "./agents";
 
 let base: string;
 let stop: () => Promise<void>;
@@ -110,6 +110,26 @@ describe("agent entry path", () => {
 
   it("quotes the path in the command", () => {
     expect(setupFor("http://127.0.0.1:1", "pp_c_x", "C:\\a b\\agent.mjs").claudeCode).toBe('node "C:\\a b\\connect.mjs" http://127.0.0.1:1 pp_c_x');
+  });
+
+  it("uses the desktop app's own Node when it ships one, so no Node install is needed", () => {
+    vi.stubEnv("PP_NODE_BINARY", "C:\\Program Files\\Perfect Planner\\desktop-host\\node.exe");
+    try {
+      const setup = setupFor("http://127.0.0.1:1", "pp_c_x", "C:\\Program Files\\Perfect Planner\\desktop-host\\core-host\\agent.mjs");
+      expect(setup.claudeCode.endsWith('"C:\\Program Files\\Perfect Planner\\desktop-host\\core-host\\connect.mjs" http://127.0.0.1:1 pp_c_x')).toBe(true);
+      expect(setup.claudeCode.startsWith(nodeCommand())).toBe(true);
+      expect(JSON.parse(setup.json).mcpServers["perfect-planner-core"].command).toBe("C:\\Program Files\\Perfect Planner\\desktop-host\\node.exe");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("calls a quoted Node path with PowerShell's call operator on Windows only", () => {
+    const env = { PP_NODE_BINARY: "/Applications/Perfect Planner.app/Contents/Resources/desktop-host/node" };
+    expect(nodeCommand(env, "darwin")).toBe('"/Applications/Perfect Planner.app/Contents/Resources/desktop-host/node"');
+    expect(nodeCommand({ PP_NODE_BINARY: "C:\\P P\\node.exe" }, "win32")).toBe('& "C:\\P P\\node.exe"');
+    expect(nodeCommand({}, "win32")).toBe("node");
+    expect(nodeBinary({})).toBe("node");
   });
 });
 

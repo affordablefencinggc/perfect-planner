@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Perfect Planner</title>
+    <link rel="stylesheet" href="splash.css" />
+    <script src="splash.js" defer></script>
+  </head>
+  <body>
+    <!-- Shown while the desktop shell starts the local service (src-tauri/src/native_core_host.rs),
+         then replaced by the app itself. If the service cannot start, the shell comes back here
+         with #error=<message>. -->
+    <main class="splash" aria-live="polite">
+      <h1>Perfect Planner</h1>
+      <p id="status" class="status">Starting Perfect Planner…</p>
+      <section id="problem" class="problem" hidden>
+        <h2>Perfect Planner could not start its local service</h2>
+        <p id="message"></p>
+        <p id="node-help" hidden>
+          This copy of the app has no Node runtime of its own and none was found on this computer.
+          Install Node.js 20 or newer from <strong>https://nodejs.org</strong>, then open Perfect Planner again.
+        </p>
+        <p class="hint">Details are in the log file named above. Closing and reopening the app tries again.</p>
+      </section>
+    </main>
+  </body>
+</html>

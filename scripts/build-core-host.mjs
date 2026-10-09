@@ -10,25 +10,30 @@ import { build } from "esbuild";
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 export const CORE_HOST_OUT = path.join(projectRoot, "dist", "core-host");
 
-export async function buildCoreHost() {
+// standalone: also bundle the npm packages (and the extra entries), for the desktop app,
+// which ships these files with its own Node runtime and no node_modules.
+export async function buildCoreHost({ outDir = CORE_HOST_OUT, standalone = false, entries = {} } = {}) {
   await build({
-    entryPoints: { index: path.join(projectRoot, "core/host/index.ts"), agent: path.join(projectRoot, "core/host/agentStdio.ts"), connect: path.join(projectRoot, "core/host/agentConnect.ts") },
-    outdir: CORE_HOST_OUT,
+    entryPoints: { index: path.join(projectRoot, "core/host/index.ts"), agent: path.join(projectRoot, "core/host/agentStdio.ts"), connect: path.join(projectRoot, "core/host/agentConnect.ts"), ...entries },
+    outdir: outDir,
     bundle: true,
     platform: "node",
     format: "esm",
     target: "node20",
     outExtension: { ".js": ".mjs" },
-    packages: "external",
+    ...(standalone
+      // CommonJS packages inside an ESM bundle still call require() for Node built-ins.
+      ? { banner: { js: 'import { createRequire as __ppCreateRequire } from "node:module"; const require = __ppCreateRequire(import.meta.url);' } }
+      : { packages: "external" }),
     logLevel: "warning",
   });
   // The worktree manager copies its commit-time secret scan from ./hooks next to its own module.
-  mkdirSync(path.join(CORE_HOST_OUT, "hooks"), { recursive: true });
-  copyFileSync(path.join(projectRoot, "core/worktrees/hooks/secret-scan.mjs"), path.join(CORE_HOST_OUT, "hooks", "secret-scan.mjs"));
+  mkdirSync(path.join(outDir, "hooks"), { recursive: true });
+  copyFileSync(path.join(projectRoot, "core/worktrees/hooks/secret-scan.mjs"), path.join(outDir, "hooks", "secret-scan.mjs"));
   // connect.mjs installs this skill so a connected agent knows the loop rules.
-  mkdirSync(path.join(CORE_HOST_OUT, "skill"), { recursive: true });
-  copyFileSync(path.join(projectRoot, "core/mcp/skill/SKILL.md"), path.join(CORE_HOST_OUT, "skill", "SKILL.md"));
-  return CORE_HOST_OUT;
+  mkdirSync(path.join(outDir, "skill"), { recursive: true });
+  copyFileSync(path.join(projectRoot, "core/mcp/skill/SKILL.md"), path.join(outDir, "skill", "SKILL.md"));
+  return outDir;
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

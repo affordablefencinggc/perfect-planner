@@ -58,6 +58,15 @@ interface Registry {
 
 const HOOK_SOURCE = fileURLToPath(new URL("./hooks/secret-scan.mjs", import.meta.url));
 
+/**
+ * The pre-commit hook git runs in a task worktree. The desktop app ships its own Node
+ * (PP_NODE_BINARY), so the hook calls that one; git's sh wants forward slashes on Windows.
+ */
+export function preCommitHook(env: NodeJS.ProcessEnv = process.env): string {
+  const node = env.PP_NODE_BINARY ? `"${env.PP_NODE_BINARY.replaceAll("\\", "/").replaceAll('"', '\\"')}"` : "node";
+  return `#!/bin/sh\nexec ${node} "$(dirname "$0")/secret-scan.mjs"\n`;
+}
+
 export class WorktreeError extends Error {}
 
 /**
@@ -324,7 +333,7 @@ export class WorktreeManager {
     mkdirSync(hooksDir, { recursive: true });
     copyFileSync(HOOK_SOURCE, path.join(hooksDir, "secret-scan.mjs"));
     const hook = path.join(hooksDir, "pre-commit");
-    writeFileSync(hook, '#!/bin/sh\nexec node "$(dirname "$0")/secret-scan.mjs"\n');
+    writeFileSync(hook, preCommitHook());
     if (process.platform !== "win32") chmodSync(hook, 0o755);
     if ((await runGit(this.repoRoot, ["config", "--get", "extensions.worktreeConfig"])).stdout.trim() !== "true") {
       const version = (await runGit(this.repoRoot, ["config", "--get", "core.repositoryformatversion"])).stdout.trim();

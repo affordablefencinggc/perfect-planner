@@ -21,8 +21,18 @@ function unavailable(reason) {
   });
 }
 
+// The installed desktop app opens its window on its local service (http://127.0.0.1:<port>,
+// src-tauri/src/native_core_host.rs). Native commands are granted only to the app's own pages,
+// so a built page served over loopback http runs in browser mode there, as under npm start.
+// (Under `tauri dev` the Vite dev server is the app's own page, so it stays native.)
+export function servedByLocalService(runtime = globalThis) {
+  if (import.meta.env?.DEV) return false;
+  const location = runtime?.location;
+  return location?.protocol === "http:" && /^(?:127\.0\.0\.1|localhost)$/.test(String(location.hostname ?? ""));
+}
+
 export function isTauriRuntime(runtime = globalThis) {
-  return Boolean(runtime && typeof runtime === "object" && "__TAURI_INTERNALS__" in runtime);
+  return Boolean(runtime && typeof runtime === "object" && "__TAURI_INTERNALS__" in runtime) && !servedByLocalService(runtime);
 }
 
 export function validateRuntimeSnapshot(value) {

@@ -1,0 +1,9 @@
+:root { color-scheme: light dark; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: Canvas; color: CanvasText; }
+.splash { max-width: 36rem; padding: 2rem; text-align: center; }
+h1 { font-size: 1.5rem; font-weight: 600; margin: 0 0 1rem; }
+h2 { font-size: 1.1rem; margin: 0 0 0.75rem; }
+.status { opacity: 0.7; }
+.problem { text-align: left; border: 1px solid color-mix(in srgb, CanvasText 20%, transparent); border-radius: 8px; padding: 1rem 1.25rem; }
+.problem p { line-height: 1.5; user-select: text; }
+.hint { opacity: 0.7; font-size: 0.9rem; }

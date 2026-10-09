@@ -1,0 +1,403 @@
+//! The desktop app's local service: the core host (Tasks, Connect agent and the
+//! agents' MCP bridge) and the built client, served on loopback by the Node runtime
+//! the installer ships (resources/desktop-host, built into dist/desktop-host by scripts/build-desktop-host.mjs).
+//!
+//! The shell starts it when the app opens and stops it when the app quits (it also
+//! stops by itself when its stdin closes, so a crashed shell leaves nothing behind).
+//! The service answers on its private stdout with one JSON line holding its origin
+//! and the window link, which may carry the core host's one-time launch secret in
+//! the fragment. The shell navigates the main window there; the secret never
+//! reaches a terminal, a log or the clipboard. The window may only ever show the
+//! splash page or that one origin.
+//!
+//! Native commands stay bound to the app's own origin (the capabilities are local
+//! only), so on the service's page the client runs in its browser mode, as it does
+//! under npm start.
+use serde::Deserialize;
+use std::io::{BufRead, BufReader, Read, Write};
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Stdio};
+use std::sync::{mpsc, Arc, Mutex};
+use std::time::Duration;
+use tauri::{App, AppHandle, Manager, Url, WebviewWindow, WebviewWindowBuilder};
+
+const READY_TIMEOUT: Duration = Duration::from_secs(90);
+const STOP_GRACE: Duration = Duration::from_secs(5);
+const MIN_SYSTEM_NODE_MAJOR: u32 = 20;
+const LOG_FILE: &str = "desktop-host.log";
+
+/// What the shell keeps about the running service.
+#[derive(Default)]
+pub(crate) struct CoreHostState {
+    child: Mutex<Option<Child>>,
+    origin: Arc<Mutex<Option<String>>>,
+    quitting: Arc<Mutex<bool>>,
+}
+
+#[derive(Debug, PartialEq)]
+pub(crate) enum ServiceLine {
+    Ready { origin: String, open: Url },
+    Failed(String),
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawLine {
+    event: String,
+    origin: Option<String>,
+    open: Option<String>,
+    message: Option<String>,
+}
+
+/// The service's one stdout line. Only a loopback http origin, and a window link on
+/// that same origin at the app's root, are accepted.
+pub(crate) fn parse_service_line(line: &str) -> Result<ServiceLine, String> {
+    let raw: RawLine = serde_json::from_str(line.trim()).map_err(|_| "The local service sent an unreadable start line.".to_string())?;
+    match raw.event.as_str() {
+        "failed" => Ok(ServiceLine::Failed(raw.message.unwrap_or_else(|| "The local service could not start.".into()))),
+        "ready" => {
+            let origin = raw.origin.ok_or("The local service did not say where it is.")?;
+            let parsed = Url::parse(&origin).map_err(|_| "The local service named an invalid address.".to_string())?;
+            if parsed.scheme() != "http" || parsed.host_str() != Some("127.0.0.1") || parsed.port().is_none() || parsed.path() != "/" || parsed.query().is_some() || parsed.fragment().is_some() || origin.ends_with('/') {
+                return Err("The local service is not on this computer's loopback address.".into());
+            }
+            let open = Url::parse(raw.open.as_deref().ok_or("The local service gave no window link.")?).map_err(|_| "The local service gave an invalid window link.".to_string())?;
+            if open.origin() != parsed.origin() || open.path() != "/" || open.query().is_some() {
+                return Err("The window link does not point at the local service.".into());
+            }
+            Ok(ServiceLine::Ready { origin, open })
+        }
+        _ => Err("The local service sent an unexpected start line.".into()),
+    }
+}
+
+/// Where the main window may go: the splash page shipped inside the app, the local
+/// service once it is up, and (in `tauri dev`) the dev server. Anything else is refused.
+pub(crate) fn navigation_allowed(url: &Url, service_origin: Option<&str>, dev_origin: Option<&str>) -> bool {
+    let app_page = matches!((url.scheme(), url.host_str()), ("tauri", Some("localhost")) | ("http", Some("tauri.localhost")) | ("https", Some("tauri.localhost")));
+    if app_page {
+        return true;
+    }
+    let origin = url.origin().ascii_serialization();
+    service_origin.is_some_and(|o| o == origin) || dev_origin.is_some_and(|o| o == origin)
+}
+
+/// `#error=...` for the splash page; it reads the message as text.
+pub(crate) fn error_fragment(message: &str, node_missing: bool) -> String {
+    let mut out = String::from("error=");
+    for byte in message.bytes() {
+        if byte.is_ascii_alphanumeric() || b"-_.~".contains(&byte) {
+            out.push(byte as char);
+        } else {
+            out.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    if node_missing {
+        out.push_str("&node=missing");
+    }
+    out
+}
+
+/// `v22.3.0` -> 22
+pub(crate) fn node_major(version: &str) -> Option<u32> {
+    version.trim().strip_prefix('v')?.split('.').next()?.parse().ok()
+}
+
+pub(crate) struct Runtime {
+    pub node: PathBuf,
+    pub entry: PathBuf,
+    pub bundled: bool,
+}
+
+enum RuntimeError {
+    NodeMissing(String),
+    Broken(String),
+}
+
+const NODE_BINARY: &str = if cfg!(windows) { "node.exe" } else { "node" };
+
+fn locate_runtime(resources: &Path, data_dir: &Path) -> Result<Runtime, RuntimeError> {
+    let base = resources.join("desktop-host");
+    let entry = base.join("core-host").join("desktop.mjs");
+    if !entry.is_file() {
+        return Err(RuntimeError::Broken(format!("This copy of Perfect Planner is missing its local service ({}). Reinstall the app.", entry.display())));
+    }
+    let bundled = base.join(NODE_BINARY);
+    if std::fs::metadata(&bundled).map(|m| m.is_file() && m.len() > 0).unwrap_or(false) {
+        return Ok(Runtime { node: executable_copy(bundled, data_dir), entry, bundled: true });
+    }
+    // A build without its own runtime (a developer's no-bundle build): use Node from PATH if it is new enough.
+    let version = Command::new("node").arg("--version").stdin(Stdio::null()).stderr(Stdio::null()).output();
+    match version {
+        Ok(out) if out.status.success() && node_major(&String::from_utf8_lossy(&out.stdout)).is_some_and(|m| m >= MIN_SYSTEM_NODE_MAJOR) => {
+            Ok(Runtime { node: PathBuf::from("node"), entry, bundled: false })
+        }
+        Ok(out) if out.status.success() => Err(RuntimeError::NodeMissing(format!(
+            "Perfect Planner needs Node.js {MIN_SYSTEM_NODE_MAJOR} or newer; this computer has {}.",
+            String::from_utf8_lossy(&out.stdout).trim()
+        ))),
+        _ => Err(RuntimeError::NodeMissing("Perfect Planner could not find Node.js.".into())),
+    }
+}
+
+/// Some Linux packages drop the executable bit on resources. Run a private copy then.
+#[cfg(unix)]
+fn executable_copy(bundled: PathBuf, data_dir: &Path) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let executable = std::fs::metadata(&bundled).map(|m| m.permissions().mode() & 0o111 != 0).unwrap_or(false);
+    if executable {
+        return bundled;
+    }
+    let copy = data_dir.join("runtime").join("node");
+    let fresh = std::fs::metadata(&copy).ok().zip(std::fs::metadata(&bundled).ok()).is_some_and(|(c, b)| c.len() == b.len());
+    if !fresh {
+        let _ = std::fs::create_dir_all(copy.parent().unwrap_or(data_dir));
+        if std::fs::copy(&bundled, &copy).is_err() {
+            return bundled;
+        }
+    }
+    let _ = std::fs::set_permissions(&copy, std::fs::Permissions::from_mode(0o755));
+    copy
+}
+
+#[cfg(not(unix))]
+fn executable_copy(bundled: PathBuf, _data_dir: &Path) -> PathBuf {
+    bundled
+}
+
+fn log_file(app: &AppHandle) -> Option<(PathBuf, std::fs::File)> {
+    let dir = app.path().app_log_dir().ok()?;
+    std::fs::create_dir_all(&dir).ok()?;
+    let path = dir.join(LOG_FILE);
+    let file = std::fs::OpenOptions::new().create(true).append(true).open(&path).ok()?;
+    Some((path, file))
+}
+
+fn spawn_service(app: &AppHandle, runtime: &Runtime, data_dir: &Path, log: Option<std::fs::File>) -> std::io::Result<Child> {
+    let mut command = Command::new(&runtime.node);
+    command
+        .arg(&runtime.entry)
+        .current_dir(runtime.entry.parent().unwrap_or(Path::new(".")))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(log.map(Stdio::from).unwrap_or_else(Stdio::null))
+        // Nothing from the person's shell setup may load code into the service.
+        .env_remove("NODE_OPTIONS")
+        .env_remove("NODE_PATH")
+        .env_remove("PP_PORT")
+        .env_remove("PP_CLIENT_DIR")
+        .env_remove("PP_CORE_PROJECT_ROOT")
+        .env_remove("PP_CORE_KEYS");
+    if runtime.bundled {
+        command.env("PP_NODE_BINARY", &runtime.node);
+    } else {
+        command.env_remove("PP_NODE_BINARY");
+    }
+    // Windows keeps npm start's data folder (%LOCALAPPDATA%); elsewhere the app's own data folder.
+    if cfg!(windows) {
+        command.env_remove("PP_DATA_DIR");
+    } else {
+        command.env("PP_DATA_DIR", data_dir);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    let _ = app;
+    command.spawn()
+}
+
+fn show_error(window: &WebviewWindow, splash: &Url, message: &str, node_missing: bool, log: Option<&Path>) {
+    let full = match log {
+        Some(path) => format!("{message} (Log: {})", path.display()),
+        None => message.to_string(),
+    };
+    let mut url = splash.clone();
+    url.set_fragment(Some(&error_fragment(&full, node_missing)));
+    let _ = window.navigate(url);
+}
+
+/// Builds the main window (with its navigation guard) and starts the service.
+pub(crate) fn setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
+    let state = CoreHostState::default();
+    let service_origin = state.origin.clone();
+    let dev_origin = if cfg!(dev) { app.config().build.dev_url.as_ref().map(|u| u.origin().ascii_serialization()) } else { None };
+    let config = app.config().app.windows.iter().find(|w| w.label == "main").cloned().ok_or("The main window is not configured.")?;
+    let guard_origin = service_origin.clone();
+    let window = WebviewWindowBuilder::from_config(app.handle(), &config)?
+        .on_navigation(move |url| {
+            let current = guard_origin.lock().ok().and_then(|o| o.clone());
+            navigation_allowed(url, current.as_deref(), dev_origin.as_deref())
+        })
+        .build()?;
+    app.manage(state);
+    // `tauri dev` serves the core host from the Vite dev server (src/node/coreHostVitePlugin.mjs).
+    if cfg!(dev) {
+        return Ok(());
+    }
+    let splash = window.url()?;
+    let handle = app.handle().clone();
+    std::thread::spawn(move || start(handle, window, splash));
+    Ok(())
+}
+
+fn start(app: AppHandle, window: WebviewWindow, splash: Url) {
+    let logged = log_file(&app);
+    let log_path = logged.as_ref().map(|(p, _)| p.clone());
+    let fail = {
+        let (window, log_path) = (window.clone(), log_path.clone());
+        move |message: &str, node_missing: bool| show_error(&window, &splash, message, node_missing, log_path.as_deref())
+    };
+    let (Ok(resources), Ok(data_dir)) = (app.path().resource_dir(), app.path().app_local_data_dir()) else {
+        return fail("Perfect Planner could not find its own folders.", false);
+    };
+    let runtime = match locate_runtime(&resources, &data_dir) {
+        Ok(runtime) => runtime,
+        Err(RuntimeError::NodeMissing(message)) => return fail(&message, true),
+        Err(RuntimeError::Broken(message)) => return fail(&message, false),
+    };
+    let log = logged.and_then(|(_, file)| file.try_clone().ok().map(|mut f| {
+        let _ = writeln!(f, "--- Perfect Planner {} starting {} with {}", env!("CARGO_PKG_VERSION"), runtime.entry.display(), runtime.node.display());
+        f
+    }));
+    let mut child = match spawn_service(&app, &runtime, &data_dir, log) {
+        Ok(child) => child,
+        Err(error) => return fail(&format!("Perfect Planner could not start its local service: {error}."), !runtime.bundled),
+    };
+    let Some(stdout) = child.stdout.take() else { return fail("The local service has no output channel.", false) };
+    let state = app.state::<CoreHostState>();
+    if let Ok(mut slot) = state.child.lock() {
+        *slot = Some(child);
+    }
+    let quitting = state.quitting.clone();
+    let origin_slot = state.origin.clone();
+
+    // First line within READY_TIMEOUT; the rest is drained so the service never blocks on a full pipe.
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut reader = BufReader::new(stdout);
+        let mut first = String::new();
+        let read = reader.read_line(&mut first);
+        let _ = tx.send(read.map(|_| first));
+        let mut sink = [0u8; 4096];
+        while matches!(reader.read(&mut sink), Ok(n) if n > 0) {}
+    });
+    let line = match rx.recv_timeout(READY_TIMEOUT) {
+        Ok(Ok(line)) if !line.is_empty() => line,
+        Ok(_) => return fail("The local service stopped before it was ready.", false),
+        Err(_) => return fail("The local service did not start in time.", false),
+    };
+    match parse_service_line(&line) {
+        Ok(ServiceLine::Ready { origin, open }) => {
+            if let Ok(mut slot) = origin_slot.lock() {
+                *slot = Some(origin);
+            }
+            if window.navigate(open).is_err() {
+                fail("Perfect Planner could not open its window on the local service.", false);
+            }
+        }
+        Ok(ServiceLine::Failed(message)) => return fail(&message, false),
+        Err(message) => return fail(&message, false),
+    }
+    // If the service dies while the app is open, say so instead of showing a dead page.
+    let watcher = app.clone();
+    let fail = fail.clone();
+    std::thread::spawn(move || loop {
+        std::thread::sleep(Duration::from_millis(500));
+        if quitting.lock().map(|q| *q).unwrap_or(true) {
+            return;
+        }
+        let state = watcher.state::<CoreHostState>();
+        let exited = state.child.lock().ok().and_then(|mut c| c.as_mut().map(|c| c.try_wait().ok().flatten().is_some())).unwrap_or(true);
+        if exited {
+            if let Ok(mut slot) = origin_slot.lock() {
+                *slot = None;
+            }
+            fail("The local service stopped. Close and reopen Perfect Planner to start it again.", false);
+            return;
+        }
+    });
+}
+
+/// Stops the service when the app quits: closing stdin asks it to stop, then it is killed.
+pub(crate) fn stop(app: &AppHandle) {
+    let Some(state) = app.try_state::<CoreHostState>() else { return };
+    if let Ok(mut quitting) = state.quitting.lock() {
+        *quitting = true;
+    }
+    let Some(mut child) = state.child.lock().ok().and_then(|mut c| c.take()) else { return };
+    drop(child.stdin.take());
+    let deadline = std::time::Instant::now() + STOP_GRACE;
+    while std::time::Instant::now() < deadline {
+        if matches!(child.try_wait(), Ok(Some(_))) {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn accepts_only_a_loopback_ready_line_whose_link_is_on_the_same_origin() {
+        let ok = parse_service_line(r#"{"event":"ready","origin":"http://127.0.0.1:41730","open":"http://127.0.0.1:41730/#pp-launch=abcdefghijklmnopqrstuvwxyz"}"#).unwrap();
+        assert_eq!(ok, ServiceLine::Ready { origin: "http://127.0.0.1:41730".into(), open: Url::parse("http://127.0.0.1:41730/#pp-launch=abcdefghijklmnopqrstuvwxyz").unwrap() });
+        for bad in [
+            r#"{"event":"ready","origin":"http://192.168.1.5:41730","open":"http://192.168.1.5:41730/"}"#,
+            r#"{"event":"ready","origin":"https://127.0.0.1:41730","open":"https://127.0.0.1:41730/"}"#,
+            r#"{"event":"ready","origin":"http://localhost:41730","open":"http://localhost:41730/"}"#,
+            r#"{"event":"ready","origin":"http://127.0.0.1","open":"http://127.0.0.1/"}"#,
+            r#"{"event":"ready","origin":"http://127.0.0.1:41730/x","open":"http://127.0.0.1:41730/"}"#,
+            r#"{"event":"ready","origin":"http://127.0.0.1:41730","open":"http://127.0.0.1:41731/"}"#,
+            r#"{"event":"ready","origin":"http://127.0.0.1:41730","open":"https://example.com/"}"#,
+            r#"{"event":"ready","origin":"http://127.0.0.1:41730","open":"http://127.0.0.1:41730/other"}"#,
+            r#"{"event":"ready","origin":"http://127.0.0.1:41730"}"#,
+            r#"{"event":"ready","origin":"http://127.0.0.1:41730","open":"http://127.0.0.1:41730/","extra":1}"#,
+            r#"{"event":"open"}"#,
+            "not json",
+        ] {
+            assert!(parse_service_line(bad).is_err(), "{bad}");
+        }
+        assert_eq!(parse_service_line(r#"{"event":"failed","message":"port in use"}"#).unwrap(), ServiceLine::Failed("port in use".into()));
+    }
+
+    #[test]
+    fn the_window_may_show_only_the_splash_and_the_local_service() {
+        let service = Some("http://127.0.0.1:41730");
+        for ok in ["tauri://localhost/index.html", "http://tauri.localhost/index.html#error=x", "http://127.0.0.1:41730/tasks", "http://127.0.0.1:41730/#pp-launch=abc"] {
+            assert!(navigation_allowed(&Url::parse(ok).unwrap(), service, None), "{ok}");
+        }
+        for bad in ["http://127.0.0.1:41731/", "http://localhost:41730/", "https://example.com/", "file:///etc/passwd", "http://evil.localhost/"] {
+            assert!(!navigation_allowed(&Url::parse(bad).unwrap(), service, None), "{bad}");
+        }
+        assert!(!navigation_allowed(&Url::parse("http://127.0.0.1:41730/").unwrap(), None, None), "nothing but the splash before the service is up");
+        assert!(navigation_allowed(&Url::parse("http://127.0.0.1:4173/").unwrap(), None, Some("http://127.0.0.1:4173")));
+    }
+
+    #[test]
+    fn error_fragment_is_url_safe_and_flags_a_missing_node() {
+        assert_eq!(error_fragment("No Node 20+ (here: v18)", true), "error=No%20Node%2020%2B%20%28here%3A%20v18%29&node=missing");
+        assert_eq!(error_fragment("a&b#c", false), "error=a%26b%23c");
+    }
+
+    #[test]
+    fn reads_the_node_major_version() {
+        assert_eq!(node_major("v24.21.0\n"), Some(24));
+        assert_eq!(node_major("v18.0.0"), Some(18));
+        assert_eq!(node_major("24.0.0"), None);
+    }
+
+    #[test]
+    fn a_bundle_without_its_service_is_reported_as_broken() {
+        let dir = std::env::temp_dir().join(format!("pp-core-host-test-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        assert!(matches!(locate_runtime(&dir, &dir), Err(RuntimeError::Broken(_))));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
