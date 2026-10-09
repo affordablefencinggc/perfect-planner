@@ -27,7 +27,7 @@ node '{{PP_CONNECT_PROGRAM}}' --agent <claude|gemini|codex> http://127.0.0.1:<po
 The installed desktop app starts the line with its own Node instead of `node`:
 
 ```
-'{{PP_NODE_PROGRAM}}' '{{PP_CONNECT_PROGRAM}}' http://127.0.0.1:<port> '<full path ending in .token>'
+'{{PP_NODE_PROGRAM}}' '{{PP_CONNECT_PROGRAM}}' --agent <claude|gemini|codex> http://127.0.0.1:<port> '<full path ending in .token>'
 ```
 
 and in Windows PowerShell with the call operator in front: `& '{{PP_NODE_PROGRAM}}' '{{PP_CONNECT_PROGRAM}}' ...`
