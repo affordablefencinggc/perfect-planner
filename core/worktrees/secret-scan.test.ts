@@ -1,5 +1,11 @@
-import { describe, expect, it } from "vitest";
-import { scanDiff } from "./hooks/secret-scan.mjs";
+import { spawnSync } from "node:child_process";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { afterEach, describe, expect, it } from "vitest";
+import { git } from "./git";
+import { resolveGit, scanDiff } from "./hooks/secret-scan.mjs";
+import { makeRepo } from "./testing";
 import { placeholderSecrets } from "./settings";
 
 describe("secret scan", () => {
@@ -61,5 +67,52 @@ describe("placeholderSecrets on values whose names give nothing away", () => {
       "API_HOST=PLACEHOLDER",
       "MYSTERY=PLACEHOLDER",
     ]);
+  });
+});
+
+const isWindows = process.platform === "win32";
+const HOOK = fileURLToPath(new URL("./hooks/secret-scan.mjs", import.meta.url));
+const cleanups: (() => void)[] = [];
+afterEach(() => {
+  while (cleanups.length) cleanups.pop()!();
+});
+
+/** A program called git that leaves a marker if it ever runs, and reports nothing staged. */
+function plantGit(dir: string): void {
+  if (isWindows) {
+    copyFileSync(path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "hostname.exe"), path.join(dir, "git.exe"));
+    return;
+  }
+  const file = path.join(dir, "git");
+  writeFileSync(file, `#!/bin/sh\necho planted > "${path.join(dir, "planted-ran")}"\n`);
+  chmodSync(file, 0o755);
+}
+
+describe("secret scan hook starts the real git", () => {
+  it("never runs a git planted in the repo, so a staged secret is still caught", async () => {
+    const repo = await makeRepo({ "a.txt": "a\n" });
+    cleanups.push(repo.cleanup);
+    plantGit(repo.root);
+    mkdirSync(path.join(repo.root, "libexec"));
+    plantGit(path.join(repo.root, "libexec"));
+    writeFileSync(path.join(repo.root, "config.js"), `const api_${"key"} = "${"abcdefghijklm"}nopqrstuvwxyz";\n`);
+    await git(repo.root, ["add", "config.js"]);
+    for (const env of [
+      { PATH: `.${path.delimiter}${process.env.PATH}` },
+      { PATH: `${path.delimiter}${repo.root}${path.delimiter}${process.env.PATH}`, GIT_EXEC_PATH: path.join(repo.root, "libexec") },
+    ]) {
+      const run = spawnSync(process.execPath, [HOOK], { cwd: repo.root, env: { ...process.env, ...env }, encoding: "utf8" });
+      expect(run.status).toBe(1);
+      expect(run.stderr).toContain("config.js:1 (generic-assignment)");
+    }
+    expect(existsSync(path.join(repo.root, "planted-ran"))).toBe(false);
+    expect(existsSync(path.join(repo.root, "libexec", "planted-ran"))).toBe(false);
+  });
+
+  it("resolveGit refuses when the only git is inside the repo", async () => {
+    const repo = await makeRepo({ "a.txt": "a\n" });
+    cleanups.push(repo.cleanup);
+    plantGit(repo.root);
+    expect(resolveGit({ PATH: [".", "", repo.root].join(path.delimiter), GIT_EXEC_PATH: repo.root }, repo.root)).toBeNull();
   });
 });
