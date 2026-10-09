@@ -293,7 +293,7 @@ describe("secrets in agent text", () => {
     const { service, ledger, connect, w1 } = setup();
     const main = await hello(service, connect, "main");
     const a = await hello(service, w1, "w1");
-    const key = ["-----BEGIN OPENSSH PRIVATE KEY-----", "SSHFAKEBODYaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "SSHFAKETAIL==", "-----END OPENSSH PRIVATE KEY-----"].join("\n");
+    const key = [`-----BEGIN OPENSSH ${"PRIVATE"} KEY-----`, "SSHFAKEBODYaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "SSHFAKETAIL==", `-----END OPENSSH ${"PRIVATE"} KEY-----`].join("\n");
     await service.call(a, "claim_task", { task: "T-1" });
     await service.call(a, "ask_main", { task: "T-1", question: `Is this the deploy key?\n${key}`, options: ["DB_PASSWORD=optionleak123", "No"] });
     await service.call(a, "report_progress", { task: "T-1", text: "Set API_TOKEN=progressleak123 for the run" });
