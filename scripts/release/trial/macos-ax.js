@@ -1,10 +1,10 @@
 // JXA helper for the macOS installer trial: reads and presses the app's accessibility tree.
 //   osascript -l JavaScript macos-ax.js windows <bundle id>
 //   osascript -l JavaScript macos-ax.js text <bundle id>
-//   osascript -l JavaScript macos-ax.js press <bundle id> <case-insensitive regex>
+//   osascript -l JavaScript macos-ax.js press <bundle id> <case-insensitive regex> [first|last]
 //   osascript -l JavaScript macos-ax.js key <bundle id> escape
 function run(argv) {
-  const [command, bundleId, pattern] = argv;
+  const [command, bundleId, pattern, which] = argv;
   const se = Application("System Events");
   const procs = se.processes.whose({ bundleIdentifier: bundleId })();
   if (!procs.length) return `no process for ${bundleId}`;
@@ -39,9 +39,10 @@ function run(argv) {
   if (command === "text") return seen.join("\n");
   if (command === "press") {
     if (!matches.length) return `no element matching /${pattern}/i among ${seen.length} labelled elements`;
+    const el = which === "last" ? matches[matches.length - 1] : matches[0];
     proc.frontmost = true;
-    try { matches[0].actions.byName("AXPress").perform(); } catch (e) { matches[0].click(); }
-    return `pressed /${pattern}/i`;
+    try { el.actions.byName("AXPress").perform(); } catch (e) { el.click(); }
+    return `pressed /${pattern}/i (${which === "last" ? "last" : "first"} of ${matches.length})`;
   }
   return `unknown command ${command}`;
 }
