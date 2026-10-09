@@ -7,11 +7,12 @@
 // then click "Choose app folder" and "Approve read-only analysis". The browser scan then applies
 // .gitignore, the generated-folder exclusions and the size budgets itself; this helper only copies.
 // To keep the manifest small it lists the contents of always-excluded folders (node_modules, dist, .git…)
-// as empty folders, and files over maxFileBytes as unreadable with their real size, which the scan
-// skips exactly as it would skip them on disk.
+// as empty folders, and files over maxFileBytes or named like credentials (.env, id_rsa, *.pem) as
+// unreadable with their real size, which the scan skips exactly as it would skip them on disk.
 import { readdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { isSecretFileName } from "../src/shared/secretFiles.js";
 
 export const MANIFEST_EMPTY_FOLDERS = Object.freeze([".git", ".next", ".turbo", ".cache", ".claude", ".ledger", ".local-preview-cache", ".perfect-planner", "_archive", "build", "coverage", "dist", "node_modules", "target", "target-codex"]);
 
@@ -28,7 +29,8 @@ export async function buildFolderManifest(root, { emptyFolders = MANIFEST_EMPTY_
       else if (entry.isFile()) {
         const info = await stat(full);
         const lastModified = Math.trunc(info.mtimeMs);
-        if (info.size > maxFileBytes) children.push({ kind: "file", name: entry.name, size: info.size, lastModified, unreadable: true });
+        // Credential files (.env, private keys) are listed by name and size only; their bytes never enter the manifest.
+        if (info.size > maxFileBytes || isSecretFileName(entry.name)) children.push({ kind: "file", name: entry.name, size: info.size, lastModified, unreadable: true });
         else children.push({ kind: "file", name: entry.name, lastModified, contentBase64: (await readFile(full)).toString("base64") });
       }
       // Symlinks and special files are left out, as the browser picker does not follow them either.

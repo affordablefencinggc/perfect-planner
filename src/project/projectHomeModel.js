@@ -120,9 +120,9 @@ const PAGE_NAMES = { blueprint: "Blueprint", structure: "Structure", components:
 const PARENT_PAGES = { architecture: "Blueprint", folder: "Structure", component: "Components" };
 const listIds = (ids) => ids.length <= 6 ? ids.join(", ") : `${ids.slice(0, 6).join(", ")} and ${ids.length - 6} more`;
 
-/** True when the person approved a plan but the architecture, folder or component records are not all approved. */
+/** True when the person's plan approval is current but the architecture, folder or component records are not all approved. */
 function buildPath(project, planStatus) {
-  return Boolean(planStatus) && !PARENT_KINDS.every((kind) => project.authorities?.[kind]?.state === "authoritative");
+  return planStatus?.state === "recorded" && !PARENT_KINDS.every((kind) => project.authorities?.[kind]?.state === "authoritative");
 }
 
 /** Owners for the approved tasks, read from the Allocation page's saved record. */

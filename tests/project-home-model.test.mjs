@@ -296,6 +296,13 @@ test("an approved plan with decided overlaps and owners reaches a usable 'ready 
   assert.match(planned.summary.message, /Blueprint/, "the optional architecture record is still named, with where to add it");
   assertOneAction(planned);
 
+  // A plan record that is not a current approval (here: approved for an older scan) keeps the
+  // architecture, folder and component records as blockers instead of hiding them.
+  const stalePlan = { ...planAuthority, data: { ...planAuthority.data, censusDigest: "f".repeat(64) } };
+  const notCurrent = deriveProjectHomeModel(session, records({ planAuthority: stalePlan, collisions: decided }));
+  assert.ok(notCurrent.blockers.some((item) => item.id === "authority-architecture-missing"), "optional-record blockers stay visible without a current approval");
+  assert.notEqual(notCurrent.stage.id, "build-ready");
+
   // Without any plan approval the original order is unchanged, but named precisely.
   assert.equal(deriveProjectHomeModel(session).stage.id, "architecture");
   assert.match(deriveProjectHomeModel(session).summary.message, /Blueprint page/);

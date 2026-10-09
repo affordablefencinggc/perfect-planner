@@ -130,3 +130,25 @@ test("malformed manifests are refused instead of producing a fake folder", () =>
   assert.throws(() => control.queueFolder({ kind: "directory", name: "x", children: [{ kind: "file", name: "a" }, { kind: "file", name: "a" }] }), /Duplicate/);
   assert.equal(control.pending(), 0);
 });
+
+test("the folder manifest never copies credential files: they are listed by name and size only", async (t) => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "pp-manifest-secrets-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  await mkdir(path.join(dir, "keys"));
+  const secrets = { ".env": "API_TOKEN=super-secret-value", ".env.local": "X=secret", "id_rsa": "-----BEGIN OPENSSH PRIVATE KEY-----", "keys/server.pem": "-----BEGIN PRIVATE KEY-----" };
+  for (const [name, body] of Object.entries(secrets)) await writeFile(path.join(dir, name), body);
+  await writeFile(path.join(dir, ".env.example"), "API_TOKEN=");
+  await writeFile(path.join(dir, "index.js"), "export {};");
+  const manifest = await buildFolderManifest(dir);
+  const json = JSON.stringify(manifest);
+  for (const body of Object.values(secrets)) {
+    assert.ok(!json.includes(Buffer.from(body).toString("base64")), "secret content must not be encoded");
+    assert.ok(!json.includes(body), "secret content must not appear");
+  }
+  const byName = (node, name) => node.children.find((child) => child.name === name);
+  for (const name of [".env", ".env.local", "id_rsa"]) assert.deepEqual(Object.keys(byName(manifest, name)).sort(), ["kind", "lastModified", "name", "size", "unreadable"]);
+  assert.equal(byName(manifest, ".env").size, secrets[".env"].length);
+  assert.equal(byName(byName(manifest, "keys"), "server.pem").unreadable, true);
+  assert.ok(byName(manifest, ".env.example").contentBase64, "templates stay readable");
+  assert.ok(byName(manifest, "index.js").contentBase64);
+});
