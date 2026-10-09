@@ -3,7 +3,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import { FileStore, Ledger, type LedgerEntry } from "../ledger/index";
+import { installClauseRules } from "../lookup/index";
 import { AgentService } from "../mcp/index";
+import { installNumberingRules } from "../numbering/index";
+import { installPeopleRules } from "../people/index";
+import { installPlanningRules } from "../planning/index";
 
 export interface CoreProject {
   /** Safe key from the client ("default" when none was given). */
@@ -28,6 +32,11 @@ export function openCoreProject(baseRoot: string, key: string, override?: string
   const root = override ?? path.join(baseRoot, "projects", key);
   fs.mkdirSync(root, { recursive: true });
   const ledger = Ledger.openSync(new FileStore(root));
+  // The same rules every core module assumes: numbering (D-/Q-/T-/R- subjects), clauses, people, planning gates.
+  installNumberingRules(ledger);
+  installClauseRules(ledger);
+  installPeopleRules(ledger);
+  installPlanningRules(ledger);
   const service = new AgentService({ ledger });
   return { key, root, ledger, service, state: new Map(), entries: () => ledger.entries() };
 }
