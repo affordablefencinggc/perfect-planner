@@ -18,7 +18,13 @@ describe("network paths", () => {
     expect(isNetworkPath("\\\\?\\UNC\\host\\share\\x.token", "win32")).toBe(true);
     expect(isNetworkPath("\\\\.\\pipe\\x.token", "win32")).toBe(true);
     expect(isNetworkPath("//host/share/x.token", "linux")).toBe(true);
+    expect(isNetworkPath("\\/host/s/x.token", "win32")).toBe(true);
+    expect(isNetworkPath("/\\host\\s\\x.token", "win32")).toBe(true);
+    expect(isNetworkPath("\\??\\UNC\\host\\s\\x.token", "win32")).toBe(true);
+    expect(isNetworkPath("\\Users\\me\\x.token", "win32")).toBe(true);
+    expect(isNetworkPath("C:x.token", "win32")).toBe(true);
     expect(isNetworkPath("C:\\Users\\me\\x.token", "win32")).toBe(false);
+    expect(isNetworkPath("d:\\pp\\x.token", "win32")).toBe(false);
     expect(isNetworkPath("/home/me/x.token", "linux")).toBe(false);
   });
 });
