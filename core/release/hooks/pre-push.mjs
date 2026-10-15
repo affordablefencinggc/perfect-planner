@@ -122,10 +122,30 @@ async function baseForPush(localSha, remoteSha, defaultRef) {
   try { return (await git(["merge-base", localSha, defaultRef])).trim(); } catch { return null; }
 }
 
-// Tree-to-tree, so nothing reads the working tree and no filter program can run.
+// `git ls-tree -r -z` output: path -> { mode, type, id }.
+async function treeOf(rev) {
+  const entries = new Map();
+  for (const record of (await git(["ls-tree", "-r", "-z", "--full-tree", rev])).split("\0")) {
+    const tab = record.indexOf("\t");
+    if (tab < 0) continue;
+    const [mode, type, id] = record.slice(0, tab).split(" ");
+    entries.set(record.slice(tab + 1), { mode, type, id });
+  }
+  return entries;
+}
+
+// Files the push adds or changes (every file for brand-new history), as [path, blob id]. Only object
+// reads (ls-tree, cat-file blob): nothing touches the working tree, so no filter program can run, and
+// the host git runner allows them in a repo whose config names one.
 async function filesForPush(localSha, base) {
-  if (base) return lines(await git(["diff-tree", "-r", "--name-only", "--no-commit-id", "--diff-filter=ACMR", base, localSha]));
-  return lines(await git(["ls-tree", "-r", "--name-only", localSha]));
+  const before = base ? await treeOf(base) : new Map();
+  const out = [];
+  for (const [path, entry] of await treeOf(localSha)) {
+    const old = before.get(path);
+    if (entry.type !== "blob" || (old && old.id === entry.id && old.mode === entry.mode)) continue;
+    out.push([path, entry.id]);
+  }
+  return out;
 }
 
 // The remote's default branch as last fetched: origin/HEAD, else origin/main,
@@ -145,7 +165,7 @@ async function defaultBranchRef() {
 
 async function allowlistFromDefaultBranch(defaultRef) {
   if (!defaultRef) return new Set();
-  try { return parseAllowlist(await git(["show", `${defaultRef}:${ALLOWLIST_PATH}`])); } catch { return new Set(); }
+  try { return parseAllowlist(await git(["cat-file", "blob", `${defaultRef}:${ALLOWLIST_PATH}`])); } catch { return new Set(); }
 }
 
 async function scanPush(localSha, remoteSha) {
@@ -153,14 +173,14 @@ async function scanPush(localSha, remoteSha) {
   const base = await baseForPush(localSha, remoteSha, defaultRef);
   const allow = await allowlistFromDefaultBranch(defaultRef);
   const findings = [];
-  for (const path of await filesForPush(localSha, base)) {
+  for (const [path, id] of await filesForPush(localSha, base)) {
     const rule = forbiddenRule(path);
     if (rule) {
       const fingerprint = fingerprintOf(path, rule, path);
       if (!allow.has(fingerprint)) findings.push({ file: path, rule, preview: "(forbidden file)", fingerprint });
     }
-    let content;
-    try { content = await git(["show", `${localSha}:${path}`]); } catch { continue; }
+    // A file that can't be read blocks the push (main reports it); it is never skipped.
+    const content = await git(["cat-file", "blob", id]);
     if (content.includes("\0")) continue;
     findings.push(...scanText(path, content, allow));
   }
