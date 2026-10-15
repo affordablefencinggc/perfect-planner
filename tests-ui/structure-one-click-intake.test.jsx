@@ -74,6 +74,26 @@ describe("folder intake with an adjacent approval", () => {
     expect(onProjectCaptured).not.toHaveBeenCalled();
   });
 
+  test("a picker that fails before any folder is chosen reads as not started, not a red error", async () => {
+    const user = userEvent.setup();
+    for (const selectWorkspaceFolder of [
+      vi.fn(async () => { throw new Error("org.freedesktop.portal.Desktop was not provided by any .service files"); }),
+      vi.fn(async () => ({ authoritative: false, reason: "dialog not found" })),
+    ]) {
+      const adapter = adapterWith({ selectWorkspaceFolder });
+      const view = render(<StructureWorkspace workspaceAdapter={adapter} />);
+      await user.click(screen.getByRole("button", { name: "Choose app folder" }));
+      const alert = await screen.findByRole("alert");
+      expect(alert.textContent.trim()).not.toBe("");
+      expect(alert.className).not.toContain("is-error");
+      const badge = view.container.querySelector(".intake-state");
+      expect(badge.textContent.trim()).toBe("not started");
+      expect(badge.classList.contains("error")).toBe(false);
+      expect(adapter.registerWorkspaceReadOnly).not.toHaveBeenCalled();
+      view.unmount();
+    }
+  });
+
   test("Use last folder reconnects the remembered project and scans it after approval", async () => {
     const user = userEvent.setup();
     const adapter = adapterWith({

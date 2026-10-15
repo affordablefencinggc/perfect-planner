@@ -62,6 +62,40 @@ export function planApprovalStatus(project, records) {
   };
 }
 
+// Two separate things, named differently everywhere they appear:
+// - "Plan approved by you": the person's decision, saved above (planApprovalStatus).
+// - "Saved-plan check": the ledger-bound check run by planRefresh. It adds proof
+//   that the approval matches this exact saved Ledger revision and the saved
+//   architecture, folder and component records. It never changes the approval.
+export const SAVED_PLAN_CHECK_ACTION = "Run saved-plan check";
+export const SAVED_PLAN_CHECK_EXPLAINER = "Saved-plan check: an extra step after you approve. It confirms the approved plan is this exact saved Ledger revision, built on the saved architecture, folder and component records. It never runs work and does not replace your approval.";
+
+/**
+ * Plain wording for the saved-plan check next to the person's approval.
+ * `check` is the planning refresh status, `approval` is planApprovalStatus(),
+ * `checked` is the caller's exact-match test for an observed check.
+ */
+export function savedPlanCheckText({ check = null, approval = null, checked = false } = {}) {
+  const approvedByYou = approval?.state === "recorded";
+  const base = { approvedByYou, explainer: SAVED_PLAN_CHECK_EXPLAINER, action: SAVED_PLAN_CHECK_ACTION };
+  const lead = approvedByYou ? "Plan approved. " : "";
+  const unapproved = !approval ? "No plan approved yet. Approve the plan on the Plan page first."
+    : approval.state === "recorded" ? null
+      : `Plan approval needs attention: ${approval.detail}`;
+  let text;
+  if (!approval && !["refreshing", "pending", "unfinished"].includes(check?.state) && !(checked && check?.state === "observed")) text = unapproved;
+  else if (checked && check?.state === "observed") text = `Saved-plan check passed: planning approval revision ${check.revision} matches this exact saved Ledger${check.ledgerRevision != null ? ` (revision ${check.ledgerRevision})` : ""}. Planning only; nothing was run.`;
+  else if (check?.state === "refreshing") text = `${lead}Running the saved-plan check…`;
+  else if (check?.state === "pending") text = `${lead}The saved-plan check is on hold: an original planning request needs reconciliation in the Ledger.`;
+  else if (check?.state === "unfinished") text = `${lead}The saved-plan check is on hold: unfinished editor text needs recovery or a decision in the Ledger.`;
+  else if (check?.state === "unavailable") text = `${lead}The saved-plan check could not run. Earlier results are not current.`;
+  else if (check?.state === "missing") text = approvedByYou ? "Plan approved. The saved-plan check found no Ledger approval to compare yet. Use “Review and approve the plan” in the Ledger to lock it to this exact Ledger." : unapproved;
+  // A check that ran (it names the folder) but could not match current records.
+  else if (check?.state === "stale" && check.rootIdentity) text = approvedByYou ? "Plan approved. The saved-plan check could not lock it: the saved Ledger, architecture, folder or component records do not match the current ones yet." : unapproved;
+  else text = approvedByYou ? "Plan approved. Run the saved-plan check to lock it to this exact Ledger." : unapproved;
+  return { ...base, text };
+}
+
 const defaultNow = () => new Date().toISOString();
 
 /**

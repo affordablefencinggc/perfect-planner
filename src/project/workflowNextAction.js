@@ -42,8 +42,15 @@ const NEXT_WHEN_DONE = Object.freeze({
 const NAMES = Object.freeze({ blueprint: "Blueprint", structure: "Structure", components: "Components" });
 const pageName = (id) => NAMES[id] ?? `${id[0].toUpperCase()}${id.slice(1)}`;
 
-export function workflowNextAction(workspace, requirements) {
+const PROOF_PAGES = new Set(["evidence", "integrity"]);
+
+/** `taskCount` is the number of tasks that need proof when known (0 = known empty), else null. */
+export function workflowNextAction(workspace, requirements, { taskCount = null } = {}) {
   const firstOpen = requirements.find((item) => item.state !== "recorded");
+  // Proof pages cannot move forward without tasks; send people to plan them instead of a dead end.
+  if (firstOpen && taskCount === 0 && PROOF_PAGES.has(workspace) && REQUIREMENT_OWNERS[firstOpen.id] && PROOF_PAGES.has(REQUIREMENT_OWNERS[firstOpen.id])) {
+    return { label: "Plan tasks in Ledger", workspace: "ledger", target: null, reason: "There are no tasks to prove yet. Add tasks in the Ledger first, then come back to add proof." };
+  }
   if (!firstOpen) {
     const [label, next] = NEXT_WHEN_DONE[workspace];
     return { label, workspace: next, target: null, reason: "All receipts represented on this surface are recorded." };

@@ -6,7 +6,10 @@
 //   PP_E2E_BROWSER=<path>       use another Chromium-based browser
 //   PP_E2E_PEEK_AFTER=<step> PP_E2E_PEEK=<workspace>   debugging: print a workspace's text after a step
 //
-// The folder picker cannot be automated, so the imported project is seeded with the app's
+// This journey runs the release build, where the folder picker cannot be automated. To test intake
+// itself, use the dev server or a PP_TEST_INTAKE=1 build: queue a folder with
+// window.__ppTestIntake.queueFolder(manifest from scripts/folder-manifest.mjs) and click
+// "Choose app folder" (see src/browser/scriptedIntake.js). Here the imported project is seeded with the app's
 // own APIs: the project session comes from createImportedProjectSession + the project
 // registry, and the saved architecture, folder and component records are published to an
 // isolated save folder with the same Node stores the local server uses. Everything after

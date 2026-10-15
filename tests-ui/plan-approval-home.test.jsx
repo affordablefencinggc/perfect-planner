@@ -28,7 +28,7 @@ import { ProjectProvider } from "../src/project/ProjectProvider.jsx";
 import { createMemoryStorage, createProjectRegistry } from "../src/project/projectRegistry.js";
 import { createProjectEntityId } from "../src/project/projectIds.js";
 import { createImportedProjectSession, createProjectSession, projectAuthorityKinds } from "../src/project/projectSession.js";
-import { readSection } from "../src/project/projectWorkRecords.js";
+import { readSection, writeSection } from "../src/project/projectWorkRecords.js";
 import { notePlanTaskDrift, recordPlanApproval } from "../src/project/planApproval.js";
 
 const AT = "2026-10-03T09:00:00.000Z";
@@ -83,6 +83,8 @@ test("an approved plan reaches promotion and Confirm project is ready records Re
   const user = userEvent.setup();
   const project = session();
   await recordPlanApproval(project.projectId, { tasks: TASKS, censusDigest: project.census.digest });
+  writeSection(project.projectId, "collisions", { checkedTaskIds: [], uncheckedTaskIds: ["T0001"], invalid: [], collisions: [], resolutions: {} });
+  writeSection(project.projectId, "allocation", { taskIds: ["T0001"], assignments: { T0001: { owner: "Dana", wave: 1 } } });
   const { container } = renderHome(project);
 
   await waitFor(() => expect(homeAction(container)?.dataset.homeNextAction).toBe("confirm-project-ready"));
@@ -91,6 +93,17 @@ test("an approved plan reaches promotion and Confirm project is ready records Re
   expect(readSection(project.projectId, "planAuthority").data.confirmedAt).toBeTruthy();
   await waitFor(() => expect(screen.getByLabelText("Current project stage").textContent).toContain("Project status ready"));
   expect(window.location.search).toContain("workspace=home");
+});
+
+test("an approved plan with no overlap check or owners sends Home to Collision, not readiness", async () => {
+  const user = userEvent.setup();
+  const project = session();
+  await recordPlanApproval(project.projectId, { tasks: TASKS, censusDigest: project.census.digest });
+  const { container } = renderHome(project);
+  await waitFor(() => expect(homeAction(container)?.dataset.homeNextAction).toBe("collision-check-missing"));
+  expect(container.textContent).not.toContain("Every planning step is recorded");
+  await user.click(homeAction(container));
+  expect(window.location.search).toContain("workspace=collision");
 });
 
 test("tasks changed after approval show on Home instead of Ready", async () => {

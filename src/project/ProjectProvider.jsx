@@ -8,6 +8,7 @@ import { taskDraftBinding } from "./taskDraftLedger.js";
 import { createImportedProjectSession, createEmptyProjectState, validateProjectSession, withProjectState } from "./projectSession.js";
 import { createProjectRegistry, resolveProjectRegistryStorage } from "./projectRegistry.js";
 import { recaptureImportedProject } from "./projectRecapture.js";
+import { saveDiscoveryFindings } from "./discoveryReviewModel.js";
 import { selectProjectMetric, selectProjectMetrics } from "./projectProvenance.js";
 import { createProjectHistoryState, projectHistoryHref, resolveProjectSelection } from "./projectUrl.js";
 
@@ -206,7 +207,9 @@ export function ProjectProvider({ children, registry: suppliedRegistry = null, s
     if (syncHistory && typeof window !== "undefined") {
       const href = projectHistoryHref(window.location.href, { projectId, workspace: nextWorkspace, phase: nextPhase });
       const state = createProjectHistoryState(window.history.state, { projectId, workspace: nextWorkspace, phase: nextPhase });
-      if (historyMode === "replace") window.history.replaceState(state, "", href);
+      const current = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+      // Re-selecting the current location (re-click, double-click) must not stack duplicate Back entries.
+      if (historyMode === "replace" || href === current) window.history.replaceState(state, "", href);
       else window.history.pushState(state, "", href);
     }
     return registry.get(projectId);
@@ -221,6 +224,7 @@ export function ProjectProvider({ children, registry: suppliedRegistry = null, s
     activeProjectId: snapshot.activeProjectId,
     activeProject: displaySnapshot.activeProject,
     registryHealth: snapshot.health,
+    registryBackupKey: registry.unreadableBackupKey ?? null,
     refreshArchitecture,
     refreshFolder,
     refreshComponent,
@@ -236,7 +240,12 @@ export function ProjectProvider({ children, registry: suppliedRegistry = null, s
     registerProject(session, options) { return registry.upsert(validateProjectSession(session), options); },
     registerImportedProject(input, options) {
       const fresh = createImportedProjectSession(input);
-      return registry.upsert(recaptureImportedProject(registry.get(fresh.projectId), input), options);
+      const saved = registry.upsert(recaptureImportedProject(registry.get(fresh.projectId), input), options);
+      // Keep the scan's finding labels and evidence paths (metadata only) so the
+      // discovery review can still show them after a reload. Best effort: the
+      // review falls back to finding counts when this cannot be saved.
+      try { saveDiscoveryFindings(saved, input?.discovery, { storage }); } catch { /* storage unavailable */ }
+      return saved;
     },
     selectProject,
     closeProject(projectId) { return registry.remove(projectId); },
@@ -253,7 +262,7 @@ export function ProjectProvider({ children, registry: suppliedRegistry = null, s
     metrics(keys, project = displaySnapshot.activeProject) { return project ? selectProjectMetrics(project, keys) : Object.freeze([]); },
     syncFromUrl(urlLike) { return applySelection(urlLike); },
     exportRedacted() { return registry.exportRedacted(); },
-  }), [applySelection, registry, selectProject, snapshot,displaySnapshot,refreshArchitecture,architectureStatuses,refreshFolder,folderStatuses,refreshComponent,componentStatuses,refreshPlan,invalidatePlan,checkedPlanStatuses,selectionInitialized,syncHistory]);
+  }), [applySelection, registry, selectProject, snapshot,displaySnapshot,refreshArchitecture,architectureStatuses,refreshFolder,folderStatuses,refreshComponent,componentStatuses,refreshPlan,invalidatePlan,checkedPlanStatuses,selectionInitialized,syncHistory,storage]);
 
   return <ProjectContext.Provider value={value}>{children}</ProjectContext.Provider>;
 }

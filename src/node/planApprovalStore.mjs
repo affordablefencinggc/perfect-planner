@@ -65,8 +65,12 @@ export function createPlanApprovalStore({root,projectId,rootIdentity,actor,sourc
   if(wire(head(observed))!==wire(expected))fail('PUBLICATION_UNCERTAIN');
   return freeze({outcome:'withdrawn',record,idempotent,observedWithdrawalHead:head(observed),currentParentsChecked:false,planApprovalRecorded:false,...flags});
  }
+ // A project folder that does not exist yet simply has no approval history.
+ // The root chain is still checked, so a symlinked root keeps failing closed.
+ async function absent(){try{await lstat(parent);return false;}catch(error){if(error.code!=='ENOENT')throw error;}try{await directories(root);}catch(error){if(error.code!=='ENOENT')throw error;}return true;}
+ const emptyHistory=()=>freeze({schemaVersion:1,projectId,rootIdentity,records:[],observedApprovalHead:{revision:0,headDigest:'GENESIS'},currentParentsChecked:false,...flags});
  return Object.freeze({
-  async inspect(){return locked(async snapshot=>{const {state}=await combined(snapshot);return freeze({schemaVersion:1,projectId,rootIdentity,records:state.records,observedApprovalHead:head(state),currentParentsChecked:false,...flags});});},
+  async inspect(){if(await absent())return emptyHistory();return locked(async snapshot=>{const {state}=await combined(snapshot);return freeze({schemaVersion:1,projectId,rootIdentity,records:state.records,observedApprovalHead:head(state),currentParentsChecked:false,...flags});});},
   async inspectCurrent(input){input=structuredClone(input);exact(input,['expectedApprovalHead']);exact(input.expectedApprovalHead,['revision','headDigest']);const expected=input.expectedApprovalHead;if(!positive(expected.revision)||!isHash(expected.headDigest))fail('REQUEST_INVALID');
    // Capture under the approval lock, then release before taking parent locks.
    const captured=await locked(async snapshot=>{const {state}=await combined(snapshot);if(wire(head(state))!==wire(expected))fail('STALE_HEAD');return state.records.at(-1);});

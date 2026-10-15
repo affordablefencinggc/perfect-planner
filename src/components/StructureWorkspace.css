@@ -76,6 +76,24 @@
   align-items: center;
   gap: 7px;
 }
+.structure-toolbar-actions { flex-wrap: wrap; }
+.structure-reset-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 10px;
+  border: 1px solid #9d6a15;
+  border-radius: 8px;
+  background: #fff5df;
+  color: #63440e;
+  font-size: 14px;
+}
+.structure-empty-plan {
+  margin: 12px;
+  color: var(--muted);
+  font-size: 14px;
+}
 .mode-switch {
   display: flex;
   align-items: center;

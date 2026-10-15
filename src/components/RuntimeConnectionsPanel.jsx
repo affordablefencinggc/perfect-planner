@@ -282,7 +282,8 @@ export function RuntimeConnectionsPanel({
           <li>Add the generated configuration to your IDE's MCP settings, keeping its existing entries. Refresh its tools, then check agent sessions here.</li>
         </ol>
         <p>Task proposals and exchange reports require the corresponding access choice. Connecting an agent does not approve work or allow it to execute code.</p>
-        <small>The bundled service check below is separate. Passing it does not establish an Antigravity connection.</small>
+        <small>The bundled service check below is separate. Passing it does not connect your IDE.</small>
+        <small>Only need read-only search across your apps? Use <strong>Connect agent</strong> in the top bar instead; it needs no desktop approval but cannot propose tasks or report exchanges.</small>
       </section>
 
       <BundledPlannerConnection connection={plannerConnection} onCheck={onCheckPlannerConnection} onDisconnect={onDisconnectPlannerConnection} inMenu />

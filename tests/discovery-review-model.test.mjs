@@ -2,7 +2,7 @@ import "./helpers/hermetic-env.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { deriveDiscoveryReview, nextDiscoveryReviewData } from "../src/project/discoveryReviewModel.js";
+import { DISCOVERY_FINDINGS_LIMITS, deriveDiscoveryReview, nextDiscoveryReviewData, saveDiscoveryFindings, savedDiscoveryFindings } from "../src/project/discoveryReviewModel.js";
 import { deriveImportedProjectWorkflowModel } from "../src/project/importedProjectWorkflowModel.js";
 import { deriveProjectHomeModel } from "../src/project/projectHomeModel.js";
 import { readWorkRecords, writeSection } from "../src/project/projectWorkRecords.js";
@@ -110,4 +110,67 @@ test("answers need text, unknown decisions are refused, and undo clears a decisi
   // A hand-edited record with an empty answer does not count as a decision.
   const records = { sections: { discoveryReview: { revision: 1, recordedAt: AT, data: { ...decided, categories: { A02: { decision: "answered", note: "" } } } } } };
   assert.equal(deriveDiscoveryReview(session, records).items.find((item) => item.id === "A02").decision, null);
+});
+
+const liveDiscovery = {
+  categories: [
+    { id: "A01", findings: [{ id: "S001", label: "JavaScript or TypeScript app", certainty: "observed", evidence: ["package.json"], evidenceCount: 1, detail: "A package manifest exists at the app root.", content: "SECRET FILE BODY" }] },
+    { id: "A02", findings: [{ id: "S013", label: "React-style component files", certainty: "signal", evidence: ["src/a.jsx", "src/b.jsx", "src/c.jsx", "src/d.jsx"], evidenceCount: 40, detail: "x".repeat(5000) }] },
+  ],
+};
+
+test("finding labels and evidence paths are saved with the scan and survive a reload, bounded and without contents", () => {
+  const storage = memoryStorage();
+  const session = project();
+  saveDiscoveryFindings(session, liveDiscovery, { storage, now: () => AT });
+  // A reload: nothing in memory, only what was saved for this project.
+  const records = readWorkRecords(session.projectId, storage);
+  const saved = savedDiscoveryFindings(session, records);
+  assert.equal(saved.get("A01")[0].label, "JavaScript or TypeScript app");
+  assert.deepEqual(saved.get("A01")[0].evidence, ["package.json"]);
+  const react = saved.get("A02")[0];
+  assert.equal(react.certainty, "signal");
+  assert.equal(react.evidence.length, 3);
+  assert.equal(react.evidenceCount, 40);
+  assert.ok(react.detail.length <= DISCOVERY_FINDINGS_LIMITS.maxDetailCharacters);
+  const raw = storage.getItem(`perfect-planner.work-records.v1:${session.projectId}`);
+  assert.doesNotMatch(raw, /SECRET FILE BODY|"content"/);
+  assert.ok(raw.length < 4_000, "the saved findings stay small");
+
+  // Saved details belong to one scan only.
+  assert.equal(savedDiscoveryFindings(project({ generatedAt: LATER }), records).size, 0);
+  // Malformed or oversized saved records are ignored, not trusted.
+  const hostile = { sections: { discoveryFindings: { revision: 1, recordedAt: AT, data: { schemaVersion: 1, snapshot: records.sections.discoveryFindings.data.snapshot, categories: { A01: [{ id: "S001", label: 42, certainty: "observed", evidence: "package.json" }], A02: "nope", "../x": [] } } } } };
+  const cleaned = savedDiscoveryFindings(session, hostile);
+  assert.equal(cleaned.get("A01")?.length ?? 0, 0);
+  assert.equal(cleaned.has("../x"), false);
+});
+
+test("Home counts discovery in the same areas as the review, and answered areas clear", () => {
+  const storage = memoryStorage();
+  const session = project();
+  const before = deriveProjectHomeModel(session).summary.discovery;
+  const review = deriveDiscoveryReview(session, null);
+  assert.equal(before.unit, "areas");
+  assert.equal(before.observed, 1);
+  assert.equal(before.signals, 1);
+  assert.equal(before.unanswered, 6);
+  assert.equal(before.signals + before.unanswered, review.open);
+  assert.equal(before.reviewRequired, review.required);
+
+  const partial = decideAll(session, storage, ["A02", "A03"]);
+  const mid = deriveProjectHomeModel(session, partial).summary.discovery;
+  assert.equal(mid.signals, 0);
+  assert.equal(mid.unanswered, 5);
+  assert.equal(mid.signals + mid.unanswered, deriveDiscoveryReview(session, partial).open);
+  assert.match(deriveProjectHomeModel(session, partial).blockers.find((item) => item.id === "discovery-questions-unanswered").reason, /^5 discovery areas/);
+
+  const records = decideAll(session, storage);
+  const after = deriveProjectHomeModel(session, records).summary.discovery;
+  assert.equal(after.signals, 0);
+  assert.equal(after.unanswered, 0);
+  assert.equal(after.observed, 1);
+  const detail = deriveImportedProjectWorkflowModel(session, "plan", records).requirements.find((item) => item.id === "REC-DISCOVERY").detail;
+  assert.doesNotMatch(detail, /review signals|1 unanswered/);
+  assert.match(detail, /7 of 7 areas reviewed/);
 });
