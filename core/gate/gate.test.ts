@@ -1,3 +1,4 @@
+import type { ChildProcess } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -6,7 +7,7 @@ import { Ledger, LedgerError, MemoryStore, type Actor } from "../ledger/index";
 import { git } from "../worktrees/git";
 import { realDir } from "../worktrees/platform";
 import { commitAll, makeRepo, memoryLedger, writeFiles } from "../worktrees/testing";
-import { TestGate, commandExists, deriveState, gateRule, isConclusiveFailure, nextAttemptId, runTestCommand, scrubbedEnv } from "./index";
+import { TestGate, commandExists, deriveState, gateRule, isConclusiveFailure, killTree, nextAttemptId, runTestCommand, scrubbedEnv } from "./index";
 
 const OWNER: Actor = { kind: "person", id: "owner" };
 const GATE: Actor = { kind: "system", id: "gate" };
@@ -666,9 +667,9 @@ describe("TestGate", () => {
 });
 
 describe("runTestCommand", () => {
-  const scratch = () => {
+  const scratch = (maxRetries = 5) => {
     const dir = realDir(mkdtempSync(path.join(os.tmpdir(), "pp-gate-run-")));
-    cleanups.push(() => rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }));
+    cleanups.push(() => rmSync(dir, { recursive: true, force: true, maxRetries, retryDelay: 250 }));
     return dir;
   };
 
@@ -731,8 +732,24 @@ describe("runTestCommand", () => {
     expect(result.outputTail).not.toContain("line 0\n");
   });
 
+  it("still reports a timeout when killing the tree never finishes", async () => {
+    const dir = scratch(20);
+    writeFileSync(path.join(dir, "hang.mjs"), `setInterval(() => {}, 1000);\n`);
+    // A killer that stops the tree but never reports back, like a taskkill.exe that hangs.
+    const stuck = (child: ChildProcess) => {
+      void killTree(child);
+      return new Promise<void>(() => {});
+    };
+    const started = Date.now();
+    const result = await runTestCommand("node hang.mjs", dir, { timeoutMs: 500, killWaitMs: 300, killTree: stuck });
+    expect(result).toMatchObject({ passed: false, timedOut: true, exitCode: null });
+    expect(result.outputTail).toContain("process tree may still be running");
+    expect(Date.now() - started).toBeLessThan(5000);
+  }, SLOW);
+
   it("kills the whole process tree on timeout", async () => {
-    const dir = scratch();
+    // Windows can hold the folder open for a moment after a killed process exits.
+    const dir = scratch(20);
     const pidFile = path.join(dir, "grandchild.pid");
     writeFileSync(
       path.join(dir, "hang.mjs"),
