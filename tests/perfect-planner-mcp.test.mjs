@@ -344,11 +344,15 @@ test("map and search enforce one aggregate byte budget across registry and works
   try {
     await writeFile(path.join(workspaceRoot, "src", "large.txt"), "x".repeat(4_096));
     for (const action of [
-      () => mapRegisteredWorkspace(registryRoot, "demo-app", { maxTotalBytes: 4_000 }),
+      () => mapRegisteredWorkspace(registryRoot, "demo-app", { maxTotalBytes: 4_000, allowPartial: false }),
       () => searchRegisteredWorkspace(registryRoot, "demo-app", "needle", { maxTotalBytes: 4_000 }),
     ]) {
       await assert.rejects(action, (error) => error.code === "MCP_OPERATION_BYTE_LIMIT");
     }
+    // A partial map stays inside the same budget: it skips the file that does not fit and says so.
+    const map = await mapRegisteredWorkspace(registryRoot, "demo-app", { maxTotalBytes: 4_000 });
+    assert.equal(map.census.partial.reason, "bytes");
+    assert.equal(map.census.skipped.some((item) => item.path === "src/large.txt"), false);
   } finally {
     await rm(base, { recursive: true, force: true });
   }
@@ -434,6 +438,55 @@ test("a registration changed during a scan is not allowed to rebind the result",
       (error) => error.code === "MCP_REGISTRY_CHANGED",
     );
     assert.equal(changed, true);
+  } finally {
+    await rm(base, { recursive: true, force: true });
+  }
+});
+
+test("a scan past a ceiling refuses by default, and with allowPartial keeps what it read and says how much was left", async () => {
+  const { runBoundedMcpOperation, scanWorkspaceSnapshot } = await import("../mcp/boundedWorkspaceScan.mjs");
+  const root = await mkdtemp(path.join(tmpdir(), "pp-partial-"));
+  try {
+    await mkdir(path.join(root, "src"), { recursive: true });
+    for (const name of ["a", "b", "c", "d", "e"]) await writeFile(path.join(root, "src", `${name}.js`), `export const ${name} = 1;\n`);
+    const scan = (options) => runBoundedMcpOperation({}, (operation) => scanWorkspaceSnapshot(root, options, operation));
+
+    await assert.rejects(() => scan({ maxFiles: 2 }), (error) => error.code === "MCP_FILE_LIMIT");
+
+    const { census } = await scan({ maxFiles: 2, allowPartial: true });
+    assert.equal(census.fileCount, 2);
+    assert.deepEqual(census.files.map((file) => file.path), ["src/a.js", "src/b.js"]);
+    assert.equal(census.partial.reason, "files");
+    assert.equal(census.partial.scannedFiles, 2);
+    assert.equal(census.partial.seenFiles, 5);
+    assert.equal(census.partial.walkComplete, true);
+    assert.equal(census.partial.notice, "Scanned 2 of 5 files; stopped at the 2-file limit. Pick a subfolder to cover the rest.");
+
+    // A byte budget too small for every file stops reading, but the scan and its re-read still finish inside it.
+    const tight = await runBoundedMcpOperation({ maxTotalBytes: 200 }, (operation) => scanWorkspaceSnapshot(root, { allowPartial: true }, operation));
+    assert.equal(tight.census.partial.reason, "bytes");
+    assert.equal(tight.census.fileCount, 4);
+    assert.equal(tight.census.partial.seenFiles, 5);
+
+    // Under every ceiling nothing is marked partial.
+    assert.equal((await scan({ allowPartial: true })).census.partial, null);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("map_workspace returns a partial map with its notice instead of refusing a big repo", async () => {
+  const { base, registryRoot, workspaceRoot } = await fixture();
+  try {
+    for (let index = 0; index < 4; index += 1) await writeFile(path.join(workspaceRoot, "src", `extra-${index}.js`), "export {};\n");
+    const map = await mapRegisteredWorkspace(registryRoot, "demo-app", { maxFiles: 2 });
+    assert.equal(map.census.fileCount, 2);
+    assert.equal(map.census.partial.reason, "files");
+    assert.match(map.census.partial.notice, /^Scanned 2 of \d+ files/);
+    await assert.rejects(
+      () => mapRegisteredWorkspace(registryRoot, "demo-app", { maxFiles: 2, allowPartial: false }),
+      (error) => error.code === "MCP_FILE_LIMIT",
+    );
   } finally {
     await rm(base, { recursive: true, force: true });
   }

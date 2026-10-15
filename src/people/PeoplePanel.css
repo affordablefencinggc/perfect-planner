@@ -1,0 +1,38 @@
+.people-panel { display: grid; gap: 20px; color: var(--ink, #27302b); font-size: 14px; }
+.people-panel h2 { margin: 0 0 8px; font-size: 16px; }
+.people-panel h3 { margin: 0 0 6px; font-size: 13px; color: var(--muted, #5f6762); }
+.people-panel ul { list-style: none; margin: 0; padding: 0; }
+.people-panel .people-section { background: var(--paper, #faf8f1); border: 1px solid var(--line, #d0cdc3); border-radius: 8px; padding: 14px; display: grid; gap: 10px; }
+.people-panel .people-empty { margin: 0; color: var(--muted, #5f6762); }
+.people-panel .people-row { display: flex; gap: 12px; align-items: flex-start; padding: 8px 0; border-top: 1px solid var(--line, #d0cdc3); }
+.people-panel .people-row:first-child { border-top: 0; }
+.people-panel .people-main { flex: 1; min-width: 0; }
+.people-panel .people-head { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.people-panel .people-main p { margin: 2px 0 0; }
+.people-panel .people-avatar { width: 36px; height: 36px; border-radius: 50%; object-fit: cover; flex: none; }
+.people-panel .people-avatar-initials { display: inline-flex; align-items: center; justify-content: center; background: var(--green-soft, #dcecdf); color: var(--green, #397a52); font-weight: 700; font-size: 13px; }
+.people-panel .people-role, .people-panel .people-you, .people-panel .people-version, .people-panel .people-kind, .people-panel .people-clauses { font-size: 12px; border-radius: 999px; padding: 1px 8px; border: 1px solid var(--line, #d0cdc3); }
+.people-panel .people-role-owner { background: var(--green-soft, #dcecdf); color: var(--green, #397a52); }
+.people-panel .people-role-helper { background: var(--amber-soft, #fbefd7); color: var(--amber-text, #8a5a0c); }
+.people-panel .people-you { background: var(--paper-strong, #fff); }
+.people-panel .people-approves, .people-panel .people-shared { color: var(--muted, #5f6762); font-size: 12px; }
+.people-panel .people-presence.is-idle { color: var(--muted-2, #626965); font-style: italic; opacity: 0.8; }
+.people-panel .people-stages ul { display: flex; flex-wrap: wrap; gap: 10px; }
+.people-panel .people-stages li { display: flex; align-items: center; gap: 6px; border: 1px solid var(--line, #d0cdc3); border-radius: 999px; padding: 3px 10px 3px 4px; }
+.people-panel .people-stage-name { font-size: 12px; font-weight: 600; order: 2; }
+.people-panel .people-stage-faces { display: inline-flex; gap: 2px; order: 1; }
+.people-panel .people-stages .people-avatar { width: 24px; height: 24px; font-size: 10px; }
+.people-panel .people-actions { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.people-panel .people-docs { display: grid; gap: 8px; }
+.people-panel .people-doc { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.people-panel .people-doc-title { font-weight: 600; background: none; border: 0; padding: 0; color: var(--ink, #27302b); text-decoration: underline; cursor: pointer; font: inherit; font-weight: 600; }
+.people-panel span.people-doc-title { text-decoration: none; cursor: default; }
+.people-panel .people-form { display: grid; gap: 8px; max-width: 420px; border-top: 1px solid var(--line, #d0cdc3); padding-top: 10px; }
+.people-panel .people-form label, .people-panel .people-photo { display: grid; gap: 2px; font-size: 12px; color: var(--muted, #5f6762); }
+.people-panel input[type="text"], .people-panel input:not([type]), .people-panel select { font: inherit; padding: 5px 8px; border: 1px solid var(--line-strong, #9aa5ae); border-radius: 6px; background: var(--paper-strong, #fff); color: var(--ink, #27302b); }
+.people-panel button { font: inherit; padding: 5px 12px; border-radius: 6px; border: 1px solid var(--line-strong, #9aa5ae); background: var(--paper-strong, #fff); color: var(--ink, #27302b); cursor: pointer; }
+.people-panel button:disabled { opacity: 0.5; cursor: not-allowed; }
+.people-panel button.people-danger { background: var(--red-soft, #f8dfdc); border-color: var(--red, #bd4b45); color: var(--red, #bd4b45); }
+.people-panel .people-error { margin: 0; color: var(--red, #bd4b45); font-size: 12px; }
+.people-panel .people-hint { margin: 0; color: var(--muted, #5f6762); font-size: 12px; }
+.people-panel button:focus-visible, .people-panel input:focus-visible, .people-panel select:focus-visible { outline: 2px solid var(--blue-focus, #3c6ee8); outline-offset: 2px; }

@@ -9,13 +9,17 @@ import {
   WarningIcon,
   XCircleIcon,
 } from "@phosphor-icons/react";
-import { buildBlueprintWorkspaceModel } from "../engine/blueprintWorkspaceModel.js";
+import { buildBlueprintWorkspaceModel, sentenceCase } from "../engine/blueprintWorkspaceModel.js";
 import { workspaceDiscoveryCategories } from "../engine/workspaceDiscoveryEngine.js";
 import "./BlueprintWorkspace.css";
 import { DEMO_ONLY_REASON, DemoOnlyReason } from "../demo/DemoSampleNotice.jsx";
 import { ArchitectureDraftPanel } from "./ArchitectureDraftPanel.jsx";
 import { inspectArchitecture } from "../runtime/architectureClient.js";
 import { useOptionalProject } from "../project/ProjectProvider.jsx";
+import { useProjectWorkRecords } from "../project/useProjectWorkRecords.js";
+import { deriveDiscoveryReview } from "../project/discoveryReviewModel.js";
+
+const plural = (count, word, many = `${word}s`) => `${count} ${count === 1 ? word : many}`;
 
 const gateStatus = (gate) => gate.status === "clear" ? "verified" : gate.status === "unknown" ? "queued" : "blocked";
 const statusLabel = { verified: "verified", blocked: "hard stop", queued: "unknown" };
@@ -59,6 +63,8 @@ function ImportedProjectBlueprint({ activeProject, onSelect, onOpenStructure }) 
   const [savedArchitecture, setSavedArchitecture] = useState(null);
   const [architectureError,setArchitectureError]=useState(false);
   const architectureRequest=useRef(0);
+  const workRecords=useProjectWorkRecords(activeProject.projectId);
+  const discoveryReview=useMemo(()=>deriveDiscoveryReview(activeProject,workRecords),[activeProject,workRecords]);
   const hasProvider=Boolean(projectContext);
   useEffect(() => {
     const request=++architectureRequest.current;
@@ -91,7 +97,7 @@ function ImportedProjectBlueprint({ activeProject, onSelect, onOpenStructure }) 
           <h1>{activeProject.name}</h1>
           <p>This Blueprint shows only redacted project-session receipts. Metadata observations and generated discovery signals stay separate from verified architecture.</p>
         </div>
-        <div className={`imported-blueprint-verdict verdict-${evidenceTone(overallState)}`}>
+        <div className={`imported-blueprint-verdict verdict-${overallState === "observed" ? "neutral" : evidenceTone(overallState)}`}>
           {overallState === "observed" ? <CheckCircleIcon weight="fill" /> : overallState === "unavailable" ? <XCircleIcon weight="fill" /> : <WarningIcon weight="fill" />}
           <span><small>Blueprint decision</small><strong>{overallState === "observed" ? "AUTHORITY RECORDED" : overallState === "unavailable" ? "EVIDENCE UNAVAILABLE" : overallState==='stale'?'REFRESH REQUIRED':"REVIEW REQUIRED"}</strong><em>{architectureAuthority?.state === "authoritative" ? `Architecture authority revision ${architectureAuthority.revision} is recorded.` : architectureAuthority ? `Last known architecture revision ${architectureAuthority.revision}; current approval has not been confirmed.` : architectureError||projectContext?.architectureRefreshStatus?.state==='unavailable' ? 'Saved architecture could not be checked. Its current status is unknown.' : "No authoritative architecture contract is recorded."}</em></span>
           <EvidenceLabel state={overallState} />
@@ -109,7 +115,7 @@ function ImportedProjectBlueprint({ activeProject, onSelect, onOpenStructure }) 
         </article>
         <article>
           <header><ListChecksIcon /><span>Discovery snapshot</span><EvidenceLabel state={discoveryState} /></header>
-          {discovery ? <><strong>{discovery.counts.observed} observed · {discovery.counts.signals} signals</strong><p>{workspaceDiscoveryCategories.reduce((total, category) => total + category.questions.length, 0)} open review questions · {discovery.counts.unanswered} areas without metadata findings.</p><small>Generated from census {shortDigest(discovery.censusDigest)}; not architecture proof. Findings do not answer these questions.</small></> : <><strong>Unavailable</strong><p>No sanitized discovery snapshot is present.</p></>}
+          {discovery ? <><strong>{discovery.counts.observed} observed · {plural(discovery.counts.signals, "signal")}</strong><p>{discoveryReview.required === 0 ? "Every area had clear findings; nothing needs your answer." : discoveryReview.open === 0 ? `All ${plural(discoveryReview.required, "area")} that needed a look have your answer.` : `${discoveryReview.open} of ${plural(discoveryReview.required, "area")} still need your answer`}{discoveryReview.required !== 0 && discoveryReview.open !== 0 ? ` · ${plural(discovery.counts.unanswered, "area")} without metadata findings.` : ""}</p><small>Generated from census {shortDigest(discovery.censusDigest)}; not architecture proof. Findings do not answer these questions.</small></> : <><strong>Unavailable</strong><p>No sanitized discovery snapshot is present.</p></>}
         </article>
       </section>
 
@@ -151,13 +157,15 @@ function ImportedProjectBlueprint({ activeProject, onSelect, onOpenStructure }) 
 
           <section className="blueprint-panel imported-next-step">
             <header><span><ArrowRightIcon /><strong>Next honest action</strong></span><EvidenceLabel state="signal" /></header>
-            <p>Review the metadata map, answer the open questions with sourced evidence, and create an architecture contract. Nothing on this page auto-approves a design.</p>
+            <p>{architectureAuthority?.state === "authoritative"
+              ? `Architecture revision ${architectureAuthority.revision} is recorded. ${discoveryReview.open ? "Answer the open discovery questions in Structure. " : ""}To change the architecture, write a new draft below and publish it as a new revision. Nothing on this page auto-approves a design.`
+              : "Review the metadata map, answer the open questions with sourced evidence, and create an architecture contract. Nothing on this page auto-approves a design."}</p>
             <button className="primary-button" type="button" onClick={onOpenStructure}><TreeStructureIcon /> Open Structure evidence</button>
-            <small>Use the architecture draft below to record decisions and explicitly approve a complete contract.</small>
+            <small>{architectureAuthority?.state === "authoritative" ? "The draft form below starts a new revision; it does not show the recorded answers." : "Use the architecture draft below to record decisions and explicitly approve a complete contract."}</small>
           </section>
         </aside>
       </div>
-      <ArchitectureDraftPanel key={activeProject.projectId} projectId={activeProject.projectId} onPublished={(receipt)=>{architectureRequest.current++;if(hasProvider){projectContext.refreshArchitecture?.(activeProject.projectId);}else{setSavedArchitecture(receipt);setArchitectureError(false);}}} />
+      <ArchitectureDraftPanel key={activeProject.projectId} projectId={activeProject.projectId} discoveryReview={discoveryReview} onPublished={(receipt)=>{architectureRequest.current++;if(hasProvider){projectContext.refreshArchitecture?.(activeProject.projectId);}else{setSavedArchitecture(receipt);setArchitectureError(false);}}} />
     </section>
   );
 }
@@ -194,7 +202,7 @@ function DemoBlueprintWorkspace({ onSelect, onOpenStructure }) {
           <header><span><ListChecksIcon /><strong>Required contracts</strong></span><small>{model.decisions.length} unanswered</small></header>
           <p>Each stable number is a named contract. It cannot drift around the conversation and reappear after implementation has begun.</p>
           <div className="decision-list">
-            {model.decisions.map((decision) => <button key={decision.id} onClick={() => onSelect({ id: decision.id, title: decision.title, status: "blocked", estimate: decision.source, items: [`Contract key: ${decision.key}`, "Answer with evidence or an explicit bounded assumption.", "Record an owner, validation date, and fallback before clearing."] })}><code>{decision.id}</code><span><strong>{decision.title}</strong><small>{decision.source}</small></span><StatusChip status="blocked">required</StatusChip><ArrowRightIcon /></button>)}
+            {model.decisions.map((decision) => <button key={decision.id} onClick={() => onSelect({ id: decision.id, title: decision.title, status: "queued", estimate: decision.source, items: [`Contract key: ${decision.key}`, "Answer with evidence or an explicit bounded assumption.", "Record an owner, validation date, and fallback before clearing."] })}><code>{decision.id}</code><span><strong>{decision.title}</strong><small>{decision.source}</small></span><StatusChip status="queued">required</StatusChip><ArrowRightIcon /></button>)}
           </div>
         </section>
 
@@ -223,7 +231,7 @@ function DemoBlueprintWorkspace({ onSelect, onOpenStructure }) {
           <header><span><TreeStructureIcon /><strong>Top-down build path</strong></span><small>{map.nodes.length} ordered stages</small></header>
           <p>This is the selected template's required path. Parallel packages may branch beneath a stage, but evidence cannot skip the stage contract.</p>
           <div className="rulebook-map" aria-label="Seven-stage top-down architecture map">
-            {map.nodes.map((node, index) => <button key={node.id} onClick={() => onSelect({ id: node.id, title: node.stage.replace(/-/g, " "), status: index === 0 ? "ready" : "blocked", estimate: `${index + 1}/${map.nodes.length}`, items: [`Template: ${map.template}`, `Predecessor: ${index ? map.nodes[index - 1].id : "none"}`, "Stage exit requires recorded proof before dependent work advances."] })}><code>{node.id}</code><strong>{node.stage.replace(/-/g, " ")}</strong><span>{index ? "locked by predecessor" : "current entry"}</span></button>)}
+            {map.nodes.map((node, index) => <button key={node.id} onClick={() => onSelect({ id: node.id, title: sentenceCase(node.stage), status: index === 0 ? "ready" : "blocked", estimate: `${index + 1}/${map.nodes.length}`, items: [`Template: ${map.template}`, `Predecessor: ${index ? map.nodes[index - 1].id : "none"}`, "Stage exit requires recorded proof before dependent work advances."] })}><code>{node.id}</code><strong>{sentenceCase(node.stage)}</strong><span>{index ? "locked by predecessor" : "current entry"}</span></button>)}
           </div>
         </section>
 
@@ -241,7 +249,7 @@ function DemoBlueprintWorkspace({ onSelect, onOpenStructure }) {
           <div className="folder-contract-summary"><span><b>{model.folderContract.nodes.length}</b><small>named paths</small></span><span><b>{model.folderContract.reservations.length}</b><small>forward reservations</small></span><span><b>0</b><small>physically created</small></span></div>
           <div className="folder-contract-tree">{model.folderContract.nodes.map((node) => {
             const depth = node.path.split("/").length - 1;
-            return <button key={node.id} style={{ "--folder-depth": depth }} onClick={() => onSelect({ id: node.id, title: node.path, status: "blocked", estimate: node.createAtStage, items: [`Purpose: ${node.purpose}`, `Owner: ${node.owner} · task ${node.taskId}`, `Policy: ${node.changePolicy}`, `Allowed: ${node.allowedContents}`, `Rename: ${node.renameFallback}`] })}><code>{node.id}</code><span><strong>{node.path.split("/").at(-1)}</strong><small>{node.path}</small></span><em>{node.owner}</em><b>{node.createAtStage}</b><ArrowRightIcon /></button>;
+            return <button key={node.id} style={{ "--folder-depth": depth }} onClick={() => onSelect({ id: node.id, title: node.path, status: "queued", estimate: node.createAtStage, items: [`Purpose: ${node.purpose}`, `Owner: ${node.owner} · task ${node.taskId}`, `Policy: ${node.changePolicy}`, `Allowed: ${node.allowedContents}`, `Rename: ${node.renameFallback}`] })}><code>{node.id}</code><span><strong>{node.path.split("/").at(-1)}</strong><small>{node.path}</small></span><em>{node.owner}</em><b>{node.createAtStage}</b><ArrowRightIcon /></button>;
           })}</div>
           <div className="folder-contract-rule"><WarningIcon weight="fill" /><span><strong>Rename means replan</strong><small>Adding, removing, or renaming a reserved path requires architecture approval and a collision rescan across every dependent plan.</small></span></div>
         </section>

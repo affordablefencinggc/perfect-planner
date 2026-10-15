@@ -76,3 +76,22 @@ test('map shows tasks approved on the Plan page as approved, and says when they 
  expect(screen.getByRole('button',{name:'Open T0001: Keep local changes and notes in Ledger'}).textContent).toContain('Draft');
  localStorage.clear();
 });
+
+test('map says the approval check failed, not "approved by you", when the task digest cannot be computed',async()=>{
+ const {recordPlanApproval}=await import('../src/project/planApproval.js');
+ const {readSection}=await import('../src/project/projectWorkRecords.js');
+ localStorage.clear();
+ const ledger=updateTaskDraft(emptyTaskDraftLedger(binding),task),store={read:async()=>ledger};
+ await recordPlanApproval(project.projectId,{tasks:ledger.tasks,censusDigest:project.census.digest});
+ const records={sections:{planAuthority:readSection(project.projectId,'planAuthority')}};
+ const context={planStatuses:{[project.projectId]:{state:'unavailable'}}};
+ const {ProjectContext}=await import('../src/project/ProjectProvider.jsx');
+ const digest=vi.spyOn(globalThis.crypto.subtle,'digest').mockRejectedValue(new Error('digest unavailable'));
+ try{
+  render(<ProjectContext.Provider value={context}><TaskDraftMap project={project} records={records} store={withMemoryTaskSaveIntents(store)}/></ProjectContext.Provider>);
+  await screen.findByRole('button',{name:'Open T0001: Keep local changes in Ledger'});
+  await waitFor(()=>expect(screen.getByLabelText('Map planning approval').textContent).toContain('could not check that the approved plan matches the current tasks'));
+  expect(screen.getByRole('status').textContent).toContain('approval check failed');
+  expect(screen.getByRole('status').textContent).not.toContain('approved by you');
+ }finally{digest.mockRestore();localStorage.clear();}
+});

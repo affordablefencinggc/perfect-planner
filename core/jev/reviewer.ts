@@ -134,7 +134,8 @@ export class JevReviewer implements SettledAnswerer {
     if (limit === null || limit <= 0) return;
     const month = this.now().toISOString().slice(0, 7);
     const spent = this.spentThisMonth();
-    const warned = new Set(this.ledger.entries().filter((e) => e.type === "budget.warning" && e.subject === `jev:${month}`).map((e) => e.data?.level));
+    // Only signed warnings count, so a forged one cannot silence the real warning.
+    const warned = new Set(this.ledger.entries().filter((e) => e.type === "budget.warning" && e.subject === `jev:${month}` && isAuthoritative(e)).map((e) => e.data?.level));
     for (const level of [80, 100]) {
       if (spent >= (limit * level) / 100 && !warned.has(level)) {
         this.ledger.append({

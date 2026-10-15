@@ -45,6 +45,15 @@ test("selection parser ignores malformed project/workspace values", () => {
   assert.throws(() => withProjectSelection("/", { projectId: appA, workspace: "unknown" }), /workspace/);
 });
 
+test("selection parser accepts only known Plan phases so garbage is never saved into the registry (xcut-08)", () => {
+  for (const phase of ["P1", "P2", "P3", "P4", "P5"]) assert.equal(readProjectSelection(`/?workspace=plan&phase=${phase}`).phase, phase);
+  for (const phase of ["garbage", "not-a-phase", "P9", "p1", "P1 ", "__proto__", "constructor", "x".repeat(96)]) {
+    assert.equal(readProjectSelection(`/?workspace=plan&phase=${encodeURIComponent(phase)}`).phase, null, phase);
+  }
+  const snapshot = { activeProjectId: appA, projectOrder: [appA], projects: [{ projectId: appA, view: { workspace: "plan", phase: null } }] };
+  assert.equal(resolveProjectSelection(snapshot, `/?project=${appA}&workspace=plan&phase=garbage`).phase, null);
+});
+
 test("history state adds one namespaced selection without erasing caller state", () => {
   const state = createProjectHistoryState({ caller: "kept" }, { projectId: appB, workspace: "plan", phase: "P4" });
   assert.deepEqual(state, { caller: "kept", perfectPlanner: { projectId: appB, workspace: "plan", phase: "P4" } });
