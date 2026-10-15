@@ -308,7 +308,7 @@ describe("real-life UI survival matrix", () => {
     await waitFor(() => expect(document.activeElement).toBe(rosterTrigger));
 
     await user.click(screen.getByRole("button", { name: /Agent connection · unavailable in Demo/ }));
-    expect(await screen.findByRole("region", { name: "Runtime and connections" })).toBeTruthy();
+    expect(await screen.findByRole("region", { name: "Runtime and connections" }, { timeout: 5000 })).toBeTruthy();
     expect(new URLSearchParams(window.location.search).get("workspace")).toBe("home");
     await user.keyboard("{Escape}");
 

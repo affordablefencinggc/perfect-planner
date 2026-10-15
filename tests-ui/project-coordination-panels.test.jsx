@@ -1,6 +1,6 @@
 import React from "react";
 import { afterEach, expect, test, vi } from "vitest";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ProjectCollisionPanel } from "../src/components/ProjectCollisionPanel.jsx";
 import { ProjectAllocationPanel } from "../src/components/ProjectAllocationPanel.jsx";
@@ -136,7 +136,11 @@ test("an owner already allocated is kept instead of the Ledger proposal", async 
     return <ProjectAllocationPanel project={project} records={records} store={ledgerStore} storage={storage} />;
   }
   render(<Proposed />);
-  await user.clear(await screen.findByLabelText("Owner for T0002"));
+  // The owner inputs render before the form picks up the Ledger proposal; clearing an input that is
+  // still empty changes nothing, so "Eli" would land afterwards and the typed text append to it.
+  const owner = await screen.findByLabelText("Owner for T0002");
+  await waitFor(() => expect(owner.value).toBe("Eli"));
+  await user.clear(owner);
   await user.type(screen.getByLabelText("Owner for T0002"), "agent: builder");
   await user.click(screen.getByRole("button", { name: "Save assignments" }));
   await screen.findByText(/1 owner from the Ledger was not confirmed/);

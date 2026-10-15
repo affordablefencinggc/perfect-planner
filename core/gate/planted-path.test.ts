@@ -22,7 +22,7 @@ afterEach(() => {
 
 function scratch(prefix: string): string {
   const dir = mkdtempSync(path.join(os.tmpdir(), prefix));
-  cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
+  cleanups.push(() => rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }));
   return dir;
 }
 
