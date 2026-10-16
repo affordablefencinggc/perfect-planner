@@ -16,8 +16,19 @@ export function isLocalWindowsPath(file: string): boolean {
   return /^[A-Za-z]:[\\/]/.test(file);
 }
 
-/** On Windows anything but a local drive-letter path counts as a network or device path. */
-const isNetworkPath = (dir: string, platform: NodeJS.Platform) => platform === "win32" && !isLocalWindowsPath(dir);
+/** Filesystem calls findExecutable makes; tests inject them to stand in for links to network shares. */
+export interface ExecutableIo {
+  /** Real path of a file or folder; throws when it cannot be resolved. */
+  realpath?: (file: string) => string;
+  /** True when `file` is a regular file this user may run. */
+  isProgram?: (file: string, windows: boolean) => boolean;
+}
+
+const isProgram = (file: string, windows: boolean) => {
+  if (!statSync(file).isFile()) return false;
+  if (!windows) accessSync(file, constants.X_OK);
+  return true;
+};
 
 /**
  * Absolute path of `name` from PATH, never from the current folder: relative and empty PATH
@@ -27,7 +38,9 @@ const isNetworkPath = (dir: string, platform: NodeJS.Platform) => platform === "
  * /private/var) is still recognised. On Windows only `.exe` counts, since a .cmd/.bat cannot be
  * started without a shell. `protect` adds roots the host registered itself (the project folder,
  * the repo's top level, worktrees it made), so a PATH entry at the repo root is skipped when cwd is
- * a subfolder. Returns null when nothing qualifies.
+ * a subfolder. On Windows the PATH folder, its real path and the program's real path must all be
+ * local drive-letter paths, so a link to a network share is refused too. Returns null when nothing
+ * qualifies. `io` is for tests.
  */
 export function findExecutable(
   name: string,
@@ -35,24 +48,28 @@ export function findExecutable(
   cwd: string,
   platform: NodeJS.Platform = process.platform,
   protect: readonly string[] = [],
+  io: ExecutableIo = {},
 ): string | null {
   const windows = platform === "win32";
+  const p = windows ? path.win32 : path.posix;
+  const real = (file: string) => realPath(file, io.realpath);
+  const program = io.isProgram ?? isProgram;
+  const local = (file: string) => !windows || isLocalWindowsPath(file);
   const pathValue = Object.entries(env).find(([key]) => (windows ? key.toUpperCase() === "PATH" : key === "PATH"))?.[1] ?? "";
-  const roots = protectedRoots(cwd, protect);
+  const roots = protectedRoots(cwd, protect, p, real);
   const extensions = windows ? [".exe"] : [""];
   for (const entry of pathValue.split(windows ? ";" : ":")) {
     const dir = entry.trim().replace(/^"(.*)"$/, "$1");
-    if (!dir || !path.isAbsolute(dir) || isNetworkPath(dir, platform)) continue;
-    const realDir = realPath(dir);
+    if (!dir || !p.isAbsolute(dir) || !local(dir)) continue;
+    const realDir = real(dir);
     // A folder that cannot be resolved is not usable, never assumed safe.
-    if (!realDir || isNetworkPath(realDir, platform) || insideAny(roots, path.resolve(dir), realDir)) continue;
+    if (!realDir || !local(realDir) || insideAny(p, roots, p.resolve(dir), realDir)) continue;
     for (const extension of extensions) {
-      const candidate = path.join(dir, `${name}${extension}`);
+      const candidate = p.join(dir, `${name}${extension}`);
       try {
-        if (!statSync(candidate).isFile()) continue;
-        if (!windows) accessSync(candidate, constants.X_OK);
-        const realFile = realPath(candidate);
-        if (!realFile || insideAny(roots, realFile)) continue;
+        if (!program(candidate, windows)) continue;
+        const realFile = real(candidate);
+        if (!realFile || !local(realFile) || insideAny(p, roots, realFile)) continue;
         return candidate;
       } catch {
         // not here
@@ -63,9 +80,9 @@ export function findExecutable(
 }
 
 /** Real path, or undefined when it cannot be resolved (missing, no access). */
-function realPath(p: string): string | undefined {
+function realPath(file: string, realpath: (file: string) => string = realpathSync.native): string | undefined {
   try {
-    return realpathSync.native(p);
+    return realpath(file);
   } catch {
     return undefined;
   }
@@ -76,13 +93,18 @@ function realPath(p: string): string | undefined {
  * itself (the project folder, the repo's top level, worktrees it made), each as written and as a
  * real path. Never derived by walking up from cwd: a home-folder dotfiles repo would then block ~/bin.
  */
-function protectedRoots(cwd: string, protect: readonly string[] = []): string[] {
+function protectedRoots(
+  cwd: string,
+  protect: readonly string[] = [],
+  p: path.PlatformPath = path,
+  realOf: (file: string) => string | undefined = (file) => realPath(file),
+): string[] {
   const roots = new Set<string>();
   for (const root of [cwd, ...protect, ...registeredRoots()]) {
     if (typeof root !== "string" || root === "") continue;
-    const here = path.resolve(root);
+    const here = p.resolve(root);
     roots.add(here);
-    const real = realPath(here);
+    const real = realOf(here);
     if (real) roots.add(real);
   }
   return [...roots];
@@ -110,14 +132,14 @@ export function registeredRoots(): string[] {
   return [...new Set([...registered.values()].flat())];
 }
 
-function insideAny(roots: readonly string[], ...candidates: string[]): boolean {
-  return roots.some((root) => candidates.some((candidate) => isWithin(root, candidate)));
+function insideAny(p: path.PlatformPath, roots: readonly string[], ...candidates: string[]): boolean {
+  return roots.some((root) => candidates.some((candidate) => isWithin(root, candidate, p)));
 }
 
 /** True when `candidate` is `root` or inside it. */
-export function isWithin(root: string, candidate: string): boolean {
-  const relative = path.relative(path.resolve(root), path.resolve(candidate));
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+export function isWithin(root: string, candidate: string, p: path.PlatformPath = path): boolean {
+  const relative = p.relative(p.resolve(root), p.resolve(candidate));
+  return relative === "" || (!relative.startsWith("..") && !p.isAbsolute(relative));
 }
 
 export class ExecutableNotFoundError extends Error {}
@@ -138,7 +160,7 @@ export function gitExecutable(cwd: string = process.cwd(), protect: readonly str
     cached = { pathValue, file };
   }
   const roots = protectedRoots(cwd, protect);
-  if (insideAny(roots, path.resolve(cached.file), realPath(cached.file) ?? path.resolve(cached.file))) {
+  if (insideAny(path, roots, path.resolve(cached.file), realPath(cached.file) ?? path.resolve(cached.file))) {
     // The cached git sits inside a root protected for this call: look again with those roots.
     const other = findExecutable("git", process.env, cwd, process.platform, protect);
     if (other) return other;
