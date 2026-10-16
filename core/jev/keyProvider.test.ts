@@ -29,7 +29,8 @@ describe("Windows Credential Manager provider", () => {
     const { run, calls } = fakeRunner(() => ({ stdout: Buffer.from(KEY, "utf8").toString("base64") }));
     const key = await createOsKeyProvider({ platform: "win32", run }).read();
     expect(key?.reveal()).toBe(KEY);
-    expect(calls[0]!.command).toBe("powershell.exe");
+    // Started by its full system path, never as a bare "powershell.exe" Windows would look for in the current folder first.
+    expect(calls[0]!.command).toMatch(/^[A-Za-z]:\\.*\\System32\\WindowsPowerShell\\v1\.0\\powershell\.exe$/i);
     const script = decodeScript(calls[0]!.args);
     expect(script).toContain("$t='PerfectPlanner/JevReviewerKey'");
     expect(script).toContain("CredReadW");
@@ -84,17 +85,17 @@ describe("macOS keychain provider", () => {
 describe("Linux Secret Service provider", () => {
   it("looks up and stores with secret-tool, the key on stdin", async () => {
     const { run, calls } = fakeRunner((c) => (c.args[0] === "lookup" ? { stdout: KEY } : {}));
-    const provider = createOsKeyProvider({ platform: "linux", run });
+    const provider = createOsKeyProvider({ platform: "linux", locate: () => "/usr/bin/secret-tool", run });
     expect((await provider.read())?.reveal()).toBe(KEY);
     await provider.save(KEY);
-    expect(calls[0]).toEqual({ command: "secret-tool", args: ["lookup", "service", KEYCHAIN_SERVICE, "account", "jev"] });
-    expect(calls[1]).toMatchObject({ command: "secret-tool", args: ["store", "--label=Perfect Planner Jev key", "service", KEYCHAIN_SERVICE, "account", "jev"], stdin: KEY });
+    expect(calls[0]).toEqual({ command: "/usr/bin/secret-tool", args: ["lookup", "service", KEYCHAIN_SERVICE, "account", "jev"] });
+    expect(calls[1]).toMatchObject({ command: "/usr/bin/secret-tool", args: ["store", "--label=Perfect Planner Jev key", "service", KEYCHAIN_SERVICE, "account", "jev"], stdin: KEY });
   });
 
   it("tells not-stored apart from no Secret Service", async () => {
-    expect(await createOsKeyProvider({ platform: "linux", run: fakeRunner(() => ({ code: 1 })).run }).status()).toMatchObject({ available: true, stored: false });
-    expect(await createOsKeyProvider({ platform: "linux", run: fakeRunner(() => ({ code: 1, stderr: "Cannot autolaunch D-Bus" })).run }).status()).toMatchObject({ available: false });
-    expect(await createOsKeyProvider({ platform: "linux", run: fakeRunner(() => ({ code: null, missing: true })).run }).status()).toMatchObject({ available: false, detail: expect.stringContaining("secret-tool") });
+    expect(await createOsKeyProvider({ platform: "linux", locate: () => "/usr/bin/secret-tool", run: fakeRunner(() => ({ code: 1 })).run }).status()).toMatchObject({ available: true, stored: false });
+    expect(await createOsKeyProvider({ platform: "linux", locate: () => "/usr/bin/secret-tool", run: fakeRunner(() => ({ code: 1, stderr: "Cannot autolaunch D-Bus" })).run }).status()).toMatchObject({ available: false });
+    expect(await createOsKeyProvider({ platform: "linux", locate: () => "/usr/bin/secret-tool", run: fakeRunner(() => ({ code: null, missing: true })).run }).status()).toMatchObject({ available: false, detail: expect.stringContaining("secret-tool") });
   });
 });
 
@@ -123,4 +124,20 @@ describe.runIf(live)(`live ${process.platform} key store`, () => {
       expect((await provider.clear()).stored).toBe(false);
     }
   }, 60_000);
+});
+
+describe("key-store helpers are started by full path", () => {
+  it("uses /usr/bin/security on macOS", async () => {
+    const { run, calls } = fakeRunner(() => ({ code: 44 }));
+    await createOsKeyProvider({ platform: "darwin", run }).status();
+    expect(calls[0]!.command).toBe("/usr/bin/security");
+  });
+
+  it("starts nothing when the helper cannot be found, rather than falling back to a bare name", async () => {
+    const { run, calls } = fakeRunner(() => ({ stdout: KEY }));
+    const provider = createOsKeyProvider({ platform: "linux", locate: () => null, run });
+    expect(await provider.status()).toMatchObject({ available: false, detail: expect.stringContaining("secret-tool") });
+    expect(await provider.read()).toBeNull();
+    expect(calls).toEqual([]);
+  });
 });

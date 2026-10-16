@@ -169,6 +169,54 @@ describe("git resolver", () => {
   });
 });
 
+describe("network shares on Windows (injected real paths)", () => {
+  // Windows rules run on every OS here: the real paths below stand in for links (junctions,
+  // symlinks, subst drives) whose targets are network shares.
+  const links: Record<string, string> = {
+    "C:\\tools": "\\\\server\\share\\tools",
+    "C:\\dev": "C:\\dev",
+    "C:\\dev\\git.exe": "\\??\\UNC\\server\\share\\git.exe",
+    "C:\\safe": "C:\\safe",
+    "C:\\safe\\git.exe": "C:\\safe\\git.exe",
+    "C:\\tools\\git.exe": "\\\\server\\share\\tools\\git.exe",
+    "C:\\repo": "C:\\repo",
+    // The folder check stands alone: this folder is a share even though its file reads as local.
+    "C:\\mix": "\\\\server\\share\\mix",
+    "C:\\mix\\git.exe": "C:\\mix\\git.exe",
+  };
+  const io = {
+    realpath: (file: string) => {
+      const real = links[file];
+      if (real === undefined) throw Object.assign(new Error(`ENOENT: ${file}`), { code: "ENOENT" });
+      return real;
+    },
+    isProgram: (file: string) => file.toLowerCase().endsWith("git.exe") && file in links,
+  };
+  const find = (pathValue: string) => findExecutable("git", { Path: pathValue }, "C:\\repo", "win32", [], io);
+
+  it("skips a local PATH folder whose real path is a share", () => {
+    expect(find("C:\\tools;C:\\safe")).toBe("C:\\safe\\git.exe");
+    expect(find("C:\\mix")).toBeNull();
+  });
+
+  it("skips a local git whose real path is a share in the \\??\\UNC spelling", () => {
+    expect(find("C:\\dev;C:\\safe")).toBe("C:\\safe\\git.exe");
+    expect(find("C:\\dev")).toBeNull();
+  });
+
+  it("still finds a local git when nothing points at a share", () => {
+    expect(find("C:\\safe")).toBe("C:\\safe\\git.exe");
+  });
+
+  it("accepts only drive-letter paths", () => {
+    expect(isLocalWindowsPath("C:\\Program Files\\Git\\cmd\\git.exe")).toBe(true);
+    expect(isLocalWindowsPath("d:/tools/git.exe")).toBe(true);
+    for (const share of ["\\\\server\\share\\git.exe", "//server/share/git.exe", "\\\\?\\UNC\\server\\share\\git.exe", "\\??\\UNC\\server\\share\\git.exe", "\\\\.\\C:\\git.exe", "C:git.exe", "\\git.exe"]) {
+      expect(isLocalWindowsPath(share), share).toBe(false);
+    }
+  });
+});
+
 describe("isLocalWindowsPath", () => {
   it("accepts only local drive-letter paths and refuses UNC in every spelling", () => {
     for (const ok of ["C:\\Program Files\\Git\\cmd", "c:/tools/git", "D:\\"]) expect(isLocalWindowsPath(ok)).toBe(true);

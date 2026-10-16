@@ -2,6 +2,7 @@ import { inspect } from "node:util";
 import { describe, expect, it, vi } from "vitest";
 import { Ledger, MemoryStore, isAuthoritative, type Actor } from "../ledger/index";
 import { Relay } from "../relay/index";
+import { deriveState } from "../gate/index";
 import { JevReviewer, MemoryKeyProvider, independenceProblem, SecretKey, checkDiff, createJevTransport, parseDiff, redactSecrets, looksSecret, SECRET_RULES, validateKey, type JevCallResult, type JevRequest } from "./index";
 
 const KEY = "ts_live_FAKE0123456789abcdef";
@@ -127,6 +128,18 @@ describe("test review (§6.2)", () => {
     const result = await new JevReviewer({ ledger: newLedger(), transport }).reviewTest({ ...TEST_INPUT, failsFirst: false });
     expect(result.verdict).toBe("reject");
     expect(transport).not.toHaveBeenCalled();
+  });
+
+  it("writes its test verdict so the test gate counts it for the reviewed definition", async () => {
+    const ledger = newLedger();
+    const defined = ledger.append({ actor: TEST_INPUT.author, type: "test.defined", subject: "T-1", summary: "Done-when test", data: { test: TEST_INPUT.test.command } });
+    const gaps = await new JevReviewer({ ledger, transport: fakeTransport({ ...GOOD, covers_clauses: "some", weakest_clause: "P-1 §2.1" }).transport }).reviewTest({ ...TEST_INPUT, definition: defined.n });
+    expect(deriveState(ledger.entries(), "T-1").jev).toEqual({ n: gaps.entry, verdict: "gaps", gaps: ["Not every cited clause is checked; weakest: P-1 §2.1."] });
+    const clean = await new JevReviewer({ ledger, transport: fakeTransport(GOOD).transport }).reviewTest({ ...TEST_INPUT, definition: defined.n });
+    expect(deriveState(ledger.entries(), "T-1").jev).toEqual({ n: clean.entry, verdict: "approve", gaps: [] });
+    // An escalation is no opinion on the test, so it leaves the gate's view alone.
+    await new JevReviewer({ ledger, transport: fakeTransport(GOOD, 0.4).transport }).reviewTest({ ...TEST_INPUT, definition: defined.n });
+    expect(deriveState(ledger.entries(), "T-1").jev?.n).toBe(clean.entry);
   });
 
   it("sends low-confidence verdicts to the main chat instead of deciding", async () => {

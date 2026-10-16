@@ -18,6 +18,7 @@ export interface TaskView {
 }
 
 const TASK_ID = /^T-\d+$/;
+const ATTEMPT = /^(T-\d+)\.a\d+$/;
 
 export function isTaskId(value: string): boolean {
   return TASK_ID.test(value);
@@ -42,7 +43,9 @@ const agentOrSigned = (entry: LedgerEntry) => entry.actor?.kind === "agent" || s
 export function foldBoard(entries: readonly LedgerEntry[]): Map<string, TaskView> {
   const board = new Map<string, TaskView>();
   for (const entry of entries) {
-    if (!isTaskId(entry.subject)) continue;
+    // Entries about one attempt ("T-14.a2": the gate's runs, a claim on a retry) belong to the task.
+    const id = ATTEMPT.exec(entry.subject)?.[1] ?? entry.subject;
+    if (!isTaskId(id)) continue;
     if (entry.type === "task.created") {
       if (!signed(entry) || board.has(entry.subject)) continue;
       board.set(entry.subject, {
@@ -59,7 +62,7 @@ export function foldBoard(entries: readonly LedgerEntry[]): Map<string, TaskView
       });
       continue;
     }
-    const task = board.get(entry.subject);
+    const task = board.get(id);
     if (!task) continue;
     const holder = entry.actor?.kind === "agent" && entry.actor.id === task.owner;
     switch (entry.type) {
@@ -75,7 +78,8 @@ export function foldBoard(entries: readonly LedgerEntry[]): Map<string, TaskView
           if (task.status === "blocked") task.status = task.owner ? "claimed" : "open";
         } else if (entry.data?.released === true) {
           if (!holder && !signed(entry)) continue;
-          task.status = "open";
+          // A worker letting go of a finished task frees it but leaves it done.
+          if (task.status !== "done") task.status = "open";
           task.owner = null;
         } else if (!agentOrSigned(entry)) {
           continue;
@@ -84,7 +88,7 @@ export function foldBoard(entries: readonly LedgerEntry[]): Map<string, TaskView
         break;
       case "task.blocked":
         if (entry.data?.pauseAll === true ? !signed(entry) : !holder && !signed(entry)) continue;
-        task.status = "blocked";
+        if (task.status !== "done") task.status = "blocked";
         if (entry.data?.released === true) task.owner = null;
         break;
       case "task.proof":
