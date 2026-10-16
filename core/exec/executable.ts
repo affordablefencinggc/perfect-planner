@@ -16,7 +16,7 @@ export function isLocalWindowsPath(file: string): boolean {
   return /^[A-Za-z]:[\\/]/.test(file);
 }
 
-// On Windows anything but a local drive-letter path counts as a network or device path.
+/** On Windows anything but a local drive-letter path counts as a network or device path. */
 const isNetworkPath = (dir: string, platform: NodeJS.Platform) => platform === "win32" && !isLocalWindowsPath(dir);
 
 /**

@@ -150,8 +150,7 @@ export class Relay {
       if (!q) return;
       q.status = "answered";
       q.answer = String(d.answer ?? e.summary);
-      const settledBy = (d.settledBy ?? d.source) as { id?: unknown } | undefined;
-      q.answeredBy = typeof settledBy?.id === "string" ? settledBy.id : e.actor.id;
+      q.answeredBy = e.actor.id;
       q.answeredVia = (d.via as Question["answeredVia"]) ?? "main";
       if (typeof d.decision === "string") q.decision = d.decision;
       this.notify(q);
@@ -220,7 +219,7 @@ export class Relay {
           summary: settled.answer,
           reason: settled.reason,
           refs: [...settled.refs, input.task],
-          data: { answer: settled.answer, via: "settled", source: settled.actor, settledBy: { ...settled.actor } },
+          data: { answer: settled.answer, via: "settled", source: settled.actor },
         });
         return { q, status: "answered", answer: settled.answer, via: "settled", paused: false };
       }

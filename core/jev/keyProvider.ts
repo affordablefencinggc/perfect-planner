@@ -10,7 +10,9 @@
 //   macOS:   login keychain generic password (security)
 //   Linux:   Secret Service (secret-tool, libsecret)
 // No command line ever carries the key: it travels on stdin and stdout only.
+// Each tool is started by its absolute path (core/exec keyStoreTool), never by bare name.
 import { spawn } from "node:child_process";
+import { keyStoreTool, type KeyStoreTool } from "../exec";
 import { SecretKey, validateKey } from "./secret";
 
 export const KEYCHAIN_SERVICE = "PerfectPlanner/JevReviewerKey";
@@ -43,6 +45,8 @@ export interface RunResult {
 }
 
 export type Runner = (command: string, args: string[], stdin?: string) => Promise<RunResult>;
+/** Runs one key-store helper, already resolved to its absolute path. */
+type ToolRunner = (args: string[], stdin?: string) => Promise<RunResult>;
 
 /** Spawns without a shell, so nothing is interpreted, and writes stdin once. */
 export const spawnRunner: Runner = (command, args, stdin) =>
@@ -63,15 +67,25 @@ export interface OsKeychainOptions {
   run?: Runner;
   /** Tests use their own entry so they never touch the real key. */
   service?: string;
+  /** Absolute path of a key-store helper, null when it is not installed (default: keyStoreTool). */
+  locate?: (tool: KeyStoreTool) => string | null;
 }
 
 export function createOsKeyProvider(options: OsKeychainOptions = {}): JevKeyProvider {
   const platform = options.platform ?? process.platform;
-  const run = options.run ?? spawnRunner;
+  const runner = options.run ?? spawnRunner;
   const service = options.service ?? KEYCHAIN_SERVICE;
-  if (platform === "win32") return windowsProvider(run, service);
-  if (platform === "darwin") return macProvider(run, service);
-  if (platform === "linux") return linuxProvider(run, service);
+  const locate = options.locate ?? ((tool: KeyStoreTool) => keyStoreTool(tool, { platform }));
+  // Each call looks the helper up again, so installing it later works without a restart.
+  const tool =
+    (name: KeyStoreTool): ToolRunner =>
+    (args, stdin) => {
+      const file = locate(name);
+      return file === null ? Promise.resolve({ code: null, stdout: "", stderr: `${name} is not installed`, missing: true }) : runner(file, args, stdin);
+    };
+  if (platform === "win32") return windowsProvider(tool("powershell"), service);
+  if (platform === "darwin") return macProvider(tool("security"), service);
+  if (platform === "linux") return linuxProvider(tool("secret-tool"), service);
   return unavailableProvider(`No secure key store is connected on ${platform}.`);
 }
 
@@ -140,10 +154,10 @@ export function windowsScript(op: keyof typeof WIN_OPS, service: string): string
   return `$ErrorActionPreference='Stop'\n${WIN_TYPES}\n$t='${target}'\n${WIN_OPS[op]}\n`;
 }
 
-function windowsProvider(run: Runner, service: string): JevKeyProvider {
+function windowsProvider(run: ToolRunner, service: string): JevKeyProvider {
   const store: KeyStoreName = "windows-credential-manager";
   const ps = (op: keyof typeof WIN_OPS, stdin?: string) =>
-    run("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", Buffer.from(windowsScript(op, service), "utf16le").toString("base64")], stdin);
+    run(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", Buffer.from(windowsScript(op, service), "utf16le").toString("base64")], stdin);
   const status = async (): Promise<KeyStatus> => {
     const result = await ps("status");
     if (result.missing) return { available: false, stored: false, store: "unavailable", detail: "PowerShell is not available." };
@@ -181,9 +195,9 @@ function securityQuote(value: string): string {
   return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 }
 
-function macProvider(run: Runner, service: string): JevKeyProvider {
+function macProvider(run: ToolRunner, service: string): JevKeyProvider {
   const store: KeyStoreName = "macos-keychain";
-  const find = (reveal: boolean) => run("/usr/bin/security", ["find-generic-password", "-s", service, "-a", KEYCHAIN_ACCOUNT, ...(reveal ? ["-w"] : [])]);
+  const find = (reveal: boolean) => run(["find-generic-password", "-s", service, "-a", KEYCHAIN_ACCOUNT, ...(reveal ? ["-w"] : [])]);
   const status = async (): Promise<KeyStatus> => {
     const result = await find(false);
     if (result.missing) return { available: false, stored: false, store: "unavailable", detail: "The security tool is not available." };
@@ -204,12 +218,12 @@ function macProvider(run: Runner, service: string): JevKeyProvider {
       const key = validateKey(raw);
       // Interactive mode keeps the key off the command line, where other processes could see it.
       const command = `add-generic-password -U -s ${securityQuote(service)} -a ${securityQuote(KEYCHAIN_ACCOUNT)} -l ${securityQuote("Perfect Planner Jev key")} -w ${securityQuote(key)}\n`;
-      const result = await run("/usr/bin/security", ["-i"], command);
+      const result = await run(["-i"], command);
       if (result.code !== 0 || /error|fail/i.test(result.stderr)) fail("The macOS keychain", "save the Jev key", { ...result, stderr: result.stderr.split(key).join("[redacted]") });
       return status();
     },
     async clear() {
-      const result = await run("/usr/bin/security", ["delete-generic-password", "-s", service, "-a", KEYCHAIN_ACCOUNT]);
+      const result = await run(["delete-generic-password", "-s", service, "-a", KEYCHAIN_ACCOUNT]);
       if (result.code !== 0 && result.code !== 44) fail("The macOS keychain", "remove the Jev key", result);
       return status();
     },
@@ -218,10 +232,10 @@ function macProvider(run: Runner, service: string): JevKeyProvider {
 
 // ---------- Linux: Secret Service through `secret-tool` ----------
 
-function linuxProvider(run: Runner, service: string): JevKeyProvider {
+function linuxProvider(run: ToolRunner, service: string): JevKeyProvider {
   const store: KeyStoreName = "linux-secret-service";
   const attrs = ["service", service, "account", KEYCHAIN_ACCOUNT];
-  const lookup = () => run("secret-tool", ["lookup", ...attrs]);
+  const lookup = () => run(["lookup", ...attrs]);
   const unavailable: KeyStatus = { available: false, stored: false, store: "unavailable", detail: "secret-tool (libsecret) is not installed, or no Secret Service is running." };
   const status = async (): Promise<KeyStatus> => {
     const result = await lookup();
@@ -240,13 +254,13 @@ function linuxProvider(run: Runner, service: string): JevKeyProvider {
       return key ? new SecretKey(key) : null;
     },
     async save(raw) {
-      const result = await run("secret-tool", ["store", "--label=Perfect Planner Jev key", ...attrs], validateKey(raw));
+      const result = await run(["store", "--label=Perfect Planner Jev key", ...attrs], validateKey(raw));
       if (result.missing) throw new Error(unavailable.detail);
       if (result.code !== 0) fail("The Secret Service", "save the Jev key", result);
       return status();
     },
     async clear() {
-      const result = await run("secret-tool", ["clear", ...attrs]);
+      const result = await run(["clear", ...attrs]);
       if (result.missing) return unavailable;
       if (result.code !== 0 && result.code !== 1) fail("The Secret Service", "remove the Jev key", result);
       return status();
