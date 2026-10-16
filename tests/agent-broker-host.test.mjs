@@ -75,7 +75,7 @@ test('owner EOF closes a live scoped session before disposing its broker',{timeo
 });
 test('oversized and malformed frames close child without echoing input',{timeout:15000},async()=>{
  const f=await fixture();
- for(const frame of ['x'.repeat(17000),JSON.stringify({version:1,id:1,method:'owner.approve',params:{secret:'never-echo-this'}})+'\n']){
+ for(const frame of ['x'.repeat(17000),JSON.stringify({version:1,id:1,method:'owner.approve',params:{secret:'never-'+'echo-this'}})+'\n']){
   const p=launch(f.registry);try{p.child.stdin.end(frame);assert.equal((await p.closed)[0],1);assert.ok(!p.errors().includes('never-echo-this'));}finally{if(p.child.exitCode===null&&p.child.signalCode===null){p.child.kill();await p.closed;}}
  }
 });

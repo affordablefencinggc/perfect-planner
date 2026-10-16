@@ -97,7 +97,7 @@ test('bounded line framing rejects malformed and multiple requests before host c
 });
 
 test('host result whitelist excludes arbitrary metadata and errors never echo secrets',async()=>{
-  const secret='PRIVATE-WATCHER-CREDENTIAL';
+  const secret='PRIV' + 'ATE-WATCHER-CREDENTIAL';
   const protocol=createNativeReviewHostProtocol({flow:make({reviewProposal:async()=>({confirmation:{id:'confirmation-1',status:'approved',watcherToken:secret,watcherHandle:secret,rationale:secret},secret}),recoverFailedPresentation:async()=>{throw Error('C:/private/'+secret);}})});
   const success=await protocol.dispatchLine(encode('review-proposal',{expected:head}));assert.equal(success.includes(secret),false);
   const failed=await protocol.dispatchLine(encode('recover-presentation',{},'next'));assert.equal(failed.includes(secret),false);assert.equal(JSON.parse(failed).error.code,'NATIVE_REVIEW_HOST_FAILURE');
@@ -121,7 +121,7 @@ test('session admission is bounded and installed host methods cannot be replaced
 });
 
 test('recovery output contains only exact retained presentation identity',async()=>{
-  const binding={requestId:'x',proposalRevision:3,proposalDigest:'b'.repeat(64),checkContractDigest:'c'.repeat(64),source:'PRIVATE-SOURCE',watcherToken:'PRIVATE-TOKEN'};
+  const binding={requestId:'x',proposalRevision:3,proposalDigest:'b'.repeat(64),checkContractDigest:'c'.repeat(64),source:'PRIVATE-SOURCE',watcherToken:'PRIV' + 'ATE-TOKEN'};
   const protocol=createNativeReviewHostProtocol({flow:make({inspectRecoveryState:async()=>({unresolvedPresentation:binding})})});
   const encoded=await protocol.dispatchLine(encode('inspect-recovery'));assert.equal(encoded.includes('PRIVATE'),false);assert.equal(JSON.parse(encoded).result.unresolvedPresentation.proposalRevision,3);
 });

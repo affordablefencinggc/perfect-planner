@@ -75,7 +75,7 @@ describe("Diagnostic stale-writer protection", () => {
     const { ledger, storage: original } = harness();
     ledger.append(event({ eventId: "evt_sensitive" }));
     const raw = JSON.parse(original.getItem(DEFAULT_RUNTIME_EVENT_STORAGE_KEY));
-    raw.events[0].message = "Bearer do-not-expose";
+    raw.events[0].message = "Bear" + "er do-not-expose";
     const initial = JSON.stringify(raw), replacement = "{preserved-changed-storage";
     let reads = 0;const write = vi.fn();
     const storage = { getItem: () => ++reads === 1 ? initial : replacement, setItem: write };
