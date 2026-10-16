@@ -16,7 +16,7 @@ npm run test:core          # vitest, node environment, core/**/*.test.ts
 npm run typecheck:core     # tsc --noEmit over core/
 ```
 
-Both run in CI on Windows, macOS and Linux (`.github/workflows/core-ci.yml`).
+Both run in CI on Windows and Linux (`.github/workflows/core-ci.yml`).
 Shared setup owned by this thread: `vitest.core.config.mjs`,
 `tsconfig.core.json`, `core/tsconfig` settings, the `test:core` and
 `typecheck:core` scripts and the core CI workflow. Other core threads add
