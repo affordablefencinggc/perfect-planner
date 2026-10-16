@@ -10,6 +10,9 @@ import { createDemoProjectSession, DEMO_PROJECT_ID } from "../src/demo/demoProje
 import { createRuntimeEventLedger, DEFAULT_RUNTIME_EVENT_STORAGE_KEY } from "../src/runtime/runtimeEventLedger.js";
 import { diagnosticSessionFixture } from './diagnosticSessionFixture.js';
 
+// Workspaces load on demand; a busy Windows runner can take over a second to fetch one.
+const LAZY = { timeout: 5000 };
+
 afterEach(() => { cleanup(); window.localStorage.clear(); });
 
 function renderDemoShell() {
@@ -59,27 +62,30 @@ describe("Perfect Planner shell interaction and accessibility", () => {
   test("navigates the staged journey, synchronizes deep links, and keeps Allocation blocked", async () => {
     window.history.replaceState({}, "", "/?workspace=plan");
     const user = userEvent.setup(); renderDemoShell();
-    expect(await screen.findByRole("region", { name: "Plan workspace" })).toBeTruthy();
+    expect(await screen.findByRole("region", { name: "Plan workspace" }, LAZY)).toBeTruthy();
     expect(screen.getByRole("navigation", { name: "Coordinate pages" })).toBeTruthy();
     const pages = screen.getByRole("navigation", { name: "Coordinate pages" });
     // Coordinate pages use the same tab row in the context strip as every other stage.
     expect(pages.closest(".workspace-context")).toBeTruthy();
     expect(within(pages).getByRole("button", { name: "Plan", exact: true }).getAttribute("aria-current")).toBe("page");
     await user.click(screen.getByRole("button", { name: "Allocation" }));
-    expect(await screen.findByRole("region", { name: "Allocation workspace" })).toBeTruthy();
+    expect(await screen.findByRole("region", { name: "Allocation workspace" }, LAZY)).toBeTruthy();
     expect(window.location.search).toContain("workspace=allocation");
     expect(screen.getByText(/Collision gate locked/)).toBeTruthy();
     expect(screen.getByRole("button", { name: /Create branches unavailable/ }).disabled).toBe(true);
     await user.click(screen.getByRole("button", { name: "Index" }));
-    expect(await screen.findByRole("region", { name: "Project index" })).toBeTruthy();
+    expect(await screen.findByRole("region", { name: "Project index" }, LAZY)).toBeTruthy();
     expect(window.location.search).toContain("workspace=index");
+    // Closing the Index returns to the page it was opened from (shell-16).
     await user.click(screen.getByRole("button", { name: "Close project index" }));
-    expect(await screen.findByRole("region", { name: "Project Home workspace" })).toBeTruthy();
+    expect(await screen.findByRole("region", { name: "Allocation workspace" }, LAZY)).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Open Perfect Planner home" }));
+    expect(await screen.findByRole("region", { name: "Project Home workspace" }, LAZY)).toBeTruthy();
     await user.click(screen.getByRole("button", { name: /Drop your app/ }));
-    expect(await screen.findByRole("region", { name: "Strict folder contract workspace" })).toBeTruthy();
+    expect(await screen.findByRole("region", { name: "Strict folder contract workspace" }, LAZY)).toBeTruthy();
     expect(window.location.search).toContain("workspace=structure");
     await user.click(screen.getByRole("button", { name: "Build" }));
-    expect(await screen.findByRole("region", { name: "Build workspace" })).toBeTruthy();
+    expect(await screen.findByRole("region", { name: "Build workspace" }, LAZY)).toBeTruthy();
     expect(window.location.search).toContain("workspace=build");
   });
 
@@ -156,9 +162,11 @@ describe("Perfect Planner shell interaction and accessibility", () => {
       expect(await screen.findByRole("region", { name: region })).toBeTruthy();
       expect(window.location.search).toContain(`workspace=${route}`);
     }
-    await user.click(screen.getByRole("button", { name: /2 demo agents/ }));
+    await user.click(screen.getByRole("button", { name: /Agent connection · unavailable in Demo/ }));
     expect(await screen.findByRole("region", { name: "Runtime and connections" })).toBeTruthy();
-    expect(await screen.findByRole("region", { name: "Connect your agent" })).toBeTruthy();
+    const connectCard = await screen.findByRole("region", { name: "Connect your agent" });
+    expect(connectCard.textContent).not.toMatch(/Antigravity/);
+    expect(connectCard.textContent).toMatch(/Use Connect agent in the top bar instead/);
     expect(window.location.search).toContain("workspace=ledger");
   });
 
@@ -176,10 +184,10 @@ describe("Perfect Planner shell interaction and accessibility", () => {
     expect(screen.getByRole("button", { name: /Delivery calendar/ }).className).toContain("responsive-topbar-action");
 
     await user.click(screen.getByRole("button", { name: /MCP access/ }));
-    expect(screen.getByText("Allow MCP context in this session")).toBeTruthy();
+    expect(screen.getByText("Allow MCP context on this device")).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "Back to more actions" }));
     await user.click(screen.getByRole("button", { name: /Invite to organization/ }));
-    expect(screen.getByRole("button", { name: /Create invitation draft/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Check address/ })).toBeTruthy();
   });
 
   test("owner profiles open above the avatar with keyboard and close with Escape", async () => {
@@ -273,6 +281,20 @@ describe("Perfect Planner shell interaction and accessibility", () => {
     expect(copied).toContain("MCP_TIMEOUT"); expect(copied).toContain('"durationMs": 2500');
     expect(copied).toContain("[REDACTED]"); expect(copied).not.toContain("private-test-token");
     expect(screen.getByRole("textbox", { name: "Operations copy tray" }).value).toBe(copied);
+  });
+
+  test("opening Operations never takes focus back from a control already focused inside it", async () => {
+    window.history.replaceState({}, "", "/?workspace=home");
+    createRuntimeEventLedger({ storage: window.localStorage }).append({projectId:DEMO_PROJECT_ID,generation:1,adapter:"fixture",source:"mcp",severity:"error",eventId:"evt_focus_keep",message:"Focus fixture",payload:{detail:"x"}});
+    // Hold animation frames so the open-focus frame runs after the user has already moved focus, as on a slow runner.
+    const frames=[];vi.stubGlobal("requestAnimationFrame",(callback)=>{frames.push(callback);return frames.length;});vi.stubGlobal("cancelAnimationFrame",()=>{});
+    try {
+      const user=userEvent.setup();renderDemoShell();
+      await user.click(screen.getByRole("button",{name:/Operations/}));
+      const box=screen.getByRole("checkbox",{name:"Queue evt_focus_keep for copying"});
+      box.focus();act(()=>{frames.splice(0).forEach((callback)=>callback(0));});
+      expect(document.activeElement).toBe(box);
+    } finally { vi.unstubAllGlobals(); }
   });
 
   test("event selection is separate from disclosure and preserves filtered selections and edited tray text", async () => {
@@ -448,7 +470,7 @@ describe("Perfect Planner shell interaction and accessibility", () => {
     await user.click(screen.getByRole("button", { name: "Open project folders" }));
     expect(screen.getByRole("dialog", { name: "Project folders" })).toBeTruthy();
     expect(screen.getAllByRole("button", { name: /Perfect Planner Demo/ }).at(-1).className).toContain("active");
-    await user.click(screen.getByRole("button", { name: /Add another project folder/ }));
+    await user.click(screen.getByRole("button", { name: /Add a project folder/ }));
     expect(screen.getByRole("region", { name: "Strict folder contract workspace" })).toBeTruthy();
   });
 
@@ -456,5 +478,133 @@ describe("Perfect Planner shell interaction and accessibility", () => {
     window.history.replaceState({}, "", "/?workspace=plan"); document.documentElement.lang = "en"; document.title = "Perfect Planner"; renderDemoShell();
     const result = await axe.run(document, { rules: { "color-contrast": { enabled: false } } });
     expect(result.violations.filter((item) => ["serious", "critical"].includes(item.impact))).toEqual([]);
+  });
+});
+
+function renderEmptyShell(route = "home", extra = "") {
+  window.history.replaceState({}, "", `/?workspace=${route}${extra}`);
+  const registry = createProjectRegistry({ storage: createMemoryStorage() });
+  return render(<ProjectProvider registry={registry}><PerfectPlannerShell diagnosticSession={diagnosticSessionFixture()} /></ProjectProvider>);
+}
+
+describe("shell trial fixes", () => {
+  test("stage tabs mark the current page with aria-current", () => {
+    window.history.replaceState({}, "", "/?workspace=collision");
+    renderDemoShell();
+    const nav = screen.getByRole("navigation", { name: "Build stages" });
+    expect(within(nav).getByRole("button", { name: "Coordinate" }).getAttribute("aria-current")).toBe("page");
+    expect(within(nav).getByRole("button", { name: "Home" }).getAttribute("aria-current")).toBeNull();
+    expect(nav.querySelectorAll('[aria-current="page"]')).toHaveLength(1);
+  });
+
+  test("Index has its own context and Escape returns to the page it was opened from", async () => {
+    window.history.replaceState({}, "", "/?workspace=plan");
+    const user = userEvent.setup(); renderDemoShell();
+    await user.click(within(screen.getByRole("navigation", { name: "Build stages" })).getByRole("button", { name: /Index/ }));
+    const context = screen.getByRole("region", { name: "Current workspace context" });
+    expect(context.querySelector(".workspace-breadcrumb strong").textContent).toBe("Index");
+    expect(context.textContent).not.toContain("Project Home");
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(new URLSearchParams(window.location.search).get("workspace")).toBe("plan"));
+    expect(screen.getByRole("region", { name: "Current workspace context" }).querySelector(".workspace-breadcrumb strong").textContent).toBe("Plan");
+  });
+
+  test("header popovers close on an outside click and never stack with the project folder menu", async () => {
+    window.history.replaceState({}, "", "/?workspace=home");
+    const user = userEvent.setup(); renderDemoShell();
+    await user.click(screen.getByRole("button", { name: /3 developers/ }));
+    expect(screen.getByRole("dialog", { name: "Developer roster" })).toBeTruthy();
+    await user.click(document.querySelector(".app-main"));
+    expect(screen.queryByRole("dialog", { name: "Developer roster" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: /3 developers/ }));
+    await user.click(screen.getByRole("button", { name: "Open project folders" }));
+    expect(screen.getByRole("dialog", { name: "Project folders" })).toBeTruthy();
+    expect(screen.queryByRole("dialog", { name: "Developer roster" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: /3 developers/ }));
+    expect(screen.queryByRole("dialog", { name: "Project folders" })).toBeNull();
+  });
+
+  test("the agent connection pill toggles its panel and Escape returns focus to it", async () => {
+    window.history.replaceState({}, "", "/?workspace=home");
+    const user = userEvent.setup(); renderDemoShell();
+    const pill = screen.getByRole("button", { name: /Agent connection · unavailable in Demo/ });
+    await user.click(pill);
+    expect(screen.getByRole("dialog", { name: "More actions" })).toBeTruthy();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog", { name: "More actions" })).toBeNull();
+    await waitFor(() => expect(document.activeElement).toBe(pill));
+    await user.click(pill);
+    expect(screen.getByRole("dialog", { name: "More actions" })).toBeTruthy();
+    await user.click(pill);
+    expect(screen.queryByRole("dialog", { name: "More actions" })).toBeNull();
+  });
+
+  test("MCP context is opt-in and the choice survives a reload", async () => {
+    const user = userEvent.setup();
+    renderEmptyShell();
+    await user.click(screen.getByRole("button", { name: "More actions" }));
+    expect(screen.getByRole("button", { name: /MCP access/ }).textContent).toContain("Off");
+    await user.click(screen.getByRole("button", { name: /MCP access/ }));
+    const toggle = screen.getByRole("checkbox", { name: /Allow MCP context on this device/ });
+    expect(toggle.checked).toBe(false);
+    await user.click(toggle);
+    expect(window.localStorage.getItem("perfect-planner.mcp-context-allowed.v1")).toBe("true");
+    cleanup();
+    renderEmptyShell();
+    await user.click(screen.getByRole("button", { name: "More actions" }));
+    await user.click(screen.getByRole("button", { name: /MCP access/ }));
+    expect(screen.getByRole("checkbox", { name: /Allow MCP context on this device/ }).checked).toBe(true);
+  });
+
+  test("a link to a project this device does not know is reported, not dropped", async () => {
+    renderEmptyShell("home", "&project=pp_not-registered-here");
+    expect(await screen.findByText(/linked project isn't registered on this device/)).toBeTruthy();
+  });
+
+  test("invitations say plainly that nothing is saved or sent", async () => {
+    const user = userEvent.setup();
+    renderEmptyShell();
+    await user.click(screen.getByRole("button", { name: "More actions" }));
+    await user.click(screen.getByRole("button", { name: /Invite to organization/ }));
+    await user.type(screen.getByPlaceholderText("name@company.com"), "dev@example.com");
+    await user.click(screen.getByRole("button", { name: /Check address/ }));
+    const toast = await screen.findByText(/Invitation not sent/);
+    expect(toast.textContent).toContain("nothing was saved or sent");
+    expect(document.body.textContent).not.toMatch(/Invitation drafted/);
+  });
+});
+
+describe("Demo project index", () => {
+  test("has a named search, pressed-state filters, neutral sample chips, and pins an exact ID match", async () => {
+    window.history.replaceState({}, "", "/?workspace=index");
+    renderDemoShell();
+    const index = await screen.findByRole("region", { name: "Project index" });
+    const search = within(index).getByRole("searchbox", { name: "Search the project index" });
+    const filters = within(index).getByRole("group", { name: "Index categories" });
+    expect(within(filters).getByRole("button", { name: /^All/ }).getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(within(filters).getByRole("button", { name: /^Outcome/ }));
+    expect(within(filters).getByRole("button", { name: /^Outcome/ }).getAttribute("aria-pressed")).toBe("true");
+    expect(within(filters).getByRole("button", { name: /^All/ }).getAttribute("aria-pressed")).toBe("false");
+    expect(index.querySelector(".index-entry .status-verified")).toBeNull();
+    fireEvent.click(within(filters).getByRole("button", { name: /^All/ }));
+    fireEvent.change(search, { target: { value: "b07" } });
+    const entries = [...index.querySelectorAll(".index-entry")];
+    expect(entries.length).toBeGreaterThan(1);
+    expect(entries[0].querySelector("code").textContent).toBe("B07");
+    expect(within(index).getByRole("region", { name: "Exact ID match" })).toBeTruthy();
+    expect(entries.filter((entry) => entry.querySelector("code").textContent === "B07")).toHaveLength(1);
+  });
+
+  test("Escape clears the search first, then closes the index", async () => {
+    window.history.replaceState({}, "", "/?workspace=index");
+    renderDemoShell();
+    const index = await screen.findByRole("region", { name: "Project index" });
+    const search = within(index).getByRole("searchbox", { name: "Search the project index" });
+    fireEvent.change(search, { target: { value: "P3" } });
+    fireEvent.keyDown(search, { key: "Escape" });
+    expect(search.value).toBe("");
+    expect(screen.getByRole("region", { name: "Project index" })).toBeTruthy();
+    fireEvent.keyDown(search, { key: "Escape" });
+    expect(await screen.findByRole("region", { name: "Project Home workspace" })).toBeTruthy();
   });
 });

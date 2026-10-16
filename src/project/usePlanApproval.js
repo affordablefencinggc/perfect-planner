@@ -1,11 +1,20 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { taskDraftBinding } from "./taskDraftLedger.js";
+import { inspectTaskDraft, taskDraftBinding } from "./taskDraftLedger.js";
 import { createTaskDraftStore } from "./taskDraftStore.js";
 import { digestPlanTasks, notePlanTaskDrift, recordPlanApproval, validPlanApproval } from "./planApproval.js";
 
 let sharedStore;
 const defaultStore = () => (sharedStore ??= createTaskDraftStore());
 const bindingOf = (project) => { try { return taskDraftBinding(project); } catch { return null; } };
+
+// A plan whose tasks wait on each other in a loop, or on an archived task, has
+// no order it could run in. Those findings block approval; missing details and
+// file overlaps do not (overlaps are decided on the Collision page).
+export const PLAN_BLOCKING_FINDINGS = Object.freeze(["dependency-cycle", "archived-dependency"]);
+export function planBlockingFindings(ledger) {
+  if (!ledger) return [];
+  return inspectTaskDraft(ledger).findings.filter((finding) => PLAN_BLOCKING_FINDINGS.includes(finding.kind));
+}
 
 /**
  * Reads the saved task drafts for an imported project and, when `watch` is on,
@@ -54,6 +63,8 @@ export function usePlanApproval(project, records, { store: providedStore, watch 
   const approve = useCallback(async () => {
     if (!store || !binding) throw new Error("Register your app folder before approving a plan.");
     const ledger = await store.read(binding);
+    const blocking = planBlockingFindings(ledger);
+    if (blocking.length) throw new Error(`The plan cannot be approved yet: ${blocking.map((finding) => finding.detail).join(" ")} Fix the dependencies in the Ledger first. Nothing was saved.`);
     const record = await recordPlanApproval(binding.projectId, { tasks: ledger.tasks, censusDigest: binding.censusDigest, source: "local-approval" });
     await read();
     return record;

@@ -44,6 +44,12 @@ export interface TestReviewInput {
   failsFirst: boolean;
   /** Who wrote the test, with their model. Jev only approves work built by a different model (§6.4). */
   author: Actor;
+  /**
+   * Ledger number of the test.defined entry under review. When given, an approve or reject verdict
+   * carries the test gate's evidence (scope:test, verdict, definition, gaps), so the gate counts it
+   * and refuses the owner's approval while Jev's gaps are open.
+   */
+  definition?: string;
 }
 
 export interface DiffReviewInput {
@@ -165,9 +171,16 @@ export class JevReviewer implements SettledAnswerer {
 
   // ---------- shared plumbing ----------
 
-  private record(task: string, review: "test" | "diff" | "question", result: ReviewResult, extra: { called: JevCallResult | null; refs: string[]; summary: string; data?: Record<string, unknown>; commit?: string }): LedgerEntry {
+  private record(task: string, review: "test" | "diff" | "question", result: ReviewResult, extra: { called: JevCallResult | null; refs: string[]; summary: string; data?: Record<string, unknown>; definition?: string; commit?: string }): LedgerEntry {
     const called = extra.called;
     const cost = called?.ok ? (called.cost ?? this.settings.estimatedCostPerCall) : 0;
+    // The test gate reads Jev's test verdicts from evidence (core/gate deriveState). Only a real
+    // approve or reject is an opinion on the test; escalations and outages carry no definition,
+    // so the gate never counts them.
+    const testOpinion = review === "test" && extra.definition !== undefined && (result.verdict === "approve" || result.verdict === "reject");
+    const evidence = testOpinion
+      ? ["scope:test", `verdict:${result.verdict === "approve" ? "approve" : "gaps"}`, `definition:${extra.definition}`, ...(result.notes as string[]).map((gap) => `gap:${String(gap).replace(/\s+/g, " ").trim()}`)]
+      : [`scope:${review}`, `verdict:${result.verdict}`, ...(extra.commit ? [`commit:${extra.commit}`] : [])];
     // Written as the system, so the ledger signs it with the app's key; Jev itself
     // holds no signing key, and an entry that merely names Jev as actor never counts.
     return this.ledger.append({
@@ -177,7 +190,7 @@ export class JevReviewer implements SettledAnswerer {
       summary: extra.summary,
       reason: result.reason,
       refs: extra.refs,
-      evidence: [`scope:${review}`, `verdict:${result.verdict}`, ...(extra.commit ? [`commit:${extra.commit}`] : [])],
+      evidence,
       data: {
         ...(called?.ok ? { reviewer: { kind: "jev", id: "jev", model: called.model } } : {}),
         ...(extra.commit ? { commit: extra.commit } : {}),
@@ -230,11 +243,11 @@ export class JevReviewer implements SettledAnswerer {
     const notIndependent = independenceProblem(input.author, this.settings.model);
     if (notIndependent) {
       const result: ReviewResult = { verdict: "escalate", notes: [], reason: `Not independent: ${notIndependent} (§6.4)`, confidence: null };
-      return { ...result, entry: this.record(input.task, "test", result, { called: null, refs, summary: `Test for ${input.task} goes to the main chat: Jev cannot review it independently`, data: { builtBy: input.author ?? null } }).n };
+      return { ...result, entry: this.record(input.task, "test", result, { definition: input.definition, called: null, refs, summary: `Test for ${input.task} goes to the main chat: Jev cannot review it independently`, data: { builtBy: input.author ?? null } }).n };
     }
     if (!input.failsFirst) {
       const result: ReviewResult = { verdict: "reject", notes: ["The test passes on the current code, so it cannot prove the task (it must fail first)."], reason: "Test does not fail before the work (§6.2)", confidence: null };
-      return { ...result, entry: this.record(input.task, "test", result, { called: null, refs, summary: `Test for ${input.task} rejected: it already passes` }).n };
+      return { ...result, entry: this.record(input.task, "test", result, { definition: input.definition, called: null, refs, summary: `Test for ${input.task} rejected: it already passes` }).n };
     }
 
     const clauseChoices: Record<string, string> = { none: "Every cited clause is fully covered" };
@@ -268,7 +281,7 @@ export class JevReviewer implements SettledAnswerer {
     if (called === "queued") return { verdict: "queued", notes: [], reason: "Jev's monthly limit is reached; the review waits in the queue (§6.7)", confidence: null };
     if (!called.ok) {
       const result: ReviewResult = { verdict: "unavailable", notes: [], reason: called.detail, confidence: null };
-      return { ...result, entry: this.record(input.task, "test", result, { called, refs, summary: `Test review for ${input.task} could not run` }).n };
+      return { ...result, entry: this.record(input.task, "test", result, { definition: input.definition, called, refs, summary: `Test review for ${input.task} could not run` }).n };
     }
 
     const a = called.answers;
@@ -281,7 +294,7 @@ export class JevReviewer implements SettledAnswerer {
     const confidence = this.minConfidence(a);
     const result = this.independent(this.decide(gaps, confidence, `the test for ${input.task}`), input.author, called.model);
     const summary = result.verdict === "approve" ? `Jev approves the test for ${input.task}` : result.verdict === "reject" ? `Jev found ${gaps.length} gap(s) in the test for ${input.task}` : `Test for ${input.task} goes to the main chat: ${result.reason.startsWith("Not independent") ? "Jev cannot review it independently" : "Jev is unsure"}`;
-    const entry = this.record(input.task, "test", result, { called, refs, summary });
+    const entry = this.record(input.task, "test", result, { definition: input.definition, called, refs, summary });
     this.warnIfNeeded();
     return { ...result, entry: entry.n };
   }

@@ -7,6 +7,8 @@ import { PerfectPlannerShell } from "../src/PerfectPlannerShell.jsx";
 import { createDemoProjectSession } from "../src/demo/demoProject.js";
 import { createProjectEntityId } from "../src/project/projectIds.js";
 import { ProjectProvider } from "../src/project/ProjectProvider.jsx";
+import { nextDiscoveryReviewData } from "../src/project/discoveryReviewModel.js";
+import { workRecordsKey, writeSection } from "../src/project/projectWorkRecords.js";
 import { currentComponentPlanInput } from "../src/engine/componentPlanSeed.js";
 import { freezeComponentPlans } from "../src/engine/componentPlanEngine.js";
 import {
@@ -19,6 +21,7 @@ import {
   createMemoryStorage,
   createProjectRegistry,
 } from "../src/project/projectRegistry.js";
+import { recordPlanApproval } from "../src/project/planApproval.js";
 
 const FIXED_TIME = "2026-09-04T08:00:00.000Z";
 
@@ -44,9 +47,21 @@ function discovery({ signals = 0, unanswered = 0 } = {}) {
       })),
     );
   }
+  // Like the engine, list all eight areas; the rest have clear (observed) findings.
+  const present = new Set(categories.map((category) => category.id));
+  const filled = ["A01", "A02", "A03", "A04", "A05", "A06", "A07", "A08"].filter(
+    (id) => !present.has(id),
+  );
+  categories.push(
+    ...filled.map((id) => ({
+      id,
+      state: "observed",
+      findings: [{ id: `S9${id.slice(1)}` }],
+    })),
+  );
   return {
     categories,
-    counts: { observed: 1, signals, unanswered },
+    counts: { observed: 1 + filled.length, signals, unanswered },
     generatedAt: FIXED_TIME,
     state: "generated",
   };
@@ -258,8 +273,9 @@ describe("project Home consumes the project-home model", () => {
     const summary = screen.getByRole("region", {
       name: "Project evidence summary",
     });
-    expect(summary.textContent).toContain("1 observed");
-    expect(summary.textContent).toContain("2 review signals");
+    // Counted in areas, like "Review what we found": 6 clear areas, 1 to check, 1 empty.
+    expect(summary.textContent).toContain("6 areas clear");
+    expect(summary.textContent).toMatch(/(^|\D)1 area to check/);
     expect(summary.textContent).toContain("1 unanswered");
     const blockerText = screen.getByRole("region", {
       name: "Project blockers",
@@ -267,6 +283,40 @@ describe("project Home consumes the project-home model", () => {
     expect(blockerText).toContain("discovery-signals-unreviewed");
     expect(blockerText).toContain("discovery-questions-unanswered");
     expectOnlyModelAction(container, "review-discovery", "Review discovery gaps");
+  });
+
+  test("answered discovery areas clear from Home's signal and unanswered counts", async () => {
+    const project = importedProject({
+      name: "Answered Discovery Home",
+      rootCharacter: "e",
+      digestCharacter: "5",
+      fileCount: 23,
+      discovery: discovery({ signals: 5, unanswered: 1 }),
+    });
+    let data = null;
+    for (const id of ["A02", "A03"])
+      data = nextDiscoveryReviewData(project, data, id, "confirmed", {
+        now: () => FIXED_TIME,
+      });
+    writeSection(project.projectId, "discoveryReview", data, {
+      now: () => FIXED_TIME,
+    });
+    try {
+      renderShell(registryWith(project), project);
+      await screen.findByRole("heading", { name: project.name });
+      const summary = screen.getByRole("region", {
+        name: "Project evidence summary",
+      });
+      expect(summary.textContent).toMatch(/(^|\D)0 areas to check/);
+      expect(summary.textContent).toMatch(/(^|\D)6 areas clear/);
+      expect(summary.textContent).toContain("0 unanswered");
+      expect(summary.textContent).not.toMatch(/review signal/);
+      expect(
+        screen.getByRole("region", { name: "Project blockers" }).textContent,
+      ).not.toContain("discovery-signals-unreviewed");
+    } finally {
+      window.localStorage.removeItem(workRecordsKey(project.projectId));
+    }
   });
 
   test("checked parent authorities cannot make a cached Plan ready without its own checked Ledger", async () => {
@@ -313,7 +363,7 @@ describe("project Home consumes the project-home model", () => {
     ));
     expect(
       screen.getByRole("region", { name: "Project blockers" }).textContent,
-    ).toContain("1 item prevent promotion");
+    ).toContain("1 item prevents promotion");
     expect(screen.queryByText("Project status ready")).toBeNull();
     const next = expectOnlyModelAction(
       container,
@@ -379,6 +429,30 @@ describe("project Home consumes the project-home model", () => {
       expectOnlyModelAction(container, actionId, state === "stale" ? "Refresh project evidence" : "Restore project access");
     },
   );
+
+  test("an approved plan is not shown as 'not checked', and Home names the next page instead of a generic promotion message (gaps 17, 28)", async () => {
+    localStorage.clear();
+    const project = importedProject({ name: "Approved Plan Home", rootCharacter: "f", digestCharacter: "6", discovery: discovery() });
+    const before = renderShell(registryWith(project), project);
+    await screen.findByRole("heading", { name: project.name });
+    expect(screen.getByLabelText("Saved planning approval status").textContent).toContain("No plan approved yet. Approve the plan on the Plan page first.");
+    before.unmount();
+
+    const tasks = [{ id: "T0001", title: "Add login", description: "", owner: "", acceptance: "", recovery: "", claims: [], dependsOn: [], archived: false }];
+    await recordPlanApproval(project.projectId, { tasks, censusDigest: project.census.digest });
+    renderShell(registryWith(project), project);
+    await screen.findByRole("heading", { name: project.name });
+    const check = screen.getByLabelText("Saved planning approval status");
+    // The check runs on open and the planning service is offline here; the approval still shows.
+    expect(check.textContent).toContain("Plan approved. The saved-plan check could not run.");
+    expect(check.textContent).not.toMatch(/not checked/i);
+    expect(within(check).getByRole("button", { name: "Run saved-plan check" })).toBeTruthy();
+    expect(screen.getByLabelText("Current project stage").textContent).toContain("Overlap check required");
+    expect(screen.getByLabelText("Current project stage").textContent).not.toContain("Architecture record required");
+    expect(screen.queryByText(/unresolved review or authority work blocks promotion/)).toBeNull();
+    expect(screen.getByText(/Next step: Check overlaps on the Collision page/)).toBeTruthy();
+    localStorage.clear();
+  });
 
   test("the explicit Demo keeps its original fixture dashboard branch", async () => {
     const demo = createDemoProjectSession({ now: FIXED_TIME });

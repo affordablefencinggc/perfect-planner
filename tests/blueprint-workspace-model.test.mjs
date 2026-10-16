@@ -30,3 +30,15 @@ test("the model does not mutate canonical workspace inputs", () => {
 test("the strict folder contract exposes reservations but blocks until architecture is exact", () => {
   const model = buildBlueprintWorkspaceModel(); const gate = model.gates.find((item) => item.id === "G-STRUCTURE"); assert.equal(gate.status, "blocked"); assert.equal(model.folderContract.ready, false); assert.match(model.folderContract.blockers.join(" "), /architectureContractDigest.*architectureRevision/); assert.equal(model.folderContract.nodes.length, 9); assert.equal(model.folderContract.reservations.length, 0);
 });
+
+// Trial define-13: titles were "Ai autopilot · rollback Policy" and "Non Functional · performance Budget".
+test("contract titles are sentence case with acronyms kept", async () => {
+  const { sentenceCase, decisionTitle } = await import("../src/engine/blueprintWorkspaceModel.js");
+  assert.equal(decisionTitle("ai-autopilot:rollbackPolicy"), "AI autopilot · Rollback policy");
+  assert.equal(decisionTitle("nonFunctional:performanceBudget"), "Quality limits · Performance budget");
+  assert.equal(sentenceCase("ci-merge"), "CI merge");
+  assert.equal(sentenceCase("identity-auth"), "Identity auth");
+  const model = buildBlueprintWorkspaceModel();
+  assert.ok(model.decisions.some((decision) => decision.title === "AI autopilot · Rollback policy"));
+  assert.ok(model.decisions.every((decision) => !/\b[a-z]+ [A-Z][a-z]/.test(decision.title)), model.decisions.map((decision) => decision.title).join(" | "));
+});

@@ -7,11 +7,21 @@ import path from "node:path";
  */
 export const NO_CWD_SEARCH_ENV = { NoDefaultCurrentDirectoryInExePath: "1" } as const;
 
-const isNetworkPath = (dir: string, platform: NodeJS.Platform) => platform === "win32" && /^[\\/]{2}/.test(dir);
+/**
+ * On Windows, true only for a local drive-letter path (C:\ or C:/). Refuses every network and device
+ * spelling: \\server, //server, mixed slashes, \\?\UNC\, \??\UNC\, \\.\ and drive-relative \dir.
+ * Use it for any path the core will run or trust on Windows.
+ */
+export function isLocalWindowsPath(file: string): boolean {
+  return /^[A-Za-z]:[\\/]/.test(file);
+}
+
+/** On Windows anything but a local drive-letter path counts as a network or device path. */
+const isNetworkPath = (dir: string, platform: NodeJS.Platform) => platform === "win32" && !isLocalWindowsPath(dir);
 
 /**
  * Absolute path of `name` from PATH, never from the current folder: relative and empty PATH
- * entries, network shares, entries whose folder cannot be resolved, and any entry inside `cwd` are
+ * entries, network shares (on Windows anything but a local drive-letter path), entries whose folder cannot be resolved, and any entry inside `cwd` are
  * skipped. Paths are compared as written and as real paths, so a PATH entry or a program that
  * reaches `cwd` through a symlink or junction (on macOS every temp folder does: /var is
  * /private/var) is still recognised. On Windows only `.exe` counts, since a .cmd/.bat cannot be

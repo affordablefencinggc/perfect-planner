@@ -1,6 +1,7 @@
 // Evidence and Integrity requirements derived from recorded proof items and sign-off.
 // Returning null keeps the "unanswered" placeholder: nothing recorded is never success.
-import { latestMergedTest, proofCoverage, proofItems, proofScope, REQUIRED_KIND_LABELS } from "../proofRecords.js";
+import { latestMergedTest, planTaskIds, proofCoverage, proofItems, proofScope, REQUIRED_KIND_LABELS } from "../proofRecords.js";
+import { readTaskDraftPresence } from "../taskDraftPresence.js";
 
 const day = (value) => { const time = Date.parse(value); return Number.isFinite(time) ? new Date(time).toISOString().slice(0, 10) : "an unknown date"; };
 const listed = (ids) => ids.length > 6 ? `${ids.slice(0, 6).join(", ")} and ${ids.length - 6} more` : ids.join(", ");
@@ -24,16 +25,40 @@ function proofBundle(sections) {
   if (!scope.taskIds.length) return { state: "unanswered", detail: "Proof is saved, but there are no tasks to cover yet." };
   const coverage = proofCoverage(scope, proofItems(sections));
   if (coverage.complete === coverage.total) return { state: "recorded", detail: `Every task (${coverage.total}) has a screenshot, a code change and a passing test, or a reason they are not needed · ${scopeNote(scope)}.` };
-  return { state: "review", detail: `${coverage.complete} of ${coverage.total} tasks have complete proof, ${coverage.partial} partial, ${coverage.none} none · ${scopeNote(scope)}.` };
+  const waived = coverage.waived ? `, ${coverage.waived} waived (every proof marked not needed)` : "";
+  return { state: "review", detail: `${coverage.complete} of ${coverage.total} tasks have complete proof${waived}, ${coverage.partial} partial, ${coverage.none} none · ${scopeNote(scope)}.` };
 }
 
-function signOff(sections) {
+/**
+ * The plan version a sign-off must match, judged without the sign-off's own
+ * snapshot (comparing a review with itself always looks current). The approved
+ * plan wins; then the Ledger's saved draft fingerprint; then proof saved after
+ * the sign-off. Null when nothing independent says what the tasks are now.
+ */
+function currentPlanDigest(sections, { project, storage } = {}) {
+  if (planTaskIds(sections.planAuthority)) return proofScope(sections).digest;
+  const presence = readTaskDraftPresence(project?.projectId, storage ?? undefined);
+  const sameScan = !presence?.censusDigest || !project?.census?.digest || presence.censusDigest === project.census.digest;
+  if (typeof presence?.draftsDigest === "string" && sameScan) return presence.draftsDigest;
+  const proofSeen = sections.proof?.data?.scope && String(sections.proof.recordedAt ?? "") > String(sections.review?.recordedAt ?? "");
+  return proofSeen ? proofScope({ proof: sections.proof }).digest : null;
+}
+
+function signOff(sections, context) {
   const review = sections.review?.data;
   if (!review?.planDigest || !review.reviewer) return null;
-  const scope = proofScope(sections);
   const who = `${review.reviewer} on ${day(review.signedAt)}`;
-  if (scope.digest !== review.planDigest) return { state: "stale", detail: `Signed off by ${who}, but the plan has changed since. Sign off this version again.` };
-  return { state: "recorded", detail: `Signed off by ${who} for this plan version (${review.taskIds?.length ?? 0} tasks).` };
+  const current = currentPlanDigest(sections, context);
+  if (!current) return { state: "review", detail: `Signed off by ${who}. The current task list could not be checked here; open Integrity to confirm the sign-off still covers it.` };
+  if (current !== review.planDigest) return { state: "stale", detail: `Signed off by ${who}, but the plan has changed since. Sign off this version again.` };
+  const tasks = `${review.taskIds?.length ?? 0} task${review.taskIds?.length === 1 ? "" : "s"}`;
+  const proof = review.proofAtSignOff;
+  const caveats = [
+    review.planSource !== "plan" && "no plan was approved",
+    !proof ? "proof at sign-off was not recorded" : proof.complete < proof.total && `only ${proof.complete} of ${proof.total} tasks were fully proven`,
+  ].filter(Boolean);
+  if (caveats.length) return { state: "review", detail: `Signed off by ${who} (${tasks}), but ${caveats.join(" and ")}.` };
+  return { state: "recorded", detail: `Signed off by ${who} for this approved plan version (${tasks}, all fully proven).` };
 }
 
 function mergedTests(sections) {

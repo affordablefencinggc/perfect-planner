@@ -30,6 +30,24 @@ test("switching project removes old rows and copy action", async () => {
   expect(invoke).toHaveBeenCalledTimes(1);
 });
 
+test("a view change (generation bump) keeps the displayed observation", async () => {
+  const invoke = vi.fn(async (_command, args) => wire(args.request));
+  const view = render(<GitInventoryPanel activeProject={project} runtime={runtime} invoke={invoke} />);
+  fireEvent.click(screen.getByRole("button", { name: "Inspect local Git" })); await screen.findByRole("table");
+  view.rerender(<GitInventoryPanel activeProject={{ ...project, generation: 2 }} runtime={runtime} invoke={invoke} />);
+  expect(screen.getByText("C:/fixture")).toBeTruthy(); expect(screen.getByRole("button", { name: "Copy observation" })).toBeTruthy();
+});
+
+test("a failed first inspection tells the user to reload, not about a previous request", async () => {
+  const failingRuntime = { __TAURI_INTERNALS__: {} };
+  const invoke = vi.fn(async () => { throw new Error("rejected"); });
+  render(<GitInventoryPanel activeProject={project} runtime={failingRuntime} invoke={invoke} />);
+  fireEvent.click(screen.getByRole("button", { name: "Inspect local Git" }));
+  await waitFor(() => expect(screen.getByRole("status").textContent).toMatch(/Reload Perfect Planner to try again/));
+  expect(screen.getByRole("status").textContent).not.toMatch(/Previous request|Reconcile/);
+  expect(screen.getByRole("button", { name: "Inspect local Git" }).disabled).toBe(true);
+});
+
 test("static browser explains the missing native capability and never invokes it", async () => {
   const invoke = vi.fn(); render(<GitInventoryPanel activeProject={project} runtime={{}} invoke={invoke} />);
   await waitFor(() => expect(screen.getByRole("button", { name: "Inspect local Git" }).disabled).toBe(true));
