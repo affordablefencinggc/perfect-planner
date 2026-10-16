@@ -32,7 +32,7 @@ describe('fill the architecture draft from the scan and discovery answers',()=>{
   const identity=screen.getByLabelText('Identity auth decision · Choice');
   expect(identity.value).toBe(A04);
   expect(identity.closest('.architecture-draft-field-wrap').textContent).toContain('From your discovery answer A04 (Data, tenancy & auth)');
-  expect(screen.getByLabelText('Capability Policy').value).toBe('Tauri capabilities deny by default.');
+  expect(screen.getByLabelText('Capability policy').value).toBe('Tauri capabilities deny by default.');
 
   // The value the person typed is kept and not marked.
   const data=screen.getByLabelText('Data decision · Choice');
@@ -40,7 +40,7 @@ describe('fill the architecture draft from the scan and discovery answers',()=>{
   expect(data.closest('.architecture-draft-field-wrap').textContent).not.toContain('From your discovery answer');
   // Fields the scan does not cover stay empty.
   expect(screen.getByLabelText('Data loss · Trigger').value).toBe('');
-  expect(screen.getByLabelText('Performance Budget').value).toBe('');
+  expect(screen.getByLabelText('Performance budget').value).toBe('');
 
   const progress=screen.getByText(/answers filled from the scan/);
   const [,filled,total,missing]=progress.textContent.match(/(\d+) of (\d+) answers filled from the scan; (\d+) still need you/);

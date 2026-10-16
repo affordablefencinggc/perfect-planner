@@ -12,6 +12,7 @@ import {publishArchitectureContract} from '../src/node/architectureContractStore
 import {publishFolderContract} from '../src/node/folderContractStore.mjs';
 import {publishComponentPlans} from '../src/node/componentPlanStore.mjs';
 import {createPlanApprovalStore} from '../src/node/planApprovalStore.mjs';
+import {createImportedProjectId} from '../src/project/projectIds.js';
 const at='2026-09-13T01:00:00.000Z';
 async function fixture(t){const f=await planningApprovalFixture(t);return {...f,request:f.publishInput,store:createPlanApprovalStore(f.config),journal:path.join(f.root,f.projectId,'plan-approvals.jsonl')};}
 async function advanceArchitecture(f){const input=componentArchitectureInput();input.nonFunctional.performanceBudget='startup P80 <500ms';const contract=await freezeArchitectureContract(input,{planId:f.projectId,actor:'fixture-owner',approvedAt:at});return publishArchitectureContract(f.root,contract,{actor:'fixture-owner',supersedes:f.context.architectureHead.contractDigest});}
@@ -99,4 +100,13 @@ test('failed flush stays uncertain until original retry syncs the same retained 
   await assert.rejects(f.store.publish(f.request),/Controlled approval sync failure/);assert.equal(await readFile(f.journal,'utf8'),bytes);
   failSync=false;const retried=await f.store.publish(f.request);assert.equal(retried.idempotent,true);assert.equal(retried.currentParentsChecked,false);assert.deepEqual(retried.record,retained.records[0]);assert.equal(syncCalls,3);assert.equal(await readFile(f.journal,'utf8'),bytes);assert.equal((await f.store.inspect()).records.length,1);
  }finally{mocked.mock.restore();syncBuiltinESMExports();}
+});
+test('inspect before any approval returns empty history when the project folder does not exist yet (proverel-05)',async t=>{
+ const f=await fixture(t),fresh='f'.repeat(64),missing={...f.config,rootIdentity:fresh,projectId:createImportedProjectId(fresh)};
+ const history=await createPlanApprovalStore(missing).inspect();
+ assert.deepEqual(history.records,[]);assert.deepEqual(history.observedApprovalHead,{revision:0,headDigest:'GENESIS'});assert.equal(history.currentParentsChecked,false);
+ assert.equal((await readdir(f.root)).includes(missing.projectId),false,'inspect never creates the folder');
+ assert.deepEqual((await createPlanApprovalStore({...missing,root:path.join(f.root,'not-created-yet')}).inspect()).records,[]);
+ const target=path.join(f.root,'elsewhere');await mkdir(target);const linked=path.join(f.root,'linked-empty');await symlink(target,linked,process.platform==='win32'?'junction':'dir');
+ await assert.rejects(createPlanApprovalStore({...missing,root:linked}).inspect(),/PLAN_APPROVAL_UNSAFE_PATH/);
 });

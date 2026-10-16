@@ -207,7 +207,9 @@ export function ProjectProvider({ children, registry: suppliedRegistry = null, s
     if (syncHistory && typeof window !== "undefined") {
       const href = projectHistoryHref(window.location.href, { projectId, workspace: nextWorkspace, phase: nextPhase });
       const state = createProjectHistoryState(window.history.state, { projectId, workspace: nextWorkspace, phase: nextPhase });
-      if (historyMode === "replace") window.history.replaceState(state, "", href);
+      const current = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+      // Re-selecting the current location (re-click, double-click) must not stack duplicate Back entries.
+      if (historyMode === "replace" || href === current) window.history.replaceState(state, "", href);
       else window.history.pushState(state, "", href);
     }
     return registry.get(projectId);
@@ -222,6 +224,7 @@ export function ProjectProvider({ children, registry: suppliedRegistry = null, s
     activeProjectId: snapshot.activeProjectId,
     activeProject: displaySnapshot.activeProject,
     registryHealth: snapshot.health,
+    registryBackupKey: registry.unreadableBackupKey ?? null,
     refreshArchitecture,
     refreshFolder,
     refreshComponent,

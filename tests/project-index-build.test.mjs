@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { emptyTaskDraftLedger, updateTaskDraft } from "../src/project/taskDraftLedger.js";
-import { agentBrief, buildRunProgress, deriveBuildBoard, nextBuildRecord, resolveApprovedTasks } from "../src/project/projectBuildModel.js";
+import { agentBrief, buildRunProgress, deriveBuildBoard, doneRefusal, nextBuildRecord, resolveApprovedTasks } from "../src/project/projectBuildModel.js";
 import { buildProjectIndex, searchProjectIndex } from "../src/project/projectIndexModel.js";
 import { receiptDerivers as indexBuild } from "../src/project/receipts/indexBuild.js";
 import { ledgerTasksReceipt } from "../src/project/receipts/ledger.js";
@@ -202,4 +202,50 @@ test("INDEX-BUILD needs a census; LEDGER-TASKS needs at least one saved draft fo
   assert.match(receipt.detail, /3 task drafts active/);
   assert.equal(ledgerTasksReceipt({}, { project: { ...project, census: { digest: "c".repeat(64) } } }, storage).state, "review");
   assert.equal(deriveWorkRecordReceipt("INDEX-BUILD", null, { project }).state, "recorded");
+});
+
+test("an owner cleared in Allocation stays cleared on Build instead of falling back to the draft", () => {
+  const ledger = sample();
+  const sections = { allocation: { revision: 2, data: { taskIds: ["T0001", "T0002", "T0003"], assignments: { T0001: { owner: "", wave: 1 }, T0002: { owner: "agent:", wave: 2 }, T0003: { owner: "Ann", wave: 1 } } } } };
+  const [first, second, third] = deriveBuildBoard({ project, ledger, sections, planStatus: observed(ledger) }).cards;
+  assert.equal(first.owner, null);
+  assert.equal(first.ownerSource, null);
+  assert.ok(first.blockers.some((item) => item.kind === "owner"), "the draft owner Sam does not come back");
+  assert.ok(second.blockers.some((item) => item.kind === "owner"), "a bare 'agent:' is not an owner");
+  assert.equal(third.ownerSource, "allocation");
+});
+
+test("Done is refused while blockers remain", () => {
+  const blockers = [{ kind: "owner", text: "No owner named yet. Assign one in Allocation." }];
+  assert.match(doneRefusal(blockers), /Can’t mark Done while 1 thing is in the way: No owner named yet/);
+  assert.equal(doneRefusal([]), null);
+  assert.throws(() => nextBuildRecord(null, { taskId: "T0001", state: "done", approvedTaskIds: ["T0001"], blockers }), /Can’t mark Done/);
+  assert.equal(nextBuildRecord(null, { taskId: "T0001", state: "in-progress", approvedTaskIds: ["T0001"], blockers }).status.T0001.state, "in-progress");
+});
+
+test("Ledger edits after a recorded approval are flagged and a stale overlap check is re-run live", () => {
+  const ledger = sample();
+  const record = buildCollisionRecord({ ledger, censusDigest: binding.censusDigest });
+  const collision = record.collisions[0];
+  const decided = { ...record, resolutions: { [collision.key]: createResolution(collision, "order", "T0001") } };
+  const approval = { revision: 1, data: { approvedTaskIds: ["T0001", "T0002", "T0003"], tasks: ledger.tasks.map((task) => ({ id: task.id, title: task.title })), planDigest: "a".repeat(64), tasksChangedAt: null } };
+  const clean = deriveBuildBoard({ project, ledger, sections: { planAuthority: approval, collisions: { revision: 1, data: decided } }, ledgerDigest: "a".repeat(64) });
+  assert.equal(clean.approval.changed, false);
+  assert.equal(clean.collisionsLive, false);
+  assert.equal(clean.cards[0].blockers.filter((item) => item.kind === "collision").length, 0);
+  // T0003 now writes the same file as T0001: a new hard overlap after approval.
+  const edited = updateTaskDraft(ledger, { ...ledger.tasks[2], title: "Draft only, now with files", claims: [{ path: "src/checkout.jsx", access: "write" }] });
+  const board = deriveBuildBoard({ project, ledger: edited, sections: { planAuthority: approval, collisions: { revision: 1, data: decided } }, ledgerDigest: "b".repeat(64) });
+  assert.equal(board.approval.changed, true);
+  assert.equal(board.collisionsLive, true);
+  assert.equal(board.cards[2].changedSinceApproval, true);
+  assert.ok(board.cards[2].blockers.some((item) => item.kind === "collision" && /T0001/.test(item.text)), "the new overlap is in the way, not 'nothing in the way'");
+  assert.equal(board.cards[1].blockers.filter((item) => item.kind === "collision" && /T0001/.test(item.text)).length, 0, "the unchanged decided pair keeps its decision");
+  assert.equal(deriveBuildBoard({ project, ledger, sections: { planAuthority: { ...approval, data: { ...approval.data, tasksChangedAt: "2026-10-05T00:00:00.000Z" } } } }).approval.changed, true);
+});
+
+test("without a recorded approval the board never says the approval is out of date", () => {
+  const board = deriveBuildBoard({ project, ledger: sample(), sections: {}, planStatus: { state: "stale", projectId: binding.projectId } });
+  assert.equal(board.approval.state, "missing");
+  assert.equal(board.approval.observedState, "stale");
 });

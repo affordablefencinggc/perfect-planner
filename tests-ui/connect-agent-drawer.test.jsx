@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { ConnectAgentDrawer } from "../src/components/ConnectAgentDrawer.jsx";
@@ -89,6 +89,55 @@ describe("Connect agent drawer", () => {
     expect(screen.queryByText("Copied")).toBeNull();
   });
 
+  test("a failed copy selects exactly that snippet, focuses it, and says so", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(navigator.clipboard, "writeText").mockRejectedValue(new Error("denied"));
+    render(<Harness />);
+    await user.click(screen.getByRole("button", { name: "Connect agent" }));
+    await user.click(screen.getByRole("button", { name: "Copy Run once in a terminal" }));
+    const snippet = screen.getByLabelText("Run once in a terminal setup text");
+    expect(window.getSelection().toString()).toBe(snippet.textContent);
+    expect(document.activeElement).toBe(snippet);
+    expect(screen.getByRole("alert").textContent).toMatch(/now selected: press Ctrl\+C/);
+  });
+
+  test("Ctrl+A or Cmd+A inside a snippet selects only that snippet, not the page", async () => {
+    const user = userEvent.setup();
+    render(<Harness />);
+    await user.click(screen.getByRole("button", { name: "Connect agent" }));
+    const snippet = screen.getByLabelText("Run once in a terminal setup text");
+    for (const modifier of [{ ctrlKey: true }, { metaKey: true }]) {
+      window.getSelection().removeAllRanges();
+      snippet.focus();
+      const notPrevented = fireEvent.keyDown(snippet, { key: "a", ...modifier });
+      expect(notPrevented).toBe(false);
+      expect(window.getSelection().toString()).toBe(snippet.textContent);
+    }
+  });
+
+  test("tabs follow the ARIA pattern for Home and End as well as the arrow keys", async () => {
+    const user = userEvent.setup();
+    render(<Harness />);
+    await user.click(screen.getByRole("button", { name: "Connect agent" }));
+    const tabs = screen.getAllByRole("tab");
+    tabs[0].focus();
+    fireEvent.keyDown(tabs[0], { key: "End" });
+    expect(screen.getByRole("tab", { name: "VS Code / Cursor" }).getAttribute("aria-selected")).toBe("true");
+    expect(document.activeElement.textContent).toBe("VS Code / Cursor");
+    fireEvent.keyDown(document.activeElement, { key: "Home" });
+    expect(screen.getByRole("tab", { name: "Claude Code" }).getAttribute("aria-selected")).toBe("true");
+    expect(document.activeElement.textContent).toBe("Claude Code");
+    fireEvent.keyDown(document.activeElement, { key: "ArrowLeft" });
+    expect(document.activeElement.textContent).toBe("VS Code / Cursor");
+  });
+
+  test("points to the desktop pairing flow for agents that propose tasks", async () => {
+    const user = userEvent.setup();
+    render(<Harness />);
+    await user.click(screen.getByRole("button", { name: "Connect agent" }));
+    expect(screen.getByText(/To let an agent propose tasks or report exchanges/).textContent).toMatch(/Runtime & connections → Connect your agent/);
+  });
+
   test("lists the read-only tools, stays honest about what it cannot do, and points to Build", async () => {
     const user = userEvent.setup();
     const onWorkspace = vi.fn();
@@ -137,5 +186,35 @@ describe("Connect agent drawer", () => {
     expect(screen.getByLabelText("Run once in a terminal setup text").textContent).toContain("<path-to-perfect-planner>/mcp/perfectPlannerMcpServer.mjs");
     expect(screen.getByText(/does not know where Perfect Planner is/)).toBeTruthy();
     expect(screen.getByText(/Replace the app data placeholder/)).toBeTruthy();
+  });
+});
+
+describe("Connect agent drawer focus stability", () => {
+  test("a parent re-render with a new inline onClose does not pull focus back to Close", async () => {
+    const user = userEvent.setup();
+    let bump;
+    function Rerendering() {
+      const [, setTick] = useState(0);
+      bump = () => setTick((tick) => tick + 1);
+      return <ConnectAgentDrawer open onClose={() => {}} setup={{ serverPath, registryRoot }} />;
+    }
+    render(<Rerendering />);
+    const dialog = screen.getByRole("dialog", { name: "Connect agent" });
+    await waitFor(() => expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "Close" })));
+    const codex = within(dialog).getByRole("tab", { name: "Codex" });
+    await user.click(codex);
+    expect(document.activeElement).toBe(codex);
+    act(() => bump());
+    act(() => bump());
+    expect(document.activeElement).toBe(codex);
+  });
+
+  test("without a project it points to choosing an app folder instead of Build", async () => {
+    const user = userEvent.setup();
+    const onWorkspace = vi.fn();
+    render(<ConnectAgentDrawer open onClose={() => {}} onWorkspace={onWorkspace} hasProject={false} setup={{ serverPath, registryRoot }} />);
+    expect(screen.queryByRole("button", { name: /Open Build/ })).toBeNull();
+    await user.click(screen.getByRole("button", { name: /Choose an app folder/ }));
+    expect(onWorkspace).toHaveBeenCalledWith("structure");
   });
 });

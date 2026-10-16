@@ -34,9 +34,9 @@ describe("safeRunner and the pre-push hook never run a git planted in the repo",
     const saved = process.env.PATH;
     try {
       process.env.PATH = pathWithRepoFirst;
-      const result = await safeRunner("git", ["rev-parse", "--git-path", "hooks"], { cwd: root });
+      const result = await safeRunner("git", ["rev-parse", "--git-dir"], { cwd: root });
       expect(result.code).toBe(0);
-      expect(result.stdout.trim()).toMatch(/hooks$/);
+      expect(result.stdout.trim()).toMatch(/\.git$/);
       expect(result.stdout).not.toContain("planted");
       expect(fs.existsSync(marker)).toBe(false);
     } finally {
@@ -82,7 +82,7 @@ describe("safeRunner and the pre-push hook never run a git planted in the repo",
     const saved = process.env.PATH;
     try {
       process.env.PATH = pathWithLinkFirst;
-      const result = await safeRunner("git", ["rev-parse", "--git-path", "hooks"], { cwd: root });
+      const result = await safeRunner("git", ["rev-parse", "--git-dir"], { cwd: root });
       expect(result.code).toBe(0);
       expect(result.stdout).not.toContain("planted");
       expect(fs.existsSync(marker)).toBe(false);
@@ -141,7 +141,7 @@ describe("safeRunner and the pre-push hook never run a git planted in the repo",
 
 // A repo whose own config and hooks name programs that write a marker file: the trap a cloned or
 // agent-edited repo can set for whatever runs git in it as the host.
-function trappedRepo(): { root: string; marker: string; first: string; second: string; cleanup: () => void } {
+function trappedRepo(extra: Record<string, string> = {}): { root: string; marker: string; first: string; second: string; cleanup: () => void } {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "pp-trapped-"));
   const marker = path.join(root, "trap-ran").replace(/\\/g, "/");
   const git = (...args: string[]) => execFileSync(gitExecutable(os.tmpdir()), args, { cwd: root, env, encoding: "utf8" }).trim();
@@ -153,7 +153,8 @@ function trappedRepo(): { root: string; marker: string; first: string; second: s
   const first = git("rev-parse", "HEAD");
   fs.writeFileSync(path.join(root, "a.txt"), "two\n");
   fs.writeFileSync(path.join(root, "b.txt"), "new\n");
-  git(...id, "add", "a.txt", "b.txt");
+  for (const [name, text] of Object.entries(extra)) fs.writeFileSync(path.join(root, name), text);
+  git(...id, "add", "a.txt", "b.txt", ...Object.keys(extra));
   git(...id, "commit", "-qm", "two");
   const second = git("rev-parse", "HEAD");
   // Set the traps after committing, so making the fixture runs none of them.
@@ -197,13 +198,12 @@ describe("host git never runs the repo's own hooks or programs", () => {
     try {
       const scan = await scanBranch(safeRunner, { cwd: root, base: first, head: second });
       expect(scan).toMatchObject({ ok: true, filesScanned: 2 });
-      const show = await safeRunner("git", ["show", second], { cwd: root });
-      expect(show.code).toBe(0);
-      expect(show.stdout).toContain("+two");
-      // A working-tree command is refused outright while the repo names a filter program.
-      const status = await safeRunner("git", ["status"], { cwd: root });
-      expect(status.code).not.toBe(0);
-      expect(status.stderr).toMatch(/will not run it/);
+      // Commands that could run a filter program are refused outright while the repo names one.
+      for (const args of [["show", second], ["status"], ["diff-tree", "-r", "--name-only", first, second]]) {
+        const refused = await safeRunner("git", args, { cwd: root });
+        expect(refused.code).not.toBe(0);
+        expect(refused.stderr).toMatch(/will not run it/);
+      }
       // Its hooks folder is the repo's own (.git/hooks here; the trap hooks are not named in config).
       const installed = await installPrePushHook(safeRunner, { cwd: root, hookScript: "/opt/pp/pre-push.mjs" });
       expect(installed.installed).toBe(false);
@@ -242,6 +242,23 @@ describe("host git never runs the repo's own hooks or programs", () => {
         expect(result.stderr).toBe("");
         expect(result.status).toBe(0);
       }
+      expect(fs.existsSync(marker)).toBe(false);
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+describe("in a repo whose config names a filter program, the scans still read every file", () => {
+  it("scanBranch and the pre-push hook still find a forbidden file, and run nothing", async () => {
+    const { root, marker, first, second, cleanup } = trappedRepo({ ".env": "A=1\n" });
+    try {
+      const scan = await scanBranch(safeRunner, { cwd: root, base: first, head: second });
+      expect(scan.findings.map((f) => `${f.file}:${f.rule}`)).toContain(".env:env-file");
+      const hook = fileURLToPath(new URL("./hooks/pre-push.mjs", import.meta.url));
+      const result = spawnSync(process.execPath, [hook], { cwd: root, input: `refs/heads/main ${second} refs/heads/main ${first}\n`, encoding: "utf8", env: process.env });
+      expect(result.status).toBe(1);
+      expect(result.stderr).toMatch(/\.env\s+env-file/);
       expect(fs.existsSync(marker)).toBe(false);
     } finally {
       cleanup();

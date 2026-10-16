@@ -178,7 +178,9 @@ export class AgentService {
     if (view.owner === agent.id) return { task: attemptLabel(view), status: view.status, entry: view.lastEntry };
     if (view.status === "done") throw new ToolError("CONFLICT", `${task} is already done.`);
     if (view.owner) throw new ToolError("CONFLICT", `${task} is held by ${view.owner}.`);
-    const entry = this.write({ actor: this.actor(agent), type: "task.claimed", subject: task, summary: `Claimed ${attemptLabel(view)} by ${agent.name}`, refs: view.clauses });
+    // A retry is claimed as its attempt ("T-14.a2"): the gate's claim rule judges that attempt, which
+    // keeps the approved test, not the reopened attempt it replaced (that one refuses every claim).
+    const entry = this.write({ actor: this.actor(agent), type: "task.claimed", subject: attemptLabel(view), summary: `Claimed ${attemptLabel(view)} by ${agent.name}`, refs: view.clauses });
     return { task: attemptLabel(view), status: "claimed", entry: entry.n };
   }
 
@@ -239,7 +241,8 @@ export class AgentService {
   }
 
   private release(agent: AgentRecord, { task, reason, blocked }: ToolInput<"release_task">) {
-    this.ownTask(agent, task, true);
+    const view = this.ownTask(agent, task, true);
+    if (view.status === "done" && blocked) throw new ToolError("CONFLICT", `${task} is already done, so it cannot be released as blocked.`);
     const entry = this.write({
       actor: this.actor(agent),
       type: blocked ? "task.blocked" : "task.progress",
@@ -249,7 +252,7 @@ export class AgentService {
       data: { released: true },
     });
     this.tokens.revokeTask(task);
-    return { entry: entry.n, status: blocked ? "blocked" : "open" };
+    return { entry: entry.n, status: view.status === "done" ? "done" : blocked ? "blocked" : "open" };
   }
 
   /**

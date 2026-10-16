@@ -10,6 +10,11 @@ const fail = () => { throw new Error("GIT_PROTOCOL_ERROR"); };
 // Closing Operations must not clear an in-flight request or an uncertain cleanup.
 // This intentionally remains session-only; durable recovery is a native concern.
 const runtimeGates = new WeakMap();
+// One message for every uncertain-cleanup path, including the first failure. There is no safe
+// in-app retry: a rejected or timed-out call is not evidence the native job stopped, and the
+// admission gate lives only in this webview session, so reloading the app is the honest reset.
+export const GIT_INSPECTION_UNCERTAIN_REASON = "Git inspection did not finish cleanly, so it is unclear whether the desktop app stopped reading this folder. Inspection is off for now. Reload Perfect Planner to try again.";
+const UNCERTAIN = GIT_INSPECTION_UNCERTAIN_REASON;
 function gateFor(runtime) {
   if (!runtime || typeof runtime !== "object") return { pending: false, quarantined: false, listeners: new Set() };
   if (!runtimeGates.has(runtime)) runtimeGates.set(runtime, { pending: false, quarantined: false, listeners: new Set() });
@@ -61,7 +66,7 @@ export function createPlannerGitInventoryController({ runtime = globalThis, invo
   let snapshot = Object.freeze({ status: "unavailable", canCheck: false, reason: "Choose a registered desktop project.", result: null });
   const listeners = new Set();
   const publish = (next) => { snapshot = Object.freeze({ ...snapshot, ...next }); for (const l of listeners) { try { l(); } catch { /* Views cannot change request ownership. */ } } return snapshot; };
-  const refreshGate = () => { if (!disposed) { if (gate.quarantined) clearExpiry(); publish({ canCheck: Boolean(binding) && !gate.pending && !gate.quarantined, ...(gate.quarantined ? { result: null, status: "failed", reason: "Previous request cleanup is uncertain. Reconcile the desktop runtime before retrying." } : {}) }); } };
+  const refreshGate = () => { if (!disposed) { if (gate.quarantined) clearExpiry(); publish({ canCheck: Boolean(binding) && !gate.pending && !gate.quarantined, ...(gate.quarantined ? { result: null, status: "failed", reason: UNCERTAIN } : {}) }); } };
   gate.listeners.add(refreshGate);
   const notifyGate = () => { for (const listener of gate.listeners) listener(); };
   const clearExpiry = () => { if (expiry !== undefined) clearTimer(expiry); expiry = undefined; };
@@ -70,10 +75,14 @@ export function createPlannerGitInventoryController({ runtime = globalThis, invo
   };
   function setProject(project) {
     const next = isTauriRuntime(runtime) ? bindingOf(project) : null;
-    const nextKey = JSON.stringify([next, project?.projectId, project?.generation]);
-    if (disposed || key === nextKey) return snapshot;
+    // The generation advances on every view change. Git metadata depends on the registered
+    // folder, not the view, so a generation-only change keeps the observation and only
+    // refreshes the generation sent with the next request.
+    const nextKey = JSON.stringify(next ? [next.projectId, next.workspaceId, next.registryRevision, next.rootIdentity] : [null, project?.projectId]);
+    if (disposed) return snapshot;
+    if (key === nextKey) { if (next) binding = next; return snapshot; }
     revision++; clearExpiry(); key = nextKey; binding = next;
-    return publish({ status: next ? "idle" : "unavailable", canCheck: Boolean(next) && !gate.pending && !gate.quarantined, result: null, reason: gate.quarantined ? "Previous request cleanup is uncertain. Reconcile the desktop runtime before retrying." : next ? "Local branches have not been inspected." : "Git inspection requires a current registered project in the desktop app." });
+    return publish({ status: next ? "idle" : "unavailable", canCheck: Boolean(next) && !gate.pending && !gate.quarantined, result: null, reason: gate.quarantined ? UNCERTAIN : next ? "Local branches have not been inspected." : "Git inspection requires a current registered project in the desktop app." });
   }
   async function check() {
     if (disposed || !binding || gate.pending || gate.quarantined) return snapshot;
@@ -104,7 +113,7 @@ export function createPlannerGitInventoryController({ runtime = globalThis, invo
       // Rejection/timeout is not evidence that the native job was stopped.
       gate.quarantined = true;
       emit(captured, id, "finish", "GIT_CLEANUP_UNCERTAIN");
-      if (!disposed && own === revision) publish({ status: "failed", result: null, reason: "Git inspection could not be verified; cleanup is uncertain. Reconcile the desktop runtime before retrying." });
+      if (!disposed && own === revision) publish({ status: "failed", result: null, reason: UNCERTAIN });
     } finally {
       if (timeout !== undefined) clearTimer(timeout);
       gate.pending = false;

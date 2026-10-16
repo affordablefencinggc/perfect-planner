@@ -1,4 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -316,6 +317,22 @@ describe("ignore list", () => {
   });
 });
 
+// A fake git that answers scanBranch's object reads (merge-base, ls-tree, cat-file) from in-memory trees.
+function fakeGit(trees: Record<string, Record<string, string>>, mergeBase: string, calls: string[][] = []): CommandRunner {
+  const id = (text: string) => createHash("sha1").update(text).digest("hex");
+  const blobs = new Map(Object.values(trees).flatMap((tree) => Object.values(tree).map((text) => [id(text), text] as const)));
+  return async (_cmd, args) => {
+    calls.push([...args]);
+    if (args[0] === "merge-base") return { code: 0, stdout: `${mergeBase}\n`, stderr: "" };
+    if (args[0] === "ls-tree") {
+      const tree = trees[args.at(-1)!] ?? {};
+      return { code: 0, stdout: Object.entries(tree).map(([path, text]) => `100644 blob ${id(text)}\t${path}\0`).join(""), stderr: "" };
+    }
+    if (args[0] === "cat-file" && blobs.has(args[2]!)) return { code: 0, stdout: blobs.get(args[2]!)!, stderr: "" };
+    return { code: 128, stdout: "", stderr: "fatal: unexpected git call\n" };
+  };
+}
+
 describe("scanBranch", () => {
   const files: Record<string, string> = {
     "src/a.ts": "export const ok = 1;\r\n" + SAMPLES["aws-access-key"] + "\r\n",
@@ -323,38 +340,27 @@ describe("scanBranch", () => {
     "logo.png": "\0PNG" + SAMPLES["github-token"],
     "secrets/.env": "A=1",
   };
-  const make = (calls: string[][]): CommandRunner => async (_cmd, args) => {
-    calls.push([...args]);
-    if (args[0] === "merge-base") return { code: 0, stdout: "b0b0\n", stderr: "" };
-    if (args[0] === "diff-tree") return { code: 0, stdout: Object.keys(files).join("\n") + "\n", stderr: "" };
-    const path = args[1].split(":").slice(1).join(":");
-    return { code: 0, stdout: files[path], stderr: "" };
-  };
 
-  it("scans full content of each changed file at head", async () => {
+  it("scans full content of each file head adds or changes since the merge-base, by object reads only", async () => {
     const calls: string[][] = [];
-    const res = await scanBranch(make(calls), { cwd: "/r", base: "origin/main" });
+    const res = await scanBranch(fakeGit({ b0b0: { "src/b.ts": "fine", "old.ts": "gone" }, HEAD: files }, "b0b0", calls), { cwd: "/r", base: "origin/main" });
     expect(calls[0]).toEqual(["merge-base", "origin/main", "HEAD"]);
-    expect(calls[1]).toEqual(["diff-tree", "-r", "--name-only", "--no-commit-id", "--diff-filter=ACMR", "b0b0", "HEAD"]);
-    expect(calls[2]).toEqual(["show", "HEAD:src/a.ts"]);
+    expect(calls[1]).toEqual(["ls-tree", "-r", "-z", "--full-tree", "b0b0"]);
+    expect(calls[2]).toEqual(["ls-tree", "-r", "-z", "--full-tree", "HEAD"]);
+    expect(calls.slice(3).every((c) => c[0] === "cat-file" && c[1] === "blob")).toBe(true);
     expect(res.ok).toBe(false);
-    expect(res.filesScanned).toBe(4);
+    // src/b.ts is unchanged and old.ts was deleted: neither is read.
+    expect(res.filesScanned).toBe(3);
     expect(res.findings.map((f) => `${f.file}:${f.rule}`).sort()).toEqual(["secrets/.env:env-file", "src/a.ts:aws-access-key"]);
     expect(res.findings.find((f) => f.file === "src/a.ts")?.line).toBe(2);
   });
 
   it("is ok when clean, and honours a custom head", async () => {
     const calls: string[][] = [];
-    const run: CommandRunner = async (_c, args) => {
-      calls.push([...args]);
-      if (args[0] === "merge-base") return { code: 0, stdout: "b0b0\n", stderr: "" };
-      return args[0] === "diff-tree" ? { code: 0, stdout: "a.ts\n", stderr: "" } : { code: 0, stdout: "clean", stderr: "" };
-    };
-    const res = await scanBranch(run, { cwd: "/r", base: "main", head: "feat" });
+    const res = await scanBranch(fakeGit({ b0b0: {}, feat: { "a.ts": "clean" } }, "b0b0", calls), { cwd: "/r", base: "main", head: "feat" });
     expect(res).toEqual({ ok: true, findings: [], filesScanned: 1 });
     expect(calls[0]).toEqual(["merge-base", "main", "feat"]);
-    expect(calls[1].slice(-2)).toEqual(["b0b0", "feat"]);
-    expect(calls[2][1]).toBe("feat:a.ts");
+    expect(calls[2].at(-1)).toBe("feat");
   });
 
   it("throws a clear error when git fails", async () => {
@@ -367,15 +373,8 @@ describe("scanBranch honours only ledger approvals, never a file on a branch", (
   const ghp = SAMPLES["github-token"];
   const allowDoc = (fp: string) => JSON.stringify({ version: 1, allow: [{ fingerprint: fp, reason: "fixture", approvedBy: "p1" }] });
   const fp = fingerprintOf("src/a.ts", "github-token", ghp);
-  const runner = (head: Record<string, string>, base: Record<string, string>, calls: string[][] = []): CommandRunner => async (_c, args) => {
-    calls.push([...args]);
-    if (args[0] === "merge-base") return { code: 0, stdout: "b0b0\n", stderr: "" };
-    if (args[0] === "diff-tree") return { code: 0, stdout: Object.keys(head).join("\n") + "\n", stderr: "" };
-    const [rev, ...rest] = args[1].split(":");
-    const path = rest.join(":");
-    const tree = rev === "main" ? base : head;
-    return path in tree ? { code: 0, stdout: tree[path], stderr: "" } : { code: 128, stdout: "", stderr: "fatal: path does not exist\n" };
-  };
+  const runner = (head: Record<string, string>, base: Record<string, string>, calls: string[][] = []): CommandRunner =>
+    fakeGit({ main: base, feat: head }, "main", calls);
   const src = `a = "${ghp}"\n`;
   const opts = { cwd: "/r", base: "main", head: "feat" };
 

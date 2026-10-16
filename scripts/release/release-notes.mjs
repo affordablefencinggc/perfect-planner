@@ -28,13 +28,11 @@ process.stdout.write(`## Perfect Planner ${release}
 |---|---|
 | Windows (recommended) | ${pick(".setup.exe")} |
 | Windows (IT / managed installs) | ${pick(".msi")} |
-| macOS (Apple silicon) | ${pick("-macos-arm64.dmg")} |
-| macOS (Intel) | ${pick("-macos-x64.dmg")} |
 | Linux (Ubuntu, Debian) | ${pick(".deb")} |
 | Linux (Fedora, RHEL) | ${pick(".rpm")} |
 | Linux (any, portable) | ${pick(".AppImage")} |
 
-These builds are **not code-signed** yet. Windows SmartScreen may say "Windows protected your PC": choose **More info**, then **Run anyway**. On macOS, right-click the app and choose **Open** the first time. Connecting a coding agent currently works on Windows only; on macOS and Linux the planner itself runs, and agent connection reports that the platform is not supported yet.
+There is no macOS build. These builds are **not code-signed** yet. Windows SmartScreen may say "Windows protected your PC": choose **More info**, then **Run anyway**. Connecting a coding agent currently works on Windows only; on Linux the planner itself runs, and agent connection reports that the platform is not supported yet.
 
 ### SHA-256
 

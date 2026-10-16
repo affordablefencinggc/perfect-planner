@@ -10,6 +10,22 @@ export function normalizeContractPath(value) {
   return String(value ?? "").trim().replaceAll("\\", "/").replace(/^\.\//, "").replace(/\/{2,}/g, "/").replace(/\/$/, "");
 }
 
+// A planned path becomes a real folder or file name on every platform, so it
+// may not hold wildcards, markup or characters Windows refuses, and stays short.
+export const MAX_CONTRACT_PATH = 240;
+const MAX_CONTRACT_SEGMENT = 100;
+const UNSAFE_PATH_CHARS = /[*?\[\]{}<>:"|\u0000-\u001f\u007f]/;
+// Task IDs are short references such as T0001 or B01, never free text.
+const TASK_ID = /^[A-Za-z][A-Za-z0-9]{0,15}(?:[-_.][A-Za-z0-9]{1,15}){0,3}$/;
+export function contractPathProblem(value) {
+  if (value.length > MAX_CONTRACT_PATH) return `is longer than ${MAX_CONTRACT_PATH} characters`;
+  if (UNSAFE_PATH_CHARS.test(value)) return "contains a wildcard or a character folders cannot use (* ? [ ] { } < > : \" |)";
+  const parts = value.split("/");
+  if (parts.some((part) => part.length > MAX_CONTRACT_SEGMENT)) return `has a name longer than ${MAX_CONTRACT_SEGMENT} characters`;
+  if (parts.some((part) => part === "." || /[. ]$/.test(part) || /^\s/.test(part))) return "has a name that starts with a space or ends with a dot or space";
+  return null;
+}
+
 const parentPath = (value) => value.includes("/") ? value.slice(0, value.lastIndexOf("/")) : null;
 
 function cycleMembers(nodes) {
@@ -32,8 +48,10 @@ export function assessFolderContract(input) {
     if (!/^F\d{3,}$/.test(node.id ?? "")) blockers.push(`${prefix}.id must be a stable F-number.`); else if (ids.has(node.id)) blockers.push(`Duplicate node id ${node.id}.`); ids.add(node.id);
     if (!KINDS.has(node.kind)) blockers.push(`${prefix}.kind must be folder or file.`);
     if (!normalized || normalized !== node.path || normalized.startsWith("/") || /^[a-zA-Z]:/.test(normalized) || normalized.split("/").includes("..")) blockers.push(`${prefix}.path must be a normalized safe relative path.`);
+    else if (contractPathProblem(normalized)) blockers.push(`${prefix}.path ${contractPathProblem(normalized)}.`);
     else if (paths.has(normalized)) blockers.push(`Duplicate planned path ${normalized}.`); paths.add(normalized);
     if (!String(node.purpose ?? "").trim() || !String(node.owner ?? "").trim() || !String(node.taskId ?? "").trim()) blockers.push(`${prefix} requires purpose, owner, and taskId.`);
+    else if (!TASK_ID.test(String(node.taskId).trim())) blockers.push(`${prefix}.taskId must be a task number such as T0001 or B01, not free text.`);
     const placeholders = { purpose: "define this boundary before approval", owner: "unallocated", taskId: "unassigned", allowedContents: "name allowed artifacts" };
     for (const [field, placeholder] of Object.entries(placeholders)) {
       if (String(node[field] ?? "").trim().toLowerCase() === placeholder) blockers.push(`${prefix}.${field} is an unresolved placeholder.`);
@@ -183,5 +201,5 @@ export function folderPlanHeadline(assessment, { imported = false } = {}) {
   }
   return assessment.ready
     ? { tone: "ready", verdict: assessment.verdict, detail: null, panelTitle: null, panelDetail: "Approval details" }
-    : { tone: "blocked", verdict: assessment.verdict, detail: `${assessment.blockers.length} blockers`, panelTitle: "Folder plan not ready for approval", panelDetail: `${assessment.blockers.length} blockers · open to review` };
+    : { tone: "blocked", verdict: assessment.verdict, detail: `${assessment.blockers.length} ${assessment.blockers.length === 1 ? "blocker" : "blockers"}`, panelTitle: "Folder plan not ready for approval", panelDetail: `${assessment.blockers.length} ${assessment.blockers.length === 1 ? "blocker" : "blockers"} · open to review` };
 }

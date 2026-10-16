@@ -20,7 +20,22 @@ export async function makeRepo(files: Record<string, string> = { "README.md": "h
   writeFiles(root, files);
   await git(root, ["add", "-A"]);
   await git(root, ["commit", "-q", "-m", "initial"]);
-  return { root, cleanup: () => rmSync(parent, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }) };
+  return { root, cleanup: () => removeTempDir(parent) };
+}
+
+/**
+ * Remove a test's temp folder. On Windows a git process, the indexer or antivirus can hold a
+ * handle for a few seconds after a test ends (EPERM/EBUSY); retry for longer, and if the folder
+ * is still locked, leave it in the temp dir with a warning rather than fail the test that used it.
+ */
+export function removeTempDir(dir: string): void {
+  try {
+    rmSync(dir, { recursive: true, force: true, maxRetries: 12, retryDelay: 250 });
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code ?? "";
+    if (!["EPERM", "EBUSY", "EACCES", "ENOTEMPTY"].includes(code)) throw error;
+    console.warn(`could not remove ${dir} (${code}); leaving it in the temp folder`);
+  }
 }
 
 export function writeFiles(root: string, files: Record<string, string>): void {
