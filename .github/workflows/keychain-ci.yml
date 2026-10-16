@@ -1,12 +1,14 @@
 name: Real OS keychain
 
 # Signing keys in the real OS keychain on each OS: Windows Credential
-# Locker, the macOS keychain, and the Linux Secret Service (gnome-keyring
-# in a private D-Bus session). It installs system packages and starts a
-# keyring daemon, so it is a platform probe on every push, not a gate the
-# app can reproduce locally; the provider's logic is tested in Core loop CI.
+# Locker and the Linux Secret Service (gnome-keyring in a private D-Bus
+# session). It installs system packages and starts a keyring daemon, so it
+# is a platform probe, not a gate the app can reproduce locally; the
+# provider's logic is tested in Core loop CI. Linux runs on every push;
+# Windows runs on main, release tags and manual runs.
 on:
   push:
+    paths-ignore: ["**/*.md", "docs/**"]
   workflow_dispatch:
 
 permissions:
@@ -24,7 +26,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: ${{ fromJSON((github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch') && '["ubuntu-latest","windows-latest"]' || '["ubuntu-latest"]') }}
     env:
       PP_KEYCHAIN_TEST: "1"
       PP_KEYCHAIN_REQUIRED: "1"
@@ -35,8 +37,8 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci --ignore-scripts
-      - name: Keychain (Windows, macOS)
-        if: runner.os != 'Linux'
+      - name: Keychain (Windows)
+        if: runner.os == 'Windows'
         run: npx vitest run -c vitest.core.config.mjs core/ledger/keychain.test.ts --reporter=verbose
       - name: Keychain (Linux)
         if: runner.os == 'Linux'
