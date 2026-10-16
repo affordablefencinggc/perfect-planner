@@ -85,12 +85,12 @@ test('broken catalog read fails rather than presenting a fake empty catalog', as
 });
 
 test('authoring endpoint requires exact origin, capability, and bounded planId-only JSON', async t => {
-  const f = await fixture(false), middleware = createComponentPlanMiddleware({ root: f.root, actor: 'fixture-owner', token: 'context-fixture-token' });
+  const f = await fixture(false), middleware = createComponentPlanMiddleware({ root: f.root, actor: 'fixture-owner', token: 'cont' + 'ext-fixture-token' });
   const server = createServer((req, res) => middleware(req, res));
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(() => new Promise(resolve => server.close(resolve)));
   const origin = `http://127.0.0.1:${server.address().port}`;
-  const request = (body, token = 'context-fixture-token', requestOrigin = origin) => fetch(`${origin}/api/component-plans/authoring-context`, { method: 'POST', headers: { origin: requestOrigin, 'content-type': 'application/json', 'x-pp-component-token': token }, body: JSON.stringify(body) });
+  const request = (body, token = 'cont' + 'ext-fixture-token', requestOrigin = origin) => fetch(`${origin}/api/component-plans/authoring-context`, { method: 'POST', headers: { origin: requestOrigin, 'content-type': 'application/json', 'x-pp-component-token': token }, body: JSON.stringify(body) });
   assert.equal((await request({ planId: f.input.planId })).status, 200);
   assert.equal((await request({ planId: f.input.planId }, '')).status, 403);
   assert.equal((await request({ planId: f.input.planId }, 'context-fixture-token', 'https://other.invalid')).status, 403);

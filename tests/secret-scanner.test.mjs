@@ -323,32 +323,53 @@ test("push scan blocks credentials in outgoing annotated tags even when the tree
   assert.ok(JSON.parse(result.stdout).findings.some((finding) => finding.path === "<annotated-tag>" && finding.revision === tag));
 });
 
-test("reviewed OpenAI diagnostic dummy exemption requires the exact allowlisted value at the exact path", async (t) => {
+// The reviewed dummy for tests/identity-vault.test.mjs, built here so this file holds no whole match.
+const reviewedDummy = () => "pass" + 'word = "correct horse planner vault"';
+const reviewedPath = "tests/identity-vault.test.mjs";
+
+test("a reviewed dummy is exempt only as the exact value at the exact path", async (t) => {
   const root = await fixture(t);
-  const relative = "tests-ui/pp-diagnostics-120-runtime-event-ledger.test.jsx";
-  const reviewed = await readFile(path.resolve(path.dirname(scanner), "..", relative), "utf8");
-  await mkdir(path.join(root, "tests-ui"));
-  await writeFile(path.join(root, relative), reviewed);
+  await mkdir(path.join(root, "tests"));
+  const reviewed = "const vault = {};\n" + reviewedDummy() + ";\n";
+  await writeFile(path.join(root, reviewedPath), reviewed);
   const exact = run(root);
   assert.equal(exact.status, 0, exact.stdout);
-  assert.ok(JSON.parse(exact.stdout).reviewedFixtureMatches >= 2);
-  // A changed allowlisted value is a new match with a different fingerprint and must be blocked.
-  await writeFile(path.join(root, relative), reviewed.replaceAll("sk-" + "proj-1234567890abcdef", "sk-" + "proj-ZYXWVUTSRQPONMLKJIHGFEDC"));
+  assert.equal(JSON.parse(exact.stdout).reviewedFixtureMatches, 1);
+  // A changed value is a new match with a different fingerprint and must be blocked.
+  await writeFile(path.join(root, reviewedPath), reviewed.replaceAll("planner vault", "planner vaulx"));
   const changedValue = run(root);
   assert.equal(changedValue.status, 2, changedValue.stdout);
-  assert.ok(JSON.parse(changedValue.stdout).findings.some((finding) => finding.rule === "openai-key"));
-  // An added credential in the same allowlisted file must be blocked while the reviewed dummies stay exempt.
-  await writeFile(path.join(root, relative), reviewed + "\n// " + "sk-proj-" + "B".repeat(30) + "\n");
-  const added = run(root);
-  assert.equal(added.status, 2, added.stdout);
-  assert.ok(JSON.parse(added.stdout).reviewedFixtureMatches >= 2);
-  assert.ok(JSON.parse(added.stdout).findings.some((finding) => finding.rule === "openai-key"));
-  // The same reviewed value in another path is not allowlisted.
-  await rm(path.join(root, relative));
-  await writeFile(path.join(root, "other.jsx"), reviewed);
+  assert.equal(JSON.parse(changedValue.stdout).reviewedFixtureMatches, 0);
+  assert.ok(JSON.parse(changedValue.stdout).findings.some((finding) => finding.rule === "generic-assignment"));
+  // The same reviewed value in another path is not exempt.
+  await rm(path.join(root, reviewedPath));
+  await writeFile(path.join(root, "other.mjs"), reviewed);
   const moved = run(root);
   assert.equal(moved.status, 2, moved.stdout);
-  assert.ok(JSON.parse(moved.stdout).findings.some((finding) => finding.rule === "openai-key"));
+  assert.ok(JSON.parse(moved.stdout).findings.some((finding) => finding.rule === "generic-assignment" && finding.path === "other.mjs"));
+});
+
+test("a credential added to a file with a reviewed dummy is blocked while the dummy stays exempt", async (t) => {
+  const root = await fixture(t);
+  await mkdir(path.join(root, "tests"));
+  await writeFile(path.join(root, reviewedPath), reviewedDummy() + ";\n// " + syntheticToken() + "\n");
+  const added = run(root);
+  assert.equal(added.status, 2, added.stdout);
+  assert.equal(JSON.parse(added.stdout).reviewedFixtureMatches, 1);
+  assert.ok(JSON.parse(added.stdout).findings.some((finding) => finding.rule === "github-token"));
+});
+
+test("the retired exemptions are gone: the old test dummies are findings at their old paths", async (t) => {
+  const root = await fixture(t);
+  await mkdir(path.join(root, "tests"));
+  await mkdir(path.join(root, "tests-ui"));
+  await writeFile(path.join(root, "tests/ci-derivation.test.mjs"), 'const h = "Bearer ' + "transport-only-" + 'secret";\n');
+  await writeFile(path.join(root, "tests-ui/pp-diagnostics-120-runtime-event-ledger.test.jsx"), 'const m = "sk-' + "proj-1234567890" + 'abcdef";\nconst p = { pass' + 'word: "raw-pass' + 'word" };\n');
+  const result = run(root);
+  assert.equal(result.status, 2, result.stdout);
+  const receipt = JSON.parse(result.stdout);
+  assert.equal(receipt.reviewedFixtureMatches, 0);
+  for (const rule of ["bearer-token", "openai-key", "generic-assignment"]) assert.ok(receipt.findings.some((finding) => finding.rule === rule), rule);
 });
 
 test("push metadata byte bound fails closed", async (t) => {
@@ -356,35 +377,6 @@ test("push metadata byte bound fails closed", async (t) => {
   const result = run(root, ["--push"], "A".repeat(64_001));
   assert.equal(result.status, 3, result.stdout);
   assert.ok(JSON.parse(result.stdout).coverageIssues.some((issue) => issue.reason === "push-input-limit"));
-});
-
-test("reviewed CI transport dummy is pinned to exact bytes and cannot exempt added credentials", async (t) => {
-  const root = await fixture(t);
-  const relative = "tests/ci-derivation.test.mjs";
-  const reviewed = await readFile(path.resolve(path.dirname(scanner), "..", relative), "utf8");
-  await mkdir(path.join(root, "tests"));
-  await writeFile(path.join(root, relative), reviewed);
-  const exact = run(root);
-  assert.equal(exact.status, 0, exact.stdout);
-  assert.equal(JSON.parse(exact.stdout).reviewedFixtureMatches, 1);
-  // An added credential in the same file is blocked; the reviewed dummy stays exempt.
-  await writeFile(path.join(root, relative), reviewed + "\n// " + syntheticToken());
-  const added = run(root);
-  assert.equal(added.status, 2, added.stdout);
-  assert.equal(JSON.parse(added.stdout).reviewedFixtureMatches, 1);
-  assert.ok(JSON.parse(added.stdout).findings.some(f => f.rule === "github-token"));
-  // A changed value in the same file is a different fingerprint and must be blocked.
-  await writeFile(path.join(root, relative), reviewed.replaceAll("Bearer " + "transport-only-secret", "Bearer " + "transport-only-secrex"));
-  const changed = run(root);
-  assert.equal(changed.status, 2, changed.stdout);
-  assert.equal(JSON.parse(changed.stdout).reviewedFixtureMatches, 0);
-  assert.ok(JSON.parse(changed.stdout).findings.some(f => f.rule === "bearer-token"));
-  // The same reviewed value in another path is not allowlisted.
-  await rm(path.join(root, relative));
-  await writeFile(path.join(root, "other.mjs"), 'const header = "Bearer ' + 'transport-only-secret";\n');
-  const moved = run(root);
-  assert.equal(moved.status, 2, moved.stdout);
-  assert.ok(JSON.parse(moved.stdout).findings.some(f => f.rule === "bearer-token" && f.path === "other.mjs"));
 });
 
 test("release workflow scans real workspace files before building", async () => {
