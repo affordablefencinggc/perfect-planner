@@ -8,7 +8,7 @@ name: Real OS keychain
 # Windows runs on main, release tags and manual runs.
 on:
   push:
-    paths-ignore: ["**/*.md", "docs/**"]
+    paths-ignore: ["*.md", "docs/**"]
   workflow_dispatch:
 
 permissions:

@@ -5,10 +5,11 @@ on:
   # for review (its final head before merge), on main, and on release tags.
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
-    paths-ignore: ["**/*.md", "docs/**"]
+    paths-ignore: ["*.md", "docs/**"]
   push:
     branches: [main]
-    paths-ignore: ["**/*.md", "docs/**"]
+    tags: ["R-*"]
+    paths-ignore: ["*.md", "docs/**"]
 
 permissions:
   contents: read

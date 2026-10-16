@@ -9,6 +9,7 @@ on:
   # fails when a new Markdown file is not listed in appMapRegistry.js.
   push:
     branches: [main]
+    tags: ["R-*"]
 
 permissions:
   contents: read
