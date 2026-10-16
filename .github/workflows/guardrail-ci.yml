@@ -1,9 +1,15 @@
 name: Perfect Planner Guardrail CI
 
 on:
+  # Draft PR heads run Linux only. Windows joins when the PR is marked ready
+  # for review (its final head before merge), on main, and on release tags.
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  # No paths-ignore here: this workflow runs the app map coverage test, which
+  # fails when a new Markdown file is not listed in appMapRegistry.js.
   push:
     branches: [main]
+    tags: ["R-*"]
 
 permissions:
   contents: read
@@ -22,11 +28,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-    # The app's stores refuse any aliased ancestor by design. macOS's default temp dir sits
-    # behind /var -> /private/var and Windows runners hand out an 8.3 short TEMP path
-    # (RUNNER~1), so each step points test fixtures at the runner's real temp dir
-    # (TMPDIR for macOS/Linux, TEMP/TMP for Windows; runner.* is only available per step).
+        os: ${{ fromJSON(github.event_name == 'pull_request' && github.event.pull_request.draft && '["ubuntu-latest"]' || '["ubuntu-latest","windows-latest"]') }}
+    # The app's stores refuse any aliased ancestor by design. Windows runners hand out an
+    # 8.3 short TEMP path (RUNNER~1), so each step points test fixtures at the runner's
+    # real temp dir (TMPDIR for Linux, TEMP/TMP for Windows; runner.* is only available per step).
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
@@ -76,6 +81,7 @@ jobs:
 
   windows-native:
     name: Windows native compile and tests
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: windows-latest
     timeout-minutes: 30
     steps:

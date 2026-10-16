@@ -194,28 +194,33 @@ export class GitProgramRefusedError extends Error {}
 const PROGRAM_KEYS = "^(filter\\..+\\.(clean|smudge|process)|merge\\..+\\.driver)$";
 const MAX_INCLUDE_FILES = 64;
 
-/** Origin and value from a `git config --show-origin --get-regexp` line: `file:<origin>\t<key> <value>`. */
-function originAndValue(line: string): { origin: string; value: string } | undefined {
-  const tab = line.indexOf("\t");
-  if (!line.startsWith("file:") || tab < 0) return undefined;
-  let origin = line.slice("file:".length, tab);
-  // Git quotes an origin with unusual characters, C style.
-  if (origin.startsWith('"')) {
-    try {
-      origin = JSON.parse(origin) as string;
-    } catch {
-      return undefined;
-    }
+/** Records from `git config -z --show-origin --get-regexp`: `<origin>\0<key>\n<value>\0` per entry. */
+function originRecords(stdout: string): { origin: string; key: string; value?: string }[] {
+  const fields = stdout.split("\0");
+  if (fields.at(-1) === "") fields.pop();
+  const records: { origin: string; key: string; value?: string }[] = [];
+  for (let index = 0; index + 1 < fields.length; index += 2) {
+    const entry = fields[index + 1]!;
+    const newline = entry.indexOf("\n");
+    records.push(newline < 0 ? { origin: fields[index]!, key: entry } : { origin: fields[index]!, key: entry.slice(0, newline), value: entry.slice(newline + 1) });
   }
-  const rest = line.slice(tab + 1);
-  const space = rest.indexOf(" ");
-  return space < 0 ? undefined : { origin, value: rest.slice(space + 1) };
+  // An odd field left over means the output was not what we asked for.
+  if (fields.length % 2) records.push({ origin: "", key: "" });
+  return records;
 }
 
-/** Where git would read an include path given in `origin`: ~ is the home folder, relative is beside the file. */
-function includeTarget(origin: string, value: string, cwd: string): string {
-  if (value.startsWith("~/") || value.startsWith("~\\")) return path.join(os.homedir(), value.slice(2));
-  return path.resolve(path.dirname(path.resolve(cwd, origin)), value);
+/**
+ * Where git reads an include path given in config file `origin`, or a reason it can't be worked out
+ * the way git would: only `~/` (the home folder), absolute paths and paths beside the file are followed.
+ * `~user/`, `%(prefix)/` and includes from anything but a file are refused, never skipped.
+ */
+function includeTarget(origin: string, value: string | undefined, cwd: string): { file: string } | { refused: string } {
+  if (!origin.startsWith("file:")) return { refused: `an include from ${origin || "an unreadable origin"}` };
+  if (value === undefined || value === "") return { refused: "an include with no path" };
+  if (value.startsWith("%(")) return { refused: `an include path git expands itself (${value})` };
+  if (value.startsWith("~/") || (process.platform === "win32" && value.startsWith("~\\"))) return { file: path.join(os.homedir(), value.slice(2)) };
+  if (value.startsWith("~")) return { refused: `an include path in another user's home folder (${value})` };
+  return { file: path.resolve(path.dirname(path.resolve(cwd, origin.slice("file:".length))), value) };
 }
 
 /**
@@ -232,20 +237,22 @@ export async function filterPrograms(cwd: string): Promise<string[]> {
   const queue: string[][] = [[]];
   while (queue.length) {
     const source = queue.shift()!;
-    const programs = await spawnGit(cwd, ["config", ...source, "--includes", "--get-regexp", PROGRAM_KEYS], {});
-    for (const line of programs.stdout.split(/\r?\n/).filter(Boolean)) found.add(line.split(" ")[0]!);
-    const includes = await spawnGit(cwd, ["config", ...source, "--includes", "--show-origin", "--get-regexp", "^includeif\\..*\\.path$"], {});
-    for (const line of includes.stdout.split(/\r?\n/).filter(Boolean)) {
-      const parsed = originAndValue(line);
-      if (!parsed) continue;
-      const target = includeTarget(parsed.origin, parsed.value, cwd);
-      if (seen.has(target)) continue;
-      seen.add(target);
+    const programs = await spawnGit(cwd, ["config", ...source, "--includes", "-z", "--get-regexp", PROGRAM_KEYS], {});
+    for (const entry of programs.stdout.split("\0").filter(Boolean)) found.add(entry.split("\n")[0]!);
+    const includes = await spawnGit(cwd, ["config", ...source, "--includes", "-z", "--show-origin", "--get-regexp", "^includeif\\..*\\.path$"], {});
+    for (const record of originRecords(includes.stdout)) {
+      const target = includeTarget(record.origin, record.value, cwd);
+      if ("refused" in target) {
+        found.add(`includeIf (${target.refused})`);
+        continue;
+      }
+      if (seen.has(target.file)) continue;
+      seen.add(target.file);
       if (seen.size > MAX_INCLUDE_FILES) {
         found.add(`includeIf (more than ${MAX_INCLUDE_FILES} conditional config files)`);
         return [...found];
       }
-      if (existsSync(target)) queue.push(["--file", target]);
+      if (existsSync(target.file)) queue.push(["--file", target.file]);
     }
   }
   return [...found];

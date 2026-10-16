@@ -190,6 +190,38 @@ describe("settings that only apply on some branches or folders (includeIf) are r
   });
 });
 
+describe("include lines that are hard to read are refused, never skipped", () => {
+  it("reads an include from a file with a non-ASCII name, and a path with a newline in it", async () => {
+    const ctx = await approvedRepo();
+    const program = plant(path.join(path.dirname(ctx.root), "odd.sh"), ctx.marker);
+    const dir = path.dirname(ctx.root);
+    const filter = `[filter "evil"]\n\tsmudge = ${program}\n`;
+    // (A) The conditional include sits in outé.gitconfig, whose name git quotes in its output.
+    writeFileSync(path.join(dir, "evil-a.gitconfig"), filter);
+    writeFileSync(path.join(dir, "outé.gitconfig"), `[includeIf "onbranch:never/**"]\n\tpath = evil-a.gitconfig\n`);
+    await git(ctx.root, ["config", "include.path", path.join(dir, "outé.gitconfig").replace(/\\/g, "/")]);
+    expect(await filterPrograms(ctx.root)).toContain("filter.evil.smudge");
+    await git(ctx.root, ["config", "--unset", "include.path"]);
+    // (B) A path with a newline in it (not possible in a Windows file name).
+    if (process.platform !== "win32") {
+      const odd = path.join(dir, "evil\nb.gitconfig");
+      writeFileSync(odd, filter);
+      await git(ctx.root, ["config", "includeIf.onbranch:never/**.path", odd]);
+      expect(await filterPrograms(ctx.root)).toContain("filter.evil.smudge");
+    }
+    expect(existsSync(ctx.marker)).toBe(false);
+  });
+
+  it("refuses %(prefix)/ and ~user/ include paths it can't place the way git would", async () => {
+    for (const value of ["%(prefix)/etc/evil.gitconfig", "~someone/evil.gitconfig"]) {
+      const ctx = await approvedRepo();
+      await git(ctx.root, ["config", "includeIf.onbranch:never/**.path", value]);
+      expect(await filterPrograms(ctx.root)).toEqual([expect.stringContaining(value)]);
+      await expect(runGit(ctx.root, ["checkout", "-q", "-b", "other"])).rejects.toBeInstanceOf(GitProgramRefusedError);
+    }
+  });
+});
+
 describe("the app's own git settings cannot be used to run a program", () => {
   it("points hooks at a path that can never hold one, so a hook planted where the old empty folder was never runs", async () => {
     const ctx = await approvedRepo();
@@ -199,7 +231,7 @@ describe("the app's own git settings cannot be used to run a program", () => {
     // The old layout: an empty no-hooks folder beside the app's attributes file. Plant every hook there.
     const attributes = await git(ctx.root, ["config", "--get", "core.attributesFile"]);
     for (const hook of HOOKS) plant(path.join(path.dirname(attributes), "no-hooks", hook), ctx.marker);
-    cleanups.push(() => rmSync(path.join(path.dirname(attributes), "no-hooks"), { recursive: true, force: true }));
+    cleanups.push(() => rmSync(path.join(path.dirname(attributes), "no-hooks"), { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }));
     const { merged } = await wholeLoop(ctx);
     expect(merged.ok).toBe(true);
     expect(existsSync(ctx.marker)).toBe(false);

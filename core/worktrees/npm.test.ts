@@ -37,7 +37,7 @@ describe("npm for worktree installs", () => {
     await commitAll(repo.root, "planted npm");
     const link = `${repo.root}-link`;
     symlinkSync(repo.root, link, isWindows ? "junction" : "dir");
-    cleanups.push(() => rmSync(link, { recursive: true, force: true }));
+    cleanups.push(() => rmSync(link, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }));
     process.env.PATH = [link, ".", "", repo.root, originalPath].join(path.delimiter);
 
     expect(path.resolve(npmCliPath(repo.root, [], process.env)).startsWith(repo.root)).toBe(false);
