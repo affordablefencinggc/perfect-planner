@@ -5,28 +5,36 @@ export const NO_CWD_SEARCH_ENV = { NoDefaultCurrentDirectoryInExePath: "1" };
 export function isLocalWindowsPath(file) {
     return /^[A-Za-z]:[\\/]/.test(file);
 }
-const isNetworkPath = (dir, platform) => platform === "win32" && !isLocalWindowsPath(dir);
-export function findExecutable(name, env, cwd, platform = process.platform, protect = []) {
+const isProgram = (file, windows) => {
+    if (!statSync(file).isFile())
+        return false;
+    if (!windows)
+        accessSync(file, constants.X_OK);
+    return true;
+};
+export function findExecutable(name, env, cwd, platform = process.platform, protect = [], io = {}) {
     const windows = platform === "win32";
+    const p = windows ? path.win32 : path.posix;
+    const real = (file) => realPath(file, io.realpath);
+    const program = io.isProgram ?? isProgram;
+    const local = (file) => !windows || isLocalWindowsPath(file);
     const pathValue = Object.entries(env).find(([key]) => (windows ? key.toUpperCase() === "PATH" : key === "PATH"))?.[1] ?? "";
-    const roots = protectedRoots(cwd, protect);
+    const roots = protectedRoots(cwd, protect, p, real);
     const extensions = windows ? [".exe"] : [""];
     for (const entry of pathValue.split(windows ? ";" : ":")) {
         const dir = entry.trim().replace(/^"(.*)"$/, "$1");
-        if (!dir || !path.isAbsolute(dir) || isNetworkPath(dir, platform))
+        if (!dir || !p.isAbsolute(dir) || !local(dir))
             continue;
-        const realDir = realPath(dir);
-        if (!realDir || isNetworkPath(realDir, platform) || insideAny(roots, path.resolve(dir), realDir))
+        const realDir = real(dir);
+        if (!realDir || !local(realDir) || insideAny(p, roots, p.resolve(dir), realDir))
             continue;
         for (const extension of extensions) {
-            const candidate = path.join(dir, `${name}${extension}`);
+            const candidate = p.join(dir, `${name}${extension}`);
             try {
-                if (!statSync(candidate).isFile())
+                if (!program(candidate, windows))
                     continue;
-                if (!windows)
-                    accessSync(candidate, constants.X_OK);
-                const realFile = realPath(candidate);
-                if (!realFile || insideAny(roots, realFile))
+                const realFile = real(candidate);
+                if (!realFile || !local(realFile) || insideAny(p, roots, realFile))
                     continue;
                 return candidate;
             }
@@ -36,33 +44,33 @@ export function findExecutable(name, env, cwd, platform = process.platform, prot
     }
     return null;
 }
-function realPath(p) {
+function realPath(file, realpath = realpathSync.native) {
     try {
-        return realpathSync.native(p);
+        return realpath(file);
     }
     catch {
         return undefined;
     }
 }
-function protectedRoots(cwd, protect = []) {
+function protectedRoots(cwd, protect = [], p = path, realOf = (file) => realPath(file)) {
     const roots = new Set();
     for (const root of [cwd, ...protect]) {
         if (typeof root !== "string" || root === "")
             continue;
-        const here = path.resolve(root);
+        const here = p.resolve(root);
         roots.add(here);
-        const real = realPath(here);
+        const real = realOf(here);
         if (real)
             roots.add(real);
     }
     return [...roots];
 }
-function insideAny(roots, ...candidates) {
-    return roots.some((root) => candidates.some((candidate) => isWithin(root, candidate)));
+function insideAny(p, roots, ...candidates) {
+    return roots.some((root) => candidates.some((candidate) => isWithin(root, candidate, p)));
 }
-export function isWithin(root, candidate) {
-    const relative = path.relative(path.resolve(root), path.resolve(candidate));
-    return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+export function isWithin(root, candidate, p = path) {
+    const relative = p.relative(p.resolve(root), p.resolve(candidate));
+    return relative === "" || (!relative.startsWith("..") && !p.isAbsolute(relative));
 }
 export class ExecutableNotFoundError extends Error {
 }
@@ -76,7 +84,7 @@ export function gitExecutable(cwd = process.cwd(), protect = []) {
         cached = { pathValue, file };
     }
     const roots = protectedRoots(cwd, protect);
-    if (insideAny(roots, path.resolve(cached.file), realPath(cached.file) ?? path.resolve(cached.file))) {
+    if (insideAny(path, roots, path.resolve(cached.file), realPath(cached.file) ?? path.resolve(cached.file))) {
         const other = findExecutable("git", process.env, cwd, process.platform, protect);
         if (other)
             return other;
