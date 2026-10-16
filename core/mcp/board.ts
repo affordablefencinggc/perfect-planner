@@ -78,7 +78,8 @@ export function foldBoard(entries: readonly LedgerEntry[]): Map<string, TaskView
           if (task.status === "blocked") task.status = task.owner ? "claimed" : "open";
         } else if (entry.data?.released === true) {
           if (!holder && !signed(entry)) continue;
-          task.status = "open";
+          // A worker letting go of a finished task frees it but leaves it done.
+          if (task.status !== "done") task.status = "open";
           task.owner = null;
         } else if (!agentOrSigned(entry)) {
           continue;
@@ -87,7 +88,7 @@ export function foldBoard(entries: readonly LedgerEntry[]): Map<string, TaskView
         break;
       case "task.blocked":
         if (entry.data?.pauseAll === true ? !signed(entry) : !holder && !signed(entry)) continue;
-        task.status = "blocked";
+        if (task.status !== "done") task.status = "blocked";
         if (entry.data?.released === true) task.owner = null;
         break;
       case "task.proof":

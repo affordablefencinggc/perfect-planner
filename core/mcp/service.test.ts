@@ -141,6 +141,16 @@ describe("worker tools", () => {
     await expectCode(service.call(a, "list_tasks", {}), "UNAUTHORIZED");
     expect(service.board().get("T-1")).toMatchObject({ status: "blocked", owner: null });
   });
+
+  it("keeps a finished task done when its worker releases it", async () => {
+    const { service, ledger, w1 } = setup();
+    const a = await hello(service, w1, "w1");
+    await service.call(a, "claim_task", { task: "T-1" });
+    ledger.append({ actor: { kind: "system", id: "gate" }, type: "test.passed", subject: "T-1", summary: "Passed", data: { test: "npm test -- T-1" } });
+    ledger.append({ actor: owner, type: "task.done", subject: "T-1", summary: "Done" });
+    expect(await service.call(a, "release_task", { task: "T-1", reason: "finished" })).toMatchObject({ status: "done" });
+    expect(service.board().get("T-1")).toMatchObject({ status: "done", owner: null });
+  });
 });
 
 describe("the one-chat relay through the tools", () => {
