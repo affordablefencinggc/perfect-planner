@@ -178,7 +178,9 @@ export class AgentService {
     if (view.owner === agent.id) return { task: attemptLabel(view), status: view.status, entry: view.lastEntry };
     if (view.status === "done") throw new ToolError("CONFLICT", `${task} is already done.`);
     if (view.owner) throw new ToolError("CONFLICT", `${task} is held by ${view.owner}.`);
-    const entry = this.write({ actor: this.actor(agent), type: "task.claimed", subject: task, summary: `Claimed ${attemptLabel(view)} by ${agent.name}`, refs: view.clauses });
+    // A retry is claimed as its attempt ("T-14.a2"): the gate's claim rule judges that attempt, which
+    // keeps the approved test, not the reopened attempt it replaced (that one refuses every claim).
+    const entry = this.write({ actor: this.actor(agent), type: "task.claimed", subject: attemptLabel(view), summary: `Claimed ${attemptLabel(view)} by ${agent.name}`, refs: view.clauses });
     return { task: attemptLabel(view), status: "claimed", entry: entry.n };
   }
 
