@@ -120,9 +120,9 @@ describe("worker tools", () => {
   it("claims a reopened task as its next attempt, past the test gate's claim rule", async () => {
     const { service, ledger, w1 } = setup();
     ledger.addRule(gateRule());
-    // Mirror what the gate records: the owner approves the test, it fails first, then a diff rejection reopens T-1.
-    ledger.append({ actor: owner, type: "test.approved", subject: "T-1", summary: "Approved again", data: { test: "npm test -- T-1", definition: "L-000002", pin: "p-1" } });
-    ledger.append({ actor: { kind: "system", id: "gate" }, type: "test.failed", subject: "T-1", summary: "Fails first", evidence: ["phase:baseline", "definition:L-000002"], data: { test: "npm test -- T-1", definition: "L-000002", phase: "baseline", pin: "p-1" } });
+    // Mirror what the gate records: the person approves the pinned test, it fails first, then a diff rejection reopens T-1.
+    ledger.append({ actor: owner, type: "test.approved", subject: "T-1", summary: "Approved again", data: { test: "npm test -- T-1", definition: "L-000002", pin: "pin-1", pins: {} } });
+    ledger.append({ actor: { kind: "system", id: "gate" }, type: "test.failed", subject: "T-1", summary: "Fails first", evidence: ["phase:baseline", "definition:L-000002"], data: { test: "npm test -- T-1", definition: "L-000002", phase: "baseline", pin: "pin-1" } });
     const a = await hello(service, w1, "w1");
     expect(await service.call(a, "claim_task", { task: "T-1" })).toMatchObject({ task: "T-1", status: "claimed" });
     ledger.append({ actor: { kind: "system", id: "gate" }, type: "task.reopened", subject: "T-1", summary: "Back to the worker as T-1.a2", reason: "Jev rejected the diff", data: { attempt: "T-1.a2" } });

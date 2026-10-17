@@ -457,8 +457,9 @@ export function folderSource(): FeatureSource {
         try { return insideRoot(root, abs) && fs.statSync(abs).isDirectory(); } catch { return false; }
       });
       if (present.length === 0) return null;
-      const testFiles = [...walk(root, "tests"), ...walk(root, "tests-ui"), ...walk(root, "__tests__")];
       const allSrc = walk(root, "src");
+      // Co-located tests count too: src/**/__tests__/Foo.test.tsx, src/lib/foo.test.ts.
+      const testFiles = [...walk(root, "tests"), ...walk(root, "tests-ui"), ...walk(root, "__tests__"), ...allSrc.filter(isTestPath)];
       const byDir = new Map<string, string[]>();
       for (const f of allSrc) {
         const d = path.posix.dirname(f);
@@ -471,7 +472,8 @@ export function folderSource(): FeatureSource {
         out.set(id, { ...f, id });
       };
       const testsFor = (stems: Set<string>): string[] =>
-        testFiles.filter((t) => stems.has(slugify(stemOf(t))));
+        // Foo.pricing.test.tsx covers Foo as well as Foo.test.tsx does.
+        testFiles.filter((t) => stems.has(slugify(stemOf(t))) || stems.has(slugify(stemOf(t).split(".")[0])));
       const isSource = (f: string): boolean => SOURCE_EXT.test(f) || /\.(vue|svelte)$/.test(f);
       for (const r of present) {
         if (r === "src/features") {

@@ -1,4 +1,5 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import type { PushProtectionResult } from "./pushProtection";
 import { checkIgnoreList, scanText } from "./secrets";
@@ -115,12 +116,37 @@ export function prePushShim(hookScriptPath: string, env: NodeJS.ProcessEnv = pro
   return `#!/bin/sh\n${SHIM_MARK}\nexec ${shQuote(node)} ${shQuote(hookScriptPath)} "$@"\n`;
 }
 
+/** The value of core.hooksPath in one config file (a path, ~ expanded), or undefined. */
+async function hooksPathIn(run: CommandRunner, cwd: string, where: string[]): Promise<string | undefined> {
+  const result = await run("git", ["config", ...where, "--includes", "--type=path", "--get", "core.hooksPath"], { cwd });
+  const value = result.code === 0 ? result.stdout.trim() : "";
+  return value || undefined;
+}
+
+/**
+ * The folder git will run this repo's hooks from. Read from the config files
+ * themselves, in git's order (worktree, repo, global, system), not from
+ * `rev-parse --git-path hooks`: the host runs git with core.hooksPath fixed to
+ * an empty folder on the command line (core/worktrees runGit), so that would
+ * name the app's folder, not the repo's. A relative core.hooksPath is relative
+ * to the worktree top, as when git runs a hook; none means <common git dir>/hooks.
+ */
 async function hooksDir(run: CommandRunner, cwd: string): Promise<string> {
-  // --git-path honours core.hooksPath, so this lands where git will look,
-  // including the per-worktree hooks folder core/worktrees sets up.
-  const result = await run("git", ["rev-parse", "--git-path", "hooks"], { cwd });
-  if (result.code !== 0) throw new Error(`Not a git repository: ${result.stderr.trim()}`);
-  return resolve(cwd, result.stdout.trim());
+  const dirs = await run("git", ["rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir"], { cwd });
+  const [gitDir, commonDir] = dirs.code === 0 ? dirs.stdout.split(/\r?\n/).map((line) => line.trim()) : [];
+  if (!gitDir || !commonDir) throw new Error(`Not a git repository: ${dirs.stderr.trim()}`);
+  const top = await run("git", ["rev-parse", "--show-toplevel"], { cwd });
+  const base = top.code === 0 && top.stdout.trim() ? top.stdout.trim() : gitDir;
+  const globals = process.env.GIT_CONFIG_GLOBAL
+    ? [process.env.GIT_CONFIG_GLOBAL]
+    : [join(homedir(), ".gitconfig"), join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "git", "config")];
+  const sources: string[][] = [["--worktree"], ["--local"], ...globals.filter((file) => existsSync(file)).map((file) => ["--file", file])];
+  if (!process.env.GIT_CONFIG_NOSYSTEM) sources.push(process.env.GIT_CONFIG_SYSTEM ? ["--file", process.env.GIT_CONFIG_SYSTEM] : ["--system"]);
+  for (const where of sources) {
+    const value = await hooksPathIn(run, cwd, where);
+    if (value) return resolve(base, value);
+  }
+  return join(commonDir, "hooks");
 }
 
 /** Whether the pre-push scan is installed as this repository's pre-push hook (layer 3). */

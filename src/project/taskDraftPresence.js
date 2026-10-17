@@ -2,6 +2,7 @@
 // synchronous workflow receipts can say whether the Ledger holds any tasks.
 // It is only ever written after a successful read of the real draft store.
 import { WORK_RECORDS_CHANGED_EVENT } from "./projectWorkRecords.js";
+import { draftsDigest } from "./proofRecords.js";
 
 const PREFIX = "perfect-planner.task-draft-presence.v1:";
 export const taskDraftPresenceKey = (projectId) => `${PREFIX}${projectId}`;
@@ -17,6 +18,8 @@ export function summarizeTaskDrafts(ledger) {
     revision: Number.isSafeInteger(ledger?.revision) ? ledger.revision : 0,
     active: tasks.filter((task) => !task.archived).length,
     total: tasks.length,
+    // Lets the plan sign-off receipt notice task edits made after a sign-off.
+    draftsDigest: draftsDigest(ledger),
   };
 }
 
@@ -34,7 +37,7 @@ export function recordTaskDraftPresence(projectId, ledger, { storage = defaultSt
   if (!projectId || !storage) return false;
   const summary = summarizeTaskDrafts(ledger);
   const previous = readTaskDraftPresence(projectId, storage);
-  if (previous && ["censusDigest", "revision", "active", "total"].every((key) => previous[key] === summary[key])) return false;
+  if (previous && ["censusDigest", "revision", "active", "total", "draftsDigest"].every((key) => previous[key] === summary[key])) return false;
   try { storage.setItem(taskDraftPresenceKey(projectId), JSON.stringify({ ...summary, checkedAt: now() })); } catch { return false; }
   try { globalThis.dispatchEvent?.(new CustomEvent(WORK_RECORDS_CHANGED_EVENT, { detail: { projectId, section: null } })); } catch { /* non-browser */ }
   return true;

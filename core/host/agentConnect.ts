@@ -139,7 +139,7 @@ export function claudeLaunch(
   protect: readonly string[],
   platform: NodeJS.Platform = process.platform,
 ): Launch | null {
-  const program = findExecutable("claude", env, cwd, platform, protect, [".exe", ".cmd"]);
+  const program = findExecutable("claude", env, cwd, platform, protect, { windowsExtensions: [".exe", ".cmd"] });
   if (!program) return null;
   if (platform !== "win32") return nodeScript(program) ? { command: process.execPath, args: [program, ...args] } : { command: program, args };
   if (!/\.cmd$/i.test(program)) return { command: program, args };

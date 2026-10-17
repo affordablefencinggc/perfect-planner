@@ -119,4 +119,12 @@ function main() {
   process.exit(1);
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main();
+// Run only as the hook itself. A bundle that includes this module (the core host, connect.mjs)
+// shares import.meta.url with its own entry, so the address alone would start the scan there too.
+if (
+  process.argv[1] &&
+  path.basename(process.argv[1]) === "secret-scan.mjs" &&
+  import.meta.url === pathToFileURL(process.argv[1]).href
+) {
+  main();
+}

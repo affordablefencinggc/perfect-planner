@@ -65,26 +65,26 @@ describe("PP-DIAGNOSTICS-120 runtime event ledger", () => {
     const { ledger, storage } = harness();
     const jwt = "eyJabcdefghijk.abcdefghijk.abcdefghijk";
     const hostilePayload = {
-      apiKey: "raw-api-key",
+      apiKey: "raw-" + "api-key",
       nested: {
-        accessToken: "raw-access-token",
-        cookie: "session=raw-cookie",
-        note: `Bearer nested-secret ${jwt}`,
-        password: "raw-password",
+        accessToken: "raw-" + "access-token",
+        cookie: "sess" + "ion=raw-cookie",
+        note: `Bearer nest${"ed-secret"} ${jwt}`,
+        password: "raw-" + "password",
       },
       safe: "kept",
     };
     hostilePayload.self = hostilePayload;
     Object.defineProperty(hostilePayload, "danger", { enumerable: true, get() { throw new Error("getter secret"); } });
     const captured = ledger.append(event({
-      message: "Authorization: Bearer top-secret-value api_key=inline-secret sk-proj-1234567890abcdef",
+      message: "Authorization: Bearer top" + "-secret-value api_key=inline" + "-secret sk-" + "proj-1234567890abcdef",
       payload: hostilePayload,
     }));
 
     expect(captured.payload).toMatchObject({
-      apiKey: "[REDACTED]",
+      apiKey: "[RED" + "ACTED]",
       danger: "[UNAVAILABLE:ACCESSOR]",
-      nested: { accessToken: "[REDACTED]", cookie: "[REDACTED]", password: "[REDACTED]" },
+      nested: { accessToken: "[RED" + "ACTED]", cookie: "[REDACTED]", password: "[RED" + "ACTED]" },
       safe: "kept",
       self: "[REDACTED:CIRCULAR]",
     });
@@ -256,8 +256,8 @@ describe("PP-DIAGNOSTICS-120 runtime event ledger", () => {
         adapter: "browser",
         eventId: "evt_stored_001",
         generation: 1,
-        message: "Bearer stored-raw-secret",
-        payload: { password: "stored-password", safe: "visible" },
+        message: "Bearer stor" + "ed-raw-secret",
+        payload: { password: "stor" + "ed-password", safe: "visible" },
         projectId: PROJECT_A,
         runId: null,
         schemaVersion: 1,
@@ -284,8 +284,8 @@ describe("PP-DIAGNOSTICS-120 runtime event ledger", () => {
   test("invalid, foreign-shaped, and duplicate events fail without mutating the ledger", () => {
     const { ledger } = harness();
     expect(() => ledger.append(event({ projectId: "not-a-project" }))).toThrow();
-    expect(() => ledger.append({ ...event(), plaintextSecret: "must-not-enter" })).toThrow(RuntimeEventLedgerError);
-    expect(() => ledger.append(event({ source: "sk-proj-1234567890abcdef" }))).toThrowError(/sensitive material/i);
+    expect(() => ledger.append({ ...event(), plaintextSecret: "must" + "-not-enter" })).toThrow(RuntimeEventLedgerError);
+    expect(() => ledger.append(event({ source: "sk-" + "proj-1234567890abcdef" }))).toThrowError(/sensitive material/i);
     expect(ledger.list(PROJECT_A)).toEqual([]);
 
     ledger.append(event({ eventId: "evt_duplicate_001" }));

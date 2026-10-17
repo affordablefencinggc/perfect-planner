@@ -28,6 +28,15 @@ when any differ. Every proof entry carries the approved pin, and only passes wit
 that pin count towards finishing. To change the test, define it again and get it
 approved again.
 
+The test command runs with a PATH that cannot lead into the project (`testEnv`): only
+absolute, local, resolvable folders outside the run folder, the repo's checkout, every
+worktree git lists and the roots the host passes as `protect`, checked as written and as
+real paths, with the app's own Node folder first (`PP_NODE_BINARY`, else this Node). The
+program its first word starts (`resolveCommand`, after any `NAME=value` and `exec`/`env`)
+is refused when it sits inside one of those folders, as written or through a link, or
+when shell syntax hides which program it is. Programs named later in the command are only
+looked up through that PATH; an explicit path later in the command is not checked.
+
 `task.done` is written by the gate only (actor `system:gate`, with `data.approvedBy`
 naming the person who merged); `gateRule()` refuses it from anyone else.
 
@@ -78,7 +87,11 @@ branch (`git merge --no-ff`), runs the test there, and only on a pass moves the
 integration branch: `git merge --ff-only` in its checkout if it is checked out
 (refused when that checkout has uncommitted changes or has moved), else
 `git update-ref` with the expected old value. Conflicts and failures leave
-the integration branch untouched. The temporary worktree is always removed.
+the integration branch untouched. Before the integration branch moves, the gate checks that the
+candidate's commit is still HEAD, has exactly the integration tip and the approved commit as parents,
+and holds the same tree as `git merge-tree --write-tree <tip> <approved>` (a pure in-memory merge that
+runs no hooks or filters; needs Git 2.38 or later), so nothing that changed the merge while git ran
+can land. The temporary worktree is always removed.
 It merges only when the branch tip has an approving diff verdict and a merge
 approval for that exact tip in the person's own signed entry (`approveMerge`,
 `review.verdict` with `scope:merge`). Passing a person as `actor` is not approval:

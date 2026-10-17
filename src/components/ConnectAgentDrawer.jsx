@@ -8,16 +8,19 @@ const FOCUSABLE = 'button:not([disabled]), [href], input:not([disabled]), select
 // Connect agent: the live check-in panel (CoreAgentConnect), whose lines come from the running host,
 // so an installed copy never shows a placeholder path. The old read-only setup snippets were removed
 // because they needed a build-time path and showed <path-to-perfect-planner> without one.
-export function ConnectAgentDrawer({ open, onClose, onWorkspace }) {
+export function ConnectAgentDrawer({ open, onClose, onWorkspace, hasProject = true }) {
   const panelRef = useRef(null);
   const returnRef = useRef(null);
+  // Latest onClose without re-running the focus effect: an inline onClose changes every parent render.
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
 
   useEffect(() => {
     if (!open) return undefined;
     returnRef.current = document.activeElement;
     panelRef.current?.querySelector(FOCUSABLE)?.focus();
     const onKeyDown = (event) => {
-      if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); onClose(); return; }
+      if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); onCloseRef.current(); return; }
       if (event.key !== "Tab" || !panelRef.current) return;
       const items = [...panelRef.current.querySelectorAll(FOCUSABLE)];
       if (!items.length) return;
@@ -28,7 +31,7 @@ export function ConnectAgentDrawer({ open, onClose, onWorkspace }) {
     };
     document.addEventListener("keydown", onKeyDown, true);
     return () => { document.removeEventListener("keydown", onKeyDown, true); returnRef.current?.focus?.(); };
-  }, [open, onClose]);
+  }, [open]);
 
   if (!open) return null;
 
@@ -51,7 +54,9 @@ export function ConnectAgentDrawer({ open, onClose, onWorkspace }) {
           <section className="connect-agent-section" aria-label="Hand your plan to the agent">
             <h3>Hand your plan to the agent</h3>
             <p>Once your plan is approved, open Build and use <strong>Copy brief</strong> to paste the current task into your agent's chat.</p>
-            {onWorkspace && <button type="button" className="connect-agent-link" onClick={() => { onClose(); onWorkspace("build"); }}>Open Build <ArrowRightIcon /></button>}
+            {onWorkspace && (hasProject
+              ? <button type="button" className="connect-agent-link" onClick={() => { onClose(); onWorkspace("build"); }}>Open Build <ArrowRightIcon /></button>
+              : <button type="button" className="connect-agent-link" onClick={() => { onClose(); onWorkspace("structure"); }}>Choose an app folder <ArrowRightIcon /></button>)}
           </section>
         </div>
       </aside>

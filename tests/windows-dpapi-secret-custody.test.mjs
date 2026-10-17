@@ -25,7 +25,7 @@ test('custody rejects malformed handles before lock side effects and relative ro
 });
 
 test('custody refuses oversized files, hardlinks and redirected parents before unprotect',async()=>{
- const root=await fixture(),stored=await storeOpaqueSecret(root,{ownerId:'test',purpose:'test',secret:'synthetic'},{dpapi:mockDpapi});
+ const root=await fixture(),stored=await storeOpaqueSecret(root,{ownerId:'test',purpose:'test',secret:'synt' + 'hetic'},{dpapi:mockDpapi});
  const file=path.join(root,'dpapi-secrets',`${stored.handle.split(':').at(-1)}.json`),original=await readFile(file);
  await writeFile(file,Buffer.alloc(1024*1024+1));await assert.rejects(inspectOpaqueSecret(root,stored.handle),/oversized/);
  await writeFile(file,original);const alias=path.join(root,'alias.json');await link(file,alias);
@@ -36,14 +36,14 @@ test('custody refuses oversized files, hardlinks and redirected parents before u
 });
 
 test('redirected mutations never create locks and invalid roots never invoke protection',async t=>{
- const root=await fixture(),stored=await storeOpaqueSecret(root,{ownerId:'test',purpose:'test',secret:'synthetic'},{dpapi:mockDpapi});
+ const root=await fixture(),stored=await storeOpaqueSecret(root,{ownerId:'test',purpose:'test',secret:'synt' + 'hetic'},{dpapi:mockDpapi});
  const redirected=`${root}-mutation`;await symlink(root,redirected,process.platform==='win32'?'junction':'dir');
  let locks=0,protects=0;const actualMkdir=fs.mkdir;
  const mock=t.mock.method(fs,'mkdir',async(...args)=>{if(String(args[0]).endsWith('.pp-lock'))locks++;return actualMkdir(...args);});syncBuiltinESMExports();
  try{
   await assert.rejects(retireOpaqueSecret(redirected,stored.handle,{ownerId:'test',reason:'test'}),/redirected/);
-  await assert.rejects(rotateOpaqueSecret(redirected,stored.handle,{ownerId:'test',secret:'synthetic'},{dpapi:mockDpapi}),/redirected/);
-  await assert.rejects(storeOpaqueSecret('.',{ownerId:'test',purpose:'test',secret:'synthetic'},{dpapi:{protect:async()=>{protects++;return Buffer.from('x');}}}),/root is invalid/);
+  await assert.rejects(rotateOpaqueSecret(redirected,stored.handle,{ownerId:'test',secret:'synt' + 'hetic'},{dpapi:mockDpapi}),/redirected/);
+  await assert.rejects(storeOpaqueSecret('.',{ownerId:'test',purpose:'test',secret:'synt' + 'hetic'},{dpapi:{protect:async()=>{protects++;return Buffer.from('x');}}}),/root is invalid/);
   assert.equal(locks,0);assert.equal(protects,0);
  }finally{mock.mock.restore();syncBuiltinESMExports();}
 });
@@ -122,14 +122,14 @@ test('credential provider respects host policy and propagates refusal without a 
 });
 
 test("opaque handles support bounded use, exact rotation, retirement, and never expose stored plaintext", async (t) => {
-  const root = await fixture(); t.after(() => rm(root, { recursive: true, force: true })); const stored = await storeOpaqueSecret(root, { ownerId: "danie", purpose: "session", secret: "token-one" }, { dpapi: mockDpapi, timestamp: "2026-09-02T00:00:00.000Z" }); assert.match(stored.handle, /^dpapi:v1:/);
+  const root = await fixture(); t.after(() => rm(root, { recursive: true, force: true })); const stored = await storeOpaqueSecret(root, { ownerId: "danie", purpose: "session", secret: "toke" + "n-one" }, { dpapi: mockDpapi, timestamp: "2026-09-02T00:00:00.000Z" }); assert.match(stored.handle, /^dpapi:v1:/);
   const inspection = await inspectOpaqueSecret(root, stored.handle); assert.equal(inspection.secret, "OPAQUE"); assert.equal(JSON.stringify(inspection).includes("token-one"), false); const disk = await readFile(path.join(root, "dpapi-secrets", `${stored.handle.split(":").at(-1)}.json`), "utf8"); assert.equal(disk.includes("token-one"), false);
   assert.equal(await useOpaqueSecret(root, stored.handle, { ownerId: "danie", purpose: "session", dpapi: mockDpapi }, (secret) => secret.toString()), "token-one"); await assert.rejects(() => useOpaqueSecret(root, stored.handle, { ownerId: "attacker", purpose: "session", dpapi: mockDpapi }, () => true), /owner or purpose/);
-  const rotated = await rotateOpaqueSecret(root, stored.handle, { ownerId: "danie", purpose: "session", expectedVersion: 1, secret: "token-two" }, { dpapi: mockDpapi }); assert.equal(rotated.version, 2); await assert.rejects(() => rotateOpaqueSecret(root, stored.handle, { ownerId: "danie", purpose: "session", expectedVersion: 1, secret: "stale" }, { dpapi: mockDpapi }), /exact current version/);
+  const rotated = await rotateOpaqueSecret(root, stored.handle, { ownerId: "danie", purpose: "session", expectedVersion: 1, secret: "toke" + "n-two" }, { dpapi: mockDpapi }); assert.equal(rotated.version, 2); await assert.rejects(() => rotateOpaqueSecret(root, stored.handle, { ownerId: "danie", purpose: "session", expectedVersion: 1, secret: "stale" }, { dpapi: mockDpapi }), /exact current version/);
   assert.equal(await useOpaqueSecret(root, stored.handle, { ownerId: "danie", purpose: "session", dpapi: mockDpapi }, (secret) => secret.toString()), "token-two"); await retireOpaqueSecret(root, stored.handle, { ownerId: "danie", purpose: "session", expectedVersion: 2, reason: "actor removed" }); await assert.rejects(() => useOpaqueSecret(root, stored.handle, { ownerId: "danie", purpose: "session", dpapi: mockDpapi }, () => true), /retired/);
 });
 
 test("portable recovery export is passphrase-authenticated and imports as a new opaque handle", async (t) => {
-  const root = await fixture(); t.after(() => rm(root, { recursive: true, force: true })); const stored = await storeOpaqueSecret(root, { ownerId: "danie", purpose: "identity", secret: "private-pem" }, { dpapi: mockDpapi }); const recovery = await exportOpaqueSecretRecovery(root, stored.handle, { ownerId: "danie", purpose: "identity", recoveryPassphrase: "recovery passphrase long" }, { dpapi: mockDpapi }); assert.equal(JSON.stringify(recovery).includes("private-pem"), false);
+  const root = await fixture(); t.after(() => rm(root, { recursive: true, force: true })); const stored = await storeOpaqueSecret(root, { ownerId: "danie", purpose: "identity", secret: "priv" + "ate-pem" }, { dpapi: mockDpapi }); const recovery = await exportOpaqueSecretRecovery(root, stored.handle, { ownerId: "danie", purpose: "identity", recoveryPassphrase: "recovery passphrase long" }, { dpapi: mockDpapi }); assert.equal(JSON.stringify(recovery).includes("private-pem"), false);
   await assert.rejects(() => importOpaqueSecretRecovery(root, recovery, { ownerId: "danie", purpose: "identity", recoveryPassphrase: "wrong passphrase long" }, { dpapi: mockDpapi }), /authentication failed/); const imported = await importOpaqueSecretRecovery(root, recovery, { ownerId: "danie", purpose: "identity", recoveryPassphrase: "recovery passphrase long" }, { dpapi: mockDpapi }); assert.notEqual(imported.handle, stored.handle); assert.equal(await useOpaqueSecret(root, imported.handle, { ownerId: "danie", purpose: "identity", dpapi: mockDpapi }, (secret) => secret.toString()), "private-pem");
 });

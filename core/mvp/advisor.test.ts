@@ -78,6 +78,19 @@ describe("MockJev, existing project", () => {
     expect(p.summary).toBe("3 of 7 features in the MVP, 2 already done");
     expect(validateProposal(p, features)).toEqual([]);
   });
+
+  it("ignores a journey-named feature that touches nothing and follows the goal", async () => {
+    // Found on Looplet: a notification "journey" folder became a one-feature MVP.
+    const loose: ScannedFeature[] = [
+      scanned(f("journey", "Journey"), "partial"),
+      scanned(f("quote-editor", "Quote editor"), "done"),
+      scanned(f("invoice-list", "Invoice list"), "partial"),
+      scanned(f("themes", "Themes"), "done"),
+    ];
+    const p = await new MockJev().proposeMvp({ mode: "existing", goal: "Send a quote, then an invoice", features: loose });
+    expect(p.journey.features.sort()).toEqual(["invoice-list", "quote-editor"]);
+    expect(stageMap(p)).toMatchObject({ "quote-editor": "mvp", "invoice-list": "mvp", journey: "beta" });
+  });
 });
 
 describe("explicit journey", () => {

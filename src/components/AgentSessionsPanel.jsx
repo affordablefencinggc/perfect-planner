@@ -56,7 +56,9 @@ export function AgentSessionsPanel({project,invoke:providedInvoke,recordFailure=
   async function run(stop=false){
     if(!available||inFlight.current)return;
     const epoch=current.current.epoch;inFlight.current=true;
-    setSnapshot({key,epoch,busy:true});
+    // A new check or stop supersedes an earlier pairing failure; keep a live pairing.
+    setPairing(previous=>previous?.error||previous?.cancelled?null:previous);
+    setSnapshot({key,epoch,busy:true,stopping:stop});
     try{
       const invoke=providedInvoke??(await import('@tauri-apps/api/core')).invoke;
       const result=await invoke(stop?'stop_project_agent_broker':'inspect_agent_sessions',{request});
@@ -87,14 +89,14 @@ export function AgentSessionsPanel({project,invoke:providedInvoke,recordFailure=
     }catch(error){
       let captured=null;
       try{captured=recordFailure(error,request,stop);}catch{}
-      if(current.current.key===key&&current.current.epoch===epoch){onObservation?.(null);setSnapshot({key,epoch,busy:false,error:true,captureFailed:!captured});}
+      if(current.current.key===key&&current.current.epoch===epoch){onObservation?.(null);setSnapshot({key,epoch,busy:false,error:true,stopAttempted:stop,captureFailed:!captured});}
     }
     finally{inFlight.current=false;if(current.current.epoch!==epoch)setSnapshot({...current.current,busy:false});}
   }
   const actionStyle={fontSize:14,minHeight:44,lineHeight:1.4};
   return <section className="runtime-capability-card" aria-label="Agent session observations">
     <strong>Agent session observations</strong>
-    <p role="status">{!available?setupReason:state?.busy?'Checking the project broker…':state?.error?'Session inspection failed. No connection was verified. Your installed build may not include the broker package yet.':state?.stopped?'This project broker was stopped. Its sessions are no longer usable.':state?.sessions?.length?`${state.sessions.length} session observations returned.`:state?.sessions?'No paired sessions returned. This does not verify an external IDE connection.':'Not checked.'}</p>
+    <p role="status">{!available?setupReason:state?.busy?(state.stopping?'Stopping the project broker…':'Checking the project broker…'):state?.error?(state.stopAttempted?'Stopping the project broker failed. No stop was confirmed, so treat its sessions as still usable. Try again, or check Operations for the error.':'Session inspection failed. No connection was verified. Your installed build may not include the broker package yet.'):state?.stopped?'This project broker was stopped. Its sessions are no longer usable.':state?.sessions?.length?`${state.sessions.length} session observations returned.`:state?.sessions?'No paired sessions returned. This does not verify an external IDE connection.':'Not checked.'}</p>
     {!available&&onOpenProjectSetup&&(!project||nativeRuntime)&&<button type="button" className="runtime-action-button" style={actionStyle} onClick={onOpenProjectSetup}>{project?'Open app setup':'Choose an app folder'}</button>}
     <fieldset disabled={!available||state?.busy||setup?.busy} style={{margin:'16px 0',padding:'16px',display:'grid',gap:'12px',border:'1px solid var(--border-color, #aeb8b9)',borderRadius:'10px'}}>
       <legend>What may this agent access?</legend>
