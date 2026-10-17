@@ -28,7 +28,7 @@ describe("enforced: the environment a test command gets", () => {
     vi.stubEnv("PROJECT_A_SECRET_NOTE", "a-only");
     track(() => { vi.unstubAllEnvs(); });
     const dir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "pp-iso-env-")));
-    track(() => fs.rmSync(dir, { recursive: true, force: true }));
+    track(() => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }));
     fs.writeFileSync(path.join(dir, "env.mjs"), `console.log("ENV:" + JSON.stringify(Object.keys(process.env).filter((name) => /KEY|TOKEN|SECRET|PASSWORD|SSH_|ANTHROPIC|OPENAI|GITHUB|AWS|^PP_|NOTE/i.test(name)).sort()));\n`);
     const names = async (extra: Record<string, string>) => {
       const run = await runTestCommand("node env.mjs", dir, { env: extra });
@@ -75,7 +75,7 @@ async function runHostileTest() {
   const a = await dispatch(ctx, alpha);
   const b = await dispatch(ctx, beta);
   const scratch = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "pp-iso-hostile-")));
-  track(() => fs.rmSync(scratch, { recursive: true, force: true }));
+  track(() => fs.rmSync(scratch, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }));
   // A stand-in for "the home folder" and "somewhere else on the computer", with a fake key file in it.
   const fakeHome = path.join(scratch, "home");
   fs.mkdirSync(path.join(fakeHome, ".ssh"), { recursive: true });

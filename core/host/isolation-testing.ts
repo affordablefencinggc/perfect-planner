@@ -35,7 +35,7 @@ export function newRepo(label: string): string {
   git(repo, "commit", "-q", "-m", "Initial");
   // Untracked local settings with a value that must never reach a worktree: the worktree gets a placeholder.
   fs.writeFileSync(path.join(repo, ".env"), `API_KEY=${label}-real-value\nPORT=3000\n`);
-  track(() => fs.rmSync(repo, { recursive: true, force: true }));
+  track(() => fs.rmSync(repo, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }));
   return repo;
 }
 
