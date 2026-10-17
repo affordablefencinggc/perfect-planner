@@ -3,7 +3,7 @@
 // deferrals into dated spike tasks, and hands the settled answers to the
 // mind map and roadmap. Questions are ordinary question.asked entries, so
 // they show up in the one-chat relay's inbox next to workers' questions.
-import type { Actor, Ledger, LedgerEntry } from "../ledger/index";
+import { isAuthoritative, type Actor, type Ledger, type LedgerEntry } from "../ledger/index";
 import { appendNumbered } from "../numbering/index";
 import { catchDeferral, findDeferrals, spikeProblem, type SpikePlan } from "./catcher";
 import { buildMindMap } from "./mindmap";
@@ -20,10 +20,12 @@ import {
 } from "./roadmap";
 import { depthCheck, type DepthFinding } from "./depth";
 import { findQuestion, questionsFor } from "./packs";
+import { EMPTY_CONTEXT, NO_IDEA_LABEL, applyTemplate, coerceContext, sameContext, seedTemplate, type RepoContext, type SeedResult } from "./seed";
+import { effectiveSkip, isTemplateDepth, isTemplateId, skipText, templateById, type PlanTemplate, type TemplateDepth, type TemplateId } from "./templates";
 import type { RepoFact } from "./repo";
 import { researchQuestion, type ResearchedQuestion, type ResearchProvider } from "./research";
 import { latestByQuestionId, openBlockers, planningAnswers, planningQuestions, type PlanningQuestionState } from "./state";
-import type { IdeaProfile, MindMap, PhaseId, PlanningQuestion, Roadmap } from "./types";
+import { AREA_TITLES, type IdeaProfile, type MindMap, type PhaseId, type PlanningQuestion, type Roadmap } from "./types";
 
 /** Subject used in refs and in data.task for questions about the plan itself. */
 export const PLAN_TASK = "plan";
@@ -52,7 +54,10 @@ export class PlanningError extends Error {
       | "STILL_OPEN"
       | "UNKNOWN_TASK"
       | "ROADMAP_WRITTEN"
-      | "KEEP_RELEASE",
+      | "KEEP_RELEASE"
+      | "UNKNOWN_TEMPLATE"
+      | "BAD_DEPTH"
+      | "NO_TEMPLATE",
     message: string,
   ) {
     super(message);
@@ -74,6 +79,8 @@ export interface AnswerInput {
   phrase?: string;
   /** Turn a deferral into a dated spike task instead of a decision. */
   spike?: SpikePlan;
+  /** Set when the person skipped this question at the tap of a plan template's "skip the usual areas"; recorded on the decision. */
+  skippedFor?: TemplateId;
 }
 
 export type AnswerResult =
@@ -245,11 +252,11 @@ export class PlanningSession {
    * Leaves a draft roadmap task out, as the person's decision (D-n). Only
    * before the roadmap is written; the release task always stays.
    */
-  dropRoadmapTask(actor: Actor, key: string, reason?: string, idea = "Your idea"): string {
+  dropRoadmapTask(actor: Actor, key: string, reason?: string, idea: string = NO_IDEA_LABEL): string {
     if (actor.kind !== "person") throw new PlanningError("PERSON_ONLY", `Only the person changes the roadmap, not ${actor.kind} ${actor.id}.`);
     this.refuseWrittenRoadmap();
     if (key === FINAL_TASK_KEY) throw new PlanningError("KEEP_RELEASE", "The release task closes every roadmap and cannot be left out.");
-    const task = roadmapTasks(buildRoadmap(this.mindMap(idea))).find((t) => t.key === key);
+    const task = roadmapTasks(this.withTemplate(buildRoadmap(this.mindMap(idea)), idea)).find((t) => t.key === key);
     if (!task) throw new PlanningError("UNKNOWN_TASK", `${key} is not a task in the draft roadmap.`);
     if (droppedRoadmapTasks(this.entries).has(key)) return droppedRoadmapTasks(this.entries).get(key)!.decision;
     return appendNumbered(this.ledger, {
@@ -373,7 +380,7 @@ export class PlanningSession {
       reason,
       refs: [q, PLAN_TASK],
       evidence: [...(input.evidence ?? []), ...(question.recommendation.sources ?? []).map((s) => s.url)],
-      data: { question: q, questionText: question.text, answer, choice, planning: { id: question.id, area: question.area }, ...(input.source ? { source: input.source } : {}), ...(input.phrase ? { phrase: input.phrase } : {}) },
+      data: { question: q, questionText: question.text, answer, choice, planning: { id: question.id, area: question.area }, ...(input.source ? { source: input.source } : {}), ...(input.phrase ? { phrase: input.phrase } : {}), ...(input.skippedFor ? { skipped: { template: input.skippedFor } } : {}) },
     });
     this.ledger.append({
       actor,
@@ -423,6 +430,83 @@ export class PlanningSession {
     return { q: question.q, status: "spiked", task: task.subject, due: spike.due, answer: text };
   }
 
+
+  // ---------- Plan templates ----------
+  // A template only suggests (see templates.ts). Choosing one is the person's
+  // decision.made (D-n) with data.template; it answers no question and approves
+  // nothing. Everything here replays from the ledger.
+
+  /** The template the person chose last (or "start blank"), or null when they never chose. */
+  templateChoice(): TemplateChoice | null {
+    return templateChoice(this.entries);
+  }
+
+  /** The template in use, or undefined (never chose, or chose to start blank). */
+  template(): PlanTemplate | undefined {
+    return templateById(this.templateChoice()?.id);
+  }
+
+  /**
+   * The person picks a starting template, or "blank" (id null) for none. Picking
+   * the one already in use, seen the same way, changes nothing and writes nothing.
+   * Answers, own tasks and left-out tasks are never touched; only what is
+   * suggested changes. Refused once the roadmap is on the board.
+   */
+  chooseTemplate(actor: Actor, input: { id: unknown; depth?: unknown; context?: RepoContext }): { changed: boolean; choice: TemplateChoice } {
+    if (actor.kind !== "person") throw new PlanningError("PERSON_ONLY", `Only the person picks a template, not ${actor.kind} ${actor.id}.`);
+    const blank = input.id === null || input.id === "blank";
+    if (!blank && !isTemplateId(input.id)) throw new PlanningError("UNKNOWN_TEMPLATE", "That is not one of the starter templates.");
+    if (input.depth !== undefined && input.depth !== null && !isTemplateDepth(input.depth)) throw new PlanningError("BAD_DEPTH", "Depth is quick, standard or thorough.");
+    const template = blank ? undefined : templateById(input.id);
+    const depth: TemplateDepth = isTemplateDepth(input.depth) ? input.depth : (template?.depth ?? "standard");
+    const context = template ? coerceContext(input.context ?? EMPTY_CONTEXT) : EMPTY_CONTEXT;
+    const current = this.templateChoice();
+    if (current && current.id === (template?.id ?? null) && (!template || (current.depth === depth && sameContext(current.context, context)))) return { changed: false, choice: current };
+    this.refuseWrittenRoadmap();
+    appendNumbered(this.ledger, {
+      actor,
+      type: "decision.made",
+      summary: template ? `Start from the "${template.title}" template` : "Start blank, with no template",
+      reason: template ? "The person picked this starting point. It only suggests: it answers no question and approves nothing." : "The person chose to start without a template.",
+      refs: [PLAN_TASK, ...(current ? [current.decision] : [])],
+      data: { template: { id: template?.id ?? null, ...(template ? { depth, context } : {}), previous: current?.id ?? null } },
+    });
+    return { changed: true, choice: this.templateChoice()! };
+  }
+
+  /**
+   * The person's tap on "skip the usual areas": every open question in an area
+   * the template usually skips (and the idea does not raise) is answered "Not
+   * needed for <the work>" as the person's own decision, with the template named
+   * on it. Returns the questions it answered. Nothing else is touched.
+   */
+  skipUsual(actor: Actor, signals: readonly string[]): string[] {
+    if (actor.kind !== "person") throw new PlanningError("PERSON_ONLY", `Only the person skips questions, not ${actor.kind} ${actor.id}.`);
+    const template = this.template();
+    if (!template) throw new PlanningError("NO_TEMPLATE", "Pick a starter template first; it says which areas are usually skipped.");
+    const areas = effectiveSkip(template, signals);
+    const skipped: string[] = [];
+    for (const q of this.open().filter((x) => areas.includes(x.area))) {
+      this.answer(actor, q.q, { text: skipText(template), reason: `Skipped at your request: ${template.title} usually skips ${AREA_TITLES[q.area]}.`, skippedFor: template.id });
+      skipped.push(q.q);
+    }
+    return skipped;
+  }
+
+  /** What the template suggests for this idea, trimmed to the repo it saw when it was picked. */
+  templateSeed(idea: string, owner?: string): { template: PlanTemplate; choice: TemplateChoice; seed: SeedResult } | undefined {
+    const choice = this.templateChoice();
+    const template = templateById(choice?.id);
+    if (!choice || !template) return undefined;
+    return { template, choice, seed: seedTemplate(template, choice.context, idea, { depth: choice.depth, ...(owner ? { owner } : {}) }) };
+  }
+
+  /** The roadmap with the chosen template's suggested tasks in it (all of them still drafts). */
+  private withTemplate(roadmap: Roadmap, idea: string, owner?: string): Roadmap {
+    const seeded = this.templateSeed(idea, owner);
+    return seeded ? applyTemplate(roadmap, seeded.template, seeded.seed, seeded.choice.context) : roadmap;
+  }
+
   mindMap(idea: string): MindMap {
     return buildMindMap(idea, planningAnswers(this.entries));
   }
@@ -433,7 +517,7 @@ export class PlanningSession {
 
   /** The draft roadmap, without the tasks the person left out. */
   roadmap(idea: string, owner?: string): Roadmap {
-    return withoutTasks(buildRoadmap(this.mindMap(idea), owner ? { owner } : {}), this.droppedRoadmapKeys());
+    return withoutTasks(this.withTemplate(buildRoadmap(this.mindMap(idea), owner ? { owner } : {}), idea, owner), this.droppedRoadmapKeys());
   }
 
   /** Writes the roadmap's tasks; refused while blockers are open, since tasks built on open questions get rebuilt. */
@@ -442,6 +526,50 @@ export class PlanningSession {
     if (open.length) throw new PlanningError("DEFERRED", `Answer the blocking questions first: ${open.join(", ")}.`);
     return writeRoadmap(this.ledger, actor, roadmap);
   }
+}
+
+/** The template the person picked, as replayed from the ledger. */
+export interface TemplateChoice {
+  /** null: the person chose to start blank. */
+  id: TemplateId | null;
+  depth: TemplateDepth;
+  /** What the folder looked like when they picked. */
+  context: RepoContext;
+  /** The template in use before this pick (null for none or blank). */
+  previous: TemplateId | null;
+  /** The D- number of the decision, and its ledger entry. */
+  decision: string;
+  entry: string;
+  at: string;
+  by: string;
+}
+
+/**
+ * The latest template pick, from the ledger. Only a person's signed decision.made
+ * counts (an agent's, or a hand-written line, is ignored), a pick is not an
+ * answer (it has no data.question), and only the known template ids are read.
+ */
+export function templateChoice(entries: readonly LedgerEntry[]): TemplateChoice | null {
+  let found: TemplateChoice | null = null;
+  for (const e of entries) {
+    if (e.type !== "decision.made" || typeof e.data?.question === "string" || !isAuthoritative(e, { personOnly: true })) continue;
+    const raw = e.data?.template;
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
+    const t = raw as Record<string, unknown>;
+    if (t.id !== null && !isTemplateId(t.id)) continue;
+    const template = templateById(t.id);
+    found = {
+      id: template?.id ?? null,
+      depth: isTemplateDepth(t.depth) ? t.depth : (template?.depth ?? "standard"),
+      context: template ? coerceContext(t.context) : EMPTY_CONTEXT,
+      previous: isTemplateId(t.previous) ? t.previous : null,
+      decision: e.subject,
+      entry: e.n,
+      at: e.at,
+      by: e.actor.id,
+    };
+  }
+  return found;
 }
 
 function oneLine(text: string): string {
