@@ -182,7 +182,9 @@ async function main() {
       const card = await run(`const b = [...document.querySelectorAll("button")].find((e) => e.offsetParent !== null && e.innerText.includes("Use recommendation")); const c = b?.closest("article, section, li, div[id^=planning-q-]"); return c ? c.innerText.slice(0, 260) : "no recommendation card"`).catch(() => "");
       throw new Error(`Blocking questions are still open after ${clicks} recommendations. Planning calls: ${log || "none seen"}. First open card: ${card.replace(/\s+/g, " ")}`);
     }
-    return `${clicks} recommendations used; no blocking questions`;
+    const ms = (await run(`return (window.__ppLog || []).filter((l) => /planning\\/answer/.test(l)).map((l) => Number(l.split(" ").pop().replace("ms", "")))`).catch(() => [])) || [];
+    const stats = ms.length ? `; ${ms.length} answers saved, ${Math.round(ms.reduce((a, b) => a + b, 0) / ms.length)} ms each on average, slowest ${Math.max(...ms)} ms` : "";
+    return `${clicks} recommendations used; no blocking questions${stats}`;
   });
 
   if (ok) ok = await step("plan: approve", async () => {
@@ -246,6 +248,8 @@ async function main() {
   if (ok) ok = await step("approve test in the window (it fails first)", async () => {
     await click("Approve test", task(task1));
     if (!(await waitFor(async () => !/Test to approve/.test(await run(`return document.querySelector(${JSON.stringify(task(task1))})?.innerText || ""`)), 60_000))) throw new Error("The test stayed unapproved.");
+    // The approval runs the test on today's code before the worker may claim; wait for its result to show.
+    if (!(await waitFor(async () => /fails on today's code/i.test(await run(`return document.querySelector(${JSON.stringify(task(task1))})?.innerText || ""`)) && /Approved\./.test(await text()), 180_000))) throw new Error("The window never showed the approved test failing on today's code.");
     return (await run(`return (document.querySelector(${JSON.stringify(task(task1))})?.innerText || "").split("\\n").slice(0, 6).join(" | ")`));
   });
 
