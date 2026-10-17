@@ -375,12 +375,12 @@ describe("finding Claude Code", () => {
       const marker = path.join(outside, "planted-ran");
       const plant = `require("fs").writeFileSync(${JSON.stringify(marker)}, "x");`;
       npmAgent(path.join(repo, "tools"), plant);
-      // A git planted beside it: keepOutOfGit (Gemini) must find the real one.
-      const plantedGit = path.join(repo, "tools", windows ? "git.exe" : "git");
-      fs.writeFileSync(plantedGit, windows ? "" : `#!/bin/sh\necho x > "${marker}"\n`, { mode: 0o755 });
+      // A git and a node planted beside it: keepOutOfGit (Gemini) must find the real git, and the agent's own lookups the real node.
+      if (!windows) for (const name of ["git", "node"]) fs.writeFileSync(path.join(repo, "tools", name), `#!/bin/sh\necho x > "${marker}"\n`, { mode: 0o755 });
+      else fs.writeFileSync(path.join(repo, "tools", "git.exe"), "");
       link(path.join(repo, "tools"), path.join(outside, "to-repo"));
       const seen = path.join(outside, "seen");
-      npmAgent(path.join(outside, "safe"), `require("fs").appendFileSync(${JSON.stringify(seen)}, JSON.stringify({ args: process.argv.slice(2).join(" "), path: process.env.PATH ?? process.env.Path }) + "\\n");`);
+      npmAgent(path.join(outside, "safe"), `for (const tool of ["git", "node"]) require("node:child_process").spawnSync(tool, ["--version"]);\nrequire("fs").appendFileSync(${JSON.stringify(seen)}, JSON.stringify({ args: process.argv.slice(2).join(" "), path: process.env.PATH ?? process.env.Path }) + "\\n");`);
       const PATH = [path.join(outside, "to-repo"), path.join(repo, "tools"), path.join(outside, "safe"), process.env.PATH ?? ""].join(sep);
       const cwd = path.join(repo, "src");
       const output: string[] = [];

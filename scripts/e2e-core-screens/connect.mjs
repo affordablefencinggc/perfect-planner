@@ -4,6 +4,15 @@ const DRAWER = { css: ".connect-agent-drawer" };
 
 export const steps = [
   {
+    // Nothing is written to a project until its person starts its history (a person-only action, never a connect step).
+    name: "core-connect-start-history",
+    run: async (page, at) => {
+      await page.goto(at("planning"));
+      await page.click({ role: "button", name: "Start a new history for this folder" }, "Start a new history");
+      await page.expectText("Start with your idea");
+    },
+  },
+  {
     name: "core-connect-agent-checks-in",
     run: async (page, at, { waitFor }) => {
       await page.goto(at("home"));
@@ -28,6 +37,24 @@ export const steps = [
       await page.expectText("Connected: E2E Agent (e2e-model, self-reported) is your main chat.");
       const leaked = await page.eval(`document.body.innerText.includes(${JSON.stringify(token)}) || Object.keys(localStorage).some((k) => (localStorage.getItem(k) ?? "").includes(${JSON.stringify(token)}))`);
       if (leaked) throw new Error("The token is still on the page or in localStorage after the agent checked in.");
+      await page.click({ within: DRAWER, role: "button", name: "Close" }, "close drawer");
+    },
+  },
+  {
+    // The same one line for the other agent CLIs: the picker changes only --agent; no key is ever in the line.
+    name: "core-connect-agent-line-per-agent",
+    run: async (page, at, { waitFor }) => {
+      await page.goto(at("home"));
+      await page.click({ css: ".topbar-connect-agent" }, "header Connect agent");
+      await page.click({ within: DRAWER, role: "button", name: "Connect agent" }, "Connect agent in drawer");
+      const lineFor = (agent) => waitFor(() => page.eval(`(() => { const c = document.querySelector("[data-connect-command]")?.textContent ?? ""; return c.includes(${JSON.stringify(`--agent ${agent} `)}) ? c : null; })()`), { label: `${agent} connect line` });
+      for (const [label, agent] of [["Gemini CLI", "gemini"], ["Codex CLI", "codex"], ["Claude Code", "claude"]]) {
+        await page.click({ within: DRAWER, role: "radio", name: label }, `pick ${label}`);
+        const command = await lineFor(agent);
+        if (/pp_[cw]_/.test(command)) throw new Error(`The ${label} line carries a key; it must name the token file instead.`);
+        if (!/\.token'$/.test(command.trim()) || command.includes("\n")) throw new Error(`The ${label} line is not one line ending in a token file: ${command}`);
+        await page.expectText(`${label} command`);
+      }
       await page.click({ within: DRAWER, role: "button", name: "Close" }, "close drawer");
     },
   },
