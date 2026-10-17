@@ -1,0 +1,10 @@
+{
+  "label": "windows-msi",
+  "checks": [
+    {
+      "name": "plan: idea and recommended answers",
+      "pass": false,
+      "seen": "Planning showed no questions within 90 s. [window 1008x681; visible buttons: PP\nPerfect Planner\nv0.1 clea | Home | 01Define | 02Coordinate | 03Build | 04Prove | 05Release | Index | Connect agent | More actions | Open project folders | No project selected | Simple | Advanced | Blueprint | Structure | Components | Deep planning | MVP board | Starting… | Close repository drawer | Add project | Project home | Operations\nno diagnostic err]"
+    }
+  ]
+}
