@@ -43,6 +43,9 @@ function readCsrf() {
   try { return globalThis.sessionStorage?.getItem(CSRF_KEY) || null; } catch { return null; }
 }
 
+/** The window's CSRF token, for the local service's other person-only routes (the typed folder). */
+export const personCsrfToken = readCsrf;
+
 function writeCsrf(value) {
   try { if (value) globalThis.sessionStorage?.setItem(CSRF_KEY, value); else globalThis.sessionStorage?.removeItem(CSRF_KEY); } catch { /* the window then stays read-only */ }
 }

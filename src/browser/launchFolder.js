@@ -73,3 +73,30 @@ export async function describeLaunchFolder({ fetchImpl = globalThis.fetch?.bind(
     return null;
   }
 }
+
+// A folder the person typed or pasted: the local host checks it (full local path, a real folder, never a whole
+// drive or the home folder) and then offers it read-only exactly like the launch folder. Resolves to
+// { name, path } or { error } with a plain reason.
+export async function chooseTypedFolder(path, { fetchImpl = globalThis.fetch?.bind(globalThis) } = {}) {
+  if (typeof fetchImpl !== "function") return { error: "This window cannot reach the local service." };
+  try {
+    // Choosing a folder is the person's own act: it needs this window's login, like every other change.
+    // Loaded here: the login code belongs to the app's screens, not to the folder-reading code Node tests load.
+    const { CSRF_HEADER, claimPersonSession, personCsrfToken } = await import("../core-screens/coreApi.js");
+    await claimPersonSession().catch(() => false);
+    const csrf = personCsrfToken();
+    if (!csrf) return { error: "This window was not opened from Perfect Planner's own launcher, so it cannot choose a folder." };
+    const response = await fetchImpl(`${BASE}/choose`, {
+      method: "POST",
+      headers: { ...HEADERS, [CSRF_HEADER]: csrf, "content-type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify({ path }),
+    });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) return { error: typeof value?.error === "string" ? value.error : "That folder could not be opened." };
+    if (value?.available !== true || typeof value.name !== "string" || !value.name) return { error: "That folder could not be opened." };
+    return { name: value.name, path: typeof value.path === "string" ? value.path : null };
+  } catch {
+    return { error: "The local service did not answer. Try again." };
+  }
+}

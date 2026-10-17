@@ -83,7 +83,8 @@ export async function startLocalServer({ clientDirectory = DEFAULT_CLIENT_DIRECT
   const coreHost = await loadCoreHost(coreHostBundle, root, logger);
   if (coreHost) middlewares.unshift(coreHost.middleware);
   const serveStatic = createStaticHandler(clientDirectory);
-  const handlers = launchFolder ? [createLaunchFolderMiddleware({ folder: launchFolder }), ...middlewares] : middlewares;
+  // Always on. With the core host, every route needs the window's login and a typed folder (POST /api/launch-folder/choose) is per session.
+  const handlers = [createLaunchFolderMiddleware({ folder: launchFolder, session: coreHost?.sessionId ? { sessionId: coreHost.sessionId, isPerson: coreHost.isPerson } : null }), ...middlewares];
   server.on("request", (req, res) => runMiddlewares(handlers, req, res, (request, response) => serveStatic(request, response).catch(() => { if (!response.headersSent) plain(response, 500, "Server error"); else response.destroy(); })));
   for (let attempt = 0, candidate = port; ; attempt++, candidate++) {
     try { await listenOnce(server, candidate, host); break; }

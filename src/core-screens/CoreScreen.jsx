@@ -126,7 +126,7 @@ export function OwnerNotice() {
  * A folder nobody has written to here: nothing is written until the person starts its history. When the
  * folder's repo shows earlier Perfect Planner use (a history may have been wiped), say so first.
  */
-export function StartHistoryNotice() {
+export function StartHistoryNotice({ onStarted } = {}) {
   const status = useCoreResource("/status");
   const person = usePersonSession();
   const [error, setError] = useState("");
@@ -139,6 +139,7 @@ export function StartHistoryNotice() {
     setError("");
     try {
       await status.post("/owner/start", {});
+      onStarted?.();
     } catch (failure) {
       setError(failure?.message ?? "The history could not be started.");
     } finally {
