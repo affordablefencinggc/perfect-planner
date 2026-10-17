@@ -19,6 +19,8 @@ const STAGE = {
   "test-proposed": { label: "Test to approve", tone: "warn" },
   "test-approved": { label: "Test approved", tone: "warn" },
   "test-passes-already": { label: "Test already passes", tone: "bad" },
+  "waiting-for-jev": { label: "Waiting for Jev", tone: "warn" },
+  "jev-found-gaps": { label: "Jev found gaps", tone: "bad" },
   "ready-to-claim": { label: "Waiting for the worker to claim", tone: "" },
   building: { label: "Being built", tone: "" },
   "review-diff": { label: "Diff to review", tone: "warn" },
@@ -62,6 +64,17 @@ function DispatchPanel({ dispatch, onClose }) {
       {copied && !copied.ok && <p className="core-tasks-warn">Copy did not work here. Select the text and copy it by hand.</p>}
       <p className="core-muted">The command holds this worker's private key and works only for {dispatch.task}. It is shown once.</p>
       <button type="button" className="core-button" onClick={onClose}>Hide command</button>
+    </div>
+  );
+}
+
+// What Jev said about the test or the change, in Jev's own plain reasons. Shown only once a Jev key is saved.
+function JevLine({ label, line }) {
+  if (!line) return null;
+  return (
+    <div className={`core-tasks-jev ${line.state}`}>
+      <p className="core-tasks-line"><span className="core-muted">{label}</span> {line.message}</p>
+      {line.reasons.length > 0 && <ul>{line.reasons.map((reason, i) => <li key={i}>{reason}</li>)}</ul>}
     </div>
   );
 }
@@ -213,6 +226,8 @@ function TaskCard({ task, project, act, busy, notice, dispatchFor, onDispatched,
 
   // A worker holds the task (claimed, or blocked while still holding it): the person can free it.
   const canRelease = Boolean(task.owner) && (task.status === "claimed" || task.status === "blocked");
+  // A diff that was sent back (by the person or by Jev) is no longer the task's change.
+  const diffStillWanted = task.stage === "review-diff" || task.stage === "ready-to-merge";
   const canStart = !["done", "ready-to-merge", "review-diff"].includes(task.stage) && task.status !== "claimed";
 
   return (
@@ -238,6 +253,8 @@ function TaskCard({ task, project, act, busy, notice, dispatchFor, onDispatched,
         </div>
       )}
 
+      {task.jev && <JevLine label="Jev on the test" line={task.jev.test} />}
+      {task.jev && ["review-diff", "ready-to-merge", "reopened"].includes(task.stage) && <JevLine label="Jev on the change" line={task.jev.diff} />}
       {task.owner && task.status !== "done" && <p className="core-tasks-line"><span className="core-muted">Worker</span> {task.owner}</p>}
       {task.lastProgress && <p className="core-tasks-line"><span className="core-muted">Latest</span> {task.lastProgress}</p>}
       {task.proofs.length > 0 && <p className="core-tasks-line"><span className="core-muted">Proof</span> {task.proofs.map((p) => `${p.kind} ${p.link.slice(0, 12)}`).join(", ")}</p>}
@@ -270,6 +287,11 @@ function TaskCard({ task, project, act, busy, notice, dispatchFor, onDispatched,
         {(task.stage === "test-proposed" || task.stage === "test-approved") && (
           <button type="button" className="core-button primary" onClick={() => run("approve-test", `/tasks/${id}/approve-test`, { test: task.test.entry })} disabled={working || !task.worktree}>
             {task.stage === "test-proposed" ? "Approve test" : "Run the test again"}
+          </button>
+        )}
+        {task.jev?.test?.canRetry && (
+          <button type="button" className="core-button primary" onClick={() => run("approve-test", `/tasks/${id}/approve-test`, { test: task.test.entry })} disabled={working || !task.worktree}>
+            {task.jev.test.state === "waiting" ? "Ask Jev to review the test" : "Ask Jev again"}
           </button>
         )}
         {task.stage === "building" && (
@@ -326,8 +348,8 @@ function TaskCard({ task, project, act, busy, notice, dispatchFor, onDispatched,
       )}
 
       {diffError && <p className="core-tasks-warn" role="alert">{diffError.message}</p>}
-      {diff && <SensitiveBlock diff={diff} confirmed={sensitiveConfirmed} onConfirm={setSensitiveConfirmed} canConfirm={task.stage === "review-diff"} />}
-      {diff && <DiffView diff={diff} />}
+      {diff && diffStillWanted && <SensitiveBlock diff={diff} confirmed={sensitiveConfirmed} onConfirm={setSensitiveConfirmed} canConfirm={task.stage === "review-diff"} />}
+      {diff && diffStillWanted && <DiffView diff={diff} />}
 
       {dispatchFor && <DispatchPanel dispatch={dispatchFor} onClose={onHideDispatch} />}
     </article>
@@ -337,14 +359,21 @@ function TaskCard({ task, project, act, busy, notice, dispatchFor, onDispatched,
 const NOTICE = {
   dispatch: () => null,
   test: () => ({ tone: "good", text: "Test saved. Approve it to run it on today's code." }),
-  "approve-test": (r) => (r.failsFirst
-    ? { tone: "good", text: "Approved. The test fails on today's code, as it should, so the worker can claim the task now." }
-    : { tone: "bad", text: `Approved, but ${r.reason ?? "the test did not fail on today's code"}${r.output ? ` Output: ${r.output.slice(-300)}` : ""}` }),
+  "approve-test": (r) => {
+    if (!r.failsFirst) return { tone: "bad", text: `Approved, but ${r.reason ?? "the test did not fail on today's code"}${r.output ? ` Output: ${r.output.slice(-300)}` : ""}` };
+    if (!r.jev) return { tone: "good", text: "Approved. The test fails on today's code, as it should, so the worker can claim the task now." };
+    if (r.jev.state === "approved") return { tone: "good", text: "Approved. The test fails on today's code, as it should, and Jev found no gaps, so the worker can claim the task now." };
+    const reasons = r.jev.reasons?.length ? ` ${r.jev.reasons.join(" ")}` : "";
+    return { tone: r.jev.state === "gaps" ? "bad" : "warn", text: `Approved, and the test fails on today's code, but the worker cannot start yet. ${r.jev.message}${reasons}${r.jev.canRetry ? " Press Ask Jev again to try again." : ""}` };
+  },
   recreate: (r) => ({ tone: "good", text: `Recreated the folder for ${r.recreated} from its branch ${r.branch}. The work saved on it is back.${r.ledgerNote ? ` ${r.ledgerNote}` : ""}` }),
   check: (r) => (r.passed
     ? { tone: "good", text: `The approved test passes in the worktree at ${String(r.commit ?? "").slice(0, 12)}. Review the diff next.` }
     : { tone: "bad", text: `${r.reason ?? "The test failed."}${r.output ? ` Output: ${r.output.slice(-300)}` : ""}` }),
-  "approve-diff": () => ({ tone: "good", text: "Diff approved. Merging reruns the test on the merged code first." }),
+  "approve-diff": (r) => {
+    if (r.approved === false && r.reopenedAs) return { tone: "warn", text: `Jev sent the change back, so it was not approved. ${(r.jev?.reasons ?? []).join(" ")} Reopened as ${r.reopenedAs}; the worker's files are kept. Start a worker on it when you are ready.` };
+    return { tone: "good", text: `${r.jev?.state === "approved" ? "Jev read the change and found no problems, and you approved it. " : "Diff approved. "}Merging reruns the test on the merged code first.` };
+  },
   reject: (r) => ({ tone: "warn", text: `Reopened as ${r.reopenedAs}. Start a worker on it when you are ready.` }),
   release: (r) => ({ tone: "warn", text: `Released ${r.released} from ${r.from}. Its worktree and commits are kept; start a worker on it when you are ready.` }),
   update: (r) => ({ tone: r.updated ? "warn" : "", text: r.message }),

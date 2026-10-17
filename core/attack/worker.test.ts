@@ -20,7 +20,8 @@ let mainAgent = "";
 let bridgeUrl = "";
 
 const board = () => win.host.project("p").service.board();
-const entries = () => win.host.project("p").entries();
+// The host's own watcher notes the workers' commits on its own timer (commit.observed by system:watcher); that is not the hostile worker writing.
+const entries = () => win.host.project("p").entries().filter((e) => !(e.type === "commit.observed" && e.actor.kind === "system" && e.actor.id === "watcher"));
 
 beforeAll(async () => {
   const repo = makeRepo();

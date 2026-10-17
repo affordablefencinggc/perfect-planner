@@ -24,6 +24,8 @@ import { localPerson, localPersonId } from "./people";
 import { annotate, checkReadiness, prepareForDispatch, registerWorktreeCareRoutes, tidy, withHygieneLock } from "./worktreeCare";
 import { protectRepository } from "../project";
 import { chosenRepoRoot, repoRefusal } from "../protectedRoots";
+import { syncJevPolicy } from "./decisions";
+import { jevActor, jevApprovedDiff, jevView, reviewDiffWithJev, reviewTestWithJev, sendBackNotes, type JevLine } from "./jev-review";
 import { repoClaimRefusal } from "../repoClaim";
 import { isNetworkPath } from "../tokenFile";
 
@@ -42,6 +44,9 @@ export type TaskStage =
   | "test-proposed"
   | "test-approved"
   | "test-passes-already"
+  /** A Jev key is saved and Jev has not approved the test yet (not asked, no answer, or not sure). */
+  | "waiting-for-jev"
+  | "jev-found-gaps"
   | "ready-to-claim"
   | "building"
   | "review-diff"
@@ -195,6 +200,14 @@ function viewTask(project: CoreProject, task: TaskView, worktrees: FolderInfo[],
   const gate = deriveState(project.entries(), label);
   const tree = worktrees.find((w) => w.taskId === label);
   const dispatch = dispatches(project).get(label);
+  const jev = jevView(project.entries(), label, gate, project.policy.requireJevTestReview === true);
+  let stage = stageOf(task, gate);
+  // With a Jev key saved the card says what is really missing: Jev's review, not "waiting for the worker".
+  if (jev?.required) {
+    if (stage === "ready-to-claim" && jev.test && jev.test.state !== "approved") stage = jev.test.state === "gaps" ? "jev-found-gaps" : "waiting-for-jev";
+    // A diff approved before the key was saved, or by anyone but the person, is read and signed again.
+    if (stage === "ready-to-merge" && (jev.diff?.state !== "approved" || !gate.diffApproval?.byPerson)) stage = "review-diff";
+  }
   const unmet = task.status === "done" ? [] : unmetDependencies(board, task);
   const staleClaims = tree?.claims.length ? staleClaimReason(project, tree, board) : null;
   return {
@@ -207,7 +220,8 @@ function viewTask(project: CoreProject, task: TaskView, worktrees: FolderInfo[],
     clauses: task.clauses,
     lastProgress: task.lastProgress,
     proofs: task.proofs.map((p) => ({ kind: p.kind, link: p.link })),
-    stage: stageOf(task, gate),
+    stage,
+    jev,
     test: gate.definition
       ? { command: gate.definition.command, files: gate.definition.files, by: personSummary(gate.definition.actor), entry: gate.definition.n }
       : null,
@@ -605,24 +619,47 @@ export function registerTaskRoutes(router: Router): void {
   /**
    * POST /tasks/:id/approve-test: the person approves the proposed test (pinning its files from the
    * worktree), then the gate runs it there; it must fail on today's code before anyone can claim.
+   * With a Jev key saved, Jev then reads the test (spec 6.2) and its verdict is recorded for the gate: the
+   * worker can claim only after Jev approves. Pressing it again asks Jev again (no key, outage, a timeout,
+   * an unusable answer or a spent monthly budget all leave the task refused). The person's approval is
+   * theirs; Jev's can only add a refusal, never stand in for it.
    */
   router.post("/tasks/:id/approve-test", async ({ project, params, body }) => {
     const task = findTask(project, params.id!);
     const label = attemptLabel(task);
     const tree = await worktreeFor(project, label);
     const gate = project.service.gate;
-    const state = gate.state(label);
+    // A key saved a moment ago counts at once: ask the key store, not the one-minute memory.
+    const jevOn = (await syncJevPolicy(project, { fresh: true })).connected;
+    let state = gate.state(label);
+    const seen = bodyOf(body).test;
     if (!state.approval) {
       // Bound to the definition the person read: a worker re-proposing a different test meanwhile makes this stale.
-      if (!state.definition || bodyOf(body).test !== state.definition.n) throw stale("The test changed since you looked at it. Read the new one, then approve it.");
+      if (!state.definition || seen !== state.definition.n) throw stale("The test changed since you looked at it. Read the new one, then approve it.");
       refuse(gate.approve(label, localPerson(project), { cwd: tree.path }));
+      state = gate.state(label);
+    } else if (jevOn && (!state.definition || seen !== state.definition.n)) {
+      throw stale("The test changed since you looked at it. Read the new one, then ask Jev.");
     }
-    const first = await gate.confirmFailsFirst(label, tree.path);
+    // A test already seen failing on the original code is not run again for Jev: the worker's newer code
+    // would make it pass, and that run would overwrite the baseline the claim depends on.
+    const settled = jevOn && state.baseline !== undefined && !state.baseline.passed;
+    const first = settled ? null : await gate.confirmFailsFirst(label, tree.path);
+    const failsFirst = first ? first.ok : true;
+    let jev: JevLine | undefined;
+    if (jevOn) {
+      jev = failsFirst
+        ? await reviewTestWithJev(project, task, label, gate.state(label), tree.path)
+        : { state: "waiting", message: "Jev reviews the test once it fails on today's code.", reasons: [], canRetry: false };
+      // No answer may mean the key was just removed: look again, so the requirement follows the key at once.
+      if (jev.state === "unavailable") await syncJevPolicy(project, { fresh: true });
+    }
     return {
       approved: true,
-      failsFirst: first.ok,
-      ...(first.ok ? {} : { reason: first.reason }),
-      ...(first.run ? { output: first.run.outputTail } : {}),
+      failsFirst,
+      ...(first && !first.ok ? { reason: first.reason } : {}),
+      ...(first?.run ? { output: first.run.outputTail } : {}),
+      ...(jev ? { jev } : {}),
       ...(await overview(project)),
     };
   });
@@ -670,8 +707,26 @@ export function registerTaskRoutes(router: Router): void {
     if (sensitive.length && !(Array.isArray(confirmed) && confirmed.length === sensitive.length && sensitive.every((file) => confirmed.includes(file)))) {
       throw new HttpError(409, "CONFIRM_SENSITIVE", `This diff changes files that can run code on your computer (${sensitive.join(", ")}). Confirm you read them before approving.`);
     }
+    // With a Jev key saved, Jev reads the change first (spec 6.3) and the person signs after it, never instead of it.
+    let jev: JevLine | undefined;
+    if ((await syncJevPolicy(project, { fresh: true })).connected) {
+      const review = await reviewDiffWithJev(project, task, label, { worktree: tree.path, baseSha: tree.baseSha, commit: tip, state: deriveState(project.entries(), label) });
+      jev = review.line;
+      if (jev.state === "gaps") {
+        // Jev found problems: the change goes back to the worker as the next attempt, with Jev's reasons; the worktree is kept.
+        const sent = project.service.gate.reject(label, jevActor(project, jev), sendBackNotes(jev), { verdict: jev.entry });
+        refuse(sent);
+        revokeWorker(project, label);
+        return { approved: false, reopenedAs: sent.ok ? sent.newTaskId : undefined, jev, ...(await overview(project)) };
+      }
+      if (jev.state === "unavailable") await syncJevPolicy(project, { fresh: true });
+      if (jev.state !== "approved") {
+        const code = jev.state === "queued" ? "JEV_BUDGET" : jev.state === "unsure" ? "JEV_UNSURE" : jev.state === "cannot-review" ? "JEV_CANNOT_REVIEW" : "JEV_UNAVAILABLE";
+        throw new HttpError(409, code, `${jev.message}${jev.reasons.length ? ` ${jev.reasons.join(" ")}` : ""}${jev.canRetry ? " Press Approve diff to ask Jev again." : ""}`);
+      }
+    }
     refuse(project.service.gate.approveDiff(attemptLabel(task), localPerson(project)));
-    return overview(project);
+    return { approved: true, ...(jev ? { jev } : {}), ...(await overview(project)) };
   });
 
   /** POST /tasks/:id/reject { notes }: the diff goes back to the worker as the next attempt. */
@@ -710,6 +765,11 @@ export function registerTaskRoutes(router: Router): void {
     const tree = await worktreeFor(project, label);
     const approved = deriveState(project.entries(), label).diffApproval?.commit;
     if (!approved || !sameCommit(bodyOf(body).commit, approved)) throw stale("Merge the commit whose diff you approved; this screen is out of date.");
+    // The diff approval that counts here is the person's own, and with a Jev key saved Jev read this exact commit too.
+    if (!deriveState(project.entries(), label).diffApproval?.byPerson) throw stale("You have not approved this diff yourself yet. Press Approve diff first.");
+    if ((await syncJevPolicy(project, { fresh: true })).connected && !jevApprovedDiff(project.entries(), label, approved)) {
+      throw new HttpError(409, "JEV_NOT_REVIEWED", "Jev has not read this change yet. Press Approve diff so Jev reads it, then merge.");
+    }
     // Git cannot write the merge commit without a name and email; say so plainly, before anything is signed.
     const missingIdentity = await gitIdentityRefusal(root);
     if (missingIdentity) throw new HttpError(409, "GIT_IDENTITY_MISSING", missingIdentity);
