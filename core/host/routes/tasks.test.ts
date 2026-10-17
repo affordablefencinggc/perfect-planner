@@ -155,6 +155,16 @@ describe("tasks routes", () => {
     expect((await post("/tasks/T-1/approve-diff", { commit: diff.commit, confirmSensitive: diff.sensitive })).status).toBe(200);
     expect((await tasks()).tasks[0]).toMatchObject({ stage: "ready-to-merge" });
     expect((await post("/tasks/T-1/merge", { commit: "0".repeat(40) })).body.code).toBe("STALE");
+    // No usable git identity (an empty name is refused by git): plain message, nothing signed, nothing merged.
+    git(repo, "config", "user.name", "");
+    const noName = await post("/tasks/T-1/merge", { commit: head });
+    expect(noName.status).toBe(409);
+    expect(noName.body.code).toBe("GIT_IDENTITY_MISSING");
+    expect(noName.body.message).toContain('git config --global user.email "you@example.com"');
+    expect(noName.body.message).not.toMatch(/conflict|Committer identity unknown/i);
+    expect(ctx.host.project("loop").entries().some((entry: any) => entry.type === "merge.done")).toBe(false);
+    git(repo, "config", "user.name", "Owner");
+    // With an identity the merge takes its normal path.
     const merged = await post("/tasks/T-1/merge", { commit: head });
     expect(merged.status, JSON.stringify(merged.body)).toBe(200);
     // The worker is finished: its token no longer works and its token file is gone.
