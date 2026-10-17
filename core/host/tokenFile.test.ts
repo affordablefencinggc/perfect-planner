@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { findExecutable, icaclsPath, isNetworkPath, writeOwnerOnlyFile } from "./tokenFile";
+import { icaclsPath, isNetworkPath, writeOwnerOnlyFile } from "./tokenFile";
 
 let dir: string;
 beforeEach(() => {
@@ -18,7 +18,13 @@ describe("network paths", () => {
     expect(isNetworkPath("\\\\?\\UNC\\host\\share\\x.token", "win32")).toBe(true);
     expect(isNetworkPath("\\\\.\\pipe\\x.token", "win32")).toBe(true);
     expect(isNetworkPath("//host/share/x.token", "linux")).toBe(true);
+    expect(isNetworkPath("\\/host/s/x.token", "win32")).toBe(true);
+    expect(isNetworkPath("/\\host\\s\\x.token", "win32")).toBe(true);
+    expect(isNetworkPath("\\??\\UNC\\host\\s\\x.token", "win32")).toBe(true);
+    expect(isNetworkPath("\\Users\\me\\x.token", "win32")).toBe(true);
+    expect(isNetworkPath("C:x.token", "win32")).toBe(true);
     expect(isNetworkPath("C:\\Users\\me\\x.token", "win32")).toBe(false);
+    expect(isNetworkPath("d:\\pp\\x.token", "win32")).toBe(false);
     expect(isNetworkPath("/home/me/x.token", "linux")).toBe(false);
   });
 });
@@ -59,33 +65,5 @@ describe("owner-only token file", () => {
       expect(acl).not.toMatch(/Everyone|BUILTIN\\Users|Authenticated Users|\(I\)/i);
     }
     expect(fs.readFileSync(file, "utf8")).toBe("secret");
-  });
-});
-
-describe("finding Claude Code", () => {
-  const touch = (file: string) => {
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, "");
-    fs.chmodSync(file, 0o755);
-  };
-
-  it("never picks a program from the project folder or a relative PATH entry", () => {
-    const project = path.join(dir, "project");
-    const bin = path.join(dir, "bin");
-    touch(path.join(project, "claude"));
-    touch(path.join(project, "claude.cmd"));
-    touch(path.join(bin, "claude"));
-    touch(path.join(bin, "claude.cmd"));
-    // A ":"-separated PATH cannot hold Windows drive-letter folders, so the POSIX case runs off Windows only.
-    if (process.platform !== "win32") {
-      const posix = findExecutable("claude", { PATH: [".", "relative/bin", project, bin].join(":") }, project, "linux");
-      expect(posix).toBe(path.join(bin, "claude"));
-    }
-    const windows = findExecutable("claude", { Path: [".", project, bin].join(";"), PATHEXT: ".COM;.EXE;.BAT;.CMD" }, project, "win32");
-    expect(windows).toBe(path.join(bin, "claude.cmd"));
-  });
-
-  it("returns null when Claude Code is not installed", () => {
-    expect(findExecutable("claude", { PATH: path.join(dir, "empty") }, dir, "linux")).toBeNull();
   });
 });

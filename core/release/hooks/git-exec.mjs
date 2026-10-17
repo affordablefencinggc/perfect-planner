@@ -20,7 +20,7 @@ export function findExecutable(name, env, cwd, platform = process.platform, prot
     const local = (file) => !windows || isLocalWindowsPath(file);
     const pathValue = Object.entries(env).find(([key]) => (windows ? key.toUpperCase() === "PATH" : key === "PATH"))?.[1] ?? "";
     const roots = protectedRoots(cwd, protect, p, real);
-    const extensions = windows ? [".exe"] : [""];
+    const extensions = windows ? (io.windowsExtensions ?? [".exe"]) : [""];
     for (const entry of pathValue.split(windows ? ";" : ":")) {
         const dir = entry.trim().replace(/^"(.*)"$/, "$1");
         if (!dir || !p.isAbsolute(dir) || !local(dir))

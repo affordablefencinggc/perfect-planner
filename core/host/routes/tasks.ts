@@ -9,7 +9,6 @@
 // cookie the app window holds, so a person's signed entry can only come from
 // this screen. Agents never reach these routes; they use the MCP tools.
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { deriveState, sensitiveChanges, testSupportFiles, type GateState } from "../../gate/index";
 import type { Actor } from "../../ledger/index";
@@ -23,6 +22,10 @@ import { AGENT_SERVER_NAME, agentEntryPath, connectLine, quoteFor, tokenFilePath
 export { quoteFor };
 import { localPerson, localPersonId } from "./people";
 import { protectRepository } from "../project";
+import { chosenRepoRoot, repoRefusal } from "../protectedRoots";
+
+// Kept here too for older imports; they live in ../protectedRoots so connect.mjs can use them without the routes.
+export { chosenRepoRoot, repoRefusal };
 
 const REPO_FILE = "repo.json";
 const MANAGER = "tasks.worktrees";
@@ -65,19 +68,6 @@ function repoFile(project: CoreProject): string {
   return path.join(project.root, ".perfect-planner", REPO_FILE);
 }
 
-/**
- * The repo folder the person picked for a project (kept in its .perfect-planner/), read without running
- * anything, so the host can protect it before its first git run. Never a whole drive or the home folder.
- */
-export function chosenRepoRoot(projectRoot: string): string | undefined {
-  try {
-    const root = (JSON.parse(fs.readFileSync(path.join(projectRoot, ".perfect-planner", REPO_FILE), "utf8")) as { root?: unknown }).root;
-    return typeof root === "string" && path.isAbsolute(root) && !repoRefusal(root) ? root : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 async function gitTop(dir: string): Promise<string | null> {
   if (!fs.existsSync(dir)) return null;
   const top = await runGit(dir, ["rev-parse", "--show-toplevel"]).catch(() => null);
@@ -110,23 +100,6 @@ export async function repoState(project: CoreProject): Promise<RepoState> {
       ? `${chosen} is no longer a git repository with a commit. Choose your project's git folder again.`
       : "Workers need your project's git folder (with at least one commit) to branch from. Choose it below.",
   };
-}
-
-/** Folders that are never a project to hand to workers: a whole drive or the home folder itself. */
-export function repoRefusal(top: string, home = os.homedir()): string | null {
-  // Same test as isHomeOrDrive (project.ts), with the home folder passable for tests.
-  const real = (p: string) => {
-    try {
-      return fs.realpathSync.native(p);
-    } catch {
-      return path.resolve(p);
-    }
-  };
-  const same = (a: string, b: string) => (process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b);
-  const dir = real(top);
-  if (same(path.dirname(dir), dir)) return `${dir} is a whole drive. Choose your project's own git folder.`;
-  if (same(dir, real(home))) return `${dir} is your home folder. Choose your project's own git folder.`;
-  return null;
 }
 
 async function requireRepo(project: CoreProject): Promise<string> {

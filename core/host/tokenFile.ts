@@ -1,19 +1,21 @@
-// Agent token files and the agent CLI, handled safely on Windows as well as
+// Agent token files, handled safely on Windows as well as
 // macOS and Linux. Mode 0600 means nothing on NTFS, so on Windows the file and
-// its folder get an owner-only ACL instead; a token path on a network share is
-// refused before anything opens it (opening \\host\share leaks the NTLM hash);
-// and the agent CLI is found by absolute path on PATH, never in the project
-// folder, so a claude.cmd planted in a repo cannot run.
+// its folder get an owner-only ACL instead; and a token path on a network share
+// is refused before anything opens it (opening \\host\share leaks the NTLM hash).
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { isWithin, registeredRoots } from "../exec/index";
+import { isLocalWindowsPath } from "../exec/index";
 
-/** UNC (\\host\share), device (\\?\, \\.\) and //host paths: anything that is not a plain local path. */
+/**
+ * True for anything that is not a plain local path. On Windows only a drive-letter path (C:\...) is
+ * local: UNC, device and NT prefixes in any slash mix (\\host, //host, \/host, /\host, \\?\UNC,
+ * \??\UNC) reach SMB, and rooted or relative paths depend on the current drive. Elsewhere //host is refused.
+ */
 export function isNetworkPath(value: string, platform: NodeJS.Platform = process.platform): boolean {
-  if (value.startsWith("//")) return true;
-  return platform === "win32" && value.startsWith("\\\\");
+  if (platform === "win32") return !isLocalWindowsPath(value);
+  return value.startsWith("//");
 }
 
 export function icaclsPath(): string {
@@ -45,77 +47,4 @@ export function writeOwnerOnlyFile(file: string, text: string, platform: NodeJS.
     fs.closeSync(fd);
   }
   if (platform === "win32") ownerOnlyAcl(file);
-}
-
-/**
- * The absolute path of a program on PATH. Relative PATH entries and the project folder itself are
- * skipped, so a program dropped into a repo is never picked. On Windows PATHEXT decides the order.
- */
-export function findExecutable(name: string, env: NodeJS.ProcessEnv, cwd: string, platform: NodeJS.Platform = process.platform): string | null {
-  const windows = platform === "win32";
-  const p = path; // the running system's paths; platform only picks the PATH separator and PATHEXT
-  const pathValue = env.PATH ?? env.Path ?? env.path ?? "";
-  // The current folder and every root the host protects (project folder, picked repo, worktrees), as
-  // written and as real paths: a PATH entry inside one of them, or a program that links into one, is skipped.
-  const roots = new Set<string>();
-  for (const root of [cwd, ...registeredRoots()]) {
-    roots.add(p.resolve(root));
-    try {
-      roots.add(fs.realpathSync.native(root));
-    } catch {
-      // not resolvable: the written path still counts
-    }
-  }
-  const inside = (...candidates: string[]) => [...roots].some((root) => candidates.some((c) => isWithin(root, c)));
-  const real = (file: string) => {
-    try {
-      return fs.realpathSync.native(file);
-    } catch {
-      return undefined;
-    }
-  };
-  const exts = windows ? (env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean) : [""];
-  for (const entry of pathValue.split(windows ? ";" : ":")) {
-    const dir = entry.trim().replace(/^"(.*)"$/, "$1");
-    if (!dir || !p.isAbsolute(dir) || isNetworkPath(dir, platform)) continue;
-    const realDir = real(dir);
-    if (!realDir || inside(p.resolve(dir), realDir)) continue;
-    for (const ext of exts) {
-      const candidate = p.join(dir, `${name}${ext.toLowerCase()}`);
-      try {
-        const stat = fs.statSync(candidate);
-        if (!stat.isFile()) continue;
-        const realFile = real(candidate);
-        if (!realFile || inside(realFile)) continue;
-        if (!windows) fs.accessSync(candidate, fs.constants.X_OK);
-        return candidate;
-      } catch {
-        // not here
-      }
-    }
-  }
-  return null;
-}
-
-export interface Launch {
-  command: string;
-  args: string[];
-  /** Only for a .cmd/.bat that is not a known npm shim: run through cmd.exe by absolute path. */
-  verbatim?: boolean;
-}
-
-/**
- * How to start a CLI found by findExecutable without a shell. An npm shim (claude.cmd next to
- * node_modules/<pkg>/<entry>) runs as node <entry> directly; an .exe runs as itself; any other
- * .cmd/.bat runs through cmd.exe by absolute path with the current folder left out of its search.
- */
-export function launchFor(program: string, args: string[], npmEntry: string | null, platform: NodeJS.Platform = process.platform): Launch {
-  if (platform !== "win32" || !/\.(cmd|bat)$/i.test(program)) return { command: program, args };
-  if (npmEntry) {
-    const entry = path.win32.join(path.win32.dirname(program), "node_modules", ...npmEntry.split("/"));
-    if (fs.existsSync(entry)) return { command: process.execPath, args: [entry, ...args] };
-  }
-  const comspec = path.win32.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "cmd.exe");
-  const quoted = [program, ...args].map((a) => `"${a}"`).join(" ");
-  return { command: comspec, args: ["/d", "/s", "/c", `"${quoted}"`], verbatim: true };
 }

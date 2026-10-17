@@ -75,6 +75,9 @@ describe("tasks routes", () => {
     if (process.platform !== "win32") expect(fs.statSync(d.tokenFile).mode & 0o077).toBe(0);
     else expect(execFileSync(icaclsPath(), [d.tokenFile], { encoding: "utf8" })).not.toMatch(/Everyone|BUILTIN\\Users|Authenticated Users|\(I\)/i);
     expect(fs.existsSync(d.worktree)).toBe(true);
+    // connect.mjs, run from the worktree in its own process, learns the worktree folders from the file beside the token.
+    const roots = JSON.parse(fs.readFileSync(d.tokenFile.replace(/\.token$/, ".roots.json"), "utf8")).roots as string[];
+    expect(roots.some((root) => fs.realpathSync(d.worktree).startsWith(fs.realpathSync(root) + path.sep))).toBe(true);
     expect(d.brief).toContain("T-1");
     expect(d.brief).toContain("propose_test");
     expect(d.setup).toContain("connect.mjs");
