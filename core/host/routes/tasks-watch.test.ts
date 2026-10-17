@@ -451,7 +451,7 @@ describe("bring a task up to date with main", () => {
     expect(res.body.result.message).toContain("1 new change from main");
     // The earlier check and diff approval were for the old tip, and the answer says so.
     expect(res.body.result.message).toContain("run Check the work again");
-    expect(fs.readFileSync(path.join(d.worktree, "docs/new.md"), "utf8")).toBe("from main\n");
+    expect(fs.readFileSync(path.join(d.worktree, "docs/new.md"), "utf8").replace(/\r\n/g, "\n")).toBe("from main\n");
     expect(git(d.worktree, "status", "--porcelain")).toBe("");
     expect(git(d.worktree, "log", "-1", "--format=%P").split(" ")).toEqual([workerTip, mainTip]);
     // The diff the person reviews is still only what the worker did.
