@@ -16,7 +16,8 @@ import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { addTask, buildCheckApprove, cleanTemp, dispatchAndApproveTest, git, gitWithHooks, makeRepo, startWindow, tempDir, write, type Window } from "./helpers";
 
-afterAll(cleanTemp);
+// Removing the 20,000-file repo took longer than vitest's 10 s hook default on the Windows runner.
+afterAll(cleanTemp, 180_000);
 const q = "?project=p";
 
 const SCREENS = ["/status", "/tasks", "/planning", "/mvp", "/summary", "/search?q=save", "/plan", "/people", "/agents", "/decisions", "/planning/mindmap", "/planning/roadmap"];
@@ -205,7 +206,7 @@ describe("attack 8: a repo with a submodule", () => {
     await w.call({ tool: "claim_task", args: { task }, agent: w.agent });
     write(w.worktree, "src/modules.js", "export const modules = true;\n");
     const modules = fs.readFileSync(path.join(w.worktree, ".gitmodules"), "utf8");
-    fs.writeFileSync(path.join(w.worktree, ".gitmodules"), modules.replace(/url = .*/, `url = ext::sh -c "touch ${marker}"`));
+    fs.writeFileSync(path.join(w.worktree, ".gitmodules"), modules.replace(/url = .*/, `url = ext::sh -c "touch ${marker.replace(/\\/g, "/")}"`));
     git(w.worktree, "add", "-A");
     git(w.worktree, "commit", "-q", "-m", "Move the submodule");
     const head = git(w.worktree, "rev-parse", "HEAD");
@@ -340,10 +341,11 @@ describe("attack 8: a filter program named by a repo is refused at the first wor
   }, 60_000);
 });
 
-describe("attack 8: 20,000 files (scaled down from 100,000)", () => {
+describe("attack 8: 20,000 files (scaled down from 100,000; 2,000 on Windows)", () => {
   let repo: string;
   let win: Window;
-  const FOLDERS = 200;
+  // Creating and adding 20,000 files took over two minutes on the Windows runner (windows-latest run 39034910848): 2,000 there.
+  const FOLDERS = process.platform === "win32" ? 20 : 200;
   const PER_FOLDER = 100;
   beforeAll(async () => {
     repo = makeRepo({ ".gitignore": ".perfect-planner/\n", "README.md": "# Big\n" });
