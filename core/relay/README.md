@@ -26,3 +26,12 @@ A blocking question pauses only its asker (`blockingFor`). `pauseAll` writes one
 exactly the tasks it paused. Question and answer text is passed through
 `redactSecrets` (core/jev/redact) before it is written. All state is rebuilt from the ledger on
 construction and kept current through `ledger.subscribe`.
+
+## Notices
+
+`addNotice({ kind, tasks, text })` records something the app itself saw (the git watcher: a collision, a
+stalled task, new commits; see core/watcher). `digest(person)` returns the ones that person's main chat has not
+been shown (`notices`, oldest first, each once per person, also appended to `lines` after the questions). Text
+is flattened to one line, clipped to 400 characters and passed through `redactSecrets`. Up to 200 are kept in
+memory; if more fall off unread the digest says how many were dropped. They are not persisted: the ledger
+already holds the facts, and the caller decides what is new, so a restart replays nothing.

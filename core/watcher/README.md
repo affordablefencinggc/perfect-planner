@@ -21,6 +21,9 @@ watcher.start(3000);              // unref'd timer, ticks never overlap
 await watcher.stop();             // waits for a tick in flight
 ```
 
+Two more options: `onTick(result)` is called once with every completed tick (timer or manual), and
+`shouldRun()` can turn a tick into a no-op that reads and writes nothing (`result.skipped`).
+
 `tick()` returns `{ observed, collisions, resolved, stalled, active, errors }`:
 the commits and collisions written this tick, every stalled task, every open
 collision, and any worktree that could not be read (missing folder, bad base,
@@ -67,3 +70,27 @@ A task is stalled when its newest commit, its changed-file set and the newest
 mtime among its changed files have not moved for `stallMs`. Stalls are
 reported in the tick result only; nothing is written. The idle clock starts
 when the watcher first sees a task, so it resets on restart.
+
+## In the host: the main chat's inbox
+
+`core/host/watch.ts` starts one watcher per open project (`CoreHost`, option `watch`, on by default, every
+5 seconds) and stops it, waiting for a pass in flight, before the project's ledger closes
+(`closeProject(key)` and `close()`). It reads the worktrees the Tasks screen's manager lists, and does nothing
+until the project has the person's history (owner pinned and ledger writable). A worktree list that cannot be
+read is an error, never an empty list: an empty list would resolve every open collision.
+
+`WatchNotifier` (`notices.ts`) turns each tick into plain-language notices for `relay.addNotice`, and the main
+chat gets them in its `check_inbox` digest (`notices`, also as `lines`), each once:
+
+- `T-3 and T-5 both changed src/a.ts.` once per pair and file set; `... no longer both change ...` when it ends.
+  After a restart a collision that is still open is announced once to the new process; the ledger is not written twice.
+- `T-4 has not changed anything for 15 minutes.` once per quiet spell, then `T-4 has changed something again
+  after being quiet.` A task that waits for the person (a test to approve, a diff to read) is not a worker stall.
+- `T-1 committed "Add export" (a1b2c3d).` or `T-1 made 3 new commits; the latest is ...`, one line per task per tick.
+- A worktree or the ledger the watcher cannot read: one notice that nothing was changed, one when it recovers.
+
+Commit messages and file names are the worker's text: they are shown on one line, clipped, with control and
+direction characters removed and secrets redacted (the ledger summary is redacted too).
+
+The watcher's `git status` uses `--no-optional-locks`. Without it the poll briefly holds `index.lock`, and a
+worker's own `git add` or `git commit` that meets it fails (10 of 150 in `polling.test.ts` before the fix).

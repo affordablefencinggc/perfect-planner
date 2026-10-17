@@ -199,13 +199,16 @@ function TaskCard({ task, project, act, busy, notice, dispatchFor, onDispatched,
       {task.merged && <p className="core-tasks-line"><span className="core-muted">Merged</span> {task.merged.commit?.slice(0, 12)}</p>}
       <AdvancedOnly as="p">{task.worktree ? `${task.worktree.branch} · ${task.worktree.path} · port ${task.worktree.port}` : "No worktree"}</AdvancedOnly>
 
+      {task.waitingFor && task.stage !== "done" && <p className="core-tasks-warn">{task.waitingFor.message}</p>}
+      {task.claims?.length > 0 && <p className="core-tasks-line"><span className="core-muted">File claims</span> {task.claims.join(", ")}{task.staleClaims ? ` (${task.staleClaims}, so these can be released)` : ""}</p>}
+
       {notice && <p className={`core-tasks-notice ${notice.tone}`} role="status">{notice.text}</p>}
 
       <div className="core-tasks-actions">
         {canStart && !dispatchFor && (
           <span className="core-tasks-start">
             <label>Worker model<input value={model} onChange={(e) => setModel(e.target.value)} autoComplete="off" /></label>
-            <button type="button" className={`core-button ${task.stage === "needs-test" ? "primary" : ""}`} onClick={startWorker} disabled={working}>
+            <button type="button" className={`core-button ${task.stage === "needs-test" ? "primary" : ""}`} onClick={startWorker} disabled={working || Boolean(task.waitingFor)} title={task.waitingFor?.message}>
               {working ? <SpinnerGapIcon aria-hidden="true" /> : <PlayIcon aria-hidden="true" />} {task.dispatch ? "Start worker again" : "Start worker"}
             </button>
           </span>
@@ -236,6 +239,12 @@ function TaskCard({ task, project, act, busy, notice, dispatchFor, onDispatched,
         )}
         {canRelease && !releasing && (
           <button type="button" className="core-button" onClick={() => setReleasing(true)} disabled={working}>Release claim</button>
+        )}
+        {task.worktree && task.stage !== "done" && (
+          <button type="button" className="core-button" onClick={() => run("update", `/tasks/${id}/update-from-main`)} disabled={working} title="Merges the newest work from the main line into this task's own folder. Refused, with nothing changed, if the worker has unsaved changes or the two clash.">Bring this task up to date with {base}</button>
+        )}
+        {task.staleClaims && task.claims?.length > 0 && (
+          <button type="button" className="core-button" onClick={() => run("release-claims", `/tasks/${id}/release-claims`)} disabled={working}>Release file claims</button>
         )}
       </div>
 
@@ -279,6 +288,8 @@ const NOTICE = {
   "approve-diff": () => ({ tone: "good", text: "Diff approved. Merging reruns the test on the merged code first." }),
   reject: (r) => ({ tone: "warn", text: `Reopened as ${r.reopenedAs}. Start a worker on it when you are ready.` }),
   release: (r) => ({ tone: "warn", text: `Released ${r.released} from ${r.from}. Its worktree and commits are kept; start a worker on it when you are ready.` }),
+  update: (r) => ({ tone: r.updated ? "warn" : "", text: r.message }),
+  "release-claims": (r) => ({ tone: "good", text: r.message }),
   merge: (r) => ({ tone: "good", text: `Merged into ${r.into} at ${String(r.commit ?? "").slice(0, 12)}. The test passed on the merge and the task is done.` }),
 };
 

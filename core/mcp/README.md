@@ -8,12 +8,12 @@ chat (helpers get their own, §9.5). Only SHA-256 digests of tokens are kept.
 | Tool | Caller | Writes |
 |---|---|---|
 | `hello(name, model)` | any | nothing; registers the agent and returns its role |
-| `list_tasks()` | any | nothing |
+| `list_tasks()` | any | nothing; each task carries `dependsOn` (the tasks that must be done before it starts, from its signed `task.created`) |
 | `claim_task(T)` | worker | `task.claimed` |
 | `report_progress(T, text)` | worker | `task.progress` |
 | `attach_proof(T, kind, link)` | worker | `task.proof` |
 | `ask_main(T, question, options?, blocking?, wait_seconds?)` | worker | `question.asked` (+ `question.answered` when settled) |
-| `check_inbox()` | main: digest; worker: its answers and pause state | nothing |
+| `check_inbox()` | main: digest (open questions, and `notices` of what the app's git watcher saw, each shown once); worker: its answers and pause state | nothing |
 | `answer(Q, text)` | main | `question.answered` (information, not a decision) |
 | `lookup(ref)` | any | nothing |
 | `release_task(T, reason, blocked?)` | worker | `task.blocked` or `task.progress`; revokes the token |

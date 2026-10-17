@@ -12,7 +12,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { deriveState, sensitiveChanges, testSupportFiles, type GateState } from "../../gate/index";
 import type { Actor } from "../../ledger/index";
-import { attemptLabel, type TaskView } from "../../mcp/index";
+import { attemptLabel, unmetDependencies, waitingMessage, type TaskView } from "../../mcp/index";
 import { WorktreeError, WorktreeManager, git, refreshCarriedSettings, runGit, WORKTREES_ACTOR, type WorktreeInfo } from "../../worktrees/index";
 import type { CoreHost } from "../host";
 import type { CoreProject } from "../project";
@@ -128,6 +128,30 @@ function dispatches(project: CoreProject): Map<string, Dispatch> {
   return map;
 }
 
+/** The worktrees the git watcher should read, or the plain reason it cannot see any. Errors are not swallowed: an unreadable list is not an empty one. */
+export async function worktreesForWatcher(project: CoreProject): Promise<{ repo: RepoState; list: WorktreeInfo[] }> {
+  const repo = await repoState(project);
+  return { repo, list: repo.ok && repo.root ? await manager(project, repo.root).list() : [] };
+}
+
+/**
+ * Why the file claims a worktree holds are stale (nobody is going to use them), or null when a worker is on the
+ * task. Stale: the folder is gone, the task left the board or is done, the attempt was sent back and replaced,
+ * or the task is not held by any worker and none has been started on it.
+ */
+function staleClaimReason(project: CoreProject, tree: WorktreeInfo, board: ReadonlyMap<string, TaskView>): string | null {
+  const task = board.get(tree.taskId.replace(/\.a\d+$/, ""));
+  if (!fs.existsSync(tree.path)) return `${tree.taskId}'s folder is gone`;
+  if (!task) return `${tree.taskId} is no longer on the board`;
+  if (task.status === "done") return `${tree.taskId} is done`;
+  const current = attemptLabel(task);
+  if (current !== tree.taskId) return `${tree.taskId} was sent back and is now ${current}`;
+  if ((task.owner && (task.status === "claimed" || task.status === "blocked")) || dispatches(project).has(tree.taskId)) return null;
+  return deriveState(project.entries(), tree.taskId).worktree?.passed === false
+    ? `${tree.taskId} has no worker on it and its last check failed`
+    : `${tree.taskId} has no worker on it`;
+}
+
 // ---------- the view ----------
 
 export function stageOf(task: TaskView, gate: GateState): TaskStage {
@@ -147,11 +171,13 @@ function personSummary(actor: Actor | undefined) {
   return actor ? { kind: actor.kind, id: actor.id, ...(actor.model ? { model: actor.model } : {}) } : undefined;
 }
 
-function viewTask(project: CoreProject, task: TaskView, worktrees: WorktreeInfo[]) {
+function viewTask(project: CoreProject, task: TaskView, worktrees: WorktreeInfo[], board: ReadonlyMap<string, TaskView>) {
   const label = attemptLabel(task);
   const gate = deriveState(project.entries(), label);
   const tree = worktrees.find((w) => w.taskId === label);
   const dispatch = dispatches(project).get(label);
+  const unmet = task.status === "done" ? [] : unmetDependencies(board, task);
+  const staleClaims = tree?.claims.length ? staleClaimReason(project, tree, board) : null;
   return {
     id: task.id,
     label,
@@ -173,6 +199,11 @@ function viewTask(project: CoreProject, task: TaskView, worktrees: WorktreeInfo[
     merged: gate.merged ?? null,
     worktree: tree ? { path: tree.path, branch: tree.branch, base: tree.baseRef, port: tree.port } : null,
     dispatch: dispatch ? { issuedAt: dispatch.issuedAt, ...(dispatch.model ? { model: dispatch.model } : {}) } : null,
+    // Why this task cannot start yet (dispatch refuses it for the same reason), in plain words; null when nothing blocks it.
+    waitingFor: unmet.length ? { tasks: unmet.map((d) => d.id), message: waitingMessage(label, unmet) } : null,
+    // File claims this task's worktree holds, and, when nobody is working on it, why they can be released.
+    claims: tree?.claims ?? [],
+    staleClaims,
     history: gate.history.slice(-12),
   };
 }
@@ -185,7 +216,8 @@ async function listWorktrees(project: CoreProject, repo: RepoState): Promise<Wor
 async function overview(project: CoreProject) {
   const repo = await repoState(project);
   const worktrees = await listWorktrees(project, repo);
-  const tasks = [...project.service.board().values()].map((task) => viewTask(project, task, worktrees));
+  const board = project.service.board();
+  const tasks = [...board.values()].map((task) => viewTask(project, task, worktrees, board));
   return { repo, tasks };
 }
 
@@ -295,6 +327,9 @@ async function dispatch(project: CoreProject, host: CoreHost, id: string, body: 
   const root = await requireRepo(project);
   const task = findTask(project, id);
   if (task.status === "done") throw new HttpError(409, "DONE", `${id} is already done.`);
+  // A task whose dependencies are not done yet does not start: say which ones, in plain words.
+  const unmet = unmetDependencies(project.service.board(), task);
+  if (unmet.length) throw new HttpError(409, "WAITING_FOR_DEPENDENCY", waitingMessage(attemptLabel(task), unmet));
   const model = typeof body.model === "string" && body.model.trim() ? body.model.trim() : undefined;
   if (model !== undefined && !MODEL.test(model)) throw new HttpError(400, "INVALID", "Name the worker's model in letters, digits and . _ : / - (for example claude-sonnet-4).");
   const label = attemptLabel(task);
@@ -341,6 +376,93 @@ async function dispatch(project: CoreProject, host: CoreHost, id: string, body: 
     agentBuilt: entry.built,
     ...(entry.built ? {} : { warning: "The agent program is not built yet. Run npm run build:core-host in the Perfect Planner folder before pasting this." }),
   };
+}
+
+const UPDATE_CODES: Record<string, string> = { dirty: "DIRTY_WORKTREE", conflict: "UPDATE_CONFLICT" };
+
+/**
+ * Bring the task's worktree up to date with the branch it merges into (manager.updateFromMain). A dirty
+ * worktree or a conflict is a plain refusal that leaves the worker's files exactly as they were. A success
+ * is the person's signed entry on the ledger.
+ */
+async function updateFromMain(project: CoreProject, id: string) {
+  const root = await requireRepo(project);
+  const task = findTask(project, id);
+  const label = attemptLabel(task);
+  if (task.status === "done") throw new HttpError(409, "DONE", `${label} is already done.`);
+  await worktreeFor(project, label);
+  let result;
+  try {
+    result = await manager(project, root).updateFromMain(label);
+  } catch (error) {
+    if (error instanceof WorktreeError) throw new HttpError(409, "NO_WORKTREE", error.message);
+    throw error;
+  }
+  if (result.status === "refused") throw new HttpError(409, UPDATE_CODES[result.reason ?? ""] ?? "UPDATE_REFUSED", result.message);
+  if (result.status === "up-to-date") return { updated: false, message: result.message, ...(await overview(project)) };
+  // The earlier check and diff approval were for the old tip; the gate will not merge any other commit.
+  const state = deriveState(project.entries(), label);
+  const recheck = Boolean(state.worktree || state.diffApproval);
+  let warning: string | undefined;
+  try {
+    project.ledger.append({
+      actor: localPerson(project),
+      type: "task.progress",
+      subject: label,
+      summary: `Brought ${label} up to date with ${result.base}`,
+      evidence: [`commit:${result.after}`, `base:${result.mergedIn}`],
+      refs: [],
+      data: { updatedFromMain: true, base: result.base, before: result.before, after: result.after, mergedIn: result.mergedIn, commits: result.commits, fastForward: result.fastForward, by: "person" },
+    });
+  } catch (error) {
+    warning = `The update was made, but it could not be written to the ledger (${(error as Error).message}).`;
+  }
+  return {
+    updated: true,
+    message: `${result.message}${recheck ? " The work changed, so run Check the work again and approve the diff again." : ""}`,
+    before: result.before,
+    after: result.after,
+    mergedIn: result.mergedIn,
+    commits: result.commits,
+    ...(warning ? { warning } : {}),
+    ...(await overview(project)),
+  };
+}
+
+/**
+ * Release the file claims a worktree holds when nobody is going to use them: the folder is gone, the task left
+ * the board or is done, was sent back, or has no worker on it. Refused while a worker holds the task (release
+ * the task first). The person's signed entry names the files and why they were stale.
+ */
+async function releaseFileClaims(project: CoreProject, id: string, body: Record<string, unknown>) {
+  if (!/^T-\d+(?:\.a\d+)?$/.test(id)) throw new HttpError(400, "INVALID", `"${id}" is not a task number like T-14.`);
+  const root = await requireRepo(project);
+  const tree = await manager(project, root).get(id);
+  if (!tree) throw new HttpError(409, "NO_WORKTREE", `${id} has no worktree, so it holds no file claims.`);
+  if (!tree.claims.length) return { released: [], message: `${id} holds no file claims.`, ...(await overview(project)) };
+  const stale = staleClaimReason(project, tree, project.service.board());
+  if (!stale) throw new HttpError(409, "CLAIM_ACTIVE", `${id} is still being worked on, so its file claims are not stale. If its worker is gone, release the task first, then release its files.`);
+  const rawFiles = body.files;
+  if (rawFiles !== undefined && (!Array.isArray(rawFiles) || rawFiles.some((file) => typeof file !== "string"))) throw new HttpError(400, "INVALID", "files must be a list of file names.");
+  const wanted = (rawFiles as string[] | undefined)?.map((file) => file.trim()).filter(Boolean);
+  const raw = body.reason;
+  if (raw !== undefined && raw !== null && typeof raw !== "string") throw new HttpError(400, "INVALID", "The reason must be text.");
+  const reason = typeof raw === "string" && raw.trim() ? raw.trim().slice(0, 500) : undefined;
+  const files = tree.claims.filter((file) => !wanted || wanted.includes(file));
+  if (!files.length) return { released: [], message: `${id} does not hold ${wanted?.length === 1 ? "that file" : "those files"}.`, ...(await overview(project)) };
+  // The person's signed record first: if it cannot be written, nothing is released.
+  project.ledger.append({
+    actor: localPerson(project),
+    type: "task.progress",
+    subject: id,
+    summary: `Released ${files.length === 1 ? "the file claim" : `${files.length} file claims`} held by ${id} (${stale})`,
+    ...(reason ? { reason } : {}),
+    evidence: files.map((file) => `claim:${file}`),
+    refs: [],
+    data: { claimsReleased: files, stale, by: "person" },
+  });
+  const done = await manager(project, root).releaseClaims(id, files);
+  return { released: done.released, remaining: done.remaining, stale, message: `Released ${done.released.join(", ")}. Other tasks can claim ${done.released.length === 1 ? "it" : "them"} now.`, ...(await overview(project)) };
 }
 
 async function releaseClaim(project: CoreProject, id: string, body: Record<string, unknown>) {
@@ -527,6 +649,12 @@ export function registerTaskRoutes(router: Router): void {
    * its commits exactly where they are, so the next worker dispatched on the task carries on from them.
    */
   router.post("/tasks/:id/release", ({ project, params, body }) => releaseClaim(project, params.id!, bodyOf(body)));
+
+  /** POST /tasks/:id/update-from-main: merge the integration branch into the task's branch, inside its worktree, never touching unsaved work. */
+  router.post("/tasks/:id/update-from-main", ({ project, params }) => updateFromMain(project, params.id!));
+
+  /** POST /tasks/:id/release-claims { files?, reason? }: free the file claims of a task nobody is working on (signed as the person). */
+  router.post("/tasks/:id/release-claims", ({ project, params, body }) => releaseFileClaims(project, params.id!, bodyOf(body)));
 
   /**
    * POST /tasks/:id/merge: merge the worker's branch into the branch it started from. The gate merges
