@@ -66,12 +66,12 @@ test('retry from the real task editor preserves unsaved text and newer saved rev
   const f=fixture('editor');f.add('editor-original');render(<TaskDraftLedger project={f.project} store={withMemoryTaskSaveIntents(f.store)}/>);
   await screen.findByRole('heading',{name:'Newer saved task'});
   fireEvent.change(screen.getByLabelText('Task title'),{target:{value:'Do not lose this unsaved title'}});
-  fireEvent.change(screen.getByLabelText('Full description'),{target:{value:'Unfinished editor text must remain unchanged'}});
+  fireEvent.change(screen.getByLabelText('Responsibility and full description'),{target:{value:'Unfinished editor text must remain unchanged'}});
   const region=screen.getByRole('region',{name:'Send saved planning draft'});
   expect(within(region).getByRole('button',{name:'Submit saved revision 2'}).disabled).toBe(true);
   await waitFor(()=>expect(retry('editor-original').disabled).toBe(false));fireEvent.click(retry('editor-original'));
   await within(region).findByText(/Native host acknowledged saved revision 1/);
-  expect(screen.getByLabelText('Task title').value).toBe('Do not lose this unsaved title');expect(screen.getByLabelText('Full description').value).toBe('Unfinished editor text must remain unchanged');
+  expect(screen.getByLabelText('Task title').value).toBe('Do not lose this unsaved title');expect(screen.getByLabelText('Responsibility and full description').value).toBe('Unfinished editor text must remain unchanged');
   expect(f.host.submit.mock.calls[0][0].ledger).toEqual(f.original);expect((await f.store.read()).revision).toBe(2);expect(f.store.saveTask).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole('button',{name:'Discard unsaved edits'}));
 });

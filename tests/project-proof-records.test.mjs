@@ -7,6 +7,8 @@ import { receiptDerivers } from "../src/project/receipts/proof.js";
 import { deriveWorkRecordReceipt } from "../src/project/workRecordReceipts.js";
 import { collisionSummary, ownerSummary } from "../src/project/integritySummary.js";
 import { readSection, writeSection } from "../src/project/projectWorkRecords.js";
+import { recordTaskDraftPresence } from "../src/project/taskDraftPresence.js";
+import { draftsDigest } from "../src/project/proofRecords.js";
 
 const AT = "2026-10-01T10:00:00.000Z";
 const draft = (id, extra = {}) => ({ id, title: `Task ${id}`, description: "", owner: "", acceptance: "", recovery: "", claims: [], dependsOn: [], archived: false, ...extra });
@@ -116,7 +118,9 @@ test("sign-off is current only for the plan version it covered", () => {
   assert.deepEqual(review, { planDigest: "fp-1", planSource: "drafts", taskIds: ["T0001"], reviewer: "Ana Ruiz", signedAt: AT, notes: "Looks right" });
 
   const signed = { review: record(review, 1, "2026-10-02T00:00:00.000Z") };
-  assert.equal(deriveWorkRecordReceipt("INT-REVIEW", { sections: signed }).state, "recorded");
+  // The sign-off's own snapshot never vouches for itself: with nothing independent, it needs review.
+  assert.equal(deriveWorkRecordReceipt("INT-REVIEW", { sections: signed }).state, "review");
+  assert.match(deriveWorkRecordReceipt("INT-REVIEW", { sections: signed }).detail, /could not be checked/);
   // Proof added later against a changed task list makes the sign-off stale.
   const changed = { ...signed, proof: record({ items: {}, scope: { source: "drafts", taskIds: ["T0001", "T0002"], digest: "fp-2" } }, 1, "2026-10-03T00:00:00.000Z") };
   const stale = deriveWorkRecordReceipt("INT-REVIEW", { sections: changed });
@@ -163,4 +167,53 @@ test("integrity summaries never claim resolution or ownership from unknown shape
   assert.equal(ownerSummary(record({ owners: [{ taskId: "T0001", owner: "Ana" }] }), ["T0001"]).state, "done");
   assert.equal(ownerSummary(record({ weird: true }), ["T0001"]).state, "unknown");
   assert.match(ownerSummary(null, ["T0001", "T0002"], ledger(draft("T0001", { owner: "Bo" }), draft("T0002"))).text, /1 of 2 task drafts name an owner/);
+});
+
+test("sign-off receipt compares with the Ledger's live drafts, not its own snapshot (proverel-03, 08)", () => {
+  const storage = memoryStorage();
+  const project = { projectId: "pp_signoff_live", census: { digest: "c".repeat(64) } };
+  const live = { revision: 1, binding: { censusDigest: project.census.digest }, tasks: [draft("T0001"), draft("T0002")] };
+  const scope = proofScope({}, live);
+  const unapproved = { ...signOffRecord({ scope, reviewer: "Ana", now: AT }), proofAtSignOff: { complete: 0, total: 2 } };
+  const sections = { review: record(unapproved, 1, AT) };
+  recordTaskDraftPresence(project.projectId, live, { storage });
+  const before = deriveWorkRecordReceipt("INT-REVIEW", { sections }, { project, storage });
+  assert.equal(before.state, "review", "unapproved, unproven sign-off is never a clean pass");
+  assert.match(before.detail, /no plan was approved and only 0 of 2 tasks were fully proven/);
+
+  const edited = { ...live, revision: 2, tasks: [draft("T0001", { title: "Renamed" }), draft("T0002")] };
+  assert.notEqual(draftsDigest(edited), draftsDigest(live));
+  recordTaskDraftPresence(project.projectId, edited, { storage });
+  const after = deriveWorkRecordReceipt("INT-REVIEW", { sections }, { project, storage });
+  assert.equal(after.state, "stale");
+
+  const planned = { planAuthority: record({ taskIds: ["T0001"], digest: "plan-1" }) };
+  const approved = { ...signOffRecord({ scope: proofScope(planned), reviewer: "Ana", now: AT }), proofAtSignOff: { complete: 1, total: 1 } };
+  assert.equal(deriveWorkRecordReceipt("INT-REVIEW", { sections: { ...planned, review: record(approved) } }, { project, storage }).state, "recorded");
+});
+
+test("all not-needed reasons make a task waived, not complete (proverel-07)", () => {
+  const scope = { source: "drafts", taskIds: ["T0001"], digest: "fp-1" };
+  let sections = {};
+  for (const covers of ["screenshot", "diff", "test"]) sections = { proof: record(addProofItem(sections, "T0001", item("skip", { covers, value: "n/a" }), scope)) };
+  const coverage = proofCoverage(scope, proofItems(sections));
+  assert.equal(coverage.tasks[0].status, "waived");
+  assert.equal(coverage.complete, 0);
+  assert.equal(coverage.waived, 1);
+  const bundle = deriveWorkRecordReceipt("INT-PROOF", { sections });
+  assert.equal(bundle.state, "review");
+  assert.match(bundle.detail, /1 waived/);
+  sections = { proof: record(addProofItem(sections, "T0001", item("diff"), scope)) };
+  assert.equal(proofCoverage(scope, proofItems(sections)).tasks[0].status, "complete");
+});
+
+test("names, titles and notes refuse bidi overrides and control characters (proverel-04)", () => {
+  const scope = { source: "drafts", taskIds: ["T0001"], digest: "fp-1" };
+  for (const bad of ["Dana\u202E", "\u2066Dana", "Da\u0007na", "Dana\u200F"]) {
+    assert.throws(() => validateProofItem(item("note", { addedBy: bad })), /text-direction/);
+    assert.throws(() => signOffRecord({ scope, reviewer: bad }), /text-direction/);
+  }
+  assert.throws(() => validateProofItem(item("note", { label: "a\u202Eb" })), /text-direction/);
+  assert.throws(() => signOffRecord({ scope, reviewer: "Ana", notes: "ok\u202Edone" }), /text-direction/);
+  assert.equal(signOffRecord({ scope, reviewer: "José Ñúñez", notes: "مرحبا", now: AT }).reviewer, "José Ñúñez");
 });

@@ -6,11 +6,13 @@ import { buildProjectIndex, INDEX_KINDS, searchProjectIndex } from "../project/p
 import "./ProjectIndexPanel.css";
 
 const WORKSPACE_NAMES = { ledger: "Ledger", structure: "Structure", blueprint: "Blueprint", components: "Components", plan: "Plan", evidence: "Evidence", build: "Build" };
+const QUERY_LIMIT = 160;
 const COUNT_LABELS = [["task", "tasks"], ["area", "discovery areas"], ["saved", "saved plans"], ["proof", "proof items"], ["file", "named files"], ["build", "build notes"]];
 
 export function ProjectIndexPanel({ project, records, onWorkspace, store = null }) {
   const drafts = useTaskDraftLedger(project, store);
   const [query, setQuery] = useState("");
+  const [clipped, setClipped] = useState(false);
   const index = useMemo(
     () => buildProjectIndex({ project, ledger: drafts.ledger, sections: records?.sections ?? {} }),
     [project, drafts.ledger, records],
@@ -30,8 +32,10 @@ export function ProjectIndexPanel({ project, records, onWorkspace, store = null 
       <div><h2><ListMagnifyingGlassIcon aria-hidden="true" />Search this project</h2><p>Find tasks, discovery areas, saved plans, proof and the files your tasks name. Results open the page where each one lives.</p></div>
     </header>
     <label className="project-index-search"><MagnifyingGlassIcon aria-hidden="true" /><span className="sr-only">Search this project</span>
-      <input type="search" value={query} maxLength={160} onChange={(event) => setQuery(event.target.value.slice(0, 160))} placeholder="Search tasks, areas, saved plans, proof and file names…" />
+      <input type="search" value={query} aria-describedby={clipped ? "project-index-clipped" : undefined} onChange={(event) => { const value = event.target.value; setClipped(value.length > QUERY_LIMIT); setQuery(value.slice(0, QUERY_LIMIT)); }} placeholder="Search tasks, areas, saved plans, proof and file names…" />
     </label>
+    {clipped && <p id="project-index-clipped" className="project-index-note">Search uses the first {QUERY_LIMIT} characters. The rest of what you typed or pasted was left out.</p>}
+    <p role="status" className="sr-only">{searching ? `${results.length} ${results.length === 1 ? "result" : "results"} for “${query.trim()}”` : ""}</p>
     <p className="project-index-counts" aria-label="What is searchable">{COUNT_LABELS.map(([kind, label]) => `${index.counts[kind]} ${label}`).join(" · ")}</p>
     {drafts.busy && !drafts.ledger && <p role="status">Reading saved tasks…</p>}
     {drafts.error && <p role="alert" className="project-index-error">Saved tasks could not be read, so tasks are missing from search: {drafts.error}</p>}

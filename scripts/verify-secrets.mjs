@@ -14,16 +14,11 @@ const ignored = new Set([".git", "node_modules", "dist", "target", "target-codex
 // file (or anywhere else) is still a finding. Never exempt a whole file or a source marker.
 const fixtureMatches = new Set([
   "scripts/generate-truth-report.mjs:generic-assignment:89bd311b7282dad1224abb5c6626b1f891a7e6a70bb72752fb7983b784cd820f",
-  "tests/ci-derivation.test.mjs:bearer-token:da44f21a888d10ac38777d4c7e7b7fd2bc174e11f3639f9e96ba12551ab9dc9b",
   "tests/identity-vault.test.mjs:generic-assignment:927b563b90b90c90f3ccfc8ee22f497e4086e33ea9f011a83acd248a71828cb6",
   "tests/provider-review-gateway.test.mjs:private-key:3021d90eb9437b2d8f30e8363695c4418b5e5f1870801b5c317e9398ee0f572d",
   "tests/provider-review.test.mjs:generic-assignment:73dc5a57856e8003501fda24b52e51bade22da6b14a878b2b3e57a7eaa931b66",
   "tests/provider-review.test.mjs:generic-assignment:686546acef73a9c5b5dc697400ef33136a9a4c4a06a7d59400e178df5b9b8fa9",
   "tests/runtime-event-codec.test.mjs:generic-assignment:38388d41b2df4458f1e7e9c960ecc61ffad998f9665aada43bef3697f55a7c64",
-  "tests-ui/pp-diagnostics-120-runtime-event-ledger.test.jsx:generic-assignment:c106c11d0473b36618225a55cc61715b40a4af0713de6458713d7ac6697faa6f",
-  "tests-ui/pp-diagnostics-120-runtime-event-ledger.test.jsx:generic-assignment:98767fffc4d4dd8d54091aaf1f826b2314f34a2a4ad881e0f5960801e1b918d8",
-  "tests-ui/pp-diagnostics-120-runtime-event-ledger.test.jsx:generic-assignment:9d5ff611772d78dd28b9e0605695b8308a5e047e586190c64386fca133a2a378",
-  "tests-ui/pp-diagnostics-120-runtime-event-ledger.test.jsx:openai-key:a165ce0568ce01a0486c54d64fea78c7e2dd166573d7fa2fdc5de3cb42d3d910",
 ]);
 const patterns = [
   ["private-key", /-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----/g],

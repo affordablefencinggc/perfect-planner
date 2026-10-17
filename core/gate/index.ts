@@ -1,4 +1,4 @@
-export { runTestCommand, commandExists, killTree, scrubbedEnv, isConclusiveFailure, TEST_ENV_ALLOW, DEFAULT_TIMEOUT_MS, type TestRunOptions, type TestRunResult, type TestRunner } from "./run";
+export { runTestCommand, commandExists, resolveCommand, testEnv, appNodeDir, killTree, scrubbedEnv, isConclusiveFailure, TEST_ENV_ALLOW, DEFAULT_TIMEOUT_MS, KILL_WAIT_MS, type ResolvedCommand, type TestRunOptions, type TestRunResult, type TestRunner } from "./run";
 export {
   TestGate,
   GateError,
@@ -8,6 +8,11 @@ export {
   parseTaskId,
   attemptId,
   nextAttemptId,
+  sensitiveChanges,
+  verifyMergeCommit,
+  testSupportFiles,
+  testRoots,
+  type GatePolicy,
   type GateState,
   type TestOutcome,
   type Phase,

@@ -1,6 +1,6 @@
 import React from "react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { PerfectPlannerShell } from "../src/PerfectPlannerShell.jsx";
 import { BundledPlannerConnection } from "../src/components/RuntimeConnectionsPanel.jsx";
@@ -196,7 +196,8 @@ test("real controller late native response cannot paint success for the next pro
   const user = userEvent.setup(); const { first, second } = mountProjects();
   const service = await openPanel(user);
   await user.click(within(service).getByRole("button", { name: "Check connection" }));
-  await user.click(screen.getByRole("button", { name: "Select second test project" }));
+  // Switch projects programmatically: a real outside click would (correctly) close the header popover.
+  fireEvent.click(screen.getByRole("button", { name: "Select second test project" }));
   const pendingCheck = within(service).getByRole("button", { name: "Check connection" });
   expect(pendingCheck.disabled).toBe(true);
   await user.click(pendingCheck);

@@ -85,6 +85,9 @@ export function boardFromLedger(entries: readonly LedgerEntry[]): StageBoard {
   const board = emptyBoard();
   for (const entry of entries) {
     if (entry.type !== "decision.made") continue;
+    // Only entries the ledger checked as written by a person or the system
+    // shape the board; a copied or hand-written line on disk does not.
+    if (!isAuthoritative(entry)) continue;
     const mvp = entry.data?.mvp as Record<string, any> | undefined;
     if (!mvp || typeof mvp !== "object") continue;
     switch (mvp.kind) {
@@ -258,7 +261,8 @@ export function mvpDoneWhen(
     const test = board.journey.test;
     for (let i = entries.length - 1; i >= 0; i--) {
       const e = entries[i]!;
-      if ((e.type === "test.passed" || e.type === "test.failed") && e.data?.test === test) {
+      // Test results come from the gate; an unverified result is ignored.
+      if ((e.type === "test.passed" || e.type === "test.failed") && e.data?.test === test && isAuthoritative(e)) {
         journeyPassed = e.type === "test.passed";
         break;
       }

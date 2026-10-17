@@ -5,6 +5,7 @@
 // passed on the same revision in this run. A human approval for that revision is a separate input.
 import { randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
+import { existsSync, realpathSync } from "node:fs";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { createInterface } from "node:readline/promises";
@@ -29,6 +30,28 @@ async function writeAtomic(file, value) {
 }
 const sameRevision = (left, right) => left?.head === right?.head && left?.treeDigest === right?.treeDigest;
 
+const realOrNull = (file) => { try { return realpathSync.native(file); } catch { return null; } };
+const inside = (root, file) => { const relative = path.relative(root, file); return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative)); };
+// npm's own entry script, run as `node npm-cli.js`, so neither a shell nor cmd.exe's current-folder
+// search ever resolves "npm" (a planted npm.cmd in the repository would otherwise run). Prefers the
+// npm that launched this script, then the npm installed beside this Node; never one inside the repo.
+export function npmCliPath(root, env = process.env) {
+  const roots = [path.resolve(root), realOrNull(root)].filter(Boolean);
+  const nodeDir = path.dirname(process.execPath);
+  for (const candidate of [env.npm_execpath, path.join(nodeDir, "node_modules", "npm", "bin", "npm-cli.js"), path.join(nodeDir, "..", "lib", "node_modules", "npm", "bin", "npm-cli.js")]) {
+    const resolved = candidate && existsSync(candidate) ? realOrNull(candidate) : null;
+    if (resolved && path.basename(resolved) === "npm-cli.js" && !roots.some((dir) => inside(dir, path.resolve(candidate)) || inside(dir, resolved))) return resolved;
+  }
+  throw new Error("npm's entry script was not found beside Node or from the npm that started this run; release gates did not run.");
+}
+// Gate scripts themselves run under npm's script shell; on Windows this stops cmd.exe searching the
+// repository folder first when one of them names a bare program.
+const NO_CWD_SEARCH_ENV = "NoDefaultCurrentDirectoryInExePath";
+export function runGateStep(root, step) {
+  const cli = npmCliPath(root);
+  return spawnSync(process.execPath, [cli, "run", ...step.split(" ")], { cwd: root, stdio: "inherit", shell: false, windowsHide: true, env: { ...process.env, [NO_CWD_SEARCH_ENV]: "1" } }).status ?? 1;
+}
+
 export async function runReleaseGates(root, profile, options = {}) {
   const chain = RELEASE_CHAINS[profile];
   if (!chain) throw new Error(`Unknown release profile: ${profile}.`);
@@ -37,7 +60,7 @@ export async function runReleaseGates(root, profile, options = {}) {
   const evidencePath = path.join(root, RELEASE_EVIDENCE_FILE);
   const evidence = { schemaVersion: 1, kind: RELEASE_EVIDENCE_KIND, runId: randomUUID(), profile, revision: { head: revision.head, treeDigest: revision.treeDigest }, startedAt: new Date().toISOString(), completedAt: null, steps: [] };
   await writeAtomic(evidencePath, sealed(evidence));
-  const runStep = options.runStep ?? ((step) => spawnSync(`npm run ${step}`, { cwd: root, stdio: "inherit", shell: true, windowsHide: true }).status ?? 1);
+  const runStep = options.runStep ?? ((step) => runGateStep(root, step));
   let failed = null;
   for (const step of chain) {
     const started = Date.now();

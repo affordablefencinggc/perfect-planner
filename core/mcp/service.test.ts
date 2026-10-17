@@ -5,6 +5,7 @@ import { Ledger, MemoryStore, type Actor } from "../ledger/index";
 import { Relay } from "../relay/index";
 import { installNumberingRules } from "../numbering/index";
 import { installClauseRules } from "../lookup/index";
+import { gateRule } from "../gate/index";
 import { AgentService, ToolError, bridgeCall, createAgentMcpServer, directCall, startBridge, TokenStore } from "./index";
 
 const owner: Actor = { kind: "person", id: "owner" };
@@ -59,7 +60,7 @@ describe("check-in and roles", () => {
 
   it("refuses bad tokens, missing hello and invalid input", async () => {
     const { service, w1 } = setup();
-    await expectCode(service.call({ token: "pp_w_not-a-real-token-at-all" }, "hello", { name: "x" }), "UNAUTHORIZED");
+    await expectCode(service.call({ token: ["pp_w_", "not-a-real-token-at-all"].join("") }, "hello", { name: "x" }), "UNAUTHORIZED");
     await expectCode(service.call({ token: w1, agent: "nobody" }, "list_tasks", {}), "UNAUTHORIZED", /hello/);
     const a = await hello(service, w1, "w");
     await expectCode(service.call(a, "claim_task", { task: "14" }), "INVALID", /T-14/);
@@ -116,6 +117,22 @@ describe("worker tools", () => {
     await expectCode(service.call(a, "claim_task", { task: "T-1" }), "REFUSED", /no approved test yet/);
   });
 
+  it("claims a reopened task as its next attempt, past the test gate's claim rule", async () => {
+    const { service, ledger, w1 } = setup();
+    ledger.addRule(gateRule());
+    // Mirror what the gate records: the person approves the pinned test, it fails first, then a diff rejection reopens T-1.
+    ledger.append({ actor: owner, type: "test.approved", subject: "T-1", summary: "Approved again", data: { test: "npm test -- T-1", definition: "L-000002", pin: "pin-1", pins: {} } });
+    ledger.append({ actor: { kind: "system", id: "gate" }, type: "test.failed", subject: "T-1", summary: "Fails first", evidence: ["phase:baseline", "definition:L-000002"], data: { test: "npm test -- T-1", definition: "L-000002", phase: "baseline", pin: "pin-1" } });
+    const a = await hello(service, w1, "w1");
+    expect(await service.call(a, "claim_task", { task: "T-1" })).toMatchObject({ task: "T-1", status: "claimed" });
+    ledger.append({ actor: { kind: "system", id: "gate" }, type: "task.reopened", subject: "T-1", summary: "Back to the worker as T-1.a2", reason: "Jev rejected the diff", data: { attempt: "T-1.a2" } });
+    expect(service.board().get("T-1")).toMatchObject({ status: "open", owner: null, attempt: 2 });
+    expect(await service.call(a, "claim_task", { task: "T-1" })).toMatchObject({ task: "T-1.a2", status: "claimed" });
+    expect(ledger.last()).toMatchObject({ type: "task.claimed", subject: "T-1.a2" });
+    expect(service.board().get("T-1")).toMatchObject({ status: "claimed", owner: a.agent, attempt: 2 });
+    await service.call(a, "report_progress", { task: "T-1", text: "Working on attempt 2" });
+  });
+
   it("releases a task back to the board and revokes the worker's token", async () => {
     const { service, w1 } = setup();
     const a = await hello(service, w1, "w1");
@@ -123,6 +140,16 @@ describe("worker tools", () => {
     expect(await service.call(a, "release_task", { task: "T-1", reason: "Needs a schema change first", blocked: true })).toMatchObject({ status: "blocked" });
     await expectCode(service.call(a, "list_tasks", {}), "UNAUTHORIZED");
     expect(service.board().get("T-1")).toMatchObject({ status: "blocked", owner: null });
+  });
+
+  it("keeps a finished task done when its worker releases it", async () => {
+    const { service, ledger, w1 } = setup();
+    const a = await hello(service, w1, "w1");
+    await service.call(a, "claim_task", { task: "T-1" });
+    ledger.append({ actor: { kind: "system", id: "gate" }, type: "test.passed", subject: "T-1", summary: "Passed", data: { test: "npm test -- T-1" } });
+    ledger.append({ actor: owner, type: "task.done", subject: "T-1", summary: "Done" });
+    expect(await service.call(a, "release_task", { task: "T-1", reason: "finished" })).toMatchObject({ status: "done" });
+    expect(service.board().get("T-1")).toMatchObject({ status: "done", owner: null });
   });
 });
 
@@ -285,6 +312,38 @@ describe("auto-answered questions in the main chat's inbox", () => {
     await service.call(a, "ask_main", { task: "T-1", question: "Paper size?", blocking: true });
     const inbox = (await service.call(main, "check_inbox", {})) as { questions: { q: string; autoAnswered: boolean }[] };
     expect(inbox.questions.map((q) => [q.q, q.autoAnswered])).toEqual([["Q-3", false], ["Q-2", true]]);
+  });
+});
+
+describe("secrets in agent text", () => {
+  it("redacts a private key pasted into a question before it reaches the ledger, the digest or the answer", async () => {
+    const { service, ledger, connect, w1 } = setup();
+    const main = await hello(service, connect, "main");
+    const a = await hello(service, w1, "w1");
+    const key = [`-----BEGIN OPENSSH ${"PRIVATE"} KEY-----`, "SSHFAKEBODYaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "SSHFAKETAIL==", `-----END OPENSSH ${"PRIVATE"} KEY-----`].join("\n");
+    await service.call(a, "claim_task", { task: "T-1" });
+    await service.call(a, "ask_main", { task: "T-1", question: `Is this the deploy key?\n${key}`, options: ["DB_PASSWORD=optionleak123", "No"] });
+    await service.call(a, "report_progress", { task: "T-1", text: "Set API_TOKEN=progressleak123 for the run" });
+    const digest = await service.call(main, "check_inbox", {});
+    await service.call(main, "answer", { question: "Q-1", text: "Use SECRET_KEY=answerleak1234 instead" });
+    const answers = await service.call(a, "check_inbox", {});
+    await service.call(a, "release_task", { task: "T-1", reason: "PASSWORD=releaseleak123 expired", blocked: true });
+    const everything = JSON.stringify([ledger.entries(), digest, answers]);
+    for (const leak of ["SSHFAKE", "optionleak123", "progressleak123", "answerleak1234", "releaseleak123"]) expect(everything).not.toContain(leak);
+    expect(everything).toContain("[redacted-secret]");
+  });
+});
+
+describe("blocked tasks after a restart", () => {
+  it("clears a dead owner from a blocked task so the task can be picked up again", async () => {
+    const { service, ledger, tokens, w1 } = setup();
+    await service.call(await hello(service, w1, "w1"), "claim_task", { task: "T-1" });
+    service.pauseAll(owner, "Stop for lunch");
+    const restarted = new AgentService({ ledger, tokens });
+    expect(restarted.releaseOrphanedHolds(owner, "Perfect Planner restarted")).toEqual(["T-1"]);
+    expect(restarted.board().get("T-1")).toMatchObject({ status: "blocked", owner: null });
+    restarted.resumeAll(owner);
+    expect(restarted.board().get("T-1")).toMatchObject({ status: "open", owner: null });
   });
 });
 

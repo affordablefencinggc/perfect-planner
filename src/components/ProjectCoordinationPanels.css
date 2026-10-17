@@ -8,15 +8,15 @@
 .coord-note{padding:10px 14px;border-left:3px solid var(--line-strong);background:var(--canvas);border-radius:4px}.coord-note.warn{background:var(--amber-soft);border-left-color:var(--amber)}
 .coord-note ul{margin:6px 0 10px;padding-left:20px}.coord-summary{font-family:var(--mono);font-size:14px!important;color:var(--muted)}
 .coord-empty{padding:24px;text-align:center}
-.coord-list{display:grid;gap:14px;margin-top:14px}
-.coord-card{border:1px solid var(--line);border-left:4px solid var(--amber);border-radius:8px;background:var(--paper-strong);padding:14px 16px}.coord-card.hard{border-left-color:var(--red)}.coord-card.decided{border-left-color:var(--green)}
+.coord-list{display:grid;grid-template-columns:minmax(0,1fr);gap:14px;margin-top:14px}
+.coord-card{min-width:0;border:1px solid var(--line);border-left:4px solid var(--amber);border-radius:8px;background:var(--paper-strong);padding:14px 16px}.coord-card.hard{border-left-color:var(--red)}.coord-card.decided{border-left-color:var(--green)}
 .coord-card>header{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:center}.coord-card>header strong{font-size:15px;overflow-wrap:anywhere}
 .coord-tag{display:inline-flex;align-items:center;gap:5px;font:12px/1.3 var(--mono);text-transform:uppercase;padding:4px 8px;border-radius:999px;background:var(--amber-soft)}.coord-card.hard .coord-tag{background:var(--red-soft)}
 .coord-files{list-style:none;margin:6px 0;padding:0;display:grid;gap:4px}.coord-files li{display:flex;gap:10px;flex-wrap:wrap;align-items:baseline}.coord-files code{overflow-wrap:anywhere}.coord-files small{color:var(--muted)}
 .coord-hint{color:var(--muted)}.coord-decided{display:flex;align-items:center;gap:6px;color:var(--green)}
-.coord-actions label{display:flex;align-items:center;gap:8px;font-size:14px}.coord-panel select,.coord-panel input{font:14px var(--mono);color:var(--ink);background:var(--paper-strong);border:1px solid var(--chrome-dark);border-radius:6px;min-height:36px;padding:6px 8px;max-width:100%}
+.coord-actions label{display:flex;align-items:center;flex-wrap:wrap;gap:8px;font-size:14px;min-width:0;max-width:100%}.coord-actions select{min-width:0}.coord-panel select,.coord-panel input{font:14px var(--mono);color:var(--ink);background:var(--paper-strong);border:1px solid var(--chrome-dark);border-radius:6px;min-height:36px;padding:6px 8px;max-width:100%}
 .coord-ok{display:flex;align-items:center;gap:8px;flex-wrap:wrap;color:var(--green);margin-top:14px!important}
 .coord-table{display:grid;gap:2px;margin-top:10px}.coord-row{display:grid;grid-template-columns:minmax(0,2fr) minmax(0,1.4fr) 90px;gap:12px;align-items:center;padding:8px 10px;background:var(--paper-strong);border-radius:6px}
 .coord-row.head{background:transparent;font:12px var(--mono);text-transform:uppercase;color:var(--muted)}.coord-row code{font-weight:700;margin-right:6px}
-.coord-owner{display:flex;align-items:center;gap:8px}.coord-owner input{flex:1;min-width:0}.coord-row input[type=number]{width:80px}
-@media(max-width:700px){.coord-panel{padding:16px}.coord-panel>header{margin:-16px -16px 16px;padding:16px}.coord-row{grid-template-columns:1fr}.coord-row.head{display:none}}
+.coord-owner{display:flex;align-items:center;flex-wrap:wrap;gap:8px}.coord-wave{display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px}.coord-row-errors{grid-column:1/-1;display:grid;gap:2px}.coord-field-error{color:var(--red);font-size:13px}.coord-panel [aria-invalid=true]{border-color:var(--red);outline:1px solid var(--red)}.coord-unsaved{font:13px var(--mono);padding:4px 10px;border-radius:999px;background:var(--amber-soft);border:1px solid var(--amber)}.coord-owner input{flex:1;min-width:0}.coord-row input[type=number]{width:80px}
+@media(max-width:700px){.coord-panel{padding:16px}.coord-panel>header{margin:-16px -16px 16px;padding:16px}.coord-row{grid-template-columns:1fr}.coord-row.head{display:none}.coord-actions label,.coord-actions select{width:100%}.coord-row [data-label]::before{content:attr(data-label);flex-basis:100%;font:12px var(--mono);text-transform:uppercase;color:var(--muted)}}

@@ -1,5 +1,9 @@
 import { isProjectId } from "./projectIds.js";
 import { projectWorkspaceNames } from "./projectSession.js";
+import { phases } from "../plannerWorkspaceData.js";
+
+// Only phases the Plan map can show; anything else in ?phase= is ignored instead of being saved into the registry.
+const KNOWN_PHASE_IDS = Object.freeze(phases.map((phase) => phase.id));
 
 const BASE = "http://perfect-planner.local";
 
@@ -16,7 +20,7 @@ export function readProjectSelection(urlLike) {
   return Object.freeze({
     projectId: isProjectId(projectId) ? projectId : null,
     workspace: projectWorkspaceNames.includes(workspace) ? workspace : null,
-    phase: phase && /^[a-zA-Z0-9._:-]{1,96}$/.test(phase) ? phase : null,
+    phase: KNOWN_PHASE_IDS.includes(phase) ? phase : null,
   });
 }
 

@@ -1,93 +1,23 @@
 // Secret scanning for "Shipping safely" (layers 1-3: staged/added text, ignore
 // list, whole-branch scan before push). Plain Node, injected git runner.
 //
-// Rules here are mirrored in hooks/pre-push.mjs (which cannot import TS);
-// secrets.test.ts fails if the two drift apart.
+// Detection is core/secrets detectSecrets, the same check Jev runs on a diff.
+// hooks/pre-push.mjs imports a generated JS copy of it (git runs hooks with
+// node, which cannot load TS); secrets.test.ts fails if the copy is stale.
 //
 // A full secret is never printed, stored or thrown: every finding carries only
 // maskSecret(match), e.g. "ghp_…(40)".
 
 import { ALLOWLIST_PATH, fingerprintOf, parseAllowlist } from "./allowlist";
+import { PLACEHOLDER, SECRET_RULES, detectSecrets, isConfigLikeFile, isPlaceholder, maskSecret, minValueLength } from "../secrets/index";
 import type { ChangedFile, CommandRunner, SecretFinding } from "./types";
 
 export { ALLOWLIST_PATH, fingerprintOf, parseAllowlist };
 
-export interface SecretRule {
-  id: string;
-  description: string;
-  pattern: RegExp;
-  /** Capture group holding the secret value when the whole match is not it. */
-  valueGroup?: number;
-  /** Capture group holding the secret's NAME; its keywords set the minimum value length. */
-  nameGroup?: number;
-  /** Only applied to config-like files (see isConfigLikeFile). */
-  configOnly?: boolean;
-}
-
-// There is deliberately no inline "allow this line" marker: a reviewed exception
-// is an exact fingerprint in .perfect-planner/secret-allowlist.json (allowlist.ts).
-
-export const SECRET_RULES: readonly SecretRule[] = [
-  { id: "aws-access-key", description: "AWS access key id", pattern: /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g },
-  { id: "github-token", description: "GitHub token", pattern: /\b(?:gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{22,})/g },
-  { id: "anthropic-key", description: "Anthropic API key", pattern: /\bsk-ant-[A-Za-z0-9_-]{20,}/g },
-  { id: "openai-key", description: "OpenAI API key", pattern: /\bsk-proj-[A-Za-z0-9_-]{20,}|\bsk-(?!ant-)[A-Za-z0-9]{32,}/g },
-  { id: "slack-token", description: "Slack token", pattern: /\bxox[abposr]-[A-Za-z0-9-]{10,}/g },
-  { id: "stripe-key", description: "Stripe live key", pattern: /\b[sr]k_live_[A-Za-z0-9]{16,}/g },
-  { id: "google-api-key", description: "Google API key", pattern: /\bAIza[0-9A-Za-z_-]{35}/g },
-  { id: "private-key", description: "Private key block", pattern: /-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?-----/g },
-  { id: "jwt", description: "JSON web token", pattern: /\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g },
-  {
-    id: "aws-secret-key",
-    description: "AWS secret access key (quoted or not)",
-    pattern: /\baws[_-]?secret[_-]?access[_-]?key["']?\s*[:=]\s*["']?([A-Za-z0-9/+]{40})(?![A-Za-z0-9/+])/gi,
-    valueGroup: 1,
-  },
-  {
-    id: "generic-assignment",
-    description: "Hard-coded secret assigned to a secret-looking name",
-    pattern: /\b([A-Za-z0-9_.-]*(?:api[_-]?key|secret|token|password|passwd|client[_-]?secret)[A-Za-z0-9_.-]*)["']?\s*[:=]\s*["']([^"'\s]{8,})["']/gi,
-    valueGroup: 2,
-    nameGroup: 1,
-  },
-  {
-    id: "generic-assignment-unquoted",
-    description: "Unquoted secret on a whole NAME: value / NAME=value line of a config file",
-    pattern: /^\s*(?:-\s+)?(?:export\s+)?([A-Za-z0-9_.-]*(?:api[_-]?key|secret|token|password|passwd|client[_-]?secret)[A-Za-z0-9_.-]*)\s*[:=]\s*([^\s"'#;]{8,})\s*(?:[#;].*)?$/gi,
-    valueGroup: 2,
-    nameGroup: 1,
-    configOnly: true,
-  },
-];
-
-/**
- * A value is a placeholder only when the WHOLE value is one (or a secret-store
- * reference such as "secret://..." or "dpapi:v1:..."); containing the word
- * "test" or "example" somewhere is not enough.
- */
-export const PLACEHOLDER = /^(?:placeholder|changeme|x{3,}|<[^>]*>|\$\{[^}]*\}|\{\{[^}]*\}\}|process\.env\.[\w.]+|your[_-][\w-]*|example|dummy|test|redacted|\*{3,}|none|null|undefined|todo)$|^(?:secret:\/\/|keychain:|keyring:|vault:|dpapi:|op:\/\/|credentials:)/i;
-
-/** True for obvious stand-ins like "changeme", "<token>", "${TOKEN}". */
-export function isPlaceholder(value: string): boolean {
-  return PLACEHOLDER.test(value);
-}
-
-/** Minimum value length for a secret name: password/secret 8, key/token 12. */
-export function minValueLength(name: string): number {
-  return /password|passwd|secret/i.test(name) ? 8 : 12;
-}
-
-const CONFIG_NAME = /\.(?:ya?ml|ini|cfg|conf|properties|toml)$|^\.env(?:\..+)?$|^\.npmrc$|^dockerfile(?:\..+)?$|^docker-compose/;
-
-/** True for files where `NAME: value` / `NAME=value` lines are configuration. */
-export function isConfigLikeFile(path: string): boolean {
-  return CONFIG_NAME.test(baseName(path).toLowerCase());
-}
-
-/** First 4 characters, an ellipsis and the length: "ghp_…(40)". */
-export function maskSecret(s: string): string {
-  return `${s.slice(0, 4)}…(${s.length})`;
-}
+// The detection rules themselves live in core/secrets, shared with Jev's diff
+// check, so a diff Jev passes is one the push check passes too.
+export type { SecretRule } from "../secrets/index";
+export { PLACEHOLDER, SECRET_RULES, isConfigLikeFile, isPlaceholder, maskSecret, minValueLength };
 
 interface ForbiddenRule {
   id: string;
@@ -107,6 +37,7 @@ export const FORBIDDEN_FILES: readonly ForbiddenRule[] = [
 ];
 
 const ENV_TEMPLATE = /^\.env\.(?:example|sample|template)$/;
+const PLANNER_STATE = /(^|\/)\.perfect-planner\//i;
 
 function baseName(path: string): string {
   const p = path.replace(/\\/g, "/");
@@ -116,6 +47,8 @@ function baseName(path: string): string {
 /** Rule id when a file name must never be committed, else null. */
 export function isForbiddenFile(path: string): string | null {
   if (path.replace(/\\/g, "/") === ALLOWLIST_PATH) return null;
+  // Perfect Planner's own state (ledger, worker tokens, briefs, keys) never leaves the machine.
+  if (PLANNER_STATE.test(path.replace(/\\/g, "/"))) return "planner-state";
   const name = baseName(path).toLowerCase();
   if (ENV_TEMPLATE.test(name)) return null;
   for (const r of FORBIDDEN_FILES) if (r.pattern.test(name)) return r.id;
@@ -128,37 +61,27 @@ const NPMRC_TOKEN = /_authToken\s*=\s*(\S+)/;
 export function scanText(file: string, text: string, allow?: ReadonlySet<string>): SecretFinding[] {
   const findings: SecretFinding[] = [];
   const isNpmrc = baseName(file).toLowerCase() === ".npmrc";
-  const config = isConfigLikeFile(file);
   const lines = text.split(/\r?\n/);
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    const taken: Array<[number, number]> = [];
     const add = (rule: string, secret: string) => {
       const fingerprint = fingerprintOf(file, rule, secret);
       if (allow?.has(fingerprint)) return;
       findings.push({ file, line: i + 1, rule, preview: maskSecret(secret), fingerprint });
     };
-    for (const rule of SECRET_RULES) {
-      if (rule.configOnly && !config) continue;
-      for (const m of line.matchAll(rule.pattern)) {
-        const start = m.index ?? 0;
-        if (rule.valueGroup === undefined) {
-          taken.push([start, start + m[0].length]);
-          add(rule.id, m[0]);
-          continue;
-        }
-        const value = m[rule.valueGroup];
-        const valueStart = start + m[0].lastIndexOf(value);
-        if (taken.some(([a, b]) => valueStart >= a && valueStart < b)) continue;
-        taken.push([valueStart, valueStart + value.length]);
-        if (rule.nameGroup !== undefined && value.length < minValueLength(m[rule.nameGroup])) continue;
-        if (isPlaceholder(value) || !/[A-Za-z]/.test(value)) continue;
-        add(rule.id, value);
-      }
-    }
+    // The same detector as Jev's diff check (core/secrets detectSecrets).
+    // An .npmrc auth token is reported under its own rule; the detector skips that span.
+    let npmStart: number | undefined;
     if (isNpmrc) {
       const m = NPMRC_TOKEN.exec(line);
-      if (m && !isPlaceholder(m[1])) add("npmrc-auth-token", m[1]);
+      if (m && !isPlaceholder(m[1])) {
+        npmStart = (m.index ?? 0) + m[0].length - m[1].length;
+        add("npmrc-auth-token", m[1]);
+      }
+    }
+    for (const span of detectSecrets(file, line)) {
+      if (npmStart !== undefined && span.end > npmStart) continue;
+      add(span.rule, line.slice(span.start, span.end));
     }
   }
   return findings;
@@ -218,41 +141,57 @@ export interface BranchScanResult {
   filesScanned: number;
 }
 
+/** `git ls-tree -r -z` output: path -> mode, type and object id. */
+function parseTree(stdout: string): Map<string, { mode: string; type: string; id: string }> {
+  const entries = new Map<string, { mode: string; type: string; id: string }>();
+  for (const record of stdout.split("\0")) {
+    const tab = record.indexOf("\t");
+    if (tab < 0) continue;
+    const [mode = "", type = "", id = ""] = record.slice(0, tab).split(" ");
+    entries.set(record.slice(tab + 1), { mode, type, id });
+  }
+  return entries;
+}
+
 /**
  * Layer 3: scan the full content of every file the branch adds or changes.
- * The allowlist is read from the BASE commit (or `allowlistText`), never from
- * the head, so a push cannot allowlist its own secret.
+ * `approved` is the set of fingerprints a person approved in the signed ledger
+ * (approvedFingerprints(ledger.entries())). No allowlist file is read from any
+ * branch: a file a push adds approves nothing, so two pushes cannot approve
+ * their own secret.
  */
 export async function scanBranch(
   run: CommandRunner,
-  opts: { cwd: string; base: string; head?: string; allowlistText?: string },
+  opts: { cwd: string; base: string; head?: string; approved?: ReadonlySet<string> },
 ): Promise<BranchScanResult> {
   const head = opts.head ?? "HEAD";
-  const list = await run("git", ["diff", "--name-only", "--diff-filter=ACMR", `${opts.base}...${head}`], { cwd: opts.cwd });
-  if (list.code !== 0) {
-    throw new Error(`git diff failed (exit ${list.code}): ${list.stderr.trim().split(/\r?\n/)[0] ?? ""}`);
-  }
-  const paths = list.stdout.split(/\r?\n/).map((p) => p.trim()).filter(Boolean);
-  const raw: SecretFinding[] = [];
-  for (const path of paths) {
+  const fail = (what: string, result: { code: number; stderr: string }) =>
+    new Error(`${what} failed (exit ${result.code}): ${result.stderr.trim().split(/\r?\n/)[0] ?? ""}`);
+  // base...head: what head changed since its merge-base with base. Only object reads (merge-base,
+  // ls-tree, cat-file blob) are used: they never touch the working tree, so no filter program can
+  // run, and the host git runner allows them in a repo whose config names one.
+  const mergeBase = await run("git", ["merge-base", opts.base, head], { cwd: opts.cwd });
+  if (mergeBase.code !== 0) throw fail("git merge-base", mergeBase);
+  const tree = async (rev: string) => {
+    const listed = await run("git", ["ls-tree", "-r", "-z", "--full-tree", rev], { cwd: opts.cwd });
+    if (listed.code !== 0) throw fail("git ls-tree", listed);
+    return parseTree(listed.stdout);
+  };
+  const before = await tree(mergeBase.stdout.trim());
+  const after = await tree(head);
+  const findings: SecretFinding[] = [];
+  const paths: string[] = [];
+  for (const [path, entry] of after) {
+    const old = before.get(path);
+    // Added or changed files; a submodule (commit) or unchanged blob has nothing to read.
+    if (entry.type !== "blob" || (old && old.id === entry.id && old.mode === entry.mode)) continue;
+    paths.push(path);
     const rule = isForbiddenFile(path);
-    if (rule) raw.push(...forbiddenFinding(path, rule));
-    const shown = await run("git", ["show", `${head}:${path}`], { cwd: opts.cwd });
-    if (shown.code !== 0) {
-      throw new Error(`git show failed for ${path} (exit ${shown.code}): ${shown.stderr.trim().split(/\r?\n/)[0] ?? ""}`);
-    }
+    if (rule) findings.push(...forbiddenFinding(path, rule, opts.approved));
+    const shown = await run("git", ["cat-file", "blob", entry.id], { cwd: opts.cwd });
+    if (shown.code !== 0) throw fail(`git cat-file for ${path}`, shown);
     if (shown.stdout.includes("\0")) continue;
-    raw.push(...scanText(path, shown.stdout));
-  }
-  let findings = raw;
-  if (raw.length > 0) {
-    let text = opts.allowlistText;
-    if (text === undefined) {
-      const base = await run("git", ["show", `${opts.base}:${ALLOWLIST_PATH}`], { cwd: opts.cwd });
-      text = base.code === 0 ? base.stdout : "";
-    }
-    const allow = parseAllowlist(text);
-    findings = raw.filter((f) => !f.fingerprint || !allow.has(f.fingerprint));
+    findings.push(...scanText(path, shown.stdout, opts.approved));
   }
   return { ok: findings.length === 0, findings, filesScanned: paths.length };
 }

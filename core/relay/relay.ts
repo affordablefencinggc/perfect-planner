@@ -11,6 +11,7 @@
 import type { Actor, EntryDraft, Ledger, LedgerEntry } from "../ledger/index";
 import { isAuthoritative } from "../ledger/index";
 import { appendNumbered } from "../numbering/index";
+import { redactSecrets } from "../jev/redact";
 
 export interface QuestionInput {
   task: string;
@@ -88,6 +89,16 @@ export interface RelayOptions {
   settled?: SettledAnswerer | null;
 }
 
+/**
+ * Whether a reader may take an entry as written: an agent's or Jev's own entry
+ * (they hold no keys), or a person or system entry whose signature the ledger
+ * verified. A forged person or system entry on disk is ignored.
+ */
+export function trustedEntry(entry: LedgerEntry): boolean {
+  const kind = entry.actor?.kind;
+  return kind === "agent" || kind === "jev" || isAuthoritative(entry);
+}
+
 export class Relay {
   private readonly ledger: Ledger;
   private readonly settled: SettledAnswerer | null;
@@ -98,6 +109,8 @@ export class Relay {
   private readonly shownAuto = new Map<string, Set<string>>();
   private readonly waiters = new Map<string, ((q: Question) => void)[]>();
   private pausedAll: { reason: string } | null = null;
+  /** Tasks Pause all blocked; Resume all unblocks exactly these, owned or not. */
+  private pausedTasks = new Set<string>();
   private readonly unsubscribe: () => void;
 
   constructor(options: RelayOptions) {
@@ -117,6 +130,9 @@ export class Relay {
 
   private apply(e: LedgerEntry): void {
     const d = e.data ?? {};
+    // Agents (and Jev) hold no keys, so their entries are taken as written; a
+    // person or system entry counts only when the ledger verified its signature.
+    if (!trustedEntry(e)) return;
     if (e.type === "question.asked") {
       this.questions.set(e.subject, {
         q: e.subject,
@@ -142,10 +158,12 @@ export class Relay {
       // Only a person's (or the system's) decision may answer later questions.
       const person = typeof d.person === "string" ? d.person : typeof d.question === "string" ? this.questions.get(d.question)?.person : undefined;
       if (person !== undefined) this.decisions.set(decisionKey(person, d.key), { d: e.subject, answer: String(d.answer ?? e.summary) });
-    } else if (e.type === "task.blocked" && d.pauseAll === true) {
+    } else if (e.type === "task.blocked" && d.pauseAll === true && isAuthoritative(e)) {
       this.pausedAll = { reason: e.reason ?? "Paused" };
-    } else if (e.type === "task.progress" && d.resumeAll === true) {
+      this.pausedTasks.add(e.subject);
+    } else if (e.type === "task.progress" && d.resumeAll === true && isAuthoritative(e)) {
       this.pausedAll = null;
+      this.pausedTasks.delete(e.subject);
     }
   }
 
@@ -159,9 +177,10 @@ export class Relay {
    * decision or the settled-answer source answers it, also question.answered.
    */
   async ask(worker: Actor, person: string, input: QuestionInput): Promise<AskResult> {
-    const question = input.question.trim();
+    // Agents paste logs and configs; nothing secret goes into the ledger or the digest.
+    const question = redactSecrets(input.question.trim());
     if (!question) throw new Error("A question needs some words.");
-    const options = (input.options ?? []).map((o) => o.trim()).filter(Boolean);
+    const options = (input.options ?? []).map((o) => redactSecrets(o.trim())).filter(Boolean);
     const blocking = input.blocking === true;
     const q = appendNumbered(this.ledger, {
       actor: worker,
@@ -241,7 +260,7 @@ export class Relay {
    * information for the worker, never a decision (only a person decides).
    */
   answer(by: Actor, person: string, q: string, text: string): { q: string; decision: string | null; worker: string } {
-    const answer = text.trim();
+    const answer = redactSecrets(text.trim());
     if (!answer) throw new Error("An answer needs some words.");
     const asked = this.questions.get(q);
     if (!asked) throw new Error(`${q} is not a question in this project.`);
@@ -310,15 +329,20 @@ export class Relay {
     return this.pausedAll;
   }
 
-  /** Pause every worker (spec §4.5): one task.blocked entry per active task, marked pauseAll. */
-  pauseAll(by: Actor, reason: string, activeTasks: string[]): void {
-    for (const task of activeTasks.length ? activeTasks : ["ALL"]) {
+  /**
+   * Pause every worker (spec §4.5): one task.blocked entry per given task,
+   * marked pauseAll. Every entry needs a real task number, so the caller passes
+   * the open tasks too when nothing is being worked on.
+   */
+  pauseAll(by: Actor, reason: string, tasks: string[]): void {
+    if (!tasks.length) throw new Error("There are no tasks to pause.");
+    for (const task of tasks) {
       this.write({ actor: by, type: "task.blocked", subject: task, summary: "Paused by Pause all", reason, data: { pauseAll: true } });
     }
   }
 
-  resumeAll(by: Actor, activeTasks: string[]): void {
-    for (const task of activeTasks.length ? activeTasks : ["ALL"]) {
+  resumeAll(by: Actor): void {
+    for (const task of [...this.pausedTasks]) {
       this.write({ actor: by, type: "task.progress", subject: task, summary: "Resumed after Pause all", data: { resumeAll: true } });
     }
   }

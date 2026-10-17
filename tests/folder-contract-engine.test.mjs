@@ -47,3 +47,22 @@ test("ambiguous filenames force resolution and content-bearing census records ar
 test("organisation review exposes exact read/write claims but cannot authorise a move", () => { const contract = valid(); contract.nodes.push({ ...node("F005", "src/features/quotes/QuoteEditor.jsx"), kind: "file", dependsOn: ["F003"] }); contract.nodes.push({ ...node("F006", "src/features/quotes/screens"), dependsOn: ["F005"] }); const census = { schemaVersion: 1, digest: "e".repeat(64), contentReturned: false, fileCount: 1, files: [{ path: "legacy/QuoteEditor.jsx" }] }; const analysis = analyzeWorkspaceStructure(census, contract); const review = prepareFolderOrganizationReview(analysis, contract); assert.equal(review.executionAllowed, false); assert.equal(review.collisionAuthorityRequired, true); assert.deepEqual(review.proposals[0], { proposalId: "MOVE-F005", nodeId: "F005", action: "move", readClaims: ["legacy/QuoteEditor.jsx"], writeClaims: ["legacy/QuoteEditor.jsx", "src/features/quotes/QuoteEditor.jsx"], dependantNodeIds: ["F006"], previewState: "AUTHORITY_REQUIRED", internalCollision: false, approvalRequired: true, rollbackReceiptRequired: true, executionAllowed: false }); });
 
 test("organisation review refuses relabelled targets and exposes internal proposal collisions", () => { const contract = valid(); contract.nodes.push({ ...node("F005", "src/features/quotes/QuoteEditor.jsx"), kind: "file", dependsOn: ["F003"] }); contract.nodes.push({ ...node("F006", "src/features/quotes/QuoteSummary.jsx"), kind: "file", dependsOn: ["F003"] }); const census = { schemaVersion: 1, digest: "f".repeat(64), contentReturned: false, fileCount: 1, files: [{ path: "legacy/QuoteEditor.jsx" }] }; const analysis = analyzeWorkspaceStructure(census, contract); const altered = { ...analysis, proposals: [{ ...analysis.proposals[0], to: "src/elsewhere/QuoteEditor.jsx" }] }; assert.throws(() => prepareFolderOrganizationReview(altered, contract), /exact contract node/); const colliding = { ...analysis, proposals: [...analysis.proposals, { ...analysis.proposals[0], proposalId: "MOVE-F006", to: "src/features/quotes/QuoteSummary.jsx" }] }; const review = prepareFolderOrganizationReview(colliding, contract); assert.equal(review.proposals.every((proposal) => proposal.previewState === "INTERNAL_COLLISION"), true); });
+
+// Trial define-03: these used to freeze.
+test("wildcards, markup, over-long paths and free-text task IDs block the contract", async () => {
+  const withNode = (overrides) => ({ ...valid(), nodes: [node("F001", "src"), node("F002", "src/x", overrides)] });
+  for (const path of ["src*", "src/**", "src/<script>", "src/a?b", "src/a:b", "src/a|b", `src/${"a".repeat(300)}`, "src/name.", "src/trailing "]) {
+    const result = assessFolderContract(withNode({ path }));
+    assert.equal(result.ready, false, path);
+    await assert.rejects(freezeFolderContract(withNode({ path }), approval()), /cannot freeze/, path);
+  }
+  assert.match(assessFolderContract(withNode({ path: "src/**" })).blockers.join(" "), /wildcard/);
+  assert.match(assessFolderContract(withNode({ path: `src/${"a".repeat(300)}` })).blockers.join(" "), /longer than 240/);
+  for (const taskId of ["lol not a task", "<script>", "T 1", "-1"]) {
+    const result = assessFolderContract(withNode({ taskId }));
+    assert.equal(result.ready, false, taskId);
+    assert.match(result.blockers.join(" "), /task number such as T0001/);
+  }
+  for (const taskId of ["T0001", "B01", "B-C001"]) assert.equal(assessFolderContract(withNode({ taskId })).ready, true, taskId);
+  assert.equal(assessFolderContract(withNode({ path: "src/my app" })).ready, true);
+});

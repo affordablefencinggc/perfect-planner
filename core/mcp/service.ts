@@ -6,11 +6,12 @@
 // owns the entry rules and the gate rules other modules register; when the
 // ledger refuses, the agent gets the ledger's reason back.
 import { LedgerError, type Actor, type EntryDraft, type Ledger, type LedgerEntry } from "../ledger/index";
-import { Relay } from "../relay/relay";
+import { Relay, trustedEntry } from "../relay/relay";
 import { attemptLabel, foldBoard, type TaskView } from "./board";
 import { lookup } from "../lookup/index";
 import { TokenStore, tokenId, type Grant } from "./tokens";
 import { TOOL_INFO, TOOL_INPUTS, type ToolInput, type ToolName } from "./tools";
+import { looksSecret, redactSecrets } from "../jev/redact";
 
 export type AgentRole = "main" | "worker" | "observer";
 
@@ -101,7 +102,8 @@ export class AgentService {
       case "answer":
         return this.answer(agent, args as ToolInput<"answer">);
       case "lookup":
-        return lookup(this.ledger.entries(), (args as ToolInput<"lookup">).ref);
+        // Forged person or system entries (plan text, decisions) are left out of what agents read.
+        return lookup(this.ledger.entries().filter(trustedEntry), (args as ToolInput<"lookup">).ref);
       case "release_task":
         return this.release(agent, args as ToolInput<"release_task">);
       default:
@@ -176,14 +178,16 @@ export class AgentService {
     if (view.owner === agent.id) return { task: attemptLabel(view), status: view.status, entry: view.lastEntry };
     if (view.status === "done") throw new ToolError("CONFLICT", `${task} is already done.`);
     if (view.owner) throw new ToolError("CONFLICT", `${task} is held by ${view.owner}.`);
-    const entry = this.write({ actor: this.actor(agent), type: "task.claimed", subject: task, summary: `Claimed ${attemptLabel(view)} by ${agent.name}`, refs: view.clauses });
+    // A retry is claimed as its attempt ("T-14.a2"): the gate's claim rule judges that attempt, which
+    // keeps the approved test, not the reopened attempt it replaced (that one refuses every claim).
+    const entry = this.write({ actor: this.actor(agent), type: "task.claimed", subject: attemptLabel(view), summary: `Claimed ${attemptLabel(view)} by ${agent.name}`, refs: view.clauses });
     return { task: attemptLabel(view), status: "claimed", entry: entry.n };
   }
 
   private progress(agent: AgentRecord, { task, text }: ToolInput<"report_progress">) {
     this.notPaused(agent);
     this.ownTask(agent, task, true);
-    return { entry: this.write({ actor: this.actor(agent), type: "task.progress", subject: task, summary: text }).n };
+    return { entry: this.write({ actor: this.actor(agent), type: "task.progress", subject: task, summary: redactSecrets(text) }).n };
   }
 
   private proof(agent: AgentRecord, { task, kind, link }: ToolInput<"attach_proof">) {
@@ -237,17 +241,18 @@ export class AgentService {
   }
 
   private release(agent: AgentRecord, { task, reason, blocked }: ToolInput<"release_task">) {
-    this.ownTask(agent, task, true);
+    const view = this.ownTask(agent, task, true);
+    if (view.status === "done" && blocked) throw new ToolError("CONFLICT", `${task} is already done, so it cannot be released as blocked.`);
     const entry = this.write({
       actor: this.actor(agent),
       type: blocked ? "task.blocked" : "task.progress",
       subject: task,
       summary: blocked ? `Released blocked by ${agent.name}` : `Released by ${agent.name}`,
-      reason,
+      reason: redactSecrets(reason),
       data: { released: true },
     });
     this.tokens.revokeTask(task);
-    return { entry: entry.n, status: blocked ? "blocked" : "open" };
+    return { entry: entry.n, status: view.status === "done" ? "done" : blocked ? "blocked" : "open" };
   }
 
   /**
@@ -257,8 +262,10 @@ export class AgentService {
   releaseOrphanedHolds(by: Actor, reason: string): string[] {
     const released: string[] = [];
     for (const task of this.board().values()) {
-      if (task.owner && task.status === "claimed" && !this.agents.has(task.owner)) {
-        this.write({ actor: by, type: "task.progress", subject: task.id, summary: `Released from ${task.owner}, which is not connected`, reason, data: { released: true } });
+      if (!task.owner || this.agents.has(task.owner)) continue;
+      // A blocked task stays blocked, but loses its dead owner so anyone can pick it up later.
+      if (task.status === "claimed" || task.status === "blocked") {
+        this.write({ actor: by, type: task.status === "blocked" ? "task.blocked" : "task.progress", subject: task.id, summary: `Released from ${task.owner}, which is not connected`, reason, data: { released: true } });
         released.push(task.id);
       }
     }
@@ -277,11 +284,14 @@ export class AgentService {
 
   /** Owner control (spec §4.5): stop every worker at once. */
   pauseAll(by: Actor, reason: string): void {
-    this.relay.pauseAll(by, reason, this.activeTasks());
+    const active = this.activeTasks();
+    // With nothing in progress, pause the open tasks so no new claim starts.
+    const tasks = active.length ? active : [...this.board().values()].filter((t) => t.status !== "done").map((t) => t.id);
+    this.relay.pauseAll(by, reason, tasks);
   }
 
   resumeAll(by: Actor): void {
-    this.relay.resumeAll(by, this.activeTasks());
+    this.relay.resumeAll(by);
   }
 
   private activeTasks(): string[] {
@@ -293,9 +303,5 @@ export class AgentService {
   }
 }
 
-// Cheap guard for the obvious cases; the commit-time secret scan is the real one.
-const SECRET_PATTERNS = [/\bsk-[A-Za-z0-9_-]{16,}/, /\bgh[pousr]_[A-Za-z0-9]{20,}/, /\bAKIA[0-9A-Z]{16}\b/, /-----BEGIN [A-Z ]*PRIVATE KEY-----/, /\b(api[_-]?key|secret|token|password)=[^&\s]{8,}/i];
-
-export function looksSecret(text: string): boolean {
-  return SECRET_PATTERNS.some((p) => p.test(text));
-}
+// The proof guard and the redaction share one set of patterns with Jev's diff check.
+export { looksSecret } from "../jev/redact";

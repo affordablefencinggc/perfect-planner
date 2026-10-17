@@ -154,7 +154,9 @@ test("foundation resilience: per-project route history updates one session witho
 
   assert.equal(alphaOnEvidence.view.workspace, "evidence");
   assert.equal(alphaOnEvidence.view.filterKey, "needs-proof");
-  assert.equal(alphaOnEvidence.generation, alpha.generation + 1);
+  // Trial define-05: a page change is not a new scan; generation ("scan N") stays.
+  assert.equal(alphaOnEvidence.generation, alpha.generation);
+  assert.ok(Date.parse(alphaOnEvidence.updatedAt) > Date.parse(alpha.updatedAt));
   assert.equal(alpha.view.workspace, "home");
   assert.equal(beta.view.workspace, "home");
   assert.equal(beta.generation, 1);

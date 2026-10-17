@@ -12,8 +12,9 @@ small platform layer (`platform.ts`, `git.ts`) that `core/watcher` and `core/gat
    no other running task has claimed the same files.
 2. Refuses if branch `pp/T-14` already exists. Retries get a new attempt id instead of reusing a branch.
 3. `git worktree add -b pp/T-14 .perfect-planner/worktrees/T-14 <base sha>`. Git itself refuses to
-   check one branch out in two worktrees. The folder is added to `.git/info/exclude`, so the main
-   checkout stays clean without editing the tracked `.gitignore`.
+   check one branch out in two worktrees. The whole `.perfect-planner/` folder (worktrees, the ledger,
+   worker tokens) is added to `.git/info/exclude` (`REQUIRED_IGNORES`, `ensureRequiredIgnores`), so
+   `git add -A` never stages it and the main checkout stays clean without editing the tracked `.gitignore`.
 4. Picks a free dev-server port (default 5200 to 5999) that no other worktree holds and nothing is listening on.
 5. Copies untracked `.env*` files from the main checkout with every value replaced by `PLACEHOLDER`, except plainly
    safe settings (ports, hosts, modes, flags) whose values don't themselves look secret. Connection strings with
@@ -63,3 +64,38 @@ Windows, macOS and Linux. Git runs without a shell; output is split on LF or CRL
 stored with forward slashes and compared case-insensitively on Windows and macOS; temp and
 worktree paths are resolved with `realpath` so 8.3 names and `/var` → `/private/var` don't
 create false mismatches; the registry write retries the atomic rename when Windows briefly locks the file.
+
+## Starting git safely
+
+Every git the core starts goes through `runGit`, which runs `gitExecutable(cwd)`: an absolute path
+resolved once from PATH (again only if PATH changes), skipping empty, relative and network entries and
+any entry inside the repo, and refused if it sits inside `cwd`. On Windows `spawn("git")` with the
+user's repo as `cwd` would otherwise run a `git.exe` planted in that repo, because CreateProcess looks in
+the current folder before PATH. Every child also gets `NO_CWD_SEARCH_ENV`
+(`NoDefaultCurrentDirectoryInExePath=1`), so cmd.exe and nested programs skip the current folder too.
+Other modules that spawn git (the ledger's ignore check, release hooks) should import
+`gitExecutable` and `NO_CWD_SEARCH_ENV` from `core/exec` (re-exported by `core/worktrees`), or call `runGit`, rather than spawning
+a bare `git`.
+
+npm is never started by name or through a shell. `runNpm` runs `node npm-cli.js` with the Node that
+runs Perfect Planner, taking npm's entry script from beside that Node or from an npm on PATH found by
+core/exec, and refusing any copy inside the project, its repo or its worktrees (`protect` roots,
+compared as written and as real paths). Installs pass `--ignore-scripts` unless a person turned on
+`allowInstallScripts` (WorktreeManager and TestGate options), since a dependency's install script is
+arbitrary code. The project's own `.npmrc` is agent-controlled, so every setting that names a program is
+fixed on npm's command line, which outranks all config files: `--git` is core/exec's git and
+`--script-shell` the system shell, user and global config come from empty files, and inherited
+`npm_config_*` variables are dropped. A failed install with scripts skipped names the switch.
+
+`runGit` is the one runner for every host git call (#25 and #13 use it too). The project's own `.git`
+is writable by any program on the PC, so it never lets git run what the repo config or hooks name:
+`core.hooksPath` points at an empty app-owned folder (pass `hooksPath` to use the app's own hooks),
+`core.fsmonitor=false`, `diff.external=` and an empty `core.attributesFile` are fixed on the command
+line, diffs get `--no-ext-diff --no-textconv`, and display settings that would change the diff a
+person reviews (`diff.relative`, `diff.noprefix`, colour, order file) are reset. System and global
+config are replaced by an app-owned file holding only the user's identity, `safe.directory` and
+line-ending settings (`GIT_CONFIG_NOSYSTEM`, `GIT_CONFIG_GLOBAL`, `GIT_ATTR_NOSYSTEM`), and
+inherited `GIT_CONFIG_*`, `GIT_EXEC_PATH`, `GIT_EXTERNAL_DIFF` and similar are dropped. Any command
+outside a short allow-list (rev-parse, show-ref, ls-tree, merge-base, update-ref, config, plain
+cat-file, worktree list/remove/prune and similar) is refused (`GitProgramRefusedError`) while the repo
+config names a filter program or merge driver (`filterPrograms`): a person must review and remove it.

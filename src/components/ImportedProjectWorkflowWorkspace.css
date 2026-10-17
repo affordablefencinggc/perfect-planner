@@ -157,7 +157,7 @@
 .imported-workflow-requirement.state-recorded { border-left-color: #3e9365; }
 .imported-workflow-requirement.state-stale,
 .imported-workflow-requirement.state-unavailable { border-left-color: #b44b43; }
-.imported-workflow-requirement-number { color: #8a918d; font-weight: 700; }
+.imported-workflow-requirement-number { color: #5f6762; font-weight: 700; }
 .imported-workflow-requirement code { font-size: 12px; font-weight: 700; }
 .imported-workflow-requirement-copy { display: grid; gap: 4px; min-width: 0; }
 .imported-workflow-requirement-copy strong { font-size: 14px; }
@@ -209,7 +209,7 @@
 .imported-workflow-caveats ul { display: grid; gap: 10px; margin: 0; padding: 15px 15px 18px 32px; color: var(--muted, #5f6762); font-size: 13px; line-height: 1.45; }
 .imported-workflow-next { padding-bottom: 15px; }
 .imported-workflow-next > p { color: var(--ink, #252a27); }
-.imported-workflow-next > button { width: calc(100% - 30px); margin: 0 15px; justify-content: center; }
+.imported-workflow-next > button { width: calc(100% - 30px); margin: 0 15px; justify-content: center; min-height: 40px; font-size: 13px; }
 .imported-workflow-next > small { display: block; margin: 10px 15px 0; color: var(--muted, #5f6762); font-size: 12px; line-height: 1.4; }
 
 .imported-workflow-search {
@@ -250,4 +250,19 @@
 @media (prefers-reduced-motion: reduce) {
   .imported-workflow-requirement,
   .imported-workflow-question { transition: none; }
+}
+
+/* App-wide visually hidden text (labels and live regions). Defined here because this stylesheet
+   is loaded eagerly with the shell; lazy panels such as ProjectIndexPanel also rely on it. */
+.sr-only {
+  position: absolute !important;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
 }

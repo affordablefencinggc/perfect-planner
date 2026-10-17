@@ -19,4 +19,7 @@
 .plan-approval-step-missing summary{cursor:pointer;font-size:14px}.plan-approval-step-missing ul{margin:8px 0 0;padding-left:20px;font-size:14px;line-height:1.5}
 .plan-approval-step-actions{display:flex;flex-wrap:wrap;gap:10px}
 .plan-approval-step-actions button{display:inline-flex;align-items:center;gap:8px;min-height:42px}
+/* The global .soft-button/.primary-button font is 9px; these are the page's main actions. */
+.plan-approval-step :is(.primary-button,.soft-button){font:600 15px/1.3 var(--mono);padding:8px 14px}
+.plan-approval-step-blocking{display:grid;gap:6px}.plan-approval-step-blocking ul{margin:0;padding-left:20px;font-size:14px;line-height:1.5}
 @media(max-width:600px){.plan-approval-step>header{flex-wrap:wrap;padding:10px 14px}.plan-approval-step-actions{display:grid}}

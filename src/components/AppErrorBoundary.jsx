@@ -40,27 +40,35 @@ export function SafeStartNotice({ onLeave = () => leaveSafeStart() }) {
 }
 
 export class AppErrorBoundary extends React.Component {
-  constructor(props) { super(props); this.state = { error: null }; }
+  constructor(props) { super(props); this.state = { error: null }; this.headingRef = React.createRef(); }
   static getDerivedStateFromError(error) { return { error }; }
   componentDidCatch(error, info) { console.error("Perfect Planner could not render.", error, info?.componentStack ?? ""); }
+  // Move keyboard and screen-reader focus to the fallback; the focused control was unmounted with the crashed tree.
+  // A crash on first render mounts the fallback directly, so both lifecycles are needed.
+  componentDidMount() { if (this.state.error) this.focusHeading(); }
+  componentDidUpdate(_props, previous) { if (this.state.error && !previous.error) this.focusHeading(); }
+  focusHeading() { this.headingRef.current?.focus({ preventScroll: true }); }
   render() {
     const { error } = this.state;
     if (!error) return this.props.children;
-    const { onReload = () => globalThis.location.reload(), onSafeStart = () => enterSafeStart(), safeStart = false } = this.props;
+    const { onReload = () => globalThis.location.reload(), onSafeStart = () => enterSafeStart(), onLeaveSafeStart = () => leaveSafeStart(), safeStart = false } = this.props;
     const message = error instanceof Error ? (error.message || error.name) : String(error);
     return (
       <main className="app-error-boundary" role="alert" aria-labelledby="app-error-title">
         <section className="app-error-card">
-          <h1 id="app-error-title">Something went wrong showing this project</h1>
-          <p>Your saved projects have not been deleted. Try reloading. If the problem keeps happening, open the planner without saved projects for this tab.</p>
-          {safeStart ? <p className="app-error-note">Saved projects are already hidden in this tab, so this problem is not caused by them.</p> : null}
+          <h1 id="app-error-title" ref={this.headingRef} tabIndex={-1}>Something went wrong showing the planner</h1>
+          {safeStart
+            ? <p>Your saved projects have not been deleted. They are hidden in this tab, so this problem is not caused by them. Try reloading, or show your saved projects again.</p>
+            : <p>Your saved projects have not been deleted. Try reloading. If the problem keeps happening, open the planner without saved projects for this tab.</p>}
           <details className="app-error-details">
             <summary>Error details</summary>
             <pre>{message}</pre>
           </details>
           <div className="app-error-actions">
             <button type="button" className="app-error-primary" onClick={onReload}>Reload</button>
-            {safeStart ? null : <button type="button" onClick={onSafeStart}>Open without saved projects</button>}
+            {safeStart
+              ? <button type="button" onClick={onLeaveSafeStart}>Show saved projects</button>
+              : <button type="button" onClick={onSafeStart}>Open without saved projects</button>}
           </div>
         </section>
       </main>

@@ -27,6 +27,8 @@ export interface PlanningQuestionState {
   choice?: string;
   decision?: string;
   spike?: { task: string; due: string; risk: string };
+  /** "repo" when the decision was read from the existing code. */
+  source?: "repo";
 }
 
 export interface AnyQuestionState {
@@ -82,6 +84,7 @@ export function planningQuestions(entries: readonly LedgerEntry[]): PlanningQues
       q.decision = e.subject;
       q.answer = String(d.answer ?? e.summary);
       if (typeof d.choice === "string") q.choice = d.choice;
+      if (d.source === "repo") q.source = "repo";
     } else if (e.type === "question.answered") {
       const q = byQ.get(e.subject);
       if (!q || q.status !== "open" || !isAuthoritative(e, { personOnly: true })) continue;
@@ -128,5 +131,6 @@ export function planningAnswers(entries: readonly LedgerEntry[]): PlanningAnswer
       text: q.answer ?? "",
       ...(q.decision ? { decision: q.decision } : {}),
       ...(q.spike ? { spike: q.spike } : {}),
+      ...(q.source === "repo" ? { fromRepo: true } : {}),
     }));
 }

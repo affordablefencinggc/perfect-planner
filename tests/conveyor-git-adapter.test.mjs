@@ -6,7 +6,13 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { canonicalWorkUnit } from "../src/engine/conveyorEngine.js";
-import { materializeConveyorGitReservation } from "../src/node/conveyorGitAdapter.mjs";
+import { materializeConveyorGitReservation as materializeReservation } from "../src/node/conveyorGitAdapter.mjs";
+
+// Each guarded Git call shares one 10 s default budget. On Windows every call starts PowerShell and
+// compiles the Job Object helper, which took over 10 s for a single rev-parse on a loaded CI runner
+// ("Unable to inspect repository root: git-time-limit"). These tests check materialization rules,
+// not latency, so they give the adapter a wider budget; time limits are covered in guarded-git-runner.
+const materializeConveyorGitReservation = (input, adapters = {}) => materializeReservation(input, { timeoutMs: 60_000, ...adapters });
 
 function git(cwd, args) { return new Promise((resolve, reject) => { const child = spawn("git", args, { cwd, shell: false, windowsHide: true }); let stdout = ""; let stderr = ""; child.stdout.on("data", (chunk) => { stdout += chunk; }); child.stderr.on("data", (chunk) => { stderr += chunk; }); child.on("error", reject); child.on("close", (exit, signal) => resolve({ exit, signal, stdout, stderr })); }); }
 async function mustGit(cwd, args) { const result = await git(cwd, args); if (result.exit !== 0) throw new Error(result.stderr); return result.stdout.trim(); }

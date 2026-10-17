@@ -8,10 +8,14 @@ import { gzipSync } from "node:zlib";
 export const PERFORMANCE_BUDGETS = Object.freeze({
   maxIndividualJavaScriptGzipBytes: 300 * 1024,
   // v1 (Oct 2026): totals raised for the seven on-demand imported-project panels; first-load limits unchanged.
-  // Core loop screens (Oct 2026): raised again for six on-demand core screens and main's
-  // one-click intake and settings panels; first-load limits unchanged.
+  // Oct 2026: +16 KiB for the self-plan gap fixes (Blueprint pre-fill, task paste, scripted intake guard, discovery details); per-file limit unchanged.
+  // UI trial sweep (Oct 2026): ~150 defect fixes (validation, confirmations, focus handling, honest states) landed against the same total.
+  // The per-file limit is unchanged, but the entry chunk itself grew about 7.5 KiB gzip over main, so first load is heavier.
+  // Both changes were sized against 480 KiB separately; together they measure 500.4 KiB, hence 504.
+  // Core loop screens (Oct 2026): six on-demand core screens on top of the above measure 539.2 KiB; 544 leaves under 5 KiB of headroom. First-load limits unchanged.
   maxTotalJavaScriptGzipBytes: 544 * 1024,
-  maxIndividualStylesheetGzipBytes: 44 * 1024,
+  // UI trial sweep (Oct 2026): +1 KiB for the shared frame stylesheet (sr-only, popover bounds, small-screen rules).
+  maxIndividualStylesheetGzipBytes: 45 * 1024,
   // UI polish (Oct 2026): total raised for the page frame and per-screen polish layers; the per-file limit is unchanged.
   // Core loop screens (Oct 2026): raised for their on-demand stylesheets.
   maxTotalStylesheetGzipBytes: 80 * 1024,

@@ -86,7 +86,9 @@ function QuestionMap({ model, onSelect, query }) {
   if (!questions.length && !normalizedQuery) return null;
 
   return <section className="imported-workflow-question-section" aria-label="Unanswered project planning questions">
-    <header><span><ListChecksIcon aria-hidden="true" /><strong>{model.workspace === "index" ? "Discovery question index" : "Questions that still need sourced answers"}</strong></span><small>{questions.length} of {model.questions.length} areas</small></header>
+    <header><span><ListChecksIcon aria-hidden="true" /><strong>{model.workspace === "index" ? "Discovery question index" : "Questions that still need sourced answers"}</strong></span><small>{normalizedQuery
+      ? `${questions.length} of ${model.questions.length} areas match`
+      : (() => { const open = model.questions.filter((item) => item.state !== "recorded").length; return open ? `${open} of ${model.questions.length} areas still open` : `All ${model.questions.length} areas answered or found`; })()}</small></header>
     <div className="imported-workflow-question-grid">
       {questions.map((item) => <button
         key={item.id}
@@ -100,7 +102,9 @@ function QuestionMap({ model, onSelect, query }) {
           estimate: STATE_LABELS[item.state],
           items: [
             item.findingIds.length ? `Saved finding references: ${item.findingIds.join(", ")}` : "No finding record is saved for this area.",
-            ...item.questions.map((question) => `Unanswered: ${question}`),
+            ...(item.decision
+              ? [`Your answer: ${item.decision.decision === "confirmed" ? "Looks right" : item.decision.decision === "not-applicable" ? "Not applicable" : item.decision.note}`, ...item.questions.map((question) => `Question: ${question}`)]
+              : item.questions.map((question) => `Unanswered: ${question}`)),
             `Project: ${model.project.projectId}`,
           ],
         })}

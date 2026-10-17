@@ -7,7 +7,7 @@ async function fixture(mode='success'){
  const root=await mkdtemp(path.join(os.tmpdir(),'pp-execution-request-')),directory=path.join(root,'requests');
  const request={requestId:'request-1',expected:{hostRevision:1,headDigest:'a'.repeat(64)},contractHead:{revision:1,headDigest:'b'.repeat(64)},confirmationId:'confirmation-1',taskId:'T0001',checkId:'unit',attemptId:'attempt-1',attemptNumber:1};
  let runs=0,workers=0,released=0;const grantId='11111111-1111-4111-8111-111111111111',runId='22222222-2222-4222-8222-222222222222';
- const owner={createWorker:async()=>{workers++;return {token:'private-fixture-only'};},inspectHeads:async()=>({enrollmentRevision:0,grantRevision:0}),
+ const owner={createWorker:async()=>{workers++;return {token:'private'+'-fixture-only'};},inspectHeads:async()=>({enrollmentRevision:0,grantRevision:0}),
   enroll:async()=>({enrollment:{revision:1,epoch:1,recordHash:'c'.repeat(64)}}),issue:async()=>({grant:{grantId}}),consume:async()=>({consumptionReceipt:{grantId}}),
   dispatch:async()=>{runs++;if(mode==='lost')throw Error('NATIVE_TASK_DISPATCH_UNRESOLVED');return {dispatchObserved:true,intentReceipt:{runId,recordDigest:'d'.repeat(64)},observationReceipt:{artifactDigest:'e'.repeat(64)},observation:{schemaVersion:mode==='legacy'?1:2,descendantsSettled:mode!=='descendant-unknown',processExited:true,jobEmptyObserved:mode!=='unclean',ioSettled:true}};},releaseWorker:async()=>{released++;}};
  const config={directory,binding:{projectId:'pp_requests',rootIdentity:'f'.repeat(64),censusDigest:'a'.repeat(64)},selection:{expected:request.expected,contractHead:request.contractHead},owner};

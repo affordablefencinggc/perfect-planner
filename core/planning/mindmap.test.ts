@@ -110,6 +110,9 @@ describe("buildMindMap", () => {
     const node = map.nodes[nodeId("risk", "Open: data.store")]!;
     expect(node.kind).toBe("risk");
     expect(node.label).toBe("Open: data.store");
+    // The spike is not a decision, so the area's components are not built from it.
+    expect(map.nodes[nodeId("data", "Data store")]).toBeUndefined();
+    expect(Object.values(map.nodes).some((n) => n.label.includes("Spike"))).toBe(false);
     expect(node.note).toContain("2026-10-20");
     expect(node.from).toEqual(["data.store"]);
     expect(map.nodes.root!.children).toContain(node.id);
