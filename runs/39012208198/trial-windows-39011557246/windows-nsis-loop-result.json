@@ -1,0 +1,45 @@
+{
+  "label": "windows-nsis",
+  "checks": [
+    {
+      "name": "plan: idea and recommended answers",
+      "pass": true,
+      "seen": "40 recommendations used; no blocking questions"
+    },
+    {
+      "name": "plan: approve",
+      "pass": true,
+      "seen": "Plan approved"
+    },
+    {
+      "name": "open git folder in Tasks",
+      "pass": true,
+      "seen": "Workers branch from D:\\a\\_temp\\loop-repo-windows-nsis"
+    },
+    {
+      "name": "connect agent: line runs as copied, agent checks in",
+      "pass": true,
+      "seen": "checked in as main; line on the app's own Node"
+    },
+    {
+      "name": "start worker on T-1 (window gives the set-up command)",
+      "pass": true,
+      "seen": "set-up command shown (405 chars, private key not logged)"
+    },
+    {
+      "name": "stand-in worker checks in over MCP and proposes a test",
+      "pass": true,
+      "seen": "trial-worker-b7461d87 checked in as worker on T-1; window shows \"Test to approve\""
+    },
+    {
+      "name": "approve test in the window (it fails first)",
+      "pass": true,
+      "seen": "T-1 | Build App shell | Test approved | Done-when test | node tests/notes.check.mjs | tests/notes.check.mjs · Proposed by trial-worker-b7461d87 (claude-trial) · approved by you (owner)"
+    },
+    {
+      "name": "stand-in worker builds, commits, attaches proof",
+      "pass": false,
+      "seen": "claim_task: REFUSED: T-1 cannot be claimed: T-1's test has not been run on the current code yet. (RULE) Window says: Test approved [window 1008x681; visible buttons: PP\nPerfect Planner\nv0.1 clea | Home | 01Define | 02Coordinate | 03Build | 04Prove | 05Release | Index | Connect agent | More actions | Open project folders | Notes helper: a small tool t | Simple | Advanced | Build | Tasks | Run the test again | Copy | Copy | Copy brief | Copy mcp settings | Hide command | Start worker | Start worker | Start worker | Start worker | Start worker | Start worker | Start worker | Start worker | Start worker | Start worker | Start worker | Start worker | Start worker | Start worker | Start worker | Start worker | Start worker | Start worker]"
+    }
+  ]
+}
