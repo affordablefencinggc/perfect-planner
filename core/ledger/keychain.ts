@@ -231,10 +231,10 @@ class Unavailable implements SecretStore {
 const isPublicAccount = (name: string) => name === "principals" || name === "pins" || name.startsWith("public.");
 
 /**
- * Remembers the public accounts for a short time, so verifying or signing one ledger entry does not
+ * Remembers the public accounts for a few seconds, so verifying or signing one ledger entry does not
  * start a keychain tool (a PowerShell process on Windows, 2 to 3 seconds each) for every lookup.
  * Private keys are never remembered here: they are read from the store each time they sign. Own
- * writes drop the entry, and the TTL bounds how stale a change made by another process can be.
+ * writes drop the entry, and the TTL (10 s) bounds how stale a change made by another process can be.
  */
 export class PublicAccountCache implements SecretStore {
   private readonly seen = new Map<string, { at: number; value: string | undefined }>();
@@ -242,7 +242,7 @@ export class PublicAccountCache implements SecretStore {
 
   constructor(
     private readonly inner: SecretStore,
-    private readonly ttlMs = 30_000,
+    private readonly ttlMs = 10_000,
     private readonly now: () => number = Date.now,
   ) {
     this.description = inner.description;
@@ -358,10 +358,13 @@ export class KeychainKeyProvider implements KeyProvider {
 
   sign(principal: string, message: Buffer): { keyId: string; signature: string } {
     this.requireAvailable();
-    const active = this.publicKeys(principal).find((k) => !k.retired);
     const privateKey = this.store.get(`private.${principal}`);
-    if (!active || !privateKey) throw new Error(`there is no signing key for ${principal} on this device; set one up in Settings`);
-    return { keyId: active.keyId, signature: signWith(privateKey, message) };
+    if (!privateKey) throw new Error(`there is no signing key for ${principal} on this device; set one up in Settings`);
+    // The key id comes from the private key that signs, so another instance's rotation can never pair a new signature with an old id.
+    const publicKey = createPublicKey(createPrivateKey({ key: Buffer.from(privateKey, "base64"), format: "der", type: "pkcs8" }))
+      .export({ format: "der", type: "spki" })
+      .toString("base64");
+    return { keyId: keyIdOf(publicKey), signature: signWith(privateKey, message) };
   }
 
   /** Removes every key this provider stored; for tests and for an explicit reset by the person. */

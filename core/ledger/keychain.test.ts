@@ -227,4 +227,33 @@ describe("PublicAccountCache", () => {
     now = 1000;
     expect(cache.get("pins")).toBe("changed elsewhere");
   });
+
+  it("two instances over one keychain: after one rotates, the other still signs with a matching key id", () => {
+    const secrets = new FakeSecrets();
+    const a = new KeychainKeyProvider(secrets);
+    const b = new KeychainKeyProvider(secrets);
+    a.ensureKey("person:owner");
+    b.trustedKeys(); // b has now remembered the old public record
+    const rotated = a.rotateKey("person:owner");
+    const signed = b.sign("person:owner", Buffer.from("x"));
+    expect(signed.keyId).toBe(rotated.keyId);
+  });
+
+  it("does not remember a failed read as missing", () => {
+    let fail = true;
+    const store: SecretStore = {
+      description: "flaky",
+      state: () => ({ available: true }),
+      get: () => {
+        if (fail) throw new Error("PowerShell failed");
+        return "[]";
+      },
+      set: () => {},
+      remove: () => {},
+    };
+    const cache = new PublicAccountCache(store);
+    expect(() => cache.get("pins")).toThrow("PowerShell failed");
+    fail = false;
+    expect(cache.get("pins")).toBe("[]");
+  });
 });
