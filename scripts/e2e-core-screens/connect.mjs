@@ -5,10 +5,12 @@ const DRAWER = { css: ".connect-agent-drawer" };
 export const steps = [
   {
     // Nothing is written to a project until its person starts its history (a person-only action, never a connect step).
+    // Earlier journey steps may have started it already, so click only when the notice is still offered.
     name: "core-connect-start-history",
-    run: async (page, at) => {
+    run: async (page, at, { waitFor }) => {
       await page.goto(at("planning"));
-      await page.click({ role: "button", name: "Start a new history for this folder" }, "Start a new history");
+      const offered = await waitFor(() => page.eval(`document.body.innerText.includes("Start a new history for this folder") ? "offer" : document.body.innerText.includes("Start with your idea") ? "started" : null`), { label: "planning screen" });
+      if (offered === "offer") await page.click({ role: "button", name: "Start a new history for this folder" }, "Start a new history");
       await page.expectText("Start with your idea");
     },
   },
