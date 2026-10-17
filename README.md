@@ -17,7 +17,7 @@ A structured planning app: point it at a project folder, get a reviewed plan, an
 
 3. **Choose a folder.** Click **Add project**, then choose your project's folder. Nothing is read until you approve the analysis, and nothing in the folder is changed.
 
-4. **Connect an agent** (Windows). Click **Connect agent** in the header, copy the entry it shows into your IDE's MCP settings, and reload your agent's tools. The agent server runs from a copy of this repository: clone it, run `npm install` once (Node.js 18 or newer), and point the entry at that folder. Agents can read your plan and propose tasks; proposals come back to you for review.
+4. **Connect an agent.** Click **Connect agent** in the header, then **Connect agent** on the card, and paste the one line it shows into a terminal in the folder your agent will work in (on Windows, PowerShell). It registers the agent with Claude Code and installs the Perfect Planner skill; then start Claude Code there and say *check in with Perfect Planner*. The app ships its own Node runtime for this, so there is nothing else to install. For other agents, copy the MCP settings it shows instead.
 
 ## Run from source
 

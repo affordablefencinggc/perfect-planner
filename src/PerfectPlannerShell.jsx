@@ -75,7 +75,8 @@ import { ViewModeContext, useViewModeState } from "./project/viewMode.js";
 import { AppSettingsContext, TEXT_SIZES, useAppSettings, useAppSettingsState } from "./settings/appSettings.js";
 import { GearSixIcon } from "@phosphor-icons/react";
 import "./settings/settings.css";
-const SettingsWorkspace = lazy(() => import("./settings/SettingsWorkspace.jsx").then((module) => ({ default: module.SettingsWorkspace })));
+const loadSettingsWorkspace = () => import("./settings/SettingsWorkspace.jsx");
+const SettingsWorkspace = lazy(() => loadSettingsWorkspace().then((module) => ({ default: module.SettingsWorkspace })));
 import { DEMO_ONLY_REASON, DemoOnlyReason, DemoSampleBadge } from "./demo/DemoSampleNotice.jsx";
 const loadRuntimeTools = (name) => import("./components/RuntimeConnectionsPanel.jsx")
   .then((module) => ({ default: module[name] })).catch(() => ({ default: RuntimeToolsUnavailable }));
@@ -5956,6 +5957,14 @@ function PerfectPlannerShellCore({
   const appSettings = useAppSettingsState();
   const settings = appSettings.settings;
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // Fetch Settings once the shell is idle, so pressing it never shows "Opening settings…" on a
+  // slow machine (the Linux installer trial screenshot caught it mid-load).
+  useEffect(() => {
+    const prefetch = () => { loadSettingsWorkspace().catch(() => {}); };
+    if (typeof window.requestIdleCallback !== "function") { const timer = setTimeout(prefetch, 1500); return () => clearTimeout(timer); }
+    const idle = window.requestIdleCallback(prefetch, { timeout: 3000 });
+    return () => window.cancelIdleCallback?.(idle);
+  }, []);
   const activeProject = projectContext.activeProject;
   const demoMode = isDemoProject(activeProject);
   const projectWorkflowReady = Boolean(activeProject) && !["stale", "unavailable"].includes(activeProject.state);

@@ -164,6 +164,7 @@ async function main(argv) {
   process.once("SIGINT", stop); process.once("SIGTERM", stop);
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+// The basename check keeps main() from running when this file is bundled into the desktop app (src/node/desktopHost.mjs).
+if (process.argv[1] && path.basename(fileURLToPath(import.meta.url)) === "serve-local.mjs" && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   main(process.argv.slice(2)).catch((error) => { console.error(`[perfect-planner] ${error.message}`); process.exit(1); });
 }

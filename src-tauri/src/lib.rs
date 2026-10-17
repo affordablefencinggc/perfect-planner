@@ -21,6 +21,7 @@ mod native_agent_registry;
 mod native_agent_pipe;
 #[cfg(windows)]
 mod native_agent_channel;
+mod native_core_host;
 mod native_host_resources;
 mod native_host_supervisor;
 #[cfg(windows)]
@@ -151,8 +152,15 @@ pub fn run() {
             jev_keychain::jev_key_save,
             jev_keychain::jev_key_clear,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running the Perfect Planner native shell");
+        // The local service (core loop, Connect agent) starts with the app and stops with it.
+        .setup(native_core_host::setup)
+        .build(tauri::generate_context!())
+        .expect("error while building the Perfect Planner native shell")
+        .run(|app, event| {
+            if let tauri::RunEvent::Exit = event {
+                native_core_host::stop(app);
+            }
+        });
 }
 
 pub use native_mcp::run_stdio_if_requested;

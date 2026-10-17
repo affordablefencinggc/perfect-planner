@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { bridgeCall, createAgentMcpServer } from "../../mcp/index";
 import { hostCall, startTestHost } from "../testing";
 import { icaclsPath } from "../tokenFile";
-import { agentEntryPath, setupFor } from "./agents";
+import { agentEntryPath, nodeBinary, nodeCommand, setupFor } from "./agents";
 
 let base: string;
 let stop: () => Promise<void>;
@@ -137,6 +137,24 @@ describe("agent entry path", () => {
   it("quotes paths so the shell cannot run anything hidden in them", () => {
     expect(setupFor("http://127.0.0.1:1", "/t/$(x)/c.token", "/a b/it's/agent.mjs", "linux").claudeCode).toBe("node '/a b/it'\\''s/connect.mjs' --agent claude http://127.0.0.1:1 '/t/$(x)/c.token'");
     expect(setupFor("http://127.0.0.1:1", "C:\\t\\c.token", "C:\\a b\\agent.mjs", "win32").claudeCode).toBe("node 'C:\\a b\\connect.mjs' --agent claude http://127.0.0.1:1 'C:\\t\\c.token'");
+  });
+
+  it("uses the desktop app's own Node when it ships one, so no Node install is needed", () => {
+    vi.stubEnv("PP_NODE_BINARY", "C:\\Program Files\\Perfect Planner\\desktop-host\\node.exe");
+    try {
+      const setup = setupFor("http://127.0.0.1:1", "C:\\t\\c.token", "C:\\Program Files\\Perfect Planner\\desktop-host\\core-host\\agent.mjs", "win32");
+      expect(setup.claudeCode).toBe("& 'C:\\Program Files\\Perfect Planner\\desktop-host\\node.exe' 'C:\\Program Files\\Perfect Planner\\desktop-host\\core-host\\connect.mjs' --agent claude http://127.0.0.1:1 'C:\\t\\c.token'");
+      expect(JSON.parse(setup.json).mcpServers["perfect-planner-core"].command).toBe("C:\\Program Files\\Perfect Planner\\desktop-host\\node.exe");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("quotes the bundled Node path for each shell", () => {
+    expect(nodeCommand("darwin", { PP_NODE_BINARY: "/Applications/Perfect Planner.app/Contents/Resources/desktop-host/node" })).toBe("'/Applications/Perfect Planner.app/Contents/Resources/desktop-host/node'");
+    expect(nodeCommand("win32", { PP_NODE_BINARY: "C:\\it's\\node.exe" })).toBe("& 'C:\\it''s\\node.exe'");
+    expect(nodeCommand("win32", {})).toBe("node");
+    expect(nodeBinary({})).toBe("node");
   });
 });
 

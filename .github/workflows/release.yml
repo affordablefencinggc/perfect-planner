@@ -93,6 +93,36 @@ jobs:
           TMPDIR: ${{ runner.temp }}
         run: npm run tauri -- build --ci --bundles ${{ matrix.bundles }} ${{ matrix.args }}
 
+      # The installers ship the core loop's local service (dist/desktop-host: a pinned Node,
+      # the core host, Connect agent's programs). Check every packaged copy of it can start,
+      # hand out a Connect agent line, check an agent in on its own Node, and stop.
+      - name: Check the bundled local service
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/release/check-desktop-host.mjs dist/desktop-host | tee -a "$GITHUB_STEP_SUMMARY"
+          find src-tauri/target -path '*bundle*' -name desktop-host.json -print0 | while IFS= read -r -d '' manifest; do
+            echo "Packaged copy: $manifest" | tee -a "$GITHUB_STEP_SUMMARY"
+            node scripts/release/check-desktop-host.mjs "$(dirname "$manifest")" | tee -a "$GITHUB_STEP_SUMMARY"
+          done
+
+      # Install the real setup.exe, open the app, click Connect agent and run the line it shows.
+      - name: Smoke-test the installed app
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          setup=$(ls src-tauri/target/release/bundle/nsis/*-setup.exe | head -1)
+          node scripts/release/smoke-installed-app.mjs --installer "$setup" --out smoke-out | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always() && runner.os == 'Windows'
+        with:
+          name: PerfectPlanner-${{ env.RELEASE_NAME }}-windows-smoke
+          path: smoke-out/
+          if-no-files-found: warn
+          retention-days: 14
+
       - name: Stamp installer names
         run: node scripts/release/stamp-artifacts.mjs --release ${{ env.RELEASE_NAME }} --platform ${{ matrix.platform }} --out release-out
 

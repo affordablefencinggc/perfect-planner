@@ -113,6 +113,23 @@ export const quoteFor = (windows: boolean) => (value: string) =>
 const connectProgram = (entry: string) => entry.replace(/agent\.mjs$/, "connect.mjs");
 
 /**
+ * The Node that runs connect.mjs and agent.mjs. The desktop app ships its own Node and sets
+ * PP_NODE_BINARY to it (src/node/desktopHost.mjs), so the person needs no Node install;
+ * otherwise (npm start, the dev server) it is the node on PATH.
+ */
+export function nodeBinary(env: NodeJS.ProcessEnv = process.env): string {
+  return env.PP_NODE_BINARY || "node";
+}
+
+/** nodeBinary as the first word of a pasted line. A quoted path needs PowerShell's call operator on Windows. */
+export function nodeCommand(platform: NodeJS.Platform = process.platform, env: NodeJS.ProcessEnv = process.env): string {
+  const binary = env.PP_NODE_BINARY;
+  if (!binary) return "node";
+  const quoted = quoteFor(platform === "win32")(binary);
+  return platform === "win32" ? `& ${quoted}` : quoted;
+}
+
+/**
  * The one line per agent: connect.mjs (next to the agent entry) registers the server with that agent's
  * CLI for the folder it runs in, replacing an older registration, and installs the perfect-planner-connect
  * skill. It names the token file, never the token, so nothing secret lands in shell history, a chat
@@ -120,17 +137,17 @@ const connectProgram = (entry: string) => entry.replace(/agent\.mjs$/, "connect.
  */
 export function connectLine(bridgeUrl: string, tokenFile: string, entry: string, platform: NodeJS.Platform = process.platform, agent: AgentKind = "claude"): string {
   const quote = quoteFor(platform === "win32");
-  return `node ${quote(connectProgram(entry))} --agent ${agent} ${bridgeUrl} ${quote(tokenFile)}`;
+  return `${nodeCommand(platform)} ${quote(connectProgram(entry))} --agent ${agent} ${bridgeUrl} ${quote(tokenFile)}`;
 }
 
 /** Installs only the skill, user-wide; no token, so it is safe to show at any time. */
 export function skillLine(entry: string, platform: NodeJS.Platform = process.platform): string {
-  return `node ${quoteFor(platform === "win32")(connectProgram(entry))} --skill-only`;
+  return `${nodeCommand(platform)} ${quoteFor(platform === "win32")(connectProgram(entry))} --skill-only`;
 }
 
 export function setupFor(bridgeUrl: string, tokenFile: string, entry: string, platform: NodeJS.Platform = process.platform) {
   const lines = Object.fromEntries(AGENT_KINDS.map((agent) => [agent, connectLine(bridgeUrl, tokenFile, entry, platform, agent)])) as Record<AgentKind, string>;
-  const json = JSON.stringify({ mcpServers: { [AGENT_SERVER_NAME]: { command: "node", args: [entry], env: { PP_BRIDGE_URL: bridgeUrl, PP_AGENT_TOKEN_FILE: tokenFile } } } }, null, 2);
+  const json = JSON.stringify({ mcpServers: { [AGENT_SERVER_NAME]: { command: nodeBinary(), args: [entry], env: { PP_BRIDGE_URL: bridgeUrl, PP_AGENT_TOKEN_FILE: tokenFile } } } }, null, 2);
   return { claudeCode: lines.claude, lines, json };
 }
 

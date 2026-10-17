@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Ledger } from "../ledger/index";
 import { git, runGit } from "./git";
-import { WorktreeManager } from "./manager";
+import { WorktreeManager, preCommitHook } from "./manager";
 import { lines, samePath } from "./platform";
 import { PLACEHOLDER } from "./settings";
 import { commitAll, makeRepo, memoryLedger, workerGit, writeFiles } from "./testing";
@@ -186,4 +186,20 @@ describe("WorktreeManager", () => {
     await manager.create({ taskId: "T-16", actor: person });
     expect(readFileSync(exclude, "utf8")).toBe("*.log\n/.perfect-planner/\n");
   }, SLOW);
+});
+
+describe("preCommitHook", () => {
+  it("runs the secret scan with node from PATH by default", () => {
+    expect(preCommitHook({})).toBe('#!/bin/sh\nexec node "$(dirname "$0")/secret-scan.mjs"\n');
+  });
+
+  it("runs it with the desktop app's own Node when there is one, in git sh's forward slashes", () => {
+    expect(preCommitHook({ PP_NODE_BINARY: "C:\\Program Files\\Perfect Planner\\desktop-host\\node.exe" })).toBe(
+      '#!/bin/sh\nexec \'C:/Program Files/Perfect Planner/desktop-host/node.exe\' "$(dirname "$0")/secret-scan.mjs"\n',
+    );
+  });
+
+  it("keeps a $ or a quote in the path literal", () => {
+    expect(preCommitHook({ PP_NODE_BINARY: "/opt/$(x)/it's/node" })).toBe(`#!/bin/sh\nexec '/opt/$(x)/it'\\''s/node' "$(dirname "$0")/secret-scan.mjs"\n`);
+  });
 });
