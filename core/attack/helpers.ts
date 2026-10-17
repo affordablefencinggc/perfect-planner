@@ -57,12 +57,16 @@ export function cleanTemp(): void {
 
 // The suite's own git calls ignore the machine's global and system git config (a global LFS filter, a signing key, a
 // hooks path of the person running the tests), so every run starts from the same place. The app's git is separate.
-const GIT_IDENTITY = { GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t.invalid", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t.invalid", GIT_CONFIG_GLOBAL: os.devNull, GIT_CONFIG_NOSYSTEM: "1" };
+// Git's own spelling of the null device, not Node's os.devNull: on Windows that is "\\\\.\\nul", which git refuses
+// ("fatal: unable to access '\\\\.\\nul': Invalid argument", windows-latest run 39034322787), while git for Windows
+// maps "/dev/null" to NUL itself.
+const NULL_DEVICE = "/dev/null";
+const GIT_IDENTITY = { GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t.invalid", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t.invalid", GIT_CONFIG_GLOBAL: NULL_DEVICE, GIT_CONFIG_NOSYSTEM: "1" };
 
 /** Plain git for test setup (the repo's own config applies; signing is switched off per repo). Hooks never run. */
 export function git(cwd: string, ...args: string[]): string {
   // No hooks for the suite's own calls: a hook installed by a test repo (git lfs install) must only ever fire for the app's git.
-  return gitWithHooks(cwd, "-c", `core.hooksPath=${os.devNull}`, ...args);
+  return gitWithHooks(cwd, "-c", `core.hooksPath=${NULL_DEVICE}`, ...args);
 }
 
 /** The same, but with the repo's hooks allowed: for setup that has to install them (git lfs install). */
