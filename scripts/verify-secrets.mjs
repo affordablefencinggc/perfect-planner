@@ -15,10 +15,6 @@ const ignored = new Set([".git", "node_modules", "dist", "target", "target-codex
 const fixtureMatches = new Set([
   "scripts/generate-truth-report.mjs:generic-assignment:89bd311b7282dad1224abb5c6626b1f891a7e6a70bb72752fb7983b784cd820f",
   "tests/identity-vault.test.mjs:generic-assignment:927b563b90b90c90f3ccfc8ee22f497e4086e33ea9f011a83acd248a71828cb6",
-  "tests/provider-review-gateway.test.mjs:private-key:3021d90eb9437b2d8f30e8363695c4418b5e5f1870801b5c317e9398ee0f572d",
-  "tests/provider-review.test.mjs:generic-assignment:73dc5a57856e8003501fda24b52e51bade22da6b14a878b2b3e57a7eaa931b66",
-  "tests/provider-review.test.mjs:generic-assignment:686546acef73a9c5b5dc697400ef33136a9a4c4a06a7d59400e178df5b9b8fa9",
-  "tests/runtime-event-codec.test.mjs:generic-assignment:38388d41b2df4458f1e7e9c960ecc61ffad998f9665aada43bef3697f55a7c64",
 ]);
 const patterns = [
   ["private-key", /-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----/g],
