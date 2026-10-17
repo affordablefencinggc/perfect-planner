@@ -201,6 +201,8 @@ describe("attack 7: Jev is missing, wrong, down or slow", () => {
 
 describe("attack 7: Jev sends something that is not an answer", () => {
   const answers = (choice: unknown, confidence: unknown = 0.99) => ({ answers: Object.fromEntries(Object.keys(GOOD).map((q) => [q, { choice, confidence }])) });
+  // Jev's reply is read strictly (core/jev/reviewer.ts): an answer that is not exactly one of the listed choices, or a confidence that is
+  // not a number from 0 to 1, is no answer at all, so the review is unavailable. Missing or low confidence is still read and escalated.
   const garbage: [string, string | unknown, Verdict[]][] = [
     ["an HTML error page with status 200", "<html><body>502 Bad Gateway</body></html>", ["unavailable"]],
     ["an empty body", "", ["unavailable"]],
@@ -214,13 +216,13 @@ describe("attack 7: Jev sends something that is not an answer", () => {
     ["a choice that is a list", answers(["all"]), ["unavailable"]],
     ["a choice that is a number", answers(1), ["unavailable"]],
     ["a choice that is null", answers(null), ["unavailable"]],
-    ["the right words in the wrong case ('ALL', 'NO', 'YES')", { answers: { covers_clauses: { choice: "ALL", confidence: 1 }, weakens_tests: { choice: "NO", confidence: 1 }, stays_in_scope: { choice: "YES", confidence: 1 } } }, ["reject"]],
-    ["the right words with a space after them", { answers: { covers_clauses: { choice: "all ", confidence: 1 }, weakens_tests: { choice: "no ", confidence: 1 }, stays_in_scope: { choice: "yes ", confidence: 1 } } }, ["reject"]],
-    ["the right words in a sentence", { answers: { covers_clauses: { choice: "all clauses are covered", confidence: 1 }, weakens_tests: { choice: "no", confidence: 1 }, stays_in_scope: { choice: "yes", confidence: 1 } } }, ["reject"]],
-    ["confidence as words ('high')", answers("all", "high"), ["escalate"]],
+    ["the right words in the wrong case ('ALL', 'NO', 'YES')", { answers: { covers_clauses: { choice: "ALL", confidence: 1 }, weakens_tests: { choice: "NO", confidence: 1 }, stays_in_scope: { choice: "YES", confidence: 1 } } }, ["unavailable"]],
+    ["the right words with a space after them", { answers: { covers_clauses: { choice: "all ", confidence: 1 }, weakens_tests: { choice: "no ", confidence: 1 }, stays_in_scope: { choice: "yes ", confidence: 1 } } }, ["unavailable"]],
+    ["the right words in a sentence", { answers: { covers_clauses: { choice: "all clauses are covered", confidence: 1 }, weakens_tests: { choice: "no", confidence: 1 }, stays_in_scope: { choice: "yes", confidence: 1 } } }, ["unavailable"]],
+    ["confidence as words ('high')", answers("all", "high"), ["unavailable"]],
     ["confidence missing", { answers: Object.fromEntries(Object.keys(GOOD).map((q) => [q, { choice: GOOD[q as keyof typeof GOOD] }])) }, ["escalate"]],
     ["confidence below the floor", { answers: Object.fromEntries(Object.keys(GOOD).map((q) => [q, { choice: GOOD[q as keyof typeof GOOD], confidence: 0.1 }])) }, ["escalate"]],
-    ["confidence negative", { answers: Object.fromEntries(Object.keys(GOOD).map((q) => [q, { choice: GOOD[q as keyof typeof GOOD], confidence: -5 }])) }, ["escalate"]],
+    ["confidence negative", { answers: Object.fromEntries(Object.keys(GOOD).map((q) => [q, { choice: GOOD[q as keyof typeof GOOD], confidence: -5 }])) }, ["unavailable"]],
   ];
 
   it.each(garbage)("%s: never an approval it should not be", async (name, payload, allowed) => {

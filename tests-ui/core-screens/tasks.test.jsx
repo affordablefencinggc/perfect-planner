@@ -227,6 +227,82 @@ describe("TasksScreen", () => {
     expect(within(after).queryByRole("button", { name: "Release claim" })).toBeNull();
     expect(within(after).getByRole("button", { name: "Start worker" })).toBeTruthy();
   });
+
+  const jevTree = { path: "/w", branch: "pp/T-1", base: "main", port: 5200 };
+  const jevTest = { entry: "L-000007", command: "npm test", files: ["save.test.js"], by: "worker-1" };
+
+  test("with a Jev key saved, a task waiting on Jev says so and Ask Jev again asks it about the same test", async () => {
+    let tasks = [task({
+      status: "open", stage: "waiting-for-jev", worktree: jevTree, test: jevTest, approval: { by: "you" }, baseline: { passed: false },
+      jev: { required: true, test: { state: "unavailable", message: "Jev could not be reached, so nothing was approved.", reasons: [], canRetry: true }, diff: null },
+    })];
+    let sent = null;
+    routeFetch({
+      "GET /tasks": async () => ok(view(tasks)),
+      "POST /tasks/T-1/approve-test": async (init) => {
+        sent = JSON.parse(init.body);
+        const line = { state: "approved", message: "Jev read the test and found no gaps.", reasons: [], canRetry: false };
+        tasks = [{ ...tasks[0], stage: "ready-to-claim", jev: { required: true, test: line, diff: null } }];
+        return ok({ failsFirst: true, jev: line, ...view(tasks) });
+      },
+    });
+    renderScreen();
+    const t1 = await card("T-1 Save notes");
+    expect(within(t1).getByText("Waiting for Jev")).toBeTruthy();
+    expect(within(t1).getByText(/Jev could not be reached, so nothing was approved/)).toBeTruthy();
+    fireEvent.click(within(t1).getByRole("button", { name: "Ask Jev again" }));
+    expect(await screen.findByText(/Jev found no gaps, so the worker can claim the task now/)).toBeTruthy();
+    expect(sent).toEqual({ test: "L-000007" });
+    const after = await card("T-1 Save notes");
+    expect(within(after).queryByRole("button", { name: "Ask Jev again" })).toBeNull();
+    expect(within(after).getByText(/Jev read the test and found no gaps/)).toBeTruthy();
+  });
+
+  test("when Jev finds gaps in the test, the reasons are shown to the person with no retry button", async () => {
+    routeFetch({
+      "GET /tasks": async () => ok(view([task({
+        stage: "jev-found-gaps", worktree: jevTree, test: jevTest, approval: { by: "you" }, baseline: { passed: false },
+        jev: { required: true, test: { state: "gaps", message: "Jev found gaps in the test.", reasons: ["It never checks the saved file contents."], canRetry: false }, diff: null },
+      })])),
+    });
+    renderScreen();
+    const t1 = await card("T-1 Save notes");
+    expect(within(t1).getByText("Jev found gaps")).toBeTruthy();
+    expect(within(t1).getByText("It never checks the saved file contents.")).toBeTruthy();
+    expect(within(t1).queryByRole("button", { name: "Ask Jev again" })).toBeNull();
+  });
+
+  test("a diff Jev sends back is not approved: the person is told why and the task shows as reopened", async () => {
+    let tasks = [task({
+      status: "claimed", owner: "worker-1", stage: "review-diff", worktree: jevTree, check: { passed: true, commit: "abc123" },
+      jev: { required: true, test: { state: "approved", message: "Jev read the test and found no gaps.", reasons: [], canRetry: false }, diff: null },
+    })];
+    routeFetch({
+      "GET /tasks": async () => ok(view(tasks)),
+      "GET /tasks/T-1/diff": async () => ok({ task: "T-1", files: ["src/save.js"], sensitive: [], text: "+export const save = 1;", commit: "abc123" }),
+      "POST /tasks/T-1/approve-diff": async () => {
+        tasks = [{ ...tasks[0], status: "open", owner: null, stage: "ready-to-claim", attempt: 2, label: "T-1.a2", worktree: null }];
+        return ok({ approved: false, reopenedAs: "T-1.a2", jev: { state: "gaps", message: "Jev found problems in the change.", reasons: ["It writes outside the notes folder."], canRetry: false }, ...view(tasks) });
+      },
+    });
+    renderScreen();
+    fireEvent.click(within(await card("T-1 Save notes")).getByRole("button", { name: "Show diff" }));
+    expect(await screen.findByText("+export const save = 1;")).toBeTruthy();
+    fireEvent.click(within(await card("T-1 Save notes")).getByRole("button", { name: "Approve diff at abc123" }));
+    const note = await screen.findByText(/Jev sent the change back, so it was not approved/);
+    expect(note.textContent).toMatch(/It writes outside the notes folder\./);
+    expect(note.textContent).toMatch(/Reopened as T-1\.a2/);
+    // The sent-back change is no longer on the card.
+    expect(screen.queryByText("+export const save = 1;")).toBeNull();
+  });
+
+  test("without a Jev key nothing about Jev is shown", async () => {
+    routeFetch({ "GET /tasks": async () => ok(view([task({ stage: "ready-to-claim", worktree: jevTree, test: jevTest, approval: { by: "you" }, baseline: { passed: false }, jev: null })])) });
+    renderScreen();
+    const t1 = await card("T-1 Save notes");
+    expect(within(t1).queryByText(/Jev/)).toBeNull();
+    expect(within(t1).queryByRole("button", { name: /Jev/ })).toBeNull();
+  });
 });
 
 describe("TasksScreen: waiting on other tasks, updating from main, releasing file claims", () => {

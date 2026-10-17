@@ -12,10 +12,10 @@
 // which only reads the ledger and says so. The Jev key is never read here:
 // only its stored/not-stored status is asked of the key provider.
 import { isAuthoritative, type Actor, type Ledger, type LedgerEntry } from "../../ledger/index";
-import { createJevTransport, createOsKeyProvider, JevReviewer, JEV_MODEL, type JevCallResult, type JevKeyProvider, type JevRequest } from "../../jev/index";
+import { createJevTransport, createOsKeyProvider, JevReviewer, JEV_MODEL, type JevCallResult, type JevKeyProvider, type JevRequest, type JevSettings } from "../../jev/index";
 import { clausesAt, sortedClauses } from "../../lookup/index";
 import { appendNumbered } from "../../numbering/index";
-import { formatCents, monthOf, monthSpend } from "../../release/budget";
+import { currentBudget, formatCents, monthOf, monthSpend } from "../../release/budget";
 import type { Roster } from "../../people/index";
 import { PlanningError, PlanningSession, planningMeta } from "../../planning/index";
 import { questionKey } from "../../relay/index";
@@ -31,6 +31,11 @@ type Transport = (request: JevRequest) => Promise<JevCallResult>;
 interface JevWiring {
   keys: JevKeyProvider;
   transport?: Transport;
+  /** Thresholds and a Jev-only monthly limit (dollars). The person's monthly budget lowers the limit further. */
+  settings?: Partial<JevSettings>;
+  /** How long a review waits for Jev before it counts as unavailable. Tests make it short. */
+  deadlineMs?: number;
+  now?: () => Date;
 }
 
 let wiring: JevWiring | null = null;
@@ -41,7 +46,12 @@ export function setDecisionJev(next: JevWiring | null): void {
   statusCache.clear();
 }
 
-function jevWiring(): JevWiring {
+/** True once something (the app's startup or a test) chose the key provider; tests use it to avoid the real key store. */
+export function jevConfigured(): boolean {
+  return wiring !== null;
+}
+
+export function jevWiring(): JevWiring {
   if (!wiring) wiring = { keys: createOsKeyProvider() };
   return wiring;
 }
@@ -55,29 +65,75 @@ export interface JevConnection {
 
 const statusCache = new Map<string, { at: number; value: JevConnection }>();
 const STATUS_TTL = 60_000;
+/** One request to TypeSafe (the transport retries a busy answer once), and the whole review. */
+const JEV_CALL_TIMEOUT_MS = 20_000;
+const JEV_DEADLINE_MS = 45_000;
 
 /**
  * Jev's test review is required once Jev is set up (a key saved in Settings), and not before, so the
  * loop runs without Jev. Called on every request; the key store's answer is cached for a minute.
+ * The Tasks buttons that ask Jev pass fresh, so a key saved a few seconds ago counts at once.
  */
-export async function syncJevPolicy(project: CoreProject): Promise<void> {
-  project.policy.requireJevTestReview = (await jevConnection(project)).connected;
+export async function syncJevPolicy(project: CoreProject, options: { fresh?: boolean } = {}): Promise<JevConnection> {
+  const connection = await jevConnection(project, options);
+  project.policy.requireJevTestReview = connection.connected;
+  return connection;
 }
 
-async function jevConnection(project: CoreProject): Promise<JevConnection> {
+export async function jevConnection(project: CoreProject, options: { fresh?: boolean } = {}): Promise<JevConnection> {
   const cached = statusCache.get(project.key);
-  if (cached && Date.now() - cached.at < STATUS_TTL) return cached.value;
+  if (!options.fresh && cached && Date.now() - cached.at < STATUS_TTL) return cached.value;
   let value: JevConnection;
   try {
     const status = await jevWiring().keys.status();
     value = status.stored
-      ? { connected: true, model: JEV_MODEL, note: "Jev is connected. New questions are sent to Jev when the plan may settle them, and Jev must review each task's test before work on it starts." }
-      : { connected: false, model: null, note: status.available ? "Jev is not connected: no TypeSafe key is saved in Settings. Recommendations shown are from the offline reviewer. Once the key is saved, Jev must review each task's test before work on it starts." : "Jev is not connected: this computer has no secure key store Perfect Planner can use. Recommendations shown are from the offline reviewer." };
+      ? { connected: true, model: JEV_MODEL, note: "Jev is connected. New questions are sent to Jev when the plan may settle them, and Jev must review each task's test and each change before it is approved." }
+      : { connected: false, model: null, note: status.available ? "Jev is not connected: no TypeSafe key is saved in Settings. Recommendations shown are from the offline reviewer. Once the key is saved, Jev must review each task's test and each change before it is approved." : "Jev is not connected: this computer has no secure key store Perfect Planner can use. Recommendations shown are from the offline reviewer." };
   } catch {
-    value = { connected: false, model: null, note: "Jev is not connected: the key store did not answer. Recommendations shown are from the offline reviewer." };
+    // An error is not "no key": if Jev was connected a moment ago, it stays required until the store answers.
+    value = cached?.value.connected
+      ? { connected: true, model: JEV_MODEL, note: "Jev was connected and the key store did not answer just now, so Jev's review is still required." }
+      : { connected: false, model: null, note: "Jev is not connected: the key store did not answer. Recommendations shown are from the offline reviewer." };
   }
   statusCache.set(project.key, { at: Date.now(), value });
   return value;
+}
+
+/**
+ * The reviewer every Jev call goes through: the saved key (read only by the transport), a deadline so a
+ * slow Jev counts as unavailable instead of hanging the screen, and the monthly cap. The cap is the
+ * smaller of the Jev limit in the wiring and what is left of the person's own monthly budget (Settings),
+ * so reviews wait in a queue at 100% and nothing is approved because of the cap (spec 6.7).
+ */
+export function jevReviewerFor(project: CoreProject): JevReviewer {
+  const w = jevWiring();
+  const now = w.now ?? (() => new Date());
+  const deadline = w.deadlineMs ?? JEV_DEADLINE_MS;
+  const base = w.transport ?? createJevTransport({ keys: w.keys, timeoutMs: JEV_CALL_TIMEOUT_MS });
+  const transport: Transport = (request) =>
+    new Promise((resolve) => {
+      const timer = setTimeout(() => resolve({ ok: false, problem: "request_failed", detail: `Jev did not answer within ${Math.max(1, Math.round(deadline / 1000))} seconds.` }), deadline);
+      timer.unref?.();
+      base(request).then(
+        (result) => (clearTimeout(timer), resolve(result)),
+        async (error: Error) => {
+          clearTimeout(timer);
+          // The error text goes on the ledger: the saved key is scrubbed out of it first, wherever it came from.
+          const key = await w.keys.read().catch(() => null);
+          const text = String(error?.message ?? error).slice(0, 200);
+          resolve({ ok: false, problem: "request_failed", detail: `Jev could not be reached: ${key ? key.scrub(text) : text}` });
+        },
+      );
+    });
+  const entries = project.entries();
+  const budget = currentBudget(entries);
+  let monthlyLimit = w.settings?.monthlyLimit ?? null;
+  if (budget) {
+    const others = monthSpend(entries.filter((e) => isAuthoritative(e)), monthOf(now())).totalCents;
+    const left = Math.max(0, budget.monthlyCents - others) / 100;
+    monthlyLimit = monthlyLimit === null ? left : Math.min(monthlyLimit, left);
+  }
+  return new JevReviewer({ ledger: project.ledger, transport, now, settings: { ...w.settings, monthlyLimit } });
 }
 
 // ---------- card shapes ----------
@@ -595,8 +651,7 @@ function askJev(project: CoreProject, q: string): void {
     if (!connection.connected) return;
     const asked = project.service.relay.get(q);
     if (!asked || asked.status !== "open" || asked.options.length < 2) return;
-    const w = jevWiring();
-    const reviewer = new JevReviewer({ ledger: project.ledger, transport: w.transport ?? createJevTransport({ keys: w.keys }) });
+    const reviewer = jevReviewerFor(project);
     reviewer.planClauses = () => sortedClauses(signedClauses(project.entries())).filter((c) => c.status === "active").map((c) => ({ ref: `§${c.clause}`, text: c.text }));
     // Jev's view is recorded as a review.verdict and shown as the recommendation; the person still decides.
     await reviewer.tryAnswer(asked);
