@@ -66,7 +66,7 @@ function DispatchPanel({ dispatch, onClose }) {
 }
 
 function RepoPicker({ repo, onSave }) {
-  const [root, setRoot] = useState("");
+  const [root, setRoot] = useState(repo.suggested ?? "");
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
   const save = async (event) => {
@@ -111,7 +111,7 @@ function SensitiveBlock({ diff, confirmed, onConfirm, canConfirm }) {
       <WarningCircleIcon weight="fill" aria-hidden="true" />
       <div>
         <strong>This diff changes {files.length === 1 ? "a file" : `${files.length} files`} that can run code on your computer.</strong>
-        <p>Install scripts, lockfiles, git settings and hooks, CI workflows and npm settings run or change programs when you install, push or merge. Read each one in the diff below before approving.</p>
+        <p>Install scripts, lockfiles, git settings and hooks, CI workflows and npm settings run or change programs when you install, push or merge. Test files are listed too, because a test can change what the approved test checks or run code when it is run, so the worker's own test file shows up on every task. Read each one in the diff below before approving.</p>
         <ul>{files.map((file) => <li key={file}><code>{file}</code></li>)}</ul>
         {canConfirm && (
           <label className="core-tasks-sensitive-confirm">

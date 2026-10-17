@@ -12,7 +12,7 @@ import { appendNumbered } from "../../numbering/index";
 import { asPersonRequest } from "../keys";
 import { hostCall, startTestHost } from "../testing";
 import { icaclsPath } from "../tokenFile";
-import { quoteFor, repoRefusal, workerCommands } from "./tasks";
+import { quoteFor, repoRefusal, withOutputTail, workerCommands } from "./tasks";
 
 const git = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, encoding: "utf8", env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t.invalid", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t.invalid" } }).trim();
 const write = (dir: string, file: string, text: string) => {
@@ -46,7 +46,7 @@ afterEach(async () => {
   fs.rmSync(repo, { recursive: true, force: true });
 });
 
-const tasks = async () => (await hostCall(ctx.base, "GET", `/tasks${q}`)).body.result as { repo: { ok: boolean; root?: string; reason?: string }; tasks: any[] };
+const tasks = async () => (await hostCall(ctx.base, "GET", `/tasks${q}`)).body.result as { repo: { ok: boolean; root?: string; reason?: string; suggested?: string }; tasks: any[] };
 const post = (route: string, body: unknown = {}) => hostCall(ctx.base, "POST", `${route}${q}`, body);
 
 describe("tasks routes", () => {
@@ -193,6 +193,8 @@ describe("tasks routes", () => {
     const view = await tasks();
     expect(view.repo.ok).toBe(false);
     expect(view.repo.reason).toMatch(/git/);
+    // The folder the person already imported is offered as the answer, not an empty box.
+    expect(view.repo.suggested).toBe(fs.realpathSync(plain));
     const res = await post("/tasks/T-1/dispatch");
     expect(res.status).toBe(409);
     // Close the host before removing its folder: Windows refuses to delete a folder whose ledger is still open.
@@ -344,5 +346,17 @@ describe("a forged local request is not the person", () => {
     const types = ctx.host.project("loop").entries().map((e) => e.type);
     expect(types).not.toContain("plan.approved");
     expect(types).not.toContain("test.approved");
+  });
+});
+
+describe("a refused merge shows why the test failed", () => {
+  it("adds the end of the test's own output to the reason, and nothing when there is none", () => {
+    const output = Array.from({ length: 40 }, (_, i) => `line ${i + 1}`).join("\n");
+    const text = withOutputTail("The test fails after the merge (exit code 1); main was left untouched.", output);
+    expect(text).toContain("exit code 1");
+    expect(text).toContain("End of the test output:\nline 21\n");
+    expect(text).toContain("line 40");
+    expect(text).not.toContain("line 20\n");
+    expect(withOutputTail("refused", "")).toBe("refused");
   });
 });
