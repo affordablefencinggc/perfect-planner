@@ -14,6 +14,7 @@ import { randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import type { AgentRecord, AgentService } from "../../mcp/index";
 import type { CoreProject } from "../project";
+import { AGENT_KINDS, type AgentKind } from "../agentKinds";
 import { HttpError, type Router } from "../router";
 import { writeOwnerOnlyFile } from "../tokenFile";
 import { localPersonId } from "./people";
@@ -112,14 +113,14 @@ export const quoteFor = (windows: boolean) => (value: string) =>
 const connectProgram = (entry: string) => entry.replace(/agent\.mjs$/, "connect.mjs");
 
 /**
- * The one line for Claude Code: connect.mjs (next to the agent entry) registers the server for the
- * folder it runs in, replacing an older registration, and installs the perfect-planner-connect skill.
- * It names the token file, never the token, so nothing secret lands in shell history, a chat
- * transcript or ~/.claude.json.
+ * The one line per agent: connect.mjs (next to the agent entry) registers the server with that agent's
+ * CLI for the folder it runs in, replacing an older registration, and installs the perfect-planner-connect
+ * skill. It names the token file, never the token, so nothing secret lands in shell history, a chat
+ * transcript or any agent's config.
  */
-export function connectLine(bridgeUrl: string, tokenFile: string, entry: string, platform: NodeJS.Platform = process.platform): string {
+export function connectLine(bridgeUrl: string, tokenFile: string, entry: string, platform: NodeJS.Platform = process.platform, agent: AgentKind = "claude"): string {
   const quote = quoteFor(platform === "win32");
-  return `node ${quote(connectProgram(entry))} ${bridgeUrl} ${quote(tokenFile)}`;
+  return `node ${quote(connectProgram(entry))} --agent ${agent} ${bridgeUrl} ${quote(tokenFile)}`;
 }
 
 /** Installs only the skill, user-wide; no token, so it is safe to show at any time. */
@@ -128,9 +129,9 @@ export function skillLine(entry: string, platform: NodeJS.Platform = process.pla
 }
 
 export function setupFor(bridgeUrl: string, tokenFile: string, entry: string, platform: NodeJS.Platform = process.platform) {
-  const claudeCode = connectLine(bridgeUrl, tokenFile, entry, platform);
+  const lines = Object.fromEntries(AGENT_KINDS.map((agent) => [agent, connectLine(bridgeUrl, tokenFile, entry, platform, agent)])) as Record<AgentKind, string>;
   const json = JSON.stringify({ mcpServers: { [AGENT_SERVER_NAME]: { command: "node", args: [entry], env: { PP_BRIDGE_URL: bridgeUrl, PP_AGENT_TOKEN_FILE: tokenFile } } } }, null, 2);
-  return { claudeCode, json };
+  return { claudeCode: lines.claude, lines, json };
 }
 
 export function tokenFilePath(project: CoreProject, name: string): string {
@@ -231,6 +232,7 @@ export function registerAgentRoutes(router: Router): void {
       agentPath: entry.path,
       agentBuilt: entry.built,
       claudeCode: setup.claudeCode,
+      lines: setup.lines,
       json: setup.json,
       ...(entry.built ? {} : { warning: "The agent program is not built yet. Run npm run build:core-host in the Perfect Planner folder before pasting this." }),
     };

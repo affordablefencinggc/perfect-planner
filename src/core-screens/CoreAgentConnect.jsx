@@ -13,6 +13,24 @@ export const CONNECT_POLL_MS = 1500;
 
 const ROLE_LABEL = { main: "Main chat", worker: "Worker", observer: "Read-only" };
 
+// The agents the one line can set up (core/host/agentKinds.ts). Each gets the same
+// five steps; only the CLI it registers with and the program you start differ.
+export const AGENT_CHOICES = [
+  { id: "claude", label: "Claude Code", start: "start Claude Code there" },
+  { id: "gemini", label: "Gemini CLI", start: "start Gemini CLI there (choose Trust folder if it asks)" },
+  { id: "codex", label: "Codex CLI", start: "start Codex there" },
+];
+const AGENT_KEY = "pp.connect.agent";
+
+function rememberedAgent() {
+  try {
+    const saved = localStorage.getItem(AGENT_KEY);
+    return AGENT_CHOICES.some((a) => a.id === saved) ? saved : "claude";
+  } catch {
+    return "claude";
+  }
+}
+
 // The relay marks a model the agent named itself as "unverified:<name>": show it as self-reported.
 export function modelLabel(model) {
   if (!model) return "";
@@ -31,6 +49,7 @@ export function CoreAgentConnect() {
   const [actionError, setActionError] = useState(null);
   const [copied, setCopied] = useState(null);
   const [justConnected, setJustConnected] = useState(null);
+  const [agentKind, setAgentKind] = useState(rememberedAgent);
   const resource = useCoreResource("/agents", { isEmpty: () => false, pollMs: pending ? CONNECT_POLL_MS : 0 });
 
   const data = resource.status === "ready" ? resource.data : null;
@@ -70,6 +89,14 @@ export function CoreAgentConnect() {
   };
 
   const copy = async (id, text) => setCopied({ id, ok: await copyText(text) });
+
+  const pickAgent = (id) => {
+    setAgentKind(id);
+    setCopied(null);
+    try { localStorage.setItem(AGENT_KEY, id); } catch { /* remembering the pick is only a convenience */ }
+  };
+  const choice = AGENT_CHOICES.find((a) => a.id === agentKind) ?? AGENT_CHOICES[0];
+  const command = pending ? (pending.lines?.[choice.id] ?? pending.claudeCode) : "";
 
   const live = agents.filter((a) => !a.revoked);
 
@@ -114,20 +141,35 @@ export function CoreAgentConnect() {
 
           {pending && (
             <div className="core-agent-connect-setup">
+              <div className="core-agent-connect-agents" role="radiogroup" aria-label="Your agent">
+                {AGENT_CHOICES.map((a) => (
+                  <button
+                    key={a.id}
+                    type="button"
+                    role="radio"
+                    aria-checked={a.id === choice.id}
+                    className={`core-button${a.id === choice.id ? " primary" : ""}`}
+                    onClick={() => pickAgent(a.id)}
+                  >
+                    {a.label}
+                  </button>
+                ))}
+              </div>
               <p>
-                Open a terminal in the folder your agent will work in and paste this one line. It connects Claude Code to Perfect Planner for that folder
-                and installs the Perfect Planner skill for every Claude Code session on this computer. Then start Claude Code there and say{" "}
-                <strong>check in with Perfect Planner</strong>. Already in Claude Code? Paste the line into the chat; it shows you the line and runs it only after you say yes.
+                Open a terminal in the folder your agent will work in and paste this one line. It connects {choice.label} to Perfect Planner for that folder
+                and installs the Perfect Planner skill for {choice.label} on this computer. Then {choice.start} and say{" "}
+                <strong>check in with Perfect Planner</strong>. Already in {choice.label}? Paste the line into the chat; it shows you the line and runs it only after you say yes.
               </p>
+              {choice.id === "codex" && <p className="core-muted">Codex keeps one Perfect Planner connection for the whole computer, so this replaces any earlier Codex connection.</p>}
               {pending.warning && <p className="core-agent-connect-warn">{pending.warning}</p>}
               <div className="core-agent-connect-snippet">
                 <div className="core-agent-connect-snippet-head">
-                  <strong>Claude Code command</strong>
-                  <button type="button" className="core-button" onClick={() => copy("cmd", pending.claudeCode)} aria-label="Copy the Claude Code command">
+                  <strong>{choice.label} command</strong>
+                  <button type="button" className="core-button" onClick={() => copy("cmd", command)} aria-label={`Copy the ${choice.label} command`}>
                     {copied?.id === "cmd" && copied.ok ? <><CheckCircleIcon aria-hidden="true" /> Copied</> : <><CopyIcon aria-hidden="true" /> Copy</>}
                   </button>
                 </div>
-                <pre tabIndex={0} aria-label="Claude Code command" data-connect-command><code>{pending.claudeCode}</code></pre>
+                <pre tabIndex={0} aria-label={`${choice.label} command`} data-connect-command><code>{command}</code></pre>
               </div>
               <details className="core-agent-connect-json">
                 <summary>Using another agent? Copy the settings instead</summary>
@@ -184,7 +226,7 @@ export function CoreAgentConnect() {
             <details className="core-agent-connect-json" data-skill-only>
               <summary>Install the skill only</summary>
               <p className="core-muted">
-                Teaches every Claude Code session on this computer, in every folder, how to work with Perfect Planner. No key, nothing connected.
+                Teaches every Claude Code, Gemini CLI and Codex CLI session on this computer, in every folder, how to work with Perfect Planner. No key, nothing connected.
                 Paste it into any terminal once; run it again after updating Perfect Planner.
               </p>
               <div className="core-agent-connect-snippet">

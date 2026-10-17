@@ -313,7 +313,7 @@ describe("worker commands", () => {
     expect(quoteFor(false)("/tmp/$(touch pwned)/it's")).toBe("'/tmp/$(touch pwned)/it'\\''s'");
     expect(quoteFor(true)("C:\\$(calc)\\it's")).toBe("'C:\\$(calc)\\it''s'");
     const posix = workerCommands({ worktree: "/w/$(x)", bridgeUrl: "http://127.0.0.1:1", tokenFile: "/t/T-1.token", entry: "/a/agent.mjs", briefFile: "/b/`x`.md", platform: "linux" });
-    expect(posix.setup).toBe("cd '/w/$(x)' && node '/a/connect.mjs' http://127.0.0.1:1 '/t/T-1.token'");
+    expect(posix.setup).toBe("cd '/w/$(x)' && node '/a/connect.mjs' --agent claude http://127.0.0.1:1 '/t/T-1.token'");
     expect(posix.start).toBe("claude \"$(cat '/b/`x`.md')\"");
     expect(workerCommands({ worktree: "C:\\w", bridgeUrl: "http://127.0.0.1:1", tokenFile: "C:\\t", entry: "C:\\a", briefFile: "C:\\b.md", platform: "win32" }).start).toBe("claude (Get-Content -Raw 'C:\\b.md')");
   });
