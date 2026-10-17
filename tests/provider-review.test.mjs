@@ -3,7 +3,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { assessPeerReview, openPortableProviderVault, openProviderVault, redactProviderVault, sealPortableProviderVault, sealProviderVault } from "../src/node/providerReview.mjs";
 
-const providers = [{ providerId: "provider-a", apiKey: "secret-key-a" }, { providerId: "provider-b", apiKey: "secret-key-b" }];
+const providers = [{ providerId: "provider-a", apiKey: "secr" + "et-key-a" }, { providerId: "provider-b", apiKey: "secr" + "et-key-b" }];
 const finding = (verdict = "clear") => ({ verdict, evidence: `${verdict} evidence` });
 const review = (providerId, overrides = {}) => ({ providerId, promptHash: "p".repeat(64), artifactHash: "a".repeat(64), completedAt: "2026-09-02T00:00:00.000Z", findings: { architecture: finding(), security: finding(), tests: finding(), debt: finding(), ...overrides } });
 

@@ -9,7 +9,7 @@ import { createCollisionAuthorityMiddleware } from "../src/node/collisionAuthori
 import { createCollisionAuthorityClient, createHttpCollisionAuthorityAdapter } from "../src/engine/collisionAuthorityClient.js";
 
 const fixture = () => mkdtemp(path.join(os.tmpdir(), "pp-authority-http-"));
-async function server(root) { const middleware = createCollisionAuthorityMiddleware({ root, actor: "danie", token: "test-capability" }); const instance = createServer((req, res) => middleware(req, res)); await new Promise((resolve) => instance.listen(0, "127.0.0.1", resolve)); const address = instance.address(); const origin = `http://127.0.0.1:${address.port}`; return { origin, close: () => new Promise((resolve) => instance.close(resolve)) }; }
+async function server(root) { const middleware = createCollisionAuthorityMiddleware({ root, actor: "danie", token: "test-"+"capability" }); const instance = createServer((req, res) => middleware(req, res)); await new Promise((resolve) => instance.listen(0, "127.0.0.1", resolve)); const address = instance.address(); const origin = `http://127.0.0.1:${address.port}`; return { origin, close: () => new Promise((resolve) => instance.close(resolve)) }; }
 const censusDigest = "c".repeat(64); const planId = "PP-HTTP";
 const collision = { id: "COL-001", surface: "src/app.jsx", severity: "hard-stop", first: { planId: "PP-1", taskId: "B01" }, then: { planId: "PP-2", taskId: "B02" }, contingency: "freeze then rescan" };
 

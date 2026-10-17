@@ -1,3 +1,4 @@
+import { realpathSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createCollisionAuthorityMiddleware } from "./collisionAuthorityHttp.mjs";
@@ -10,7 +11,30 @@ import { createTaskObservationHost } from "./taskObservationVitePlugin.mjs";
 
 // One composition of the local saving APIs, shared by the Vite dev server and the
 // production server (scripts/serve-local.mjs) so both save to the same place the same way.
-export const localAuthorityRoot = (env = process.env) => path.join(env.LOCALAPPDATA ?? os.tmpdir(), "PerfectPlannerCleanroom", "authority");
+// Saved work lives in the platform's app-data folder, never the temp folder (which
+// Linux clears on reboot and macOS purges): LOCALAPPDATA on Windows (also honoured as an
+// explicit override elsewhere, as the tests and the browser journey do),
+// ~/Library/Application Support on macOS and $XDG_DATA_HOME (else ~/.local/share) on Linux.
+// The folder is canonicalised once it exists, because the host-root guards refuse redirected paths.
+const canonical = (target) => { try { return realpathSync.native(target); } catch { return target; } };
+
+export function platformDataDirectory(env = process.env, platform = process.platform, home = () => os.homedir()) {
+  if (env.LOCALAPPDATA) return env.LOCALAPPDATA;
+  const homeDir = env.HOME || home();
+  if (platform === "win32") {
+    if (!homeDir) throw new Error("Perfect Planner cannot find a folder to save in: LOCALAPPDATA is not set.");
+    return path.win32.join(homeDir, "AppData", "Local");
+  }
+  if (platform === "darwin") {
+    if (!homeDir) throw new Error("Perfect Planner cannot find a folder to save in: HOME is not set.");
+    return path.posix.join(canonical(homeDir), "Library", "Application Support");
+  }
+  if (env.XDG_DATA_HOME && path.posix.isAbsolute(env.XDG_DATA_HOME)) return canonical(env.XDG_DATA_HOME);
+  if (!homeDir) throw new Error("Perfect Planner cannot find a folder to save in: HOME and XDG_DATA_HOME are not set.");
+  return path.posix.join(canonical(homeDir), ".local", "share");
+}
+
+export const localAuthorityRoot = (env = process.env, platform = process.platform) => (platform === "win32" ? path.win32 : path.posix).join(platformDataDirectory(env, platform), "PerfectPlannerCleanroom", "authority");
 
 const planningLedgerUnavailable = (req, res, next) => {
   if (!String(req.url).startsWith("/api/planning-ledger/")) return next();

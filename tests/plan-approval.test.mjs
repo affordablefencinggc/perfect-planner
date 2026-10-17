@@ -2,7 +2,7 @@ import "./helpers/hermetic-env.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { confirmProjectReady, digestPlanTasks, notePlanTaskDrift, planApprovalStatus, recordPlanApproval } from "../src/project/planApproval.js";
+import { confirmProjectReady, digestPlanTasks, notePlanTaskDrift, planApprovalStatus, recordPlanApproval, withCorePlanApproval } from "../src/project/planApproval.js";
 import { readWorkRecords, writeSection } from "../src/project/projectWorkRecords.js";
 import { deriveImportedProjectWorkflowModel } from "../src/project/importedProjectWorkflowModel.js";
 import { deriveProjectHomeModel } from "../src/project/projectHomeModel.js";
@@ -129,7 +129,22 @@ test("Home reaches promotion, then Ready only after an explicit confirmation", a
   assert.equal(none.nextAction.workspace, "plan");
 
   await recordPlanApproval(session.projectId, { tasks: TASKS, censusDigest: session.census.digest }, { storage, now });
-  const promotion = deriveProjectHomeModel(session, readWorkRecords(session.projectId, storage));
+  // Overlaps and owners are planning steps too: Home never offers readiness while they are open.
+  const home = () => deriveProjectHomeModel(session, readWorkRecords(session.projectId, storage));
+  assert.equal(home().nextAction.id, "collision-check-missing");
+  assert.equal(home().nextAction.workspace, "collision");
+  assert.ok(home().blockers.some((item) => item.id === "owners-missing"));
+  const pair = { key: "T0001|T0002", tasks: ["T0001", "T0002"], severity: "ordered", files: [], signature: "sig" };
+  writeSection(session.projectId, "collisions", { checkedTaskIds: ["T0001", "T0002"], uncheckedTaskIds: [], invalid: [], collisions: [pair], resolutions: {} }, { storage, now });
+  assert.equal(home().nextAction.id, "collision-undecided", "an undecided 'needs an order' pair blocks readiness");
+  assert.match(home().nextAction.reason, /1 of 1 overlap still needs a decision/);
+  writeSection(session.projectId, "collisions", { checkedTaskIds: ["T0001", "T0002"], uncheckedTaskIds: [], invalid: [], collisions: [pair], resolutions: { [pair.key]: { choice: "order", first: "T0001", signature: "sig" } } }, { storage, now });
+  assert.equal(home().nextAction.id, "owners-missing");
+  writeSection(session.projectId, "allocation", { taskIds: ["T0001", "T0002"], assignments: { T0001: { owner: "Ana", wave: 1 }, T0002: { owner: "agent:", wave: 2 } } }, { storage, now });
+  assert.equal(home().nextAction.id, "owners-incomplete", "a bare 'agent:' is not an owner");
+  assert.equal(home().nextAction.workspace, "allocation");
+  writeSection(session.projectId, "allocation", { taskIds: ["T0001", "T0002"], assignments: { T0001: { owner: "Ana", wave: 1 }, T0002: { owner: "agent: builder", wave: 2 } } }, { storage, now });
+  const promotion = home();
   assert.equal(promotion.stage.id, "promotion");
   assert.equal(promotion.nextAction.id, "confirm-project-ready");
   assert.equal(promotion.nextAction.label, "Confirm project is ready");
@@ -173,6 +188,41 @@ test("Next honest action never routes to the page that is already open", async (
   await recordPlanApproval(session.projectId, { tasks: TASKS, censusDigest: session.census.digest }, { storage, now });
   const afterApproval = deriveImportedProjectWorkflowModel(session, "allocation", readWorkRecords(session.projectId, storage)).nextAction;
   assert.deepEqual([afterApproval.workspace, afterApproval.target], ["collision", "ALLOC-CLEARANCE"]);
+});
+
+test("the core ledger's plan approval is the plan approval everywhere, and readiness binds to its entry", async () => {
+  const storage = memoryStorage(), session = project();
+  const corePlan = { approved: true, latest: { plan: "P-2", entry: "L-000051", at: AT, by: "owner", summary: "Plan approved", source: "planning" }, count: 2, tasks: ["T-1", "T-2", "T-3"] };
+  const withCore = (records) => withCorePlanApproval(records, corePlan);
+
+  // No local record: core alone approves the plan on Home and on the Build page.
+  let records = withCore(readWorkRecords(session.projectId, storage));
+  const status = planApprovalStatus(session, records);
+  assert.equal(status.state, "recorded");
+  assert.equal(status.revision, 2);
+  assert.match(status.detail, /Plan P-2 approved in Deep planning by owner · 3 roadmap tasks/);
+  assert.equal(deriveProjectHomeModel(session, records).nextAction.id, "confirm-project-ready");
+  const build = deriveImportedProjectWorkflowModel(session, "build", records).requirements.find((item) => item.id === "AUTH-PLAN");
+  assert.equal(build.state, "recorded");
+  assert.equal(build.source, "Project ledger · P-2 · L-000051");
+
+  // A local approval whose tasks drifted does not override the core approval.
+  await recordPlanApproval(session.projectId, { tasks: TASKS, censusDigest: session.census.digest }, { storage, now });
+  await notePlanTaskDrift(session.projectId, [{ ...TASKS[0], title: "Changed" }, TASKS[1]], { storage, now });
+  assert.equal(planApprovalStatus(session, withCore(readWorkRecords(session.projectId, storage))).state, "recorded");
+  assert.equal(planApprovalStatus(session, readWorkRecords(session.projectId, storage)).state, "review");
+
+  // "Project is ready" is confirmed against the core entry; a later approval needs it again.
+  confirmProjectReady(session.projectId, { storage, now, records: withCore(readWorkRecords(session.projectId, storage)) });
+  records = withCore(readWorkRecords(session.projectId, storage));
+  assert.equal(planApprovalStatus(session, records).confirmed, true);
+  assert.equal(deriveProjectHomeModel(session, records).stage.id, "ready");
+  const next = withCorePlanApproval(readWorkRecords(session.projectId, storage), { ...corePlan, latest: { ...corePlan.latest, plan: "P-3", entry: "L-000060" } });
+  assert.equal(planApprovalStatus(session, next).confirmed, false);
+
+  // Core with no approval (or not reachable) leaves the local record as it was.
+  assert.equal(withCorePlanApproval(records, null), records);
+  assert.equal(planApprovalStatus(session, withCorePlanApproval(readWorkRecords(session.projectId, storage), { approved: false, latest: null, count: 0, tasks: [] })).state, "review");
 });
 
 test("the person's plan approval and the ledger-bound saved-plan check have distinct, consistent wording (gap 17)", async () => {

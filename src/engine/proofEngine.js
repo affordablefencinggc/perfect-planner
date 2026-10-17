@@ -30,7 +30,7 @@ export function assessCompletion(plan, journal = [], artifacts = {}) {
   const reasons = [];
   for (const audit of audits.filter((item) => !item.ok)) reasons.push(`${audit.itemId}: ${audit.fatal.join("; ")}`);
   if (!plan.approved) reasons.push("spine approval is missing");
-  if (plan.openGates > 0) reasons.push(`${plan.openGates} collision gate(s) remain open`);
+  if (plan.openGates > 0) reasons.push(`${plan.openGates} collision gate${plan.openGates === 1 ? " remains" : "s remain"} open`);
   if (plan.ciTier3 !== "green") reasons.push("merged-state Tier 3 CI is not green");
   if (plan.truthCoreValid !== true) reasons.push("local truth-core report is missing or invalid");
   if (!plan.completenessReview) reasons.push("no completeness review is recorded");

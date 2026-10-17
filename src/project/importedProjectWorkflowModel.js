@@ -5,6 +5,8 @@ import { validateProjectSession } from "./projectSession.js";
 import { deriveWorkRecordReceipt } from "./workRecordReceipts.js";
 import { planApprovalStatus } from "./planApproval.js";
 import { workflowNextAction } from "./workflowNextAction.js";
+import { planTaskIds } from "./proofRecords.js";
+import { readTaskDraftPresence } from "./taskDraftPresence.js";
 
 export const IMPORTED_WORKFLOW_MODEL_SCHEMA_VERSION = 1;
 
@@ -19,7 +21,7 @@ const SUPPORTED_WORKSPACES = new Set([
   "index",
 ]);
 
-const WORKSPACE_COPY = Object.freeze({
+export const WORKSPACE_COPY = Object.freeze({
   plan: {
     eyebrow: "DEFINE · PROJECT-SCOPED PLANNING",
     title: "Planning intake",
@@ -120,7 +122,8 @@ function authorityReceipt(project, kind, label) {
 function planReceipt(project, records) {
   const status = planApprovalStatus(project, records);
   if (!status) return authorityReceipt(project, "plan", "Plan approval");
-  return receipt("AUTH-PLAN", "Plan approval", effectiveState(project, status.state), status.detail, status.revision ? `Saved plan approval · revision ${status.revision}` : null);
+  const source = status.core ? `Project ledger · ${status.core.plan} · ${status.core.entry}` : status.revision ? `Saved plan approval · revision ${status.revision}` : null;
+  return receipt("AUTH-PLAN", "Plan approval", effectiveState(project, status.state), status.detail, source);
 }
 
 // Counted in areas, the same unit as "Review what we found"; answered areas clear.
@@ -257,6 +260,13 @@ function planningQuestions(project, records) {
 
 // Never routes to the open page; see workflowNextAction.js.
 const nextActionFor = workflowNextAction;
+// Tasks that need proof: the approved plan's, else the Ledger's saved active drafts. Null when unknown.
+function proofTaskCount(project, records) {
+  const planned = planTaskIds(records?.sections?.planAuthority);
+  if (planned) return planned.length;
+  const presence = readTaskDraftPresence(project.projectId);
+  return presence ? presence.active : null;
+}
 
 /**
  * Read-only selector for imported-project workflow pages. It consumes one
@@ -295,7 +305,7 @@ export function deriveImportedProjectWorkflowModel(session, workspace, records =
     counts: { recorded: recordedCount, review: reviewCount, unanswered: unansweredCount, total: requirements.length },
     requirements,
     questions: workspace === "plan" || workspace === "index" ? planningQuestions(project, records) : [],
-    nextAction: nextActionFor(workspace, requirements),
+    nextAction: nextActionFor(workspace, requirements, { taskCount: workspace === "evidence" || workspace === "integrity" ? proofTaskCount(project, records) : null }),
     caveats: [
       ...(project.census?.skippedCount > 0 ? [`${project.census.skippedCount} folder scan item${project.census.skippedCount === 1 ? " was" : "s were"} skipped; coverage is incomplete.`] : []),
       ...(project.registration?.persistence === "reselect-required" ? ["Folder access must be reselected after this browser session."] : []),

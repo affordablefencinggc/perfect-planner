@@ -1,3 +1,4 @@
+import { isTauriRuntime } from "./runtimeSnapshot.js";
 const CLIENT_SCHEMA_VERSION = 1;
 const CLAMSHIELD_PROTOCOL_VERSION = 1;
 const EXPECTED_SERVICE = "ClamShieldIndexBroker";
@@ -94,7 +95,7 @@ function incompatible(reason) {
 }
 
 export function isClamShieldDesktopRuntime(runtime = globalThis) {
-  return Boolean(runtime && typeof runtime === "object" && "__TAURI_INTERNALS__" in runtime);
+  return isTauriRuntime(runtime);
 }
 
 export function validateClamShieldPingResponse(value) {

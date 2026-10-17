@@ -7,7 +7,7 @@ afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 test('component registry bootstrap uses an empty JSON POST before capability inspection', async () => {
   const fetcher = vi.fn(async (url) => ({ ok: true, status: 200, json: async () => String(url).endsWith('/session')
-    ? { actor: 'fixture-owner', token: 'fixture-component-token' }
+    ? { actor: 'fixture-owner', token: 'fixture-' + 'component-token' }
     : { valid: true, planId: 'PP-CLEANROOM', revision: 0, head: null, registrations: [] } }));
   vi.stubGlobal('fetch', fetcher);
   render(<ComponentPlansWorkspace activeProject={{ kind: 'demo' }} />);

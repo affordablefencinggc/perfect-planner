@@ -14,10 +14,12 @@ import { createReadStream } from "node:fs";
 import { readdir, stat } from "node:fs/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createLocalAuthorityMiddlewares, localAuthorityRoot, runMiddlewares } from "../src/node/localAuthorityHost.mjs";
+import { coreHostOptions } from "../src/node/coreHostVitePlugin.mjs";
 import { createLaunchFolderMiddleware, resolveLaunchFolder } from "../src/node/launchFolderHost.mjs";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 export const DEFAULT_CLIENT_DIRECTORY = path.join(projectRoot, "dist", "client");
+export const DEFAULT_CORE_HOST_BUNDLE = path.join(projectRoot, "dist", "core-host", "index.mjs");
 export const LOOPBACK_HOST = "127.0.0.1";
 const PORT_ATTEMPTS = 20;
 
@@ -67,10 +69,19 @@ const listenOnce = (server, port, host) => new Promise((resolve, reject) => {
 });
 
 // Starts the host. port 0 asks the OS for any free port; otherwise busy ports are skipped upward.
-export async function startLocalServer({ clientDirectory = DEFAULT_CLIENT_DIRECTORY, root = localAuthorityRoot(), launchFolder = null, port = Number(process.env.PORT ?? 4173), host = LOOPBACK_HOST, logger = console } = {}) {
+async function loadCoreHost(bundle, root, logger) {
+  if (!bundle || !(await fileAt(bundle))) { logger.warn?.(`[perfect-planner] Core host bundle not found (${bundle}); run npm run build:core-host.`); return null; }
+  try { const { createCoreHost } = await import(pathToFileURL(bundle).href); const host = createCoreHost(coreHostOptions(process.env, root)); host.acceptDesktopLaunch?.(); return host; }
+  catch (error) { logger.warn?.(`[perfect-planner] Core host disabled: ${error.message}`); return null; }
+}
+
+export async function startLocalServer({ clientDirectory = DEFAULT_CLIENT_DIRECTORY, coreHostBundle = DEFAULT_CORE_HOST_BUNDLE, root = localAuthorityRoot(), launchFolder = null, port = Number(process.env.PORT ?? 4173), host = LOOPBACK_HOST, logger = console } = {}) {
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error(`Invalid PORT: ${port}`);
   const server = http.createServer();
   const { middlewares, close: closeAuthority } = await createLocalAuthorityMiddlewares({ root, logger, getAddress: () => server.address(), isHttps: () => false });
+  // The core loop screens (/api/core) run from the bundled core host; without a bundle they show their error state.
+  const coreHost = await loadCoreHost(coreHostBundle, root, logger);
+  if (coreHost) middlewares.unshift(coreHost.middleware);
   const serveStatic = createStaticHandler(clientDirectory);
   const handlers = launchFolder ? [createLaunchFolderMiddleware({ folder: launchFolder }), ...middlewares] : middlewares;
   server.on("request", (req, res) => runMiddlewares(handlers, req, res, (request, response) => serveStatic(request, response).catch(() => { if (!response.headersSent) plain(response, 500, "Server error"); else response.destroy(); })));
@@ -80,8 +91,11 @@ export async function startLocalServer({ clientDirectory = DEFAULT_CLIENT_DIRECT
   }
   const address = server.address();
   const url = `http://${host}:${address.port}/`;
-  const close = () => new Promise((resolve) => { closeAuthority(); server.close(() => resolve()); server.closeAllConnections?.(); });
-  return { server, url, port: address.port, root, close };
+  const close = () => new Promise((resolve) => { closeAuthority(); coreHost?.close(); server.close(() => resolve()); server.closeAllConnections?.(); });
+  // The person's window proves itself with a one-time launch secret in the URL fragment
+  // (core/host/session.ts). Fragments never reach a server, a proxy or a log.
+  const launchUrl = () => (coreHost ? `${url}#pp-launch=${coreHost.issueLaunch()}` : url);
+  return { server, url, port: address.port, root, close, launchUrl };
 }
 
 // Newest modification time under the client's sources (generated truth output excluded).
@@ -103,7 +117,8 @@ async function newestSourceTime(entries) {
 export async function clientBuildIsCurrent(clientDirectory = DEFAULT_CLIENT_DIRECTORY) {
   const built = await fileAt(path.join(clientDirectory, "index.html"));
   if (!built) return false;
-  return (await newestSourceTime(["src", "public", "index.html", "package.json", "vite.config.mjs"])) <= built.mtimeMs;
+  if (!(await fileAt(DEFAULT_CORE_HOST_BUNDLE))) return false;
+  return (await newestSourceTime(["src", "core", "public", "index.html", "package.json", "vite.config.mjs"])) <= built.mtimeMs;
 }
 
 const run = (command, args) => new Promise((resolve, reject) => {
@@ -125,6 +140,7 @@ async function main(argv) {
       // Same steps as npm run build:client. The build status report is supplementary: if it cannot be
       // written the app still runs and shows that report as unavailable, so only the client build is fatal.
       await run(process.execPath, [path.join(projectRoot, "node_modules", "vite", "bin", "vite.js"), "build"]);
+      await run(process.execPath, [path.join(projectRoot, "scripts", "build-core-host.mjs")]);
       // One retry: on Windows a scanner can briefly hold the freshly written folder (EPERM on rename).
       const report = () => run(process.execPath, [path.join(projectRoot, "scripts", "generate-truth-report.mjs"), "--release"]);
       try { await report().catch(() => report()); }
@@ -132,15 +148,23 @@ async function main(argv) {
     }
   }
   const launchFolder = resolveLaunchFolder({ argv: argv.filter((value) => value !== "--build") });
-  const { url, root, close } = await startLocalServer({ launchFolder });
+  const { url, root, close, launchUrl } = await startLocalServer({ launchFolder });
   console.log(`[perfect-planner] Perfect Planner is running at ${url}`);
   if (launchFolder) console.log(`[perfect-planner] One-click scan offered for ${launchFolder} (read only)`);
   console.log(`[perfect-planner] Saving to ${root}`);
-  if (process.env.PP_OPEN === "1") openBrowser(url);
+  // A window opened from this link can make changes as you; the link works once, for 10 minutes.
+  const open = launchUrl();
+  console.log(`[perfect-planner] Open Perfect Planner (one-time link): ${open}`);
+  if (process.stdin.isTTY) {
+    console.log("[perfect-planner] Press Enter for a new one-time link.");
+    process.stdin.on("data", () => console.log(`[perfect-planner] Open Perfect Planner (one-time link): ${launchUrl()}`));
+  }
+  if (process.env.PP_OPEN === "1") openBrowser(open);
   const stop = () => { close().finally(() => process.exit(0)); };
   process.once("SIGINT", stop); process.once("SIGTERM", stop);
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+// The basename check keeps main() from running when this file is bundled into the desktop app (src/node/desktopHost.mjs).
+if (process.argv[1] && path.basename(fileURLToPath(import.meta.url)) === "serve-local.mjs" && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   main(process.argv.slice(2)).catch((error) => { console.error(`[perfect-planner] ${error.message}`); process.exit(1); });
 }

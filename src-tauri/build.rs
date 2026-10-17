@@ -1,4 +1,8 @@
 fn main() {
+    // The desktop host (Node runtime, core host, client) is built into ../dist/desktop-host by
+    // scripts/build-desktop-host.mjs before `tauri build`; the bundle ships it as resources.
+    // An empty folder keeps plain cargo builds and tests working without it.
+    let _ = std::fs::create_dir_all("../dist/desktop-host");
     println!("cargo:rerun-if-env-changed=PP_NATIVE_HOST_MANIFEST_SHA256");
     let pin=match std::env::var("PP_NATIVE_HOST_MANIFEST_SHA256"){
         Ok(value)=>{assert!(value.len()==64&&value.bytes().all(|byte|byte.is_ascii_digit()||(b'a'..=b'f').contains(&byte)),"PP_NATIVE_HOST_MANIFEST_SHA256 must be exactly 64 lowercase hexadecimal characters");value},
@@ -39,6 +43,7 @@ fn main() {
             "collision_authority_inspect",
             "collision_authority_approve",
             "collision_authority_commit",
+            "take_core_launch",
             "jev_key_status",
             "jev_key_save",
             "jev_key_clear",

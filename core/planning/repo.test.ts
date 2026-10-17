@@ -173,4 +173,16 @@ describe("roadmap for an existing repo", () => {
     // Nothing is written as a plan while those blockers are open.
     expect(() => session.writeRoadmap({ kind: "person", id: "looplet-spare" }, session.roadmap("x"))).toThrow(/blocking questions/);
   });
+
+  it("reads a package with a bin, or a plain library, as not an app; an app or a server is not", () => {
+    const ids = (pkg: object) => readRepoStack(tmp({ "package.json": JSON.stringify(pkg) })).facts.map((f) => f.id);
+    expect(ids({ bin: { t: "cli.js" } })).toEqual(expect.arrayContaining(["data.store", "stack.hosting", "auth.signin", "offline.sync-engine"]));
+    expect(ids({ main: "index.js" })).toContain("data.store");
+    expect(ids({ name: "no entry point" })).not.toContain("data.store");
+    expect(ids({ main: "server.js", dependencies: { express: "4" } })).not.toContain("data.store");
+    expect(ids({ main: "index.js", dependencies: { react: "18" } })).not.toContain("data.store");
+    expect(ids({ main: "db.js", dependencies: { pg: "8" } }).filter((i) => i === "data.store")).toHaveLength(1);
+    const fact = readRepoStack(tmp({ "package.json": JSON.stringify({ bin: "cli.js" }) })).facts.find((f) => f.id === "data.store")!;
+    expect(fact).toMatchObject({ choice: "none", evidence: ["package.json"] });
+  });
 });

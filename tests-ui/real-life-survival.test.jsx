@@ -307,8 +307,8 @@ describe("real-life UI survival matrix", () => {
     await user.keyboard("{Escape}");
     await waitFor(() => expect(document.activeElement).toBe(rosterTrigger));
 
-    await user.click(screen.getByRole("button", { name: /2 demo agents/ }));
-    expect(await screen.findByRole("region", { name: "Runtime and connections" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: /Agent connection · unavailable in Demo/ }));
+    expect(await screen.findByRole("region", { name: "Runtime and connections" }, { timeout: 5000 })).toBeTruthy();
     expect(new URLSearchParams(window.location.search).get("workspace")).toBe("home");
     await user.keyboard("{Escape}");
 
@@ -378,11 +378,11 @@ describe("real-life UI survival matrix", () => {
     await back();
 
     await user.click(within(dialog).getByRole("button", { name: /MCP access/ }));
-    expect(within(dialog).getByText("Allow MCP context in this session")).toBeTruthy();
+    expect(within(dialog).getByText("Allow MCP context on this device")).toBeTruthy();
     await back();
 
     await user.click(within(dialog).getByRole("button", { name: /Invite to organization/ }));
-    expect(within(dialog).getByRole("button", { name: /Create invitation draft/ })).toBeTruthy();
+    expect(within(dialog).getByRole("button", { name: /Check address/ })).toBeTruthy();
     await back();
 
     await user.click(within(dialog).getByRole("button", { name: /Organization settings/ }));
@@ -399,7 +399,7 @@ describe("real-life UI survival matrix", () => {
     renderDemo("home");
 
     await user.click(screen.getByRole("button", { name: "More actions" }));
-    await user.click(screen.getByRole("button", { name: /Agent connection/ }));
+    await user.click(within(screen.getByRole("dialog", { name: "More actions" })).getByRole("button", { name: /Agent connection/ }));
     expect(await screen.findByRole("region", { name: "Runtime and connections" })).toBeTruthy();
     expect(new URLSearchParams(window.location.search).get("workspace")).toBe("home");
     await user.keyboard("{Escape}");
@@ -423,12 +423,12 @@ describe("real-life UI survival matrix", () => {
     await user.click(screen.getByRole("button", { name: "More actions" }));
     await user.click(screen.getByRole("button", { name: /MCP access/ }));
     const checkbox = screen.getByRole("checkbox", {
-      name: /Allow MCP context in this session/,
+      name: /Allow MCP context on this device/,
     });
-    expect(checkbox.checked).toBe(true);
-    await user.click(checkbox);
     expect(checkbox.checked).toBe(false);
-    expect(await screen.findByText("MCP context paused for this session.")).toBeTruthy();
+    await user.click(checkbox);
+    expect(checkbox.checked).toBe(true);
+    expect(await screen.findByText("MCP context allowed on this device.")).toBeTruthy();
     await user.keyboard("{Escape}");
 
     await user.click(screen.getByRole("button", { name: "More actions" }));
@@ -445,7 +445,7 @@ describe("real-life UI survival matrix", () => {
 
     await user.click(screen.getByRole("button", { name: "MCP events" }));
     const mcpLog = screen.getByRole("log", { name: "MCP events" });
-    expect(within(mcpLog).getByText("MCP context paused for this session.")).toBeTruthy();
+    expect(within(mcpLog).getByText("MCP context allowed on this device.")).toBeTruthy();
     expect(within(mcpLog).queryByText("Survival probe runtime failure")).toBeNull();
   });
 
@@ -457,10 +457,10 @@ describe("real-life UI survival matrix", () => {
     await user.click(screen.getByRole("button", { name: /Invite to organization/ }));
     await user.type(screen.getByPlaceholderText("name@company.com"), "reviewer@example.com");
     await user.selectOptions(screen.getByRole("combobox", { name: /ROLE/ }), "Reviewer");
-    await user.click(screen.getByRole("button", { name: /Create invitation draft/ }));
+    await user.click(screen.getByRole("button", { name: /Check address/ }));
     expect(
       await screen.findByText(
-        "Invitation drafted for reviewer@example.com as Reviewer. Delivery connection is still required.",
+        "Invitation not sent: no mail provider is connected, so nothing was saved or sent for reviewer@example.com (Reviewer).",
       ),
     ).toBeTruthy();
 

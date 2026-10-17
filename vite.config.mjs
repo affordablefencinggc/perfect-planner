@@ -2,6 +2,7 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import { readFileSync } from "node:fs";
 import { localAuthorityVitePlugin } from "./src/node/localAuthorityHost.mjs";
+import { coreHostVitePlugin } from "./src/node/coreHostVitePlugin.mjs";
 import { createLaunchFolderMiddleware, resolveLaunchFolder } from "./src/node/launchFolderHost.mjs";
 import { defaultRegistryRoot, mcpServerPath } from "./mcp/agentSetupPaths.mjs";
 
@@ -63,6 +64,7 @@ export default defineConfig(({ command }) => ({
   // Local saving APIs (shared with scripts/serve-local.mjs for production use).
   plugins: [
     mermaidDocuments(),
+    coreHostVitePlugin(),
     { name: "perfect-planner-launch-folder", configureServer: (server) => { server.middlewares.use(createLaunchFolderMiddleware({ folder: resolveLaunchFolder() })); } },
     localAuthorityVitePlugin(),
     react(),

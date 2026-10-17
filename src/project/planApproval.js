@@ -39,11 +39,47 @@ export function validPlanApproval(data) {
 const plural = (count, word) => `${count} ${word}${count === 1 ? "" : "s"}`;
 
 /**
+ * The core ledger's plan approval (GET /api/core/plan), attached to work records
+ * as `corePlan` by useProjectWorkRecords. It is the one source of truth: when a
+ * person-signed plan.approved exists, the plan is approved on every screen.
+ * Returns the latest approval, or null when there is none (or core is unknown).
+ */
+export function corePlanApproval(records) {
+  const core = records?.corePlan;
+  const latest = core?.approved ? core.latest : null;
+  return latest && typeof latest.plan === "string" && typeof latest.entry === "string" && isIso(latest.at) ? { ...latest, tasks: Array.isArray(core.tasks) ? core.tasks : [] } : null;
+}
+
+/** Attaches the core plan approval to a work-records value (null leaves it unchanged). */
+export function withCorePlanApproval(records, corePlan) {
+  return corePlan && records ? { ...records, corePlan } : records;
+}
+
+function corePlanStatus(core, records) {
+  const section = records?.sections?.planAuthority ?? null;
+  const record = validPlanApproval(section?.data) ? section.data : null;
+  const ready = records?.sections?.planReady?.data ?? null;
+  const where = core.source === "planning" ? "in Deep planning" : core.source === "plan-page" ? "on the Plan page" : "in the project ledger";
+  const tasks = core.tasks.length ? ` · ${plural(core.tasks.length, "roadmap task")}` : "";
+  return {
+    state: "recorded",
+    core,
+    record,
+    revision: Number(core.plan.replace(/^P-/, "")) || null,
+    recordedAt: core.at,
+    detail: `Plan ${core.plan} approved ${where} by ${core.by}${tasks}`,
+    confirmed: Boolean(ready && ready.entry === core.entry && isIso(ready.confirmedAt)),
+  };
+}
+
+/**
  * Current status of the approved plan, derived only from the recorded section.
  * Returns null when nothing is recorded (absence stays unanswered).
  *   state: recorded | review (tasks changed) | stale (folder scan changed) | unavailable
  */
 export function planApprovalStatus(project, records) {
+  const core = corePlanApproval(records);
+  if (core) return corePlanStatus(core, records);
   const section = records?.sections?.planAuthority ?? null;
   if (!section) return null;
   const data = section.data;
@@ -139,7 +175,10 @@ export async function notePlanTaskDrift(projectId, tasks, { storage, now = defau
 }
 
 /** Records the explicit "project is ready" confirmation against the current approved plan. */
-export function confirmProjectReady(projectId, { storage, now = defaultNow } = {}) {
+export function confirmProjectReady(projectId, { storage, now = defaultNow, records = null } = {}) {
+  // A core plan approval (Deep planning or the Plan page) is the plan being confirmed.
+  const core = corePlanApproval(records);
+  if (core) return writeSection(projectId, "planReady", { plan: core.plan, entry: core.entry, confirmedAt: now() }, { storage, now });
   const previous = readSection(projectId, "planAuthority", storage);
   if (!validPlanApproval(previous?.data)) throw new Error("Approve the plan before confirming the project is ready.");
   if (previous.data.tasksChangedAt) throw new Error("Tasks changed since approval. Approve the plan again first.");
@@ -154,6 +193,7 @@ export function confirmProjectReady(projectId, { storage, now = defaultNow } = {
 export function effectivePlanAuthority(project, records) {
   const status = planApprovalStatus(project, records);
   if (!status) return { authority: project?.authorities?.plan ?? null, status: null };
+  if (status.core) return { authority: { state: "authoritative", entityId: null, digest: status.record?.planDigest ?? null, revision: status.revision, recordedAt: status.core.at }, status };
   if (!status.record) return { authority: { state: "unavailable", entityId: null, digest: null, revision: status.revision, recordedAt: null }, status };
   const state = status.state === "recorded" ? "authoritative" : status.state === "review" ? "generated" : status.state;
   return {

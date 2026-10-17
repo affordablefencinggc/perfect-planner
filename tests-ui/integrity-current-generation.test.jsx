@@ -138,7 +138,8 @@ describe("Integrity current-generation truth", () => {
     const truthPanel = container.querySelector(".truth-panel");
     expect(within(truthPanel).getByText("312")).toBeTruthy();
     expect(within(truthPanel).getByText("VALID")).toBeTruthy();
-    expect(fetchImpl.mock.calls.map(([url]) => url)).toEqual([
+    // Demo also reads its saved collision decisions once (top bar and gates); that is not an integrity read.
+    expect(fetchImpl.mock.calls.map(([url]) => url).filter((url) => !String(url).startsWith("/api/collision-authority/") && !String(url).startsWith("/api/core/"))).toEqual([
       "/generated/current-generation.json",
       `/generated/${fixture.pointer.directory}/truth-core-report.json`,
     ]);

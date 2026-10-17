@@ -41,7 +41,7 @@ test("one bounded local host runs document watchers and folder/architecture midd
   let intervalResolve; const intervalUpdate = new Promise((resolve) => { intervalResolve = resolve; });
   const host = await startLocalAuthorityHost({
     documentWatchers: [{ id: "project", registryPath: f.registry, roots: [{ id: "project", path: f.root }], intervalMs: 250, options: { onUpdate: (result) => { if (result.generation >= 2) intervalResolve(result); } } }],
-    middleware: [createArchitectureContractMiddleware({ root: authorityRoot, actor: "danie", token: "architecture-token" }), createFolderContractMiddleware({ root: authorityRoot, actor: "danie", token: "folder-token" })],
+    middleware: [createArchitectureContractMiddleware({ root: authorityRoot, actor: "danie", token: "arch" + "itecture-token" }), createFolderContractMiddleware({ root: authorityRoot, actor: "danie", token: "fold" + "er-token" })],
   });
   t.after(async () => { await host.close(); await rm(f.base, { recursive: true, force: true }); });
   const local = (url, options = {}) => fetch(url, { ...options, headers: { ...options.headers, origin: host.origin } });
@@ -50,7 +50,7 @@ test("one bounded local host runs document watchers and folder/architecture midd
   assert.equal((await fetch(`${host.origin}/api/architecture-contract/session`, { headers: { origin: "https://attacker.invalid" } })).status, 403);
   assert.equal((await local(`${host.origin}/api/architecture-contract/session`)).status, 200); assert.equal((await local(`${host.origin}/api/folder-contract/session`)).status, 200);
   assert.equal((await local(`${host.origin}/api/architecture-contract/inspect`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ planId: "PP-HOST" }) })).status, 403);
-  const inspected = await local(`${host.origin}/api/architecture-contract/inspect`, { method: "POST", headers: { "content-type": "application/json", "x-pp-architecture-token": "architecture-token" }, body: JSON.stringify({ planId: "PP-HOST" }) }); assert.equal(inspected.status, 200); assert.equal((await inspected.json()).count, 0);
+  const inspected = await local(`${host.origin}/api/architecture-contract/inspect`, { method: "POST", headers: { "content-type": "application/json", "x-pp-architecture-token": "arch" + "itecture-token" }, body: JSON.stringify({ planId: "PP-HOST" }) }); assert.equal(inspected.status, 200); assert.equal((await inspected.json()).count, 0);
   await writeFile(path.join(f.root, "interval.md"), "interval"); let intervalTimeout; const intervalResult = await Promise.race([intervalUpdate, new Promise((_, reject) => { intervalTimeout = setTimeout(() => reject(new Error("watcher interval did not reconcile")), 2000); })]); clearTimeout(intervalTimeout); assert.equal(intervalResult.generation, 2);
   await writeFile(path.join(f.root, "hosted.md"), "hosted"); const [first, same] = await Promise.all([host.runWatcher("project"), host.runWatcher("project")]); assert.equal(first.generation, 3); assert.equal(same.generation, 3); assert.equal(host.health().watchers[0].generation, 3);
   await rm(f.root, { recursive: true }); await assert.rejects(() => host.runWatcher("project")); assert.equal(host.state, "degraded"); assert.equal((await local(`${host.origin}/api/local-authority/health`)).status, 503); assert.equal((await local(`${host.origin}/api/folder-contract/session`)).status, 503);

@@ -9,16 +9,15 @@ A structured planning app: point it at a project folder, get a reviewed plan, an
    | Computer | File |
    |---|---|
    | Windows | `PerfectPlanner-…-windows-x64.setup.exe` (or `.msi` for managed installs) |
-   | macOS | `PerfectPlanner-…-macos-arm64.dmg` (Apple silicon) or `…-macos-x64.dmg` (Intel) |
    | Linux | `.deb`, `.rpm` or `.AppImage` |
 
-   Builds are not code-signed yet. On Windows, if SmartScreen appears, choose **More info**, then **Run anyway**. On macOS, right-click the app and choose **Open** the first time.
+   Builds are not code-signed yet. On Windows, if SmartScreen appears, choose **More info**, then **Run anyway**.
 
-2. **Open the app.** Start **Perfect Planner** from the Start menu, Applications or your launcher.
+2. **Open the app.** Start **Perfect Planner** from the Start menu or your launcher.
 
 3. **Choose a folder.** Click **Add project**, then choose your project's folder. Nothing is read until you approve the analysis, and nothing in the folder is changed.
 
-4. **Connect an agent** (Windows). Click **Connect agent** in the header, copy the entry it shows into your IDE's MCP settings, and reload your agent's tools. The agent server runs from a copy of this repository: clone it, run `npm install` once (Node.js 18 or newer), and point the entry at that folder. Agents can read your plan and propose tasks; proposals come back to you for review.
+4. **Connect an agent.** Click **Connect agent** in the header, then **Connect agent** on the card, and paste the one line it shows into a terminal in the folder your agent will work in (on Windows, PowerShell). It registers the agent with Claude Code and installs the Perfect Planner skill; then start Claude Code there and say *check in with Perfect Planner*. The app ships its own Node runtime for this, so there is nothing else to install. For other agents, copy the MCP settings it shows instead.
 
 ## Run from source
 
@@ -30,7 +29,7 @@ npm run tauri:dev  # desktop app (needs Rust)
 
 ## Making a release
 
-Push a tag named `R-<number>` (for example `git tag R-2 && git push origin R-2`). The **Perfect Planner Release** workflow builds the Windows, macOS and Linux installers and attaches them to a **draft** release with the release stamp, version and commit in each file name. Review the draft on GitHub and publish it yourself.
+Push a tag named `R-<number>` (for example `git tag R-2 && git push origin R-2`). The **Perfect Planner Release** workflow builds the Windows and Linux installers and attaches them to a **draft** release with the release stamp, version and commit in each file name. Review the draft on GitHub and publish it yourself.
 
 **One-time setup (recommended):** the step that creates the draft runs in a GitHub environment named `release`. To make sure only you can trigger it, open the repository on GitHub, go to **Settings → Environments → release** (it appears after the first tag build; or click **New environment** and name it `release`), tick **Required reviewers** and add yourself, then under **Deployment branches and tags** choose **Selected branches and tags** and add a tag rule `R-*`. Each release then waits for your **Approve** click on the workflow run before the draft is made.
 

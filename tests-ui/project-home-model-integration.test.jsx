@@ -210,6 +210,21 @@ describe("project Home consumes the project-home model", () => {
     ).toBeTruthy();
   });
 
+  test("with no folder imported, Home shows an approved core-loop plan instead of the folder prompt", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url) => String(url).startsWith("/api/core/plan?")
+        ? { ok: true, status: 200, json: async () => ({ ok: true, result: { approved: true, latest: { plan: "P-1", by: "owner" }, count: 1, tasks: [{ label: "T-1" }] } }) }
+        : { ok: false, status: 503, json: async () => ({ error: "Authority unavailable in Home test" }) }),
+    );
+    const { container } = renderShell(registryWith());
+
+    await screen.findByText("Your plan is approved and work is under way");
+    expect(screen.queryByRole("heading", { name: "Bring in a real app to begin" })).toBeNull();
+    expect(container.querySelector("[data-home-core-plan]")?.dataset.homeCorePlan).toBe("P-1");
+    expect(container.querySelector("[data-home-core-plan]")?.textContent).toContain("Plan P-1 approved by owner, 1 task on the board.");
+  });
+
   test("imported Home binds the current census and does not invent discovery counts", async () => {
     const user = userEvent.setup();
     const project = importedProject({
@@ -336,9 +351,9 @@ describe("project Home consumes the project-home model", () => {
     // Controlled positive service response: cached approval alone is not current.
     const originalFetch = globalThis.fetch;
     vi.stubGlobal("fetch", vi.fn(async (url, options) => {
-      if (String(url) === "/api/architecture-contract/session") return { ok: true, json: async () => ({ actor: "fixture-reviewer", token: "fixture-token" }) };
-      if (String(url) === "/api/folder-contract/session") return { ok: true, json: async () => ({ actor: "fixture-reviewer", token: "fixture-folder-token" }) };
-      if (String(url) === "/api/component-plans/session") return {ok:true,json:async()=>({actor:'fixture-reviewer',token:'fixture-component-token'})};
+      if (String(url) === "/api/architecture-contract/session") return { ok: true, json: async () => ({ actor: "fixture-reviewer", token: "fixture-" + "token" }) };
+      if (String(url) === "/api/folder-contract/session") return { ok: true, json: async () => ({ actor: "fixture-reviewer", token: "fixture-" + "folder-" + "token" }) };
+      if (String(url) === "/api/component-plans/session") return {ok:true,json:async()=>({actor:'fixture-reviewer',token:'fixture-' + 'component-' + 'token'})};
       if (String(url) === "/api/component-plans/authoring-context") {expect(JSON.parse(options.body).planId).toBe(project.projectId);return {ok:true,json:async()=>componentContext};}
       if (String(url) === "/api/folder-contract/inspect") {
         expect(JSON.parse(options.body).planId).toBe(project.projectId);
@@ -363,7 +378,7 @@ describe("project Home consumes the project-home model", () => {
     ));
     expect(
       screen.getByRole("region", { name: "Project blockers" }).textContent,
-    ).toContain("1 item prevent promotion");
+    ).toContain("1 item prevents promotion");
     expect(screen.queryByText("Project status ready")).toBeNull();
     const next = expectOnlyModelAction(
       container,

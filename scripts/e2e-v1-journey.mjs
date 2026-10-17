@@ -29,6 +29,8 @@ import { currentComponentPlanInput } from "../src/engine/componentPlanSeed.js";
 import { publishComponentPlans } from "../src/node/componentPlanStore.mjs";
 import { bindComponentParents } from "../tests/fixtures/componentParents.mjs";
 import { clientBuildIsCurrent } from "./serve-local.mjs";
+import { buildCoreHost } from "./build-core-host.mjs";
+import { coreScreenSteps } from "./e2e-core-screens.mjs";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const SHOTS = path.join(projectRoot, "tests-e2e", "screenshots");
@@ -215,10 +217,12 @@ async function openPage(cdp) {
 
 async function startServer(appData, launchFolder) {
   const port = await freePort();
-  const child = spawn(process.execPath, [path.join(projectRoot, "scripts", "serve-local.mjs")], { cwd: projectRoot, env: { ...process.env, LOCALAPPDATA: appData, PORT: String(port), PP_OPEN: "0", PP_FOLDER: launchFolder }, stdio: ["ignore", "pipe", "pipe"] });
+  const child = spawn(process.execPath, [path.join(projectRoot, "scripts", "serve-local.mjs")], { cwd: projectRoot, env: { ...process.env, LOCALAPPDATA: appData, PORT: String(port), PP_OPEN: "0", PP_FOLDER: launchFolder, PP_CORE_KEYS: "memory" }, stdio: ["ignore", "pipe", "pipe"] });
   let output = ""; child.stdout.on("data", (d) => { output += d; }); child.stderr.on("data", (d) => { output += d; });
   const url = await waitFor(() => output.match(/running at (http:\/\/\S+)/)?.[1], { label: `server start (${output.trim()})` });
-  return { url: url.endsWith("/") ? url : `${url}/`, stop: () => new Promise((resolve) => { child.once("exit", resolve); child.kill(); setTimeout(resolve, 2000); }), output: () => output };
+  // The one-time link that lets this window make changes as the person (core/host/session.ts).
+  const launch = await waitFor(() => output.match(/one-time link\): (http:\/\/\S+#pp-launch=[\w-]+)/)?.[1], { label: `launch link (${output.trim()})` });
+  return { url: url.endsWith("/") ? url : `${url}/`, launch, stop: () => new Promise((resolve) => { child.once("exit", resolve); child.kill(); setTimeout(resolve, 2000); }), output: () => output };
 }
 
 // ---------- seed ----------
@@ -265,6 +269,7 @@ async function main() {
     log("dist/client is missing or older than its sources; building it first");
     await new Promise((resolve, reject) => spawn(process.execPath, [path.join(projectRoot, "node_modules", "vite", "bin", "vite.js"), "build"], { cwd: projectRoot, stdio: "inherit" })
       .on("error", reject).on("exit", (code) => code === 0 ? resolve() : reject(new Error(`vite build exited with ${code}`))));
+    await buildCoreHost();
   }
   await rm(SHOTS, { recursive: true, force: true }); await mkdir(SHOTS, { recursive: true });
 
@@ -300,7 +305,9 @@ async function main() {
 
   try {
     await step("seed-imported-project", async () => {
-      await page.goto(server.url);
+      await page.goto(server.launch);
+      // The window claims the link once and strips it from the address bar.
+      await waitFor(async () => (await page.eval(`Boolean(sessionStorage.getItem("pp.core.csrf")) && !location.hash.includes("pp-launch")`)) || null, { label: "launch link claimed" });
       await page.eval(`localStorage.setItem(${JSON.stringify(DEFAULT_PROJECT_REGISTRY_KEY)}, ${JSON.stringify(seeded.value)}); true`);
       await page.goto(at("home"));
       await page.expectText("E2E Notes App");
@@ -363,11 +370,18 @@ async function journey(page, at, step) {
     await page.expectText(/2 tasks/);
   });
 
+  // A new project's ledger takes no write until the person starts its history (the core screens' notice).
+  await step("start-history", async () => {
+    await page.goto(at("planning"));
+    await page.click({ role: "button", name: "Start a new history for this folder" });
+    await waitFor(async () => !(await page.text()).includes("Start a new history for this folder"), { label: "history started" });
+  });
+
   await step("plan-approve", async () => {
     await page.goto(at("plan"));
     await page.expectText("Approve this plan");
     await page.click({ role: "button", name: "Approve this plan" });
-    await page.expectText(/2 tasks approved on this device/);
+    await page.expectText(/2 tasks approved .* on this device/);
   });
 
   await step("collision-evaluate-and-resolve", async () => {
@@ -484,7 +498,7 @@ async function journey(page, at, step) {
     await page.goto(at("index"));
     await page.expectText(/6\s*proof items/);
     await page.goto(at("plan"));
-    await page.expectText(/Plan approved: 2 tasks approved on this device/);
+    await page.expectText(/Plan approved: Plan P-\d+ approved on the Plan page by owner/);
     const map = await page.run((h) => h.findAll({ css: ".draft-map-node" }).map((el) => el.textContent));
     if (map.length !== 2 || map.some((text) => !/Approved/.test(text) || /Draft/.test(text))) throw new Error(`Plan map tasks should read Approved, saw ${JSON.stringify(map)}`);
     if (/could not be checked/.test(await page.text())) throw new Error("Plan still says the approval could not be checked");
@@ -493,6 +507,9 @@ async function journey(page, at, step) {
     const header = await page.eval(`document.querySelector(".structure-state")?.textContent ?? ""`);
     if (/BLOCKED|blockers/.test(header)) throw new Error(`Structure header says blocked on a Ready project: ${header}`);
   });
+
+  // Core loop screens (Deep planning, MVP board, Decisions, People, ledger search, Connect agent).
+  for (const core of coreScreenSteps) await step(core.name, () => core.run(page, at, { re, waitFor }));
   await peek(page, at);
 }
 

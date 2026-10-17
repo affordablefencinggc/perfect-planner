@@ -1,3 +1,4 @@
+import { isTauriRuntime } from "./runtimeSnapshot.js";
 const WORKSPACE_SCHEMA_VERSION = 1;
 const REGISTRATION_KEYS = Object.freeze([
   "access",
@@ -65,7 +66,7 @@ function assertCapabilities(value) {
 }
 
 export function isNativeWorkspaceRuntime(runtime = globalThis) {
-  return Boolean(runtime && typeof runtime === "object" && "__TAURI_INTERNALS__" in runtime);
+  return isTauriRuntime(runtime);
 }
 
 export function validateWorkspacePickerReceipt(value) {

@@ -38,7 +38,8 @@ test("fresh intake definitions stay project-scoped and disappear on reload witho
   expect(screen.getByText(/Hook definitions observed\. Installation and execution/)).toBeTruthy();
   expect(screen.getByText(/Scanner definition observed; a passing execution receipt is still required/)).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Delivery pipeline" }));
-  const changes = screen.getByRole("button", { name: /Local changes/ });
+  // Delivery stages are static cards (they only repeated their own text in a toast).
+  const changes = screen.getByText("Local changes").closest("article");
   expect(within(changes).getByText("unavailable")).toBeTruthy();
   fireEvent.click(await screen.findByRole("button", { name: "Capture second fixture" }));
   fireEvent.click(screen.getByRole("button", { name: "Hooks & catchers" }));
@@ -47,7 +48,8 @@ test("fresh intake definitions stay project-scoped and disappear on reload witho
   expect(screen.getByText(/Hook definitions observed\. Installation and execution/)).toBeTruthy();
   const generationBeforeNavigation = registry.getActive().generation;
   fireEvent.click(screen.getByRole("button", { name: "Build" }));
-  expect(registry.getActive().generation).toBeGreaterThan(generationBeforeNavigation);
+  // A page change is not a new scan (define-05): the generation stays put and the observations survive.
+  expect(registry.getActive().generation).toBe(generationBeforeNavigation);
   expect(screen.getByText(/Hook definitions observed\. Installation and execution/)).toBeTruthy();
   view.unmount();
   render(shell());

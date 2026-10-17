@@ -27,8 +27,10 @@ export interface PlanningQuestionState {
   choice?: string;
   decision?: string;
   spike?: { task: string; due: string; risk: string };
-  /** "repo" when the decision was read from the existing code. */
-  source?: "repo";
+  /** "repo" when the decision was read from the existing code, "description" when the person's own description settled it. */
+  source?: "repo" | "description";
+  /** For a description answer: the person's words that settled it. */
+  phrase?: string;
 }
 
 export interface AnyQuestionState {
@@ -84,7 +86,8 @@ export function planningQuestions(entries: readonly LedgerEntry[]): PlanningQues
       q.decision = e.subject;
       q.answer = String(d.answer ?? e.summary);
       if (typeof d.choice === "string") q.choice = d.choice;
-      if (d.source === "repo") q.source = "repo";
+      if (d.source === "repo" || d.source === "description") q.source = d.source;
+      if (d.source === "description" && typeof d.phrase === "string") q.phrase = d.phrase;
     } else if (e.type === "question.answered") {
       const q = byQ.get(e.subject);
       if (!q || q.status !== "open" || !isAuthoritative(e, { personOnly: true })) continue;
