@@ -37,6 +37,12 @@ beforeEach(() => { try { localStorage.clear(); } catch { /* ignore */ } });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe("TasksScreen", () => {
+  test("a test that already passes can be replaced by writing another one", async () => {
+    routeFetch({ "GET /tasks": async () => ok(view([task({ stage: "test-passes-already", worktree: { branch: "pp/T-1", path: "/w/T-1", port: 5200 }, test: { command: "node --test a", files: ["a"], entry: "L-1", by: { kind: "person", id: "owner" } }, baseline: { passed: true } })])) });
+    renderScreen();
+    expect(await screen.findByText("Write the test yourself instead")).toBeTruthy();
+  });
+
   test("shows the empty state when no plan has been approved yet", async () => {
     routeFetch({ "GET /tasks": async () => ok(view([])) });
     renderScreen();
