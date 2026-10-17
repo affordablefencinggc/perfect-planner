@@ -105,12 +105,6 @@ describe("ProjectTruthGate", () => {
     expect(screen.getAllByText(/Local path hidden/).length).toBeGreaterThanOrEqual(2);
   });
 
-  test("keeps a label with a spaced slash instead of hiding it as a path", () => {
-    render(<ProjectTruthGate workspaceState="ready" workspaceLabel="To-do / Ledger" />);
-    expect(document.body.textContent).toContain("To-do / Ledger");
-    expect(document.body.textContent).not.toContain("Local path hidden");
-  });
-
   test("keeps workspace labels with a spaced slash separator readable (proverel-01)", () => {
     render(<ProjectTruthGate workspaceState="empty" workspaceLabel="To-do / Ledger" reason="Open /home/private/app and C:\\Users\\x" />);
     const status = screen.getByRole("status");
