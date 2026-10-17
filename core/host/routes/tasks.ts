@@ -147,7 +147,11 @@ function dispatches(project: CoreProject): Map<string, Dispatch> {
 /** The worktrees the git watcher should read, or the plain reason it cannot see any. Errors are not swallowed: an unreadable list is not an empty one. */
 export async function worktreesForWatcher(project: CoreProject): Promise<{ repo: RepoState; list: WorktreeInfo[] }> {
   const repo = await repoState(project);
-  return { repo, list: repo.ok && repo.root ? await manager(project, repo.root).list() : [] };
+  if (!repo.ok || !repo.root) return { repo, list: [] };
+  // A done task's folder is about to be removed (or waits for its clean-up): a git process of ours inside it would keep Windows from removing it.
+  const board = project.service.board();
+  const list = (await manager(project, repo.root).list()).filter((tree) => board.get(tree.taskId.replace(/\.a\d+$/, ""))?.status !== "done");
+  return { repo, list };
 }
 
 /**
@@ -766,6 +770,8 @@ export function registerTaskRoutes(router: Router): void {
     if (!merged.ok) throw new HttpError(409, "REFUSED", withOutputTail(merged.reason, merged.output));
     revokeWorker(project, label);
     dispatches(project).delete(label);
+    // A watcher pass that began before the task was done may still have git running in its folder, which Windows will not remove.
+    await project.watch?.tick();
     const removed = await manager(project, root).remove(label, WORKTREES_ACTOR).catch((error: Error) => ({ error: error.message }));
     return { merged: true, commit: merged.mergeCommit, into: tree.baseRef, removed, ...(await overview(project)) };
   });
