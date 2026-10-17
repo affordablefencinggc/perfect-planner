@@ -33,7 +33,7 @@ function BoundMap({binding,project,records:providedRecords,onWorkspace,providedS
   const localApproval=planApprovalStatus(project,records),[ledgerDigest,setLedgerDigest]=useState(null);
   const [digestFailed,setDigestFailed]=useState(false);
   useEffect(()=>{let current=true;setLedgerDigest(null);setDigestFailed(false);if(ledger)digestPlanTasks(ledger.tasks).then(d=>{if(current)setLedgerDigest(d);}).catch(()=>{if(current)setDigestFailed(true);});return()=>{current=false;};},[ledger]);
-  const localRecorded=!planChecked&&!busy&&!error&&!stale&&ledger&&localApproval?.state==='recorded'&&ledgerDigest!==null;
+  const localRecorded=!planChecked&&!busy&&!error&&!stale&&ledger&&localApproval?.state==='recorded'&&localApproval.record&&ledgerDigest!==null;
   const localApproved=localRecorded&&ledgerDigest===localApproval.record.planDigest;
   const localChanged=!planChecked&&ledger&&!stale&&(localApproval?.state==='review'||localApproval?.state==='stale'||(localRecorded&&!localApproved));
   const approvedIds=planChecked?null:localApproved?new Set(localApproval.record.taskIds):null;
