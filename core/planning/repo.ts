@@ -181,3 +181,49 @@ export function profileRepo(
   // The person's own description wins over what the code shows.
   return { ...base, signals, known: { ...known, ...base.known } };
 }
+
+// ---------- the repo's file list, for guessing which files a task will touch ----------
+
+/** The files of a repo, repo-relative with "/", for contracts to guess a task's likely files from. */
+export interface RepoIndex {
+  files: string[];
+  /** The walk stopped at its file limit, so the list is not everything. */
+  truncated: boolean;
+}
+
+const SKIPPED_FOLDERS = new Set([
+  ".git", "node_modules", ".perfect-planner", "dist", "build", "out", "coverage", ".next", ".nuxt", ".svelte-kit", ".turbo", ".cache", "target", ".venv", "venv", "__pycache__", ".idea", ".vscode",
+]);
+
+/**
+ * Lists the repo's files by reading folder names only (nothing is opened, imported or run). A symbolic
+ * link is never followed or listed, and build output, dependencies and the planner's own folder are skipped.
+ * Sorted, so the same repo always gives the same list.
+ */
+export function listRepoFiles(root: string, options: { maxFiles?: number; maxDepth?: number } = {}): RepoIndex {
+  const maxFiles = options.maxFiles ?? 20_000;
+  const maxDepth = options.maxDepth ?? 10;
+  const files: string[] = [];
+  let truncated = false;
+  const walk = (dir: string, prefix: string, depth: number): void => {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (truncated) return;
+      if (entry.isSymbolicLink()) continue;
+      const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        if (!SKIPPED_FOLDERS.has(entry.name) && depth < maxDepth) walk(path.join(dir, entry.name), rel, depth + 1);
+      } else if (entry.isFile()) {
+        if (files.length >= maxFiles) truncated = true;
+        else files.push(rel);
+      }
+    }
+  };
+  if (fs.existsSync(root)) walk(root, "", 0);
+  return { files, truncated };
+}

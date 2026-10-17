@@ -184,11 +184,39 @@ comes from a person.
 `buildMindMap(idea, answers)` maps answers to components, data, screens,
 integrations and risks (spikes become risk nodes); edits are pure
 (`addNode`, `removeNode`, `renameNode`, `linkNodes`) and `toMermaid` renders
-it. `buildRoadmap(map, { owner })` splits it into foundation, core,
+it. `buildRoadmap(map, { owner, repo })` splits it into foundation, core,
 integrations, hardening and release phases; every task has an owner and a
 testable done-when. `depthCheck(map, answers)` flags components nobody broke
 down and decisions that contradict each other (offline-first with a
 server-only store, no sign-in with roles, and so on).
+
+## Task contracts (`contract.ts`)
+
+The contract ledger: every roadmap task is broken into a tiny piece and told to do only that.
+`RoadmapTask.contract` holds the plain `clauses` the task must meet, the `allowedFiles` it may change
+(paths or globs, in the collision engine's pattern language), the `doneWhen` test that proves it and a
+`sizeCap` (default 5 files, 150 lines). `draftContract` guesses the files from `listRepoFiles(root)` (a
+read-only walk that skips symlinks, dependencies and build output) and the task's words: names that match
+come first, one slot is left for the task's own test, and with no match the task gets a new folder named
+after it. A guess is only a start; the person reads it at approval.
+
+- **Flags.** `contractFlags` marks a task with no files, one the repo suggests would change more files than
+  the cap, or one with too many clauses ("split this"). The approve route refuses while a flagged task is
+  not ticked, and the ticks are kept in the ledger (`flagsAccepted`).
+- **Signing.** `plan.approved` carries `data.contracts = { digest, tasks: { key: digest }, accepted }`.
+  `writeRoadmap` writes each task's `contract`, `contractDigest` and `contractFlags` into its
+  `task.created`, and refuses the whole roadmap, before the first write, if any contract is unusable.
+- **Replay.** `contractOf(entries, task)` is "signed" only when the task entry passes its signature check
+  and its digest is the one the nearest earlier person-signed approval signed for that task key.
+  Anything else is "unsigned": the host will not dispatch or check against it, and it never reads as "no
+  contract". `null` means the task never had one (added by hand, or written before contracts).
+- **Widening.** `widenContract` is a person's `decision.made` with `data.contract = { op: "widened",
+  task, files }`. The planning rules refuse it from anyone else, and the replay ignores any widening that is
+  not a verified person's entry. The signed contract does not change, so its digest still matches.
+  A worker can only ask with `ask_main`; there is no path for it to answer itself.
+
+The check of the finished work against the contract lives in `core/gate/contract.ts` (an added check;
+it only ever adds refusals).
 
 ## Tests
 

@@ -24,3 +24,24 @@ export {
   type Refusal,
   type Ok,
 } from "./gate";
+export {
+  BINARY_LINES,
+  checkContract,
+  contractRule,
+  contractVerdictAt,
+  evaluateContract,
+  isUnderContract,
+  latestContractVerdict,
+  parseNumstat,
+  parseRaw,
+  readChanges,
+  recordContractVerdict,
+  type ContractCheck,
+  type ContractContext,
+  type ContractLimits,
+  type ContractProblem,
+  type ContractReport,
+  type FileChange,
+  type ProblemKind,
+} from "./contract";
+export { CONTRACT_PRIVATE_DIR, isDependencyPath, isProtectedPath, isTestLike, normalizePattern, oddPathProblem, pathCovered, pathCoveredFolded, patternProblem, resolveLinkTarget } from "./contractPaths";

@@ -13,10 +13,12 @@ import path from "node:path";
 import { deriveState, sensitiveChanges, testSupportFiles, type GateState } from "../../gate/index";
 import type { Actor } from "../../ledger/index";
 import { attemptLabel, type TaskView } from "../../mcp/index";
+import type { ContractView } from "../../planning/index";
 import { WorktreeError, WorktreeManager, git, refreshCarriedSettings, runGit, WORKTREES_ACTOR, type WorktreeInfo } from "../../worktrees/index";
 import type { CoreHost } from "../host";
 import type { CoreProject } from "../project";
 import { HttpError, type Router } from "../router";
+import { briefContract, checkWork, contractCard, freeOlderAttempts, signedContract, widenTask } from "./contract";
 import { AGENT_SERVER_NAME, agentEntryPath, connectLine, nodeBinary, quoteFor, tokenFilePath, writeTokenFile } from "./agents";
 
 export { quoteFor };
@@ -174,6 +176,7 @@ function viewTask(project: CoreProject, task: TaskView, worktrees: WorktreeInfo[
     worktree: tree ? { path: tree.path, branch: tree.branch, base: tree.baseRef, port: tree.port } : null,
     dispatch: dispatch ? { issuedAt: dispatch.issuedAt, ...(dispatch.model ? { model: dispatch.model } : {}) } : null,
     history: gate.history.slice(-12),
+    contract: contractCard(project.entries(), task.id, label),
   };
 }
 
@@ -240,7 +243,7 @@ async function worktreeFor(project: CoreProject, label: string): Promise<Worktre
 // Single quotes in both shells, so a path can never run $(...) or `...`: POSIX ends and reopens the
 // quote around a ', PowerShell doubles it.
 
-export function workerBrief(task: { label: string; title: string; clauses: string[] }, worktree: WorktreeInfo, test: GateState["definition"], approved: boolean): string {
+export function workerBrief(task: { label: string; title: string; clauses: string[] }, worktree: WorktreeInfo, test: GateState["definition"], approved: boolean, contract: ContractView | null = null): string {
   const testStep = test
     ? approved
       ? `2. The done-when test is already approved: \`${test.command}\`${test.files.length ? ` (${test.files.join(", ")})` : ""}. Do not change it; Perfect Planner refuses work that edits an approved test.`
@@ -251,6 +254,7 @@ export function workerBrief(task: { label: string; title: string; clauses: strin
     task.clauses.length ? `It implements ${task.clauses.join(", ")}; use the lookup tool to read the exact text.` : "",
     `Work only in this folder: ${worktree.path} (branch ${worktree.branch}, dev server port ${worktree.port}).`,
     "",
+    ...briefContract(contract),
     `1. Call hello on the ${AGENT_SERVER_NAME} MCP server with your name and model.`,
     testStep,
     `3. When list_tasks shows ${task.label} with testApproved true, call claim_task. The claim is refused until the person has approved the test and Perfect Planner has seen it fail.`,
@@ -298,11 +302,14 @@ async function dispatch(project: CoreProject, host: CoreHost, id: string, body: 
   const model = typeof body.model === "string" && body.model.trim() ? body.model.trim() : undefined;
   if (model !== undefined && !MODEL.test(model)) throw new HttpError(400, "INVALID", "Name the worker's model in letters, digits and . _ : / - (for example claude-sonnet-4).");
   const label = attemptLabel(task);
+  // A task under contract starts only from the contract the owner signed, and claims its files.
+  const contract = signedContract(project.entries(), task.id);
   const worktrees = manager(project, root);
   let tree = await worktrees.get(label);
   if (!tree) {
     try {
-      tree = await worktrees.create({ taskId: label, actor: localPerson(project) });
+      if (contract) await freeOlderAttempts(worktrees, contract, label);
+      tree = await worktrees.create({ taskId: label, actor: localPerson(project), ...(contract ? { claims: contract.allowedFiles } : {}) });
     } catch (error) {
       if (error instanceof WorktreeError) throw new HttpError(409, "WORKTREE", error.message);
       throw error;
@@ -317,7 +324,7 @@ async function dispatch(project: CoreProject, host: CoreHost, id: string, body: 
   dispatches(project).set(label, record);
 
   const gate = deriveState(project.entries(), label);
-  const brief = workerBrief({ label, title: task.title, clauses: task.clauses }, tree, gate.definition, Boolean(gate.approval));
+  const brief = workerBrief({ label, title: task.title, clauses: task.clauses }, tree, gate.definition, Boolean(gate.approval), contract);
   // The brief goes next to the ledger, never into the worktree (an untracked file there would block the check).
   const briefFile = path.join(project.root, ".perfect-planner", "briefs", `${label}.md`);
   fs.mkdirSync(path.dirname(briefFile), { recursive: true });
@@ -467,6 +474,12 @@ export function registerTaskRoutes(router: Router): void {
     const task = findTask(project, params.id!);
     const label = attemptLabel(task);
     const tree = await worktreeFor(project, label);
+    // Under contract, the diff is measured first; work that breaks it is never run.
+    const contract = signedContract(project.entries(), task.id);
+    if (contract) {
+      const measured = await checkWork(project, label, tree, contract, await manager(project, await requireRepo(project)).list());
+      if (!measured.ok) return { passed: false, contractRefused: true, commit: measured.tip, reason: measured.reason, ...(await overview(project)) };
+    }
     const run = await project.service.gate.prove(label, tree.path);
     if (!run.ok && !run.run && !run.entry) refuse(run);
     return {
@@ -527,6 +540,18 @@ export function registerTaskRoutes(router: Router): void {
    * its commits exactly where they are, so the next worker dispatched on the task carries on from them.
    */
   router.post("/tasks/:id/release", ({ project, params, body }) => releaseClaim(project, params.id!, bodyOf(body)));
+
+  /**
+   * POST /tasks/:id/widen { files, reason, question? }: the person allows more files on one task's contract.
+   * A worker can only ask (ask_main); this is the owner's own signed decision, and it never loosens the
+   * check on dependency files, other tasks' claims or the planner's folders.
+   */
+  router.post("/tasks/:id/widen", async ({ project, params, body }) => {
+    const task = findTask(project, params.id!);
+    const repo = await repoState(project);
+    const widened = await widenTask(project, task, attemptLabel(task), repo.ok && repo.root ? manager(project, repo.root) : undefined, bodyOf(body));
+    return { widened, ...(await overview(project)) };
+  });
 
   /**
    * POST /tasks/:id/merge: merge the worker's branch into the branch it started from. The gate merges

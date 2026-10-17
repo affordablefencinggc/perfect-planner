@@ -263,6 +263,41 @@ describe("Deep planning screen", () => {
     expect(screen.queryByText(/T-1/)).toBeNull();
   });
 
+  it("shows each roadmap task's contract, collapsed, with the flags that say to split a task", async () => {
+    const contract = { clauses: ["Build App shell so that it starts and does its one job."], allowedFiles: ["src/app-shell/**"], doneWhen: "a test proves it starts", sizeCap: { maxFiles: 5, maxLines: 150 } };
+    const flagged = { code: "TOO_MANY_FILES", message: "9 files in your repo look like part of this task, but one task may change at most 5 files. Split this task into smaller ones." };
+    const draft = { ...roadmap, written: false, phases: [{ ...roadmap.phases[0], tasks: [{ ...roadmap.phases[0].tasks[0], task: undefined, entry: undefined, contract, contractFlags: [flagged] }] }, roadmap.phases[1]] };
+    mockApi({ "GET /planning": () => ok(overview()), "GET /planning/roadmap": () => ok(draft) });
+    renderScreen();
+    await screen.findByRole("tab", { name: /Questions/ });
+    fireEvent.click(screen.getByRole("tab", { name: /Roadmap/ }));
+    const title = await screen.findByText("Build App shell");
+    const item = title.closest("li");
+    const details = item.querySelector("details.core-contract");
+    expect(details.open).toBe(false);
+    expect(within(item).getByText("Contract", { selector: "summary" }).textContent).toMatch(/1 file or folder · up to 5 files and 150 lines/);
+    expect(within(item).getByText("src/app-shell/**")).toBeTruthy();
+    expect(within(item).getByRole("alert").textContent).toMatch(/Split this task into smaller ones/);
+  });
+
+  it("will not approve a plan with tasks marked 'split this' until the person ticks that they read them", async () => {
+    const flagged = [{ key: "K-component.app-shell", title: "Build App shell", flags: [{ code: "NO_FILES", message: "No files are named for this task." }] }];
+    const calls = mockApi({
+      "GET /planning": () => ok(overview({ fingerprint: "fp-1", approval: { canApprove: true, current: false, message: "Every blocking question is settled. The plan can be approved.", approved: [], flagged } })),
+      "POST /planning/approve": () => ok({ plan: "P-1", entry: "L-000040", tasks: { "K-component.app-shell": "T-1" } }),
+    });
+    renderScreen();
+    expect(await screen.findByText("1 task needs a closer look")).toBeTruthy();
+    expect(screen.getByText(/No files are named for this task\./)).toBeTruthy();
+    const approve = screen.getByRole("button", { name: /Approve plan/ });
+    expect(approve.disabled).toBe(true);
+    fireEvent.click(screen.getByRole("checkbox", { name: /I have read this and accept it as it is/ }));
+    expect(approve.disabled).toBe(false);
+    fireEvent.click(approve);
+    await waitFor(() => expect(calls.some((c) => c.path === "/planning/approve")).toBe(true));
+    expect(calls.find((c) => c.path === "/planning/approve").body).toEqual({ fingerprint: "fp-1", acceptFlagged: ["K-component.app-shell"] });
+  });
+
   it("Advanced shows Q-, D-, T- and ledger numbers; Simple does not", async () => {
     mockApi({ "GET /planning": () => ok(overview()), "GET /planning/roadmap": () => ok(roadmap) });
     const { unmount } = renderScreen("simple");

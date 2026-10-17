@@ -3,8 +3,10 @@
 
 import { isAuthoritative, type Actor, type Ledger, type LedgerEntry } from "../ledger/index";
 import { appendNumbered } from "../numbering/index";
+import { contractDigest, draftContract, normalizeContract } from "./contract";
 import { nodeArea } from "./mindmap";
-import type { MindMap, MindNode, PhaseId, Roadmap, RoadmapPhase, RoadmapTask } from "./types";
+import type { RepoIndex } from "./repo";
+import type { MindMap, MindNode, PhaseId, Roadmap, RoadmapPhase, RoadmapTask, TaskContract } from "./types";
 
 export const PHASES: readonly { id: PhaseId; title: string }[] = [
   { id: "foundation", title: "Foundation" },
@@ -98,8 +100,10 @@ function walk(map: MindMap): MindNode[] {
  * - a task outside foundation depends on the foundation tasks it is linked to
  *   (cross-links in either direction), and a top-level one on the stack's top-level tasks;
  * - the final "Cut the first release" task depends on every other task.
+ * Every task also gets its contract (contract.ts): the files it may change are guessed from `opts.repo`
+ * (the repo's file list) and the task's own words; a task that cannot be kept small is flagged.
  */
-export function buildRoadmap(map: MindMap, opts: { owner?: string } = {}): Roadmap {
+export function buildRoadmap(map: MindMap, opts: { owner?: string; repo?: RepoIndex } = {}): Roadmap {
   const owner = opts.owner ?? "unassigned";
   const all = walk(map);
   // What the repo already has gets no build task; the roadmap names it instead.
@@ -127,27 +131,44 @@ export function buildRoadmap(map: MindMap, opts: { owner?: string } = {}): Roadm
       }
       if (parent === map.root) for (const s of stackRoots) if (earlier(s.id)) deps.add(s.id);
     }
+    const doneWhen = doneWhenOf(node, map);
+    const drafted = draftContract(
+      {
+        kind: node.kind,
+        label: node.label,
+        parts: node.children.map((c) => map.nodes[c]?.label).filter((l): l is string => !!l),
+        ...(node.note ? { note: node.note } : {}),
+        doneWhen,
+      },
+      opts.repo,
+    );
     return {
       key: taskKey(node.id),
       title: titleOf(node),
       phase: phaseOf(node),
       owner,
-      doneWhen: doneWhenOf(node, map),
+      doneWhen,
       node: node.id,
       change: node.kind === "risk" ? "fix" : "feature",
       dependsOn: ordered.filter((n) => deps.has(n.id)).map((n) => taskKey(n.id)),
+      contract: drafted.contract,
+      contractFlags: drafted.flags,
     };
   });
 
+  const releaseDone = "`npm test` passes on a clean checkout and a test proves the release entry (R-1, v1.0.0) is in the ledger with its stamp.";
+  const release = draftContract({ kind: "release", label: "Cut the first release", parts: [], doneWhen: releaseDone }, opts.repo);
   tasks.push({
     key: FINAL_TASK_KEY,
     title: "Cut the first release",
     phase: "release",
     owner,
-    doneWhen: "`npm test` passes on a clean checkout and a test proves the release entry (R-1, v1.0.0) is in the ledger with its stamp.",
+    doneWhen: releaseDone,
     node: map.root,
     change: "feature",
     dependsOn: tasks.map((t) => t.key),
+    contract: release.contract,
+    contractFlags: release.flags,
   });
 
   const phases: RoadmapPhase[] = PHASES.map((p) => ({ id: p.id, title: p.title, tasks: tasks.filter((t) => t.phase === p.id) }));
@@ -179,14 +200,21 @@ function writeOrder(tasks: RoadmapTask[]): RoadmapTask[] {
 }
 
 /**
- * Writes one task.created per task, each taking the next T- number. Returns
- * key -> T- number. Writes nothing for an empty roadmap. Everything is checked
- * before the first write, so a bad roadmap writes nothing.
+ * Writes one task.created per task, each taking the next T- number and carrying its contract and the
+ * contract's digest. Returns key -> T- number. Writes nothing for an empty roadmap. Everything is checked
+ * before the first write (a task without a usable contract included), so a bad roadmap writes nothing.
  */
 export function writeRoadmap(ledger: Ledger, actor: Actor, roadmap: Roadmap): Record<string, string> {
   const ordered = writeOrder(roadmapTasks(roadmap));
+  const contracts = new Map<string, TaskContract>();
+  for (const task of ordered) {
+    const parsed = normalizeContract(task.contract);
+    if (!parsed.ok) throw new Error(`${task.key} has no usable contract (${parsed.problem}); every task needs one`);
+    contracts.set(task.key, parsed.contract);
+  }
   const numbers: Record<string, string> = {};
   for (const task of ordered) {
+    const contract = contracts.get(task.key)!;
     const entry = appendNumbered(ledger, {
       actor,
       type: "task.created",
@@ -201,6 +229,9 @@ export function writeRoadmap(ledger: Ledger, actor: Actor, roadmap: Roadmap): Re
         dependsOn: task.dependsOn.map((d) => numbers[d]!),
         key: task.key,
         source: "planning",
+        contract,
+        contractDigest: contractDigest(contract),
+        contractFlags: task.contractFlags ?? [],
       },
     });
     numbers[task.key] = entry.subject;
