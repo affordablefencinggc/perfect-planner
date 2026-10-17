@@ -19,7 +19,9 @@ import {
   openBlockers,
   ownTasks,
   planningAnswers,
-  profileIdea,
+  profileRepo,
+  readRepoStack,
+  stackForIdea,
   toMermaid,
   type AnswerInput,
   type IdeaProfile,
@@ -71,7 +73,7 @@ function planning(project: CoreProject): PlanningState {
   let state = project.state.get(STATE_KEY) as PlanningState | undefined;
   if (!state || state.person !== person) {
     const idea = state?.idea ?? readIdea(project);
-    state = { session: new PlanningSession(project.ledger, { person }), person, idea, profile: idea ? profileIdea(idea) : null };
+    state = { session: new PlanningSession(project.ledger, { person }), person, idea, profile: idea ? profileRepo(idea, stackForIdea(readRepoStack(project.root), idea)) : null };
     project.state.set(STATE_KEY, state);
   }
   return state;
@@ -148,13 +150,13 @@ function questionView(q: PlanningQuestionState, numbers: ReturnType<typeof entry
   };
 }
 
-/** What the person's own description settled and ruled out, so the screen can say why a question was skipped. */
+/** What the person's own description and the repo settled and ruled out, so the screen can say why a question was skipped. */
 function descriptionView(state: PlanningState, questions: readonly PlanningQuestionState[]) {
   return {
     ruledOut: state.profile?.ruledOut ?? [],
     settled: questions
-      .filter((q) => q.source === "description" && q.status !== "open")
-      .map((q) => ({ q: q.q, id: q.id, area: q.area, areaTitle: AREA_TITLES[q.area], text: q.text, answer: q.answer ?? "", phrase: q.phrase ?? "", ...(q.decision ? { decision: q.decision } : {}) })),
+      .filter((q) => (q.source === "description" || q.source === "repo") && q.status !== "open")
+      .map((q) => ({ q: q.q, id: q.id, area: q.area, areaTitle: AREA_TITLES[q.area], text: q.text, answer: q.answer ?? "", from: q.source as string, phrase: q.phrase ?? "", ...(q.decision ? { decision: q.decision } : {}) })),
   };
 }
 
@@ -277,6 +279,8 @@ function roadmapView(project: CoreProject) {
       ],
     })),
     dropped: [...droppedRoadmapTasks(entries).values()],
+    /** Parts the repo already has: named here, with no build task. */
+    existing: roadmap.existing ?? [],
   };
 }
 
@@ -296,7 +300,15 @@ export function registerPlanningRoutes(router: Router): void {
     const idea = text((body as { idea?: unknown })?.idea, "idea").trim();
     if (idea.length < 3) throw new HttpError(400, "EMPTY", "Describe your idea in a sentence first.");
     const state = planning(project);
-    const profile = profileIdea(idea);
+    // What the repo already has (package.json, config files) and what the idea says both count; the idea wins.
+    const stack = stackForIdea(readRepoStack(project.root), idea);
+    const profile = profileRepo(idea, stack);
+    let fromRepo: string[] = [];
+    try {
+      fromRepo = state.session.recordRepoFacts(actorFor(project), profile, stack.facts);
+    } catch (error) {
+      refuse(error);
+    }
     const asked = state.session.start(ASKER, profile);
     // The idea is the person's own words: what it settles ("no accounts", "uses SQLite") is their answer, not a question.
     let described: string[] = [];
@@ -308,21 +320,21 @@ export function registerPlanningRoutes(router: Router): void {
     state.idea = idea;
     state.profile = profile;
     saveIdea(project, idea);
-    return { asked, described, signals: profile.signals, research: { live: false, note: RESEARCH_NOTE }, overview: overview(project) };
+    return { asked, described, fromRepo, signals: profile.signals, research: { live: false, note: RESEARCH_NOTE }, overview: overview(project) };
   });
 
   /**
-   * POST /planning/reopen { q }: asks a question the description settled
-   * again, so the person can answer it themselves. Only description answers
-   * reopen here; a person's own decision stays.
+   * POST /planning/reopen { q }: asks a question the description or the repo
+   * settled again, so the person can answer it themselves. A person's own
+   * decision stays.
    */
   router.post("/planning/reopen", ({ project, body }) => {
     const q = text((body as { q?: unknown })?.q, "q", 40).trim();
     if (!q) throw new HttpError(400, "INVALID", "Say which question to reopen.");
     const state = planning(project);
     const question = state.session.questions().find((x) => x.q === q);
-    if (question && question.status !== "open" && question.source !== "description") {
-      throw new HttpError(409, "NOT_FROM_DESCRIPTION", `${q} was answered by you, not settled by your description, so it stays decided.`);
+    if (question && question.status !== "open" && question.source !== "description" && question.source !== "repo") {
+      throw new HttpError(409, "NOT_FROM_DESCRIPTION", `${q} was answered by you, not settled by your description or your repo, so it stays decided.`);
     }
     try {
       const reopened = state.session.reopen(actorFor(project), q);

@@ -319,6 +319,17 @@ describe("Deep planning screen", () => {
       expect(within(card).getByText("From your description")).toBeTruthy();
     });
 
+    it("says when the repo, not the description, settled a question", async () => {
+      const repoQ = { ...settledQuestion, source: "repo", phrase: undefined };
+      const view = described({ areas: [...overview().areas, { area: "auth", title: "Users and auth", questions: [repoQ] }] });
+      view.description.settled = [{ ...view.description.settled[0], from: "repo", phrase: "" }];
+      mockApi({ "GET /planning": () => ok(view) });
+      renderScreen();
+      const panel = await screen.findByRole("region", { name: "Settled by your description and your repo" });
+      expect(within(panel).getByText("Your repo already has this.")).toBeTruthy();
+      expect(within(screen.getByRole("article", { name: "Who signs in, and how?" })).getByText("From your repo")).toBeTruthy();
+    });
+
     it("reopens a settled question when the person wants to answer it", async () => {
       const calls = mockApi({
         "GET /planning": () => ok(described()),

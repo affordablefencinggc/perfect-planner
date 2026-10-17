@@ -72,28 +72,34 @@ const short = (text: string, max = 40): string => {
  * Any answer with a spike also adds risk "Open: <question id>" (see buildMindMap).
  */
 export const AREA_RULES: Readonly<Record<Area, (answer: PlanningAnswer) => NodeSpec[]>> = {
-  stack: (a) => [
-    {
-      kind: "component",
-      label: "App shell",
-      note: a.text,
-      children: [
-        { kind: "screen", label: "Main layout" },
-        { kind: "integration", label: `Framework: ${short(a.text || a.choice)}`, note: a.text },
-      ],
-    },
-  ],
-  data: (a) => [
-    {
-      kind: "data",
-      label: "Data store",
-      note: a.text,
-      children: [
-        { kind: "data", label: "Schema" },
-        { kind: "data", label: "Backups" },
-      ],
-    },
-  ],
+  stack: (a) =>
+    isDeclined(a)
+      ? []
+      : [
+          {
+            kind: "component",
+            label: "App shell",
+            note: a.text,
+            children: [
+              { kind: "screen", label: "Main layout" },
+              { kind: "integration", label: `Framework: ${short(a.text || a.choice)}`, note: a.text },
+            ],
+          },
+        ],
+  data: (a) =>
+    isDeclined(a)
+      ? []
+      : [
+          {
+            kind: "data",
+            label: "Data store",
+            note: a.text,
+            children: [
+              { kind: "data", label: "Schema" },
+              { kind: "data", label: "Backups" },
+            ],
+          },
+        ],
   auth: (a) =>
     isDeclined(a)
       ? []
@@ -134,16 +140,14 @@ export const AREA_RULES: Readonly<Record<Area, (answer: PlanningAnswer) => NodeS
           },
         ]
       : [],
-  security: (a) => [
-    { kind: "risk", label: "Data exposure", note: a.text },
-    { kind: "data", label: "Secrets store" },
-  ],
-  scale: (a) => [{ kind: "risk", label: "Cost at scale", note: a.text }],
+  security: (a) => (isDeclined(a) ? [] : [{ kind: "risk", label: "Data exposure", note: a.text }, { kind: "data", label: "Secrets store" }]),
+  scale: (a) => (isDeclined(a) ? [] : [{ kind: "risk", label: "Cost at scale", note: a.text }]),
   testing: (a) => [
     { kind: "component", label: "Test suite", note: a.text, children: [{ kind: "data", label: "Test fixtures" }] },
     { kind: "component", label: "Release pipeline", children: [{ kind: "data", label: "Build artifacts" }] },
   ],
   platforms: (a) => {
+    if (isDeclined(a)) return [];
     const text = answerText(a);
     return PLATFORMS.filter((p) => p.pattern.test(text)).map((p) => ({
       kind: "component" as const,
@@ -202,11 +206,13 @@ export function buildMindMap(idea: string, answers: PlanningAnswer[]): MindMap {
   };
 
   // "No sync engine" settles the offline area: nothing syncs, so no Sync engine to build.
+  // A declined framework means a library or tool, not an app: no app shell, whatever the language answer says.
+  const noApp = answers.some((a) => a.questionId === "stack.framework" && !a.spike && isDeclined(a));
   const noSync = answers.some((a) => a.questionId === "offline.sync-engine" && !a.spike && isDeclined(a));
   for (const answer of sortAnswers(answers)) {
     // A spike is an open question, not a decision: it adds only its risk node,
     // never the area's components ("Framework: Spike T-1 due ..." as a task).
-    if (!answer.spike && !(noSync && answer.area === "offline")) for (const spec of AREA_RULES[answer.area](answer)) place(spec, "root", answer.questionId, answer.fromRepo === true);
+    if (!answer.spike && !(noSync && answer.area === "offline") && !(noApp && answer.area === "stack")) for (const spec of AREA_RULES[answer.area](answer)) place(spec, "root", answer.questionId, answer.fromRepo === true);
     if (answer.spike) {
       place(
         {

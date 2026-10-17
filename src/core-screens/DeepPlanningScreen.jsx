@@ -308,8 +308,8 @@ function DescriptionPanel({ data, resource }) {
   };
   return (
     <section className="core-card planning-described" aria-labelledby="planning-described-title">
-      <h3 id="planning-described-title">Settled by your description</h3>
-      <p className="core-muted">Your idea already answers these, so they were not asked. If one is wrong, answer it yourself.</p>
+      <h3 id="planning-described-title">{settled.some((s) => s.from === "repo") ? "Settled by your description and your repo" : "Settled by your description"}</h3>
+      <p className="core-muted">{settled.some((s) => s.from === "repo") ? "Your idea and the code already answer these, so they were not asked." : "Your idea already answers these, so they were not asked."} If one is wrong, answer it yourself.</p>
       {ruledOut.length > 0 && (
         <ul className="planning-ruled-out" aria-label="What your idea rules out">
           {ruledOut.map((r) => (
@@ -324,7 +324,7 @@ function DescriptionPanel({ data, resource }) {
               <span className="planning-rail-area">{s.areaTitle}</span>
               <span>{s.text}</span>
               <strong>{s.answer}</strong>
-              <span className="core-muted">You wrote “{s.phrase}”.</span>
+              <span className="core-muted">{s.from === "repo" ? "Your repo already has this." : `You wrote “${s.phrase}”.`}</span>
               <AdvancedOnly>{s.q} · {s.id}{s.decision ? ` · ${s.decision}` : ""}</AdvancedOnly>
               <button type="button" className="core-button" disabled={busy !== null} onClick={() => reopen(s.q)} aria-label={`Answer it myself: ${s.text}`}>
                 {busy === s.q ? "Reopening…" : "Answer it myself"}
@@ -371,6 +371,7 @@ function QuestionCard({ question, resource }) {
         {question.status === "decided" && <span className="core-pill good">Decided</span>}
         {question.status === "spiked" && <span className="core-pill warn">Spike set</span>}
         {question.source === "description" && <span className="core-pill">From your description</span>}
+        {question.source === "repo" && <span className="core-pill">From your repo</span>}
         <AdvancedOnly>{question.q} · {question.id}{question.entries?.asked ? ` · asked ${question.entries.asked}` : ""}</AdvancedOnly>
       </div>
       <h4 id={`${id}-text`}>{question.text}</h4>
@@ -513,11 +514,15 @@ function RoadmapView() {
   if (resource.status === "no-session") return null; // the screen shows the shared notice
   const { phases, written, answered } = resource.data;
   const dropped = resource.data.dropped ?? [];
+  const existing = resource.data.existing ?? [];
   return (
     <div className="planning-roadmap">
       <p className="core-muted">
         {written ? "These tasks are on the board. They were added when the plan was approved." : "A draft. The tasks are added to the board when you approve the plan. Tasks you add yourself go on the board straight away."}
       </p>
+      {existing.length > 0 && (
+        <p className="core-muted planning-existing">Already in your repo, so no task: {existing.map((e) => e.label).join(", ")}.</p>
+      )}
       <RoadmapChanges resource={resource} />
       {!answered && <p className="core-empty" role="status"><strong>No answers yet</strong>Only the release task exists until questions are answered.</p>}
       <ol className="planning-phases">
