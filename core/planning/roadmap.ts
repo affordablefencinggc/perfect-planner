@@ -201,6 +201,7 @@ export function writeRoadmap(ledger: Ledger, actor: Actor, roadmap: Roadmap): Re
         dependsOn: task.dependsOn.map((d) => numbers[d]!),
         key: task.key,
         source: "planning",
+        ...(task.template ? { template: task.template } : {}),
       },
     });
     numbers[task.key] = entry.subject;

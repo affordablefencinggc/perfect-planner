@@ -10,6 +10,12 @@ import { bridgeCall } from "../mcp/index";
 import { addTask, cleanTemp, dispatchAndApproveTest, listTree, makeRepo, startWindow, tempDir, type Window } from "./helpers";
 
 afterAll(cleanTemp);
+// After a restart the host's own watcher may note a commit the old run never saw (a commit.observed entry by system:watcher), before
+// or after the test looks (it is slower to start on Windows). Nothing else may be written because of a replayed cookie or token.
+const writtenSince = (win: Window, before: number) =>
+  win.host.project("p").entries().slice(before).filter((e) => !(e.type === "commit.observed" && e.actor.kind === "system" && e.actor.id === "watcher"));
+// The board without lastEntry, which moves with the watcher's own note above.
+const boardOf = (win: Window) => JSON.stringify([...win.host.project("p").service.board().values()].map(({ lastEntry: _lastEntry, ...task }: any) => task));
 const q = "?project=p";
 
 interface Before {
@@ -67,7 +73,6 @@ describe("attack 1: replay after the app restarts", () => {
     try {
       expect(fresh.origin).toBe(old.win.origin);
       const oldWindow = { cookie: old.cookie, "x-pp-csrf": old.csrf, origin: old.win.origin, "content-type": "application/json" };
-      const before = fresh.host.project("p").entries().length;
       for (const route of ["/status", "/tasks", "/planning", "/agents", "/decisions", "/people"]) {
         const res = await fetch(`${fresh.base}${route}${q}`, { headers: oldWindow });
         expect(res.status, `GET ${route}`).toBe(401);
@@ -80,8 +85,7 @@ describe("attack 1: replay after the app restarts", () => {
       // The old cookie with the new window's CSRF token, and the new cookie with the old token: neither mixes.
       expect((await fetch(`${fresh.base}/planning/tasks${q}`, { method: "POST", headers: { ...oldWindow, "x-pp-csrf": fresh.csrf }, body: "{}" })).status).toBe(401);
       expect((await fetch(`${fresh.base}/planning/tasks${q}`, { method: "POST", headers: { ...fresh.person(), "x-pp-csrf": old.csrf, "content-type": "application/json" }, body: "{}" })).status).toBe(401);
-      expect(fresh.host.project("p").entries().length).toBe(before);
-      expect(before).toBe(old.entries);
+      expect(writtenSince(fresh, old.entries)).toEqual([]);
     } finally {
       await fresh.stop();
     }
@@ -123,8 +127,7 @@ describe("attack 1: replay after the app restarts", () => {
       // The new host's bridge starts when the person connects an agent.
       const connected = await fresh.call("POST", `/agents/connect${q}`, {});
       const bridge = connected.body.result.bridgeUrl as string;
-      const entriesBefore = fresh.host.project("p").entries().length;
-      const boardBefore = JSON.stringify([...fresh.host.project("p").service.board().values()]);
+      const boardBefore = boardOf(fresh);
       for (const [name, token] of [["connect", old.connectToken], ["worker", old.workerToken]] as const) {
         for (const url of [bridge, old.connectBridge, old.workerBridge]) {
           const outcome = await code(bridgeCall(url, token)({ tool: "hello", args: { name: "Replayed agent" } }));
@@ -133,8 +136,8 @@ describe("attack 1: replay after the app restarts", () => {
       }
       // A worker that had claimed T-1 before the restart cannot touch it now.
       expect(await code(bridgeCall(bridge, old.workerToken)({ tool: "report_progress", args: { task: "T-1", text: "I am back" }, agent: "worker-0000" }))).toBe("UNAUTHORIZED");
-      expect(fresh.host.project("p").entries().length).toBe(entriesBefore);
-      expect(JSON.stringify([...fresh.host.project("p").service.board().values()])).toBe(boardBefore);
+      expect(writtenSince(fresh, old.entries)).toEqual([]);
+      expect(boardOf(fresh)).toBe(boardBefore);
       expect(fresh.host.project("p").service.listAgents().map((a) => a.name)).not.toContain("Replayed agent");
     } finally {
       await fresh.stop();
