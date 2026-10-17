@@ -1,0 +1,10 @@
+{
+  "label": "windows-nsis",
+  "checks": [
+    {
+      "name": "plan: idea and recommended answers",
+      "pass": false,
+      "seen": "Blocking questions are still open after 28 recommendations. Window says: 9 | Blocking | Blocking [window 1008x681; visible buttons: PP\nPerfect Planner\nv0.1 clea | Home | 01Define | 02Coordinate | 03Build | 04Prove | 05Release | Index | Connect agent | More actions | Open project folders | Core project | Simple | Advanced | Blueprint | Structure | Components | Deep planning | MVP board | Approve plan | Go to question | Go to question | Go to question | Go to question | Go to question | Go to question | Go to question | Go to question | Go to question | Questions | Mind map | Roadmap | Answer it myself | Answer it myself | Answer it myself | Answer it myself | Answer it myself | Answer it myself | Use recommendation | Python backend\nHeavy data or]"
+    }
+  ]
+}
