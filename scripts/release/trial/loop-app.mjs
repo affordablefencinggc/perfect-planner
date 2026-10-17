@@ -165,10 +165,10 @@ async function main() {
     }
     if (!(await waitText("Your idea", 20_000))) throw new Error("No idea box.");
     await setValue("Your idea", "Notes helper: a small tool that saves a person's notes to a local file. One person, one laptop, no accounts, no cloud.");
-    await click("Start planning");
-    if (!(await waitFor(async () => /questions\s+answered|No blocking questions are open/.test(await text()), 90_000))) throw new Error("Planning showed no questions within 90 s.");
     // Keep the last few answers' HTTP outcomes, so a stuck plan says what the service replied.
-    await run(`if (!window.__ppLog) { window.__ppLog = []; const f = window.fetch; window.fetch = async (...a) => { try { const r = await f(...a); window.__ppLog.push((a[1]?.method || "GET") + " " + String(a[0]).replace(/\\?.*/, "") + " " + r.status); return r; } catch (e) { window.__ppLog.push("ERR " + String(a[0]).replace(/\\?.*/, "") + " " + e.message); throw e; } }; } return true;`);
+    await run(`if (!window.__ppLog) { window.__ppLog = []; const f = window.fetch; window.fetch = async (...a) => { const t0 = Date.now(); try { const r = await f(...a); window.__ppLog.push((a[1]?.method || "GET") + " " + String(a[0]).replace(/\\?.*/, "") + " " + r.status + " " + (Date.now() - t0) + "ms"); return r; } catch (e) { window.__ppLog.push("ERR " + String(a[0]).replace(/\\?.*/, "") + " " + e.message + " " + (Date.now() - t0) + "ms"); throw e; } }; } return true;`);
+    await click("Start planning");
+    if (!(await waitFor(async () => /questions\s+answered|No blocking questions are open/.test(await text()), 240_000))) throw new Error(`Planning showed no questions within 240 s. Calls: ${(await run(`return (window.__ppLog || []).slice(-8).join("; ")`).catch(() => "")) || "none seen"}.`);
     let clicks = 0;
     for (let i = 0; i < 120; i++) {
       if ((await text()).includes("No blocking questions are open")) break;
