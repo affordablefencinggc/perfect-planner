@@ -62,6 +62,7 @@ describe("DecisionsScreen", () => {
     routeFetch({ "GET /decisions": () => new Promise((resolve) => { release = () => resolve(ok(EMPTY)); }) });
     renderWith();
     expect(screen.getByRole("status", { name: "Loading decisions" })).toBeTruthy();
+    await waitFor(() => expect(release).toBeTypeOf("function")); // the read starts after the window's launch claim
     await act(async () => release());
     expect(await screen.findByText("No decisions waiting.")).toBeTruthy();
     expect(screen.getByText(/When an agent or the plan needs a call, it lands here with Jev's recommendation\./)).toBeTruthy();

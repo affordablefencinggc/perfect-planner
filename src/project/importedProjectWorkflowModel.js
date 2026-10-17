@@ -122,7 +122,8 @@ function authorityReceipt(project, kind, label) {
 function planReceipt(project, records) {
   const status = planApprovalStatus(project, records);
   if (!status) return authorityReceipt(project, "plan", "Plan approval");
-  return receipt("AUTH-PLAN", "Plan approval", effectiveState(project, status.state), status.detail, status.revision ? `Saved plan approval · revision ${status.revision}` : null);
+  const source = status.core ? `Project ledger · ${status.core.plan} · ${status.core.entry}` : status.revision ? `Saved plan approval · revision ${status.revision}` : null;
+  return receipt("AUTH-PLAN", "Plan approval", effectiveState(project, status.state), status.detail, source);
 }
 
 // Counted in areas, the same unit as "Review what we found"; answered areas clear.

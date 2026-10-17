@@ -54,7 +54,7 @@ function realPath(file, realpath = realpathSync.native) {
 }
 function protectedRoots(cwd, protect = [], p = path, realOf = (file) => realPath(file)) {
     const roots = new Set();
-    for (const root of [cwd, ...protect]) {
+    for (const root of [cwd, ...protect, ...registeredRoots()]) {
         if (typeof root !== "string" || root === "")
             continue;
         const here = p.resolve(root);
@@ -64,6 +64,18 @@ function protectedRoots(cwd, protect = [], p = path, realOf = (file) => realPath
             roots.add(real);
     }
     return [...roots];
+}
+const registered = new Map();
+let nextRegistration = 0;
+export function protectRoots(roots) {
+    const id = nextRegistration++;
+    registered.set(id, roots.filter((root) => typeof root === "string" && root !== "" && path.isAbsolute(root)));
+    return () => {
+        registered.delete(id);
+    };
+}
+export function registeredRoots() {
+    return [...new Set([...registered.values()].flat())];
 }
 function insideAny(p, roots, ...candidates) {
     return roots.some((root) => candidates.some((candidate) => isWithin(root, candidate, p)));

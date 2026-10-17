@@ -71,7 +71,7 @@ const listenOnce = (server, port, host) => new Promise((resolve, reject) => {
 // Starts the host. port 0 asks the OS for any free port; otherwise busy ports are skipped upward.
 async function loadCoreHost(bundle, root, logger) {
   if (!bundle || !(await fileAt(bundle))) { logger.warn?.(`[perfect-planner] Core host bundle not found (${bundle}); run npm run build:core-host.`); return null; }
-  try { const { createCoreHost } = await import(pathToFileURL(bundle).href); return createCoreHost(coreHostOptions(process.env, root)); }
+  try { const { createCoreHost } = await import(pathToFileURL(bundle).href); const host = createCoreHost(coreHostOptions(process.env, root)); host.acceptDesktopLaunch?.(); return host; }
   catch (error) { logger.warn?.(`[perfect-planner] Core host disabled: ${error.message}`); return null; }
 }
 

@@ -15,6 +15,8 @@ import type { IncomingMessage } from "node:http";
 export const PERSON_COOKIE = "pp_core_person";
 export const CSRF_HEADER = "x-pp-csrf";
 const LAUNCH_TTL_MS = 10 * 60_000;
+// The desktop shell may still be compiling when the host starts; its secret waits longer, still single use.
+const DESKTOP_LAUNCH_TTL_MS = 2 * 60 * 60_000;
 
 interface Session {
   csrf: string;
@@ -59,6 +61,16 @@ export class PersonSessions {
     return secret;
   }
 
+  /**
+   * Accepts a launch secret made by the process that started both this host and the desktop
+   * shell (PP_CORE_DESKTOP_LAUNCH), so the shell can hand it to its window over IPC.
+   */
+  acceptLaunch(secret: string, ttlMs = DESKTOP_LAUNCH_TTL_MS): boolean {
+    if (!/^[\w-]{20,128}$/.test(secret)) return false;
+    this.launches.set(digest(secret), this.now() + ttlMs);
+    return true;
+  }
+
   /** Spends a launch secret; returns the cookie and CSRF token for the window that held it. */
   claim(launch: unknown): { cookie: string; csrf: string } | null {
     if (typeof launch !== "string" || launch.length < 20) return null;
@@ -70,6 +82,16 @@ export class PersonSessions {
     const csrf = randomBytes(24).toString("base64url");
     this.sessions.set(digest(cookie), { csrf, createdAt: this.now() });
     return { cookie, csrf };
+  }
+
+  /**
+   * True for a request carrying a claimed window's cookie. Reads need only this: the cookie is
+   * HttpOnly and SameSite=Strict, so a page on another site cannot send it, and a local process
+   * that forges Origin or sec-fetch-site still has no cookie. Writes also need isPerson below.
+   */
+  hasSession(req: IncomingMessage): boolean {
+    const cookie = cookieValue(req);
+    return Boolean(cookie && this.sessions.has(digest(cookie)));
   }
 
   /** True only for a request from a claimed window: cookie, matching CSRF token and the app's Origin. */

@@ -1,3 +1,4 @@
+import { resetPersonSession } from "../../src/core-screens/coreApi.js";
 import React from "react";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -194,6 +195,61 @@ describe("Deep planning screen", () => {
     expect((await screen.findByRole("alert")).textContent).toContain("1 blocking question is still open (Q-1)");
   });
 
+  it("does not offer to approve the same plan twice, and offers the changed plan", async () => {
+    const approved = [{ plan: "P-1", entry: "L-000020", at: "2026-10-09T10:00:00Z", by: "owner", summary: "Plan approved", fingerprint: "f1" }];
+    mockApi({ "GET /planning": () => ok(overview({ approval: { canApprove: false, current: true, message: "This plan is approved as it stands. Change an answer to approve a new version.", approved } })) });
+    renderScreen();
+    const button = await screen.findByRole("button", { name: /Plan approved/ });
+    expect(button.disabled).toBe(true);
+    cleanup();
+    mockApi({ "GET /planning": () => ok(overview({ approval: { canApprove: true, current: false, message: "The plan changed since it was approved. Approve the new version.", approved } })) });
+    renderScreen();
+    expect((await screen.findByRole("button", { name: /Approve changed plan/ })).disabled).toBe(false);
+  });
+
+  it("says plainly when this project's owner cannot sign on this computer", async () => {
+    mockApi({
+      "GET /planning": () => ok(overview()),
+      "GET /status": () => ok({ project: "default", owner: { state: "key-missing", reason: "The owner's key k-1 is not on this device." } }),
+    });
+    renderScreen();
+    const stop = await screen.findByText(/owner key is not on this computer/);
+    expect(stop.closest("[role=alert]").textContent).toMatch(/start a new project in a new folder/);
+  });
+
+  it("asks the person to start a new history first, and warns when the folder shows earlier use", async () => {
+    resetPersonSession();
+    window.sessionStorage.setItem("pp.core.csrf", "csrf-1");
+    const signals = ["This repo has Perfect Planner's pre-push scan installed.", "This repo has 1 Perfect Planner task branch (pp/T-1)."];
+    let started = false;
+    const calls = mockApi({
+      "GET /planning": () => ok(overview()),
+      "GET /status": () => ok({ project: "default", owner: { state: "new", signals, started } }),
+      "POST /owner/start": () => { started = true; return ok({ started: true, signals }); },
+    });
+    renderScreen();
+    const notice = await screen.findByRole("alert", { name: "Start a new history" });
+    expect(notice.textContent).toMatch(/may have had a Perfect Planner history before/);
+    expect(notice.textContent).toMatch(/signs, not proof/);
+    expect(notice.textContent).toContain("pp/T-1");
+    fireEvent.click(within(notice).getByRole("button", { name: "Start a new history for this folder" }));
+    await waitFor(() => expect(calls.some((c) => c.method === "POST" && c.path === "/owner/start")).toBe(true));
+    await waitFor(() => expect(screen.queryByRole("alert", { name: "Start a new history" })).toBeNull());
+    resetPersonSession();
+  });
+
+  it("stops plainly when an older copy of the project's history was put back", async () => {
+    mockApi({
+      "GET /planning": () => ok(overview()),
+      "GET /status": () => ok({ project: "default", owner: { state: "pinned" }, integrity: { state: "rolled-back", writesStopped: true, reason: "the ledger ends at L-000002 but the copy of the head this computer keeps says L-000004 was written" } }),
+    });
+    renderScreen();
+    const stop = await screen.findByText(/missing work this computer saw written/);
+    const alert = stop.closest("[role=alert]");
+    expect(alert.getAttribute("data-integrity-state")).toBe("rolled-back");
+    expect(alert.textContent).toMatch(/Restore the missing entries from git or a backup/);
+  });
+
   it("switches to the mind map and the roadmap", async () => {
     mockApi({ "GET /planning": () => ok(overview()), "GET /planning/mindmap": () => ok(mindmap), "GET /planning/roadmap": () => ok(roadmap) });
     renderScreen();
@@ -221,5 +277,134 @@ describe("Deep planning screen", () => {
     expect(screen.getByText(/D-1 · L-000005/)).toBeTruthy();
     fireEvent.click(screen.getByRole("tab", { name: /Roadmap/ }));
     expect(await screen.findByText(/T-1 · L-000010/)).toBeTruthy();
+  });
+
+  describe("the person's own words", () => {
+    const settledQuestion = question({
+      q: "Q-5",
+      id: "auth.signin",
+      area: "auth",
+      text: "Who signs in, and how?",
+      status: "decided",
+      answer: "No sign-in",
+      choice: "no-login",
+      decision: "D-2",
+      source: "description",
+      phrase: "No accounts, no login",
+      options: [{ id: "no-login", label: "No sign-in", fit: "One person on their own device." }],
+      recommendation: { option: "magic-link", reason: "Magic links are simple.", confidence: 0.45, sources: [] },
+    });
+    const described = (o = {}) =>
+      overview({
+        areas: [...overview().areas, { area: "auth", title: "Users and auth", questions: [settledQuestion] }],
+        description: {
+          ruledOut: [
+            { id: "accounts", label: "No accounts or sign-in", phrase: "No accounts, no login" },
+            { id: "sync", label: "Nothing syncs to a cloud", phrase: "no cloud sync" },
+          ],
+          settled: [{ q: "Q-5", id: "auth.signin", area: "auth", areaTitle: "Users and auth", text: "Who signs in, and how?", answer: "No sign-in", phrase: "No accounts, no login", decision: "D-2" }],
+        },
+        ...o,
+      });
+
+    it("shows which questions the description settled, and why", async () => {
+      mockApi({ "GET /planning": () => ok(described()) });
+      renderScreen();
+      const panel = await screen.findByRole("region", { name: "Settled by your description" });
+      expect(within(panel).getByText("No accounts or sign-in")).toBeTruthy();
+      expect(within(panel).getByText("Nothing syncs to a cloud")).toBeTruthy();
+      expect(within(panel).getByText("Who signs in, and how?")).toBeTruthy();
+      expect(within(panel).getByText(/You wrote “No accounts, no login”/)).toBeTruthy();
+      const card = screen.getByRole("article", { name: "Who signs in, and how?" });
+      expect(within(card).getByText("From your description")).toBeTruthy();
+    });
+
+    it("reopens a settled question when the person wants to answer it", async () => {
+      const calls = mockApi({
+        "GET /planning": () => ok(described()),
+        "POST /planning/reopen": () => ok({ q: "Q-9", overview: described() }),
+      });
+      renderScreen();
+      const panel = await screen.findByRole("region", { name: "Settled by your description" });
+      fireEvent.click(within(panel).getByRole("button", { name: "Answer it myself: Who signs in, and how?" }));
+      await waitFor(() => expect(calls.some((c) => c.path === "/planning/reopen")).toBe(true));
+      expect(calls.find((c) => c.path === "/planning/reopen").body).toEqual({ q: "Q-5" });
+    });
+
+    it("says nothing about the description when it settled nothing", async () => {
+      mockApi({ "GET /planning": () => ok(overview()) });
+      renderScreen();
+      await screen.findByText("Which language runs the app?", { selector: "h4" });
+      expect(screen.queryByRole("region", { name: "Settled by your description" })).toBeNull();
+    });
+  });
+
+  describe("the person's own tasks", () => {
+    const draft = {
+      written: false,
+      answered: 2,
+      phases: [
+        { id: "foundation", title: "Foundation", tasks: [{ key: "K-component-app-shell", title: "Build App shell", phase: "foundation", owner: "owner", doneWhen: "a test proves it starts.", node: "component-app-shell", change: "feature", dependsOn: [], dependsOnTasks: [] }] },
+        { id: "core", title: "Core", tasks: [{ key: "T-4", title: "Export habits to CSV", phase: "core", owner: "owner", doneWhen: "", node: "", change: "feature", dependsOn: [], dependsOnTasks: [], refs: [], task: "T-4", entry: "L-000020", own: true }] },
+        { id: "release", title: "Release", tasks: [{ key: "K-first-release", title: "Cut the first release", phase: "release", owner: "owner", doneWhen: "npm test passes.", node: "root", change: "feature", dependsOn: ["K-component-app-shell"], dependsOnTasks: ["K-component-app-shell"] }] },
+      ],
+      dropped: [{ key: "K-risk-cost-at-scale", title: "Mitigate: Cost at scale", decision: "D-3" }],
+    };
+
+    async function openRoadmap(handlers) {
+      const calls = mockApi({ "GET /planning": () => ok(overview()), "GET /planning/roadmap": () => ok(draft), ...handlers });
+      renderScreen();
+      fireEvent.click(await screen.findByRole("tab", { name: /Roadmap/ }));
+      await screen.findByText("Build App shell");
+      return calls;
+    }
+
+    it("adds a task of the person's own to the roadmap", async () => {
+      const calls = await openRoadmap({ "POST /planning/tasks": () => ok({ task: "T-5", entry: "L-000021" }) });
+      const form = screen.getByRole("form", { name: "Add your own task" });
+      const add = within(form).getByRole("button", { name: "Add task" });
+      expect(add.disabled).toBe(true);
+      fireEvent.change(within(form).getByLabelText("Task"), { target: { value: "Weekly summary email" } });
+      fireEvent.change(within(form).getByLabelText("Done when (optional)"), { target: { value: "a test sends one summary" } });
+      fireEvent.change(within(form).getByLabelText("Phase"), { target: { value: "integrations" } });
+      fireEvent.click(add);
+      await waitFor(() => expect(calls.some((c) => c.path === "/planning/tasks")).toBe(true));
+      expect(calls.find((c) => c.path === "/planning/tasks").body).toEqual({ title: "Weekly summary email", doneWhen: "a test sends one summary", phase: "integrations" });
+      expect(await within(form).findByRole("status")).toBeTruthy();
+    });
+
+    it("shows the refusal when a task cannot be added", async () => {
+      await openRoadmap({ "POST /planning/tasks": () => refused(400, "EMPTY", "Give the task a title.") });
+      const form = screen.getByRole("form", { name: "Add your own task" });
+      fireEvent.change(within(form).getByLabelText("Task"), { target: { value: "x" } });
+      fireEvent.click(within(form).getByRole("button", { name: "Add task" }));
+      expect((await within(form).findByRole("alert")).textContent).toBe("Give the task a title.");
+    });
+
+    it("marks the person's own tasks and leaves a draft task out, or puts one back", async () => {
+      const calls = await openRoadmap({
+        "POST /planning/roadmap/drop": () => ok({ decision: "D-4", roadmap: draft }),
+        "POST /planning/roadmap/restore": () => ok({ decision: "D-5", roadmap: draft }),
+      });
+      expect(screen.getByText("Your task")).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Leave out: Export habits to CSV" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Leave out: Cut the first release" })).toBeNull();
+      fireEvent.click(screen.getByRole("button", { name: "Leave out: Build App shell" }));
+      await waitFor(() => expect(calls.some((c) => c.path === "/planning/roadmap/drop")).toBe(true));
+      expect(calls.find((c) => c.path === "/planning/roadmap/drop").body).toEqual({ key: "K-component-app-shell" });
+      const left = screen.getByRole("region", { name: "Left out of the roadmap" });
+      fireEvent.click(within(left).getByRole("button", { name: "Put back: Mitigate: Cost at scale" }));
+      await waitFor(() => expect(calls.some((c) => c.path === "/planning/roadmap/restore")).toBe(true));
+      expect(calls.find((c) => c.path === "/planning/roadmap/restore").body).toEqual({ key: "K-risk-cost-at-scale" });
+    });
+
+    it("still takes own tasks after approval, but no longer offers to leave tasks out", async () => {
+      mockApi({ "GET /planning": () => ok(overview()), "GET /planning/roadmap": () => ok({ ...draft, written: true, dropped: [] }) });
+      renderScreen();
+      fireEvent.click(await screen.findByRole("tab", { name: /Roadmap/ }));
+      await screen.findByText("Build App shell");
+      expect(screen.getByRole("form", { name: "Add your own task" })).toBeTruthy();
+      expect(screen.queryByRole("button", { name: /Leave out/ })).toBeNull();
+    });
   });
 });

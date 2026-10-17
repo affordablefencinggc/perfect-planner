@@ -219,6 +219,7 @@ function DetailCard({ data, onOpen }) {
 function ChainBadge({ verify }) {
   const advanced = useAdvanced();
   if (verify.status === "loading") return <span className="core-pill">Checking the ledger…</span>;
+  if (verify.status === "no-session") return null;
   if (verify.status === "error") return <span className="core-pill warn">Ledger status unknown</span>;
   const v = verify.data ?? {};
   if (v.ok) {

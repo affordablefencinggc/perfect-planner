@@ -15,7 +15,9 @@ import "./DeepPlanningScreen.css";
 // Deep planning: the hard questions first. Reads /api/core/planning (see
 // core/host/routes/planning.ts). Every answer is a ledger entry; "TBD" and
 // "later" are refused by the deferral catcher, and approval waits for every
-// blocking question.
+// blocking question. What the person's own idea settles ("no accounts") is
+// shown as settled by their description and can be reopened; the roadmap
+// takes tasks of their own and lets them leave draft tasks out.
 
 const VIEWS = [
   { id: "questions", label: "Questions", Icon: ListChecksIcon },
@@ -147,7 +149,7 @@ function ApprovePanel({ data, resource }) {
     try {
       const result = await resource.post("/planning/approve", { fingerprint: data.fingerprint });
       const count = Object.keys(result.tasks ?? {}).length;
-      setDone(count ? `Plan approved. ${count} roadmap tasks were added.` : "Plan approved again. The roadmap tasks were already added.");
+      setDone(count ? `Plan approved. ${count} roadmap tasks were added.` : "The changed plan is approved. The roadmap tasks were already added.");
     } catch (e) {
       setRefusal(e.message);
     } finally {
@@ -167,15 +169,9 @@ function ApprovePanel({ data, resource }) {
         {refusal && <p className="planning-refusal" role="alert">{refusal}</p>}
         {done && <p className="planning-done" role="status">{done}</p>}
       </div>
-      {data.approval.upToDate ? (
-        <button type="button" className="core-button" disabled>
-          <SealCheckIcon aria-hidden="true" /> Approved
-        </button>
-      ) : (
-        <button type="button" className="core-button primary" onClick={approve} disabled={busy}>
-          <SealCheckIcon aria-hidden="true" /> {busy ? "Approving…" : data.approval.changedSinceApproval ? "Approve changed plan" : "Approve plan"}
-        </button>
-      )}
+      <button type="button" className="core-button primary" onClick={approve} disabled={busy || (data.approval.current ?? data.approval.upToDate)}>
+        <SealCheckIcon aria-hidden="true" /> {busy ? "Approving…" : (data.approval.current ?? data.approval.upToDate) ? "Plan approved" : latest ? "Approve changed plan" : "Approve plan"}
+      </button>
     </div>
   );
 }
@@ -271,6 +267,7 @@ function QuestionPacks({ data, resource }) {
         </div>
       )}
       {note && <p className="core-muted" role="status">{note}</p>}
+      <DescriptionPanel data={data} resource={resource} />
       {data.areas.map((area) => {
         const open = area.questions.filter((q) => q.status === "open").length;
         return (
@@ -286,6 +283,58 @@ function QuestionPacks({ data, resource }) {
         );
       })}
     </div>
+  );
+}
+
+// What the person's own idea already settled ("No accounts" answers "Who
+// signs in?"), so they can see why a question was skipped and answer it
+// themselves instead.
+function DescriptionPanel({ data, resource }) {
+  const [busy, setBusy] = useState(null);
+  const [refusal, setRefusal] = useState(null);
+  const ruledOut = data.description?.ruledOut ?? [];
+  const settled = data.description?.settled ?? [];
+  if (!ruledOut.length && !settled.length) return null;
+  const reopen = async (q) => {
+    setBusy(q);
+    setRefusal(null);
+    try {
+      await resource.post("/planning/reopen", { q });
+    } catch (e) {
+      setRefusal(e.message);
+    } finally {
+      setBusy(null);
+    }
+  };
+  return (
+    <section className="core-card planning-described" aria-labelledby="planning-described-title">
+      <h3 id="planning-described-title">Settled by your description</h3>
+      <p className="core-muted">Your idea already answers these, so they were not asked. If one is wrong, answer it yourself.</p>
+      {ruledOut.length > 0 && (
+        <ul className="planning-ruled-out" aria-label="What your idea rules out">
+          {ruledOut.map((r) => (
+            <li key={r.id}><span className="core-pill">{r.label}</span> <span className="core-muted">“{r.phrase}”</span></li>
+          ))}
+        </ul>
+      )}
+      {settled.length > 0 && (
+        <ul className="planning-settled">
+          {settled.map((s) => (
+            <li key={s.q}>
+              <span className="planning-rail-area">{s.areaTitle}</span>
+              <span>{s.text}</span>
+              <strong>{s.answer}</strong>
+              <span className="core-muted">You wrote “{s.phrase}”.</span>
+              <AdvancedOnly>{s.q} · {s.id}{s.decision ? ` · ${s.decision}` : ""}</AdvancedOnly>
+              <button type="button" className="core-button" disabled={busy !== null} onClick={() => reopen(s.q)} aria-label={`Answer it myself: ${s.text}`}>
+                {busy === s.q ? "Reopening…" : "Answer it myself"}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {refusal && <p className="planning-refusal" role="alert">{refusal}</p>}
+    </section>
   );
 }
 
@@ -321,6 +370,7 @@ function QuestionCard({ question, resource }) {
         {question.blocking ? <span className="core-pill warn">Blocking</span> : <span className="core-pill">Nice to know</span>}
         {question.status === "decided" && <span className="core-pill good">Decided</span>}
         {question.status === "spiked" && <span className="core-pill warn">Spike set</span>}
+        {question.source === "description" && <span className="core-pill">From your description</span>}
         <AdvancedOnly>{question.q} · {question.id}{question.entries?.asked ? ` · asked ${question.entries.asked}` : ""}</AdvancedOnly>
       </div>
       <h4 id={`${id}-text`}>{question.text}</h4>
@@ -403,6 +453,7 @@ function MindMapView() {
   const resource = useCoreResource("/planning/mindmap");
   if (resource.status === "loading") return <CoreLoading label="Loading the mind map" />;
   if (resource.status === "error") return <CoreError error={resource.error} onRetry={resource.reload} />;
+  if (resource.status === "no-session") return null; // the screen shows the shared notice
   const { map, depth, answered } = resource.data;
   const root = map.nodes[map.root];
   return (
@@ -459,12 +510,15 @@ function RoadmapView() {
   const resource = useCoreResource("/planning/roadmap");
   if (resource.status === "loading") return <CoreLoading label="Loading the roadmap" />;
   if (resource.status === "error") return <CoreError error={resource.error} onRetry={resource.reload} />;
+  if (resource.status === "no-session") return null; // the screen shows the shared notice
   const { phases, written, answered } = resource.data;
+  const dropped = resource.data.dropped ?? [];
   return (
     <div className="planning-roadmap">
       <p className="core-muted">
-        {written ? "These tasks are on the board. They were added when the plan was approved." : "A draft. The tasks are added to the board when you approve the plan."}
+        {written ? "These tasks are on the board. They were added when the plan was approved." : "A draft. The tasks are added to the board when you approve the plan. Tasks you add yourself go on the board straight away."}
       </p>
+      <RoadmapChanges resource={resource} />
       {!answered && <p className="core-empty" role="status"><strong>No answers yet</strong>Only the release task exists until questions are answered.</p>}
       <ol className="planning-phases">
         {phases.map((phase) => (
@@ -475,13 +529,16 @@ function RoadmapView() {
             ) : (
               <ul>
                 {phase.tasks.map((t) => (
-                  <li key={t.key} className="planning-task">
-                    <strong>{t.title}</strong>
-                    <span className="core-muted">Done when {t.doneWhen}</span>
+                  <li key={t.key} className={`planning-task${t.own ? " is-own" : ""}`}>
+                    <strong>{t.title} {t.own && <span className="core-pill">Your task</span>}</strong>
+                    {t.doneWhen && <span className="core-muted">Done when {t.doneWhen}</span>}
                     <span className="core-muted">Owner: {t.owner}</span>
                     <AdvancedOnly as="span">
                       {t.task ?? t.key}{t.entry ? ` · ${t.entry}` : ""}{t.dependsOnTasks.length ? ` · after ${t.dependsOnTasks.join(", ")}` : ""}
                     </AdvancedOnly>
+                    {!written && !t.own && t.key !== FINAL_TASK_KEY && (
+                      <RoadmapAction resource={resource} path="/planning/roadmap/drop" taskKey={t.key} label={`Leave out: ${t.title}`}>Leave out</RoadmapAction>
+                    )}
                   </li>
                 ))}
               </ul>
@@ -489,6 +546,97 @@ function RoadmapView() {
           </li>
         ))}
       </ol>
+      {dropped.length > 0 && (
+        <section className="core-card planning-dropped" aria-labelledby="planning-dropped-title">
+          <h3 id="planning-dropped-title">Left out of the roadmap</h3>
+          <ul>
+            {dropped.map((d) => (
+              <li key={d.key} className="planning-task">
+                <strong>{d.title}</strong>
+                <AdvancedOnly as="span">{d.key} · {d.decision}</AdvancedOnly>
+                {!written && <RoadmapAction resource={resource} path="/planning/roadmap/restore" taskKey={d.key} label={`Put back: ${d.title}`}>Put back</RoadmapAction>}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
     </div>
+  );
+}
+
+/** Key of the release task that closes every roadmap; it cannot be left out. */
+const FINAL_TASK_KEY = "K-first-release";
+
+const PHASE_OPTIONS = [
+  { id: "foundation", label: "Foundation" },
+  { id: "core", label: "Core" },
+  { id: "integrations", label: "Integrations" },
+  { id: "hardening", label: "Hardening" },
+  { id: "release", label: "Release" },
+];
+
+function RoadmapAction({ resource, path, taskKey, label, children }) {
+  const [busy, setBusy] = useState(false);
+  const [refusal, setRefusal] = useState(null);
+  const act = async () => {
+    setBusy(true);
+    setRefusal(null);
+    try {
+      await resource.post(path, { key: taskKey });
+    } catch (e) {
+      setRefusal(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <>
+      <button type="button" className="core-button planning-task-action" disabled={busy} onClick={act} aria-label={label}>{children}</button>
+      {refusal && <span className="planning-refusal" role="alert">{refusal}</span>}
+    </>
+  );
+}
+
+// The person's own task: written straight to the ledger as a numbered task, so it is on the board now.
+function RoadmapChanges({ resource }) {
+  const [title, setTitle] = useState("");
+  const [doneWhen, setDoneWhen] = useState("");
+  const [phase, setPhase] = useState("core");
+  const [busy, setBusy] = useState(false);
+  const [refusal, setRefusal] = useState(null);
+  const [done, setDone] = useState(null);
+  const id = useId();
+  const submit = async (event) => {
+    event.preventDefault();
+    setBusy(true);
+    setRefusal(null);
+    setDone(null);
+    try {
+      const result = await resource.post("/planning/tasks", { title: title.trim(), ...(doneWhen.trim() ? { doneWhen: doneWhen.trim() } : {}), phase });
+      setDone(`“${title.trim()}” is on the task board.`);
+      setTitle("");
+      setDoneWhen("");
+      return result;
+    } catch (e) {
+      setRefusal(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <form className="core-card planning-own-task" onSubmit={submit} aria-labelledby={`${id}-title`}>
+      <h3 id={`${id}-title`}>Add your own task</h3>
+      <label htmlFor={`${id}-task`} className="planning-label">Task</label>
+      <input id={`${id}-task`} value={title} maxLength={200} onChange={(e) => setTitle(e.target.value)} placeholder="For example: export my habits to a CSV file" />
+      <label htmlFor={`${id}-done`} className="planning-label">Done when (optional)</label>
+      <input id={`${id}-done`} value={doneWhen} onChange={(e) => setDoneWhen(e.target.value)} placeholder="For example: a test exports three habits and reads them back" />
+      <label htmlFor={`${id}-phase`} className="planning-label">Phase</label>
+      <select id={`${id}-phase`} value={phase} onChange={(e) => setPhase(e.target.value)}>
+        {PHASE_OPTIONS.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
+      </select>
+      {refusal && <p className="planning-refusal" role="alert">{refusal}</p>}
+      {done && <p className="planning-done" role="status">{done}</p>}
+      <button type="submit" className="core-button primary" disabled={busy || !title.trim()}>{busy ? "Adding…" : "Add task"}</button>
+    </form>
   );
 }

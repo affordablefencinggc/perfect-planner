@@ -737,4 +737,8 @@ describe("pre-push hook honours the allowlist only from the remote default branc
       done(w);
     }
   });
+
+  it("keeps agent token files out of git", () => {
+    expect(REQUIRED_IGNORES).toContain(".perfect-planner/tokens/");
+  });
 });

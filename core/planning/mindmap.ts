@@ -24,9 +24,10 @@ export function isDeclined(answer: PlanningAnswer): boolean {
   return DECLINE_PATTERN.test(answer.text.toLowerCase()) || DECLINE_PATTERN.test(choice);
 }
 
-/** True when an offline-area answer chooses offline working. */
+/** True when an offline-area answer chooses offline working that syncs ("works offline; nothing syncs" needs no sync engine). */
 export function choosesOffline(answer: PlanningAnswer): boolean {
-  return /offline|local[- ]first/.test(answerText(answer)) && !isDeclined(answer);
+  const text = answerText(answer);
+  return /offline|local[- ]first/.test(text) && !/nothing syncs|\bno (?:cloud )?sync\b/.test(text) && !isDeclined(answer);
 }
 
 /** Platforms the answer mentions, in the fixed order web, desktop, mobile. */
@@ -62,7 +63,7 @@ const short = (text: string, max = 40): string => {
  * | auth      | component "Sign-in" > screen "Sign-in screen", data "Users and roles"; nothing when declined |
  * | money     | integration "Payments"; nothing when declined ("none", "not in v1") |
  * | ai        | integration "AI provider" > risk "AI API outage"; nothing when declined |
- * | offline   | component "Sync engine" > data "Local copy", risk "Edit conflicts"; only when offline is chosen |
+ * | offline   | component "Sync engine" > data "Local copy", risk "Edit conflicts"; only when offline is chosen and the sync engine is not "none" |
  * | security  | risk "Data exposure", data "Secrets store" |
  * | scale     | risk "Cost at scale" |
  * | testing   | component "Test suite" > data "Test fixtures"; component "Release pipeline" > data "Build artifacts" |
@@ -200,10 +201,12 @@ export function buildMindMap(idea: string, answers: PlanningAnswer[]): MindMap {
     for (const child of spec.children ?? []) place(child, id, from, fromRepo);
   };
 
+  // "No sync engine" settles the offline area: nothing syncs, so no Sync engine to build.
+  const noSync = answers.some((a) => a.questionId === "offline.sync-engine" && !a.spike && isDeclined(a));
   for (const answer of sortAnswers(answers)) {
     // A spike is an open question, not a decision: it adds only its risk node,
     // never the area's components ("Framework: Spike T-1 due ..." as a task).
-    if (!answer.spike) for (const spec of AREA_RULES[answer.area](answer)) place(spec, "root", answer.questionId, answer.fromRepo === true);
+    if (!answer.spike && !(noSync && answer.area === "offline")) for (const spec of AREA_RULES[answer.area](answer)) place(spec, "root", answer.questionId, answer.fromRepo === true);
     if (answer.spike) {
       place(
         {

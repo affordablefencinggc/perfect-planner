@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { asPersonRequest } from "../keys";
 import { hostCall, startTestHost } from "../testing";
 
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0, 0, 0]);
@@ -28,12 +29,32 @@ describe("people routes", () => {
     expect(res.body.result.entry).toMatch(/^L-/);
     expect(res.body.result.me).toBe("owner");
     expect(res.body.result.firstRun).toBe(false);
-    expect(res.body.result.view.owner.person).toBe("owner");
+    expect(res.body.result.view.owner).toMatchObject({ person: "owner", name: "Dana Lee" });
+  });
+
+  it("refuses a first owner who is not the project's pinned owner", async () => {
+    const res = await call("POST", "/people/members", { person: "dana", name: "Dana Lee", role: "owner" });
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe("OWNER_IS_PINNED");
+    expect((await call("GET", "/people")).body.result.view.members).toEqual([]);
+  });
+
+  it("passes the pinned owner to the People, MVP and Decisions routes", async () => {
+    expect((await call("POST", "/people/claim", { name: "Solo" })).status).toBe(200);
+    const people = await call("GET", "/people");
+    expect(people.body.result.view.owner).toMatchObject({ person: "owner", name: "Solo" });
+    // Each route rebuilds the roster from the ledger with the pinned owner; without it the owner has no name.
+    expect((await call("GET", "/mvp")).status).toBe(200);
+    expect((await call("POST", "/decisions/ask", { question: "Which database should we use?", options: ["SQLite", "Postgres"] })).status).toBe(200);
+    const decisions = await call("GET", "/decisions");
+    expect(decisions.status).toBe(200);
+    expect(decisions.body.result.open[0].askedBy).toMatchObject({ kind: "person", id: "owner", name: "Solo" });
   });
 
   it("names the person who started the project as the only one who can become its owner", async () => {
-    expect((await call("POST", "/planning/start", { idea: "A notes app that syncs" })).status).toBe(200); // makes the person's key
-    ctx.host.project("p1").ledger.append({ actor: { kind: "person", id: "owner" }, type: "task.created", subject: "T-1", summary: "Worked on before adding people" });
+    expect((await call("POST", "/planning/start", { idea: "A notes app that syncs" })).status).toBe(200);
+    // Written as the person's own request would be (only that may make and use their key).
+    asPersonRequest(() => ctx.host.project("p1").ledger.append({ actor: { kind: "person", id: "owner" }, type: "task.created", subject: "T-1", summary: "Worked on before adding people" }));
     const before = await call("GET", "/people");
     expect(before.body.result).toMatchObject({ firstRun: true, starter: "owner" });
     const res = await call("POST", "/people/members", { person: "owner", name: "Riley Owner", role: "owner" });
@@ -56,7 +77,9 @@ describe("people routes", () => {
       expect(view).toMatchObject({ firstRun: false, ownerMissing: true });
       expect(view).not.toHaveProperty("starter");
       const add = await hostCall(unowned.base, "POST", "/people/members?project=p1", { person: "owner", name: "Riley", role: "owner" });
-      expect(add.status).toBe(422);
+      // The host refuses every person write without a usable owner, before the ledger is asked.
+      expect(add.status).toBe(409);
+      expect(add.body.code).toBe("NO_OWNER");
     } finally {
       await unowned.stop();
     }

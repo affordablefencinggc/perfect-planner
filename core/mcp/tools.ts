@@ -26,6 +26,13 @@ export const TOOL_INPUTS = {
   answer: z.object({ question: z.string().regex(/^Q-\d+$/, "Use a question number such as Q-3."), text: words(2000) }),
   lookup: z.object({ ref: words(80) }),
   release_task: z.object({ task: taskId, reason: words(500), blocked: z.boolean().optional() }),
+  propose_test: z.object({
+    task: taskId,
+    /** One line that runs the test from the worktree root, e.g. "node --test tests/invoice.test.mjs". */
+    command: words(500),
+    /** The test file(s) the command runs, relative to the worktree root. Their content is pinned when the person approves. */
+    files: z.array(words(300)).min(1, "Name the test file(s) so they can be pinned.").max(20),
+  }),
 } as const;
 
 export type ToolName = keyof typeof TOOL_INPUTS;
@@ -48,6 +55,7 @@ export const TOOL_INFO: Record<ToolName, ToolInfo> = {
   check_inbox: { title: "Check inbox", caller: "any", readOnly: true, description: "Main chat: the digest of open questions from every worker, blocking first. Worker: answers to your questions, and whether you are paused." },
   answer: { title: "Answer a question", caller: "main", readOnly: false, description: "Main chat only: answer a question by its Q number and send the answer to the worker that asked. Your answer is recorded as information; only the person's own answer in Perfect Planner becomes a decision (D number) that answers the same question later." },
   lookup: { title: "Look up a reference", caller: "any", readOnly: true, description: "Resolve any reference (§3.1, P-2 §3.1, T-14, Q-3, D-3, R-1, L-000231) to its text, its history and everything that cites it." },
+  propose_test: { title: "Propose the done-when test", caller: "worker", readOnly: false, description: "Test first: write a test in your worktree that fails today and passes once the task is done, then propose its command and files here. The person approves it in Perfect Planner, the app runs it to confirm it fails, and only then can you claim_task. Proposing again replaces the earlier test and any approval." },
   release_task: { title: "Release a task", caller: "worker", readOnly: false, description: "Give your task back, with a reason. Set blocked when you cannot continue; otherwise it returns to the board as open. Your token stops working for it." },
 };
 

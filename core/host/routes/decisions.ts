@@ -16,13 +16,13 @@ import { createJevTransport, createOsKeyProvider, JevReviewer, JEV_MODEL, type J
 import { clausesAt, sortedClauses } from "../../lookup/index";
 import { appendNumbered } from "../../numbering/index";
 import { formatCents, monthOf, monthSpend } from "../../release/budget";
-import { replayRoster, type Roster } from "../../people/index";
+import type { Roster } from "../../people/index";
 import { PlanningError, PlanningSession, planningMeta } from "../../planning/index";
 import { questionKey } from "../../relay/index";
 import type { CoreProject } from "../project";
 import { fingerprintOf, requireFingerprint } from "../fingerprint";
 import { HttpError, type Router } from "../router";
-import { localPerson } from "./people";
+import { localPerson, rosterOf } from "./people";
 
 // ---------- Jev connection (status only; the key stays with the provider) ----------
 
@@ -56,6 +56,14 @@ export interface JevConnection {
 const statusCache = new Map<string, { at: number; value: JevConnection }>();
 const STATUS_TTL = 60_000;
 
+/**
+ * Jev's test review is required once Jev is set up (a key saved in Settings), and not before, so the
+ * loop runs without Jev. Called on every request; the key store's answer is cached for a minute.
+ */
+export async function syncJevPolicy(project: CoreProject): Promise<void> {
+  project.policy.requireJevTestReview = (await jevConnection(project)).connected;
+}
+
 async function jevConnection(project: CoreProject): Promise<JevConnection> {
   const cached = statusCache.get(project.key);
   if (cached && Date.now() - cached.at < STATUS_TTL) return cached.value;
@@ -63,8 +71,8 @@ async function jevConnection(project: CoreProject): Promise<JevConnection> {
   try {
     const status = await jevWiring().keys.status();
     value = status.stored
-      ? { connected: true, model: JEV_MODEL, note: "Jev is connected. New questions are sent to Jev when the plan may settle them." }
-      : { connected: false, model: null, note: status.available ? "Jev is not connected: no TypeSafe key is saved in Settings. Recommendations shown are from the offline reviewer." : "Jev is not connected: this computer has no secure key store Perfect Planner can use. Recommendations shown are from the offline reviewer." };
+      ? { connected: true, model: JEV_MODEL, note: "Jev is connected. New questions are sent to Jev when the plan may settle them, and Jev must review each task's test before work on it starts." }
+      : { connected: false, model: null, note: status.available ? "Jev is not connected: no TypeSafe key is saved in Settings. Recommendations shown are from the offline reviewer. Once the key is saved, Jev must review each task's test before work on it starts." : "Jev is not connected: this computer has no secure key store Perfect Planner can use. Recommendations shown are from the offline reviewer." };
   } catch {
     value = { connected: false, model: null, note: "Jev is not connected: the key store did not answer. Recommendations shown are from the offline reviewer." };
   }
@@ -155,11 +163,27 @@ export function entryCents(entry: LedgerEntry): number | null {
   return null;
 }
 
-/** Model spend this month: budget-style costs plus Jev's own review costs. */
+/** Model spend this month: budget-style costs plus Jev's own review costs. Only signed (authoritative) entries count. */
 export function spendThisMonth(entries: readonly LedgerEntry[], month: string): number {
+  const signed = entries.filter((e) => isAuthoritative(e));
   let jevDollars = 0;
-  for (const e of entries) if (e.at.slice(0, 7) === month && typeof e.data?.cost === "number") jevDollars += e.data.cost;
-  return Math.round(monthSpend(entries, month).modelCents + jevDollars * 100);
+  for (const e of signed) if (e.at.slice(0, 7) === month && typeof e.data?.cost === "number") jevDollars += e.data.cost;
+  return Math.round(monthSpend(signed, month).modelCents + jevDollars * 100);
+}
+
+/** Plan clauses from signed entries only: an unsigned clause line cannot steer a recommendation. */
+const signedClauses = (entries: readonly LedgerEntry[]) => clausesAt(entries.filter((e) => isAuthoritative(e)));
+
+/**
+ * Jev, when Jev produced this verdict. A Jev verdict counts only when Perfect Planner wrote
+ * and signed it (core/jev/reviewer) naming Jev in data.reviewer; an entry that merely
+ * names Jev as its actor, or an unsigned line written into the ledger file, never does.
+ */
+function jevReviewer(e: LedgerEntry): Actor | undefined {
+  if (e.type !== "review.verdict" || e.actor.kind !== "system" || !isAuthoritative(e)) return undefined;
+  const reviewer = e.data?.reviewer as Actor | string | undefined;
+  if (reviewer === "jev") return { kind: "jev", id: "jev" };
+  return reviewer && typeof reviewer === "object" && reviewer.kind === "jev" ? reviewer : undefined;
 }
 
 /** The question and recommendation as the person sees them. */
@@ -236,6 +260,7 @@ function askedQuestions(entries: readonly LedgerEntry[]): Map<string, Asked> {
       q.answered = e;
       if (typeof d.decision === "string") q.decision = decisions.get(d.decision);
     } else if (e.type === "review.verdict" && d.review === "question") {
+      if (!jevReviewer(e)) continue;
       for (const r of e.refs) {
         const q = out.get(r);
         if (q) q.jevVerdict = e;
@@ -295,7 +320,7 @@ export function offlineRecommendation(entries: readonly LedgerEntry[], q: Pick<A
   if (q.options.length === 0) return "This question has no options to choose between, so it needs your answer in your own words.";
   let best: { sim: number; e: LedgerEntry; option: { id: string; label: string } } | null = null;
   for (const e of entries) {
-    if (e.type !== "decision.made" || typeof e.data?.questionText !== "string" || e.data.question === q.q) continue;
+    if (e.type !== "decision.made" || !isAuthoritative(e) || typeof e.data?.questionText !== "string" || e.data.question === q.q) continue;
     const option = matchOption(q.options, String(e.data.answer ?? e.summary));
     if (!option) continue;
     const sim = similarity(q.question, e.data.questionText);
@@ -316,7 +341,7 @@ export function offlineRecommendation(entries: readonly LedgerEntry[], q: Pick<A
       cost: null,
     };
   }
-  const clauses = sortedClauses(clausesAt(entries)).filter((c) => c.status === "active");
+  const clauses = sortedClauses(signedClauses(entries)).filter((c) => c.status === "active");
   const named = q.options
     .map((o) => ({ o, hits: norm(o.label).length >= 3 ? clauses.filter((c) => ` ${norm(c.text)} `.includes(` ${norm(o.label)} `)) : [] }))
     .filter((x) => x.hits.length > 0);
@@ -423,7 +448,9 @@ function reviewCard(e: LedgerEntry, roster: Roster): DecisionCard {
   const notes = [d.notes, d.gaps].flatMap((list) => (Array.isArray(list) ? list : [])).map((n) => (typeof n === "string" ? n : typeof (n as { message?: unknown })?.message === "string" ? String((n as { message: string }).message) : JSON.stringify(n)));
   const cents = entryCents(e);
   const model = typeof d.jevModel === "string" ? d.jevModel : e.actor.model ?? null;
-  const by = who(e.actor, roster);
+  // Jev's counted verdicts are written (signed) by Perfect Planner, naming Jev in data.reviewer.
+  const jevActor = jevReviewer(e);
+  const by = who(jevActor ?? e.actor, roster);
   return {
     id: e.n,
     kind: "review",
@@ -437,7 +464,7 @@ function reviewCard(e: LedgerEntry, roster: Roster): DecisionCard {
       option: VERDICT_WORDS[verdict] ?? (verdict || "Recorded"),
       reasons: notes.length ? notes : e.reason ? [e.reason] : [],
       confidence: clamp01(d.confidence),
-      source: e.actor.kind === "jev" ? "jev" : "offline",
+      source: jevActor ? "jev" : "offline",
       producedBy: by.name,
       model,
       cost: cents === null ? null : money(cents),
@@ -452,7 +479,7 @@ function reviewCard(e: LedgerEntry, roster: Roster): DecisionCard {
 
 export async function buildDecisionsView(project: CoreProject, now = new Date()): Promise<DecisionsView> {
   const entries = project.entries();
-  const roster = replayRoster(entries, project.ledger.owner);
+  const roster = rosterOf(project);
   const questions = askedQuestions(entries);
   const answeredDecisions = new Set<string>();
   const open: DecisionCard[] = [];
@@ -463,6 +490,8 @@ export async function buildDecisionsView(project: CoreProject, now = new Date())
     (card.status === "open" ? open : decided).push(card);
   }
   for (const e of entries) {
+    // Only entries the ledger verified as written by a person or the system become cards.
+    if (!isAuthoritative(e)) continue;
     if (e.type === "decision.made" && !answeredDecisions.has(e.subject) && typeof e.data?.question !== "string") decided.push(decisionCard(e, roster));
     else if (e.type === "review.verdict" && e.data?.review !== "question") decided.push(reviewCard(e, roster));
   }
@@ -500,7 +529,7 @@ function openQuestion(project: CoreProject, body: unknown): Asked {
 /** The card as it is now must be the card the person approved. */
 function checkFingerprint(project: CoreProject, asked: Asked, body: unknown): void {
   const entries = project.entries();
-  const card = questionCard(entries, replayRoster(entries, project.ledger.owner), asked);
+  const card = questionCard(entries, rosterOf(project), asked);
   requireFingerprint(body, card.fingerprint ?? "", "question and recommendation");
 }
 
@@ -568,7 +597,7 @@ function askJev(project: CoreProject, q: string): void {
     if (!asked || asked.status !== "open" || asked.options.length < 2) return;
     const w = jevWiring();
     const reviewer = new JevReviewer({ ledger: project.ledger, transport: w.transport ?? createJevTransport({ keys: w.keys }) });
-    reviewer.planClauses = () => sortedClauses(clausesAt(project.entries())).filter((c) => c.status === "active").map((c) => ({ ref: `§${c.clause}`, text: c.text }));
+    reviewer.planClauses = () => sortedClauses(signedClauses(project.entries())).filter((c) => c.status === "active").map((c) => ({ ref: `§${c.clause}`, text: c.text }));
     // Jev's view is recorded as a review.verdict and shown as the recommendation; the person still decides.
     await reviewer.tryAnswer(asked);
   })().catch(() => undefined);

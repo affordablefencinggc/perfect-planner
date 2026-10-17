@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 compile_error!("Release builds require embedded assets. Use npm run tauri:build -- --no-bundle, not plain cargo build --release.");
 
 mod collision_authority;
+mod core_launch;
 mod jev_keychain;
 mod native_mcp;
 #[cfg(windows)] mod native_agent_mcp;
@@ -112,6 +113,7 @@ fn runtime_snapshot(
 pub fn run() {
     tauri::Builder::default()
         .manage(native_agent_commands::AgentBrokers::default())
+        .manage(core_launch::CoreLaunch::from_env())
         .invoke_handler(tauri::generate_handler![
             runtime_snapshot,
             native_agent_commands::inspect_agent_sessions,
@@ -144,6 +146,7 @@ pub fn run() {
             collision_authority::collision_authority_inspect,
             collision_authority::collision_authority_approve,
             collision_authority::collision_authority_commit,
+            core_launch::take_core_launch,
             jev_keychain::jev_key_status,
             jev_keychain::jev_key_save,
             jev_keychain::jev_key_clear,

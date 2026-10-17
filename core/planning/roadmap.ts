@@ -1,7 +1,7 @@
 // Roadmap: turns a mind map into phased tasks, and writes them to the ledger
 // as numbered task.created entries.
 
-import type { Actor, Ledger } from "../ledger/index";
+import { isAuthoritative, type Actor, type Ledger, type LedgerEntry } from "../ledger/index";
 import { appendNumbered } from "../numbering/index";
 import { nodeArea } from "./mindmap";
 import type { MindMap, MindNode, PhaseId, Roadmap, RoadmapPhase, RoadmapTask } from "./types";
@@ -206,4 +206,73 @@ export function writeRoadmap(ledger: Ledger, actor: Actor, roadmap: Roadmap): Re
     numbers[task.key] = entry.subject;
   }
   return numbers;
+}
+
+// ---------- The person's own changes to the roadmap ----------
+
+/** `data.source` on a task.created the person added by hand. */
+export const OWN_TASK_SOURCE = "person";
+
+/** A task the person added themselves, as replayed from the ledger. */
+export interface OwnTask {
+  task: string;
+  entry: string;
+  title: string;
+  phase: PhaseId;
+  owner: string;
+  doneWhen?: string;
+  refs: string[];
+  at: string;
+}
+
+const PHASE_IDS: ReadonlySet<string> = new Set(PHASES.map((p) => p.id));
+
+export function isPhase(value: unknown): value is PhaseId {
+  return typeof value === "string" && PHASE_IDS.has(value);
+}
+
+/** Tasks the person added by hand (task.created with source "person"), in ledger order. */
+export function ownTasks(entries: readonly LedgerEntry[]): OwnTask[] {
+  return entries
+    .filter((e) => e.type === "task.created" && e.data?.source === OWN_TASK_SOURCE && isAuthoritative(e, { personOnly: true }))
+    .map((e) => ({
+      task: e.subject,
+      entry: e.n,
+      title: typeof e.data?.title === "string" ? e.data.title : e.summary,
+      phase: isPhase(e.data?.phase) ? e.data.phase : "core",
+      owner: typeof e.data?.owner === "string" ? e.data.owner : e.actor.id,
+      ...(typeof e.data?.doneWhen === "string" && e.data.doneWhen ? { doneWhen: e.data.doneWhen } : {}),
+      refs: [...e.refs],
+      at: e.at,
+    }));
+}
+
+/**
+ * Draft roadmap tasks the person left out, by task key, replayed from their
+ * decision.made entries (data.roadmap.drop / data.roadmap.restore). Only a
+ * person's decision counts.
+ */
+export function droppedRoadmapTasks(entries: readonly LedgerEntry[]): Map<string, { key: string; title: string; decision: string }> {
+  const dropped = new Map<string, { key: string; title: string; decision: string }>();
+  for (const e of entries) {
+    if (e.type !== "decision.made" || !isAuthoritative(e, { personOnly: true })) continue;
+    const change = e.data?.roadmap as { drop?: unknown; restore?: unknown; title?: unknown } | undefined;
+    if (!change || typeof change !== "object") continue;
+    if (typeof change.drop === "string") dropped.set(change.drop, { key: change.drop, title: typeof change.title === "string" ? change.title : change.drop, decision: e.subject });
+    if (typeof change.restore === "string") dropped.delete(change.restore);
+  }
+  return dropped;
+}
+
+/** The roadmap without the given task keys; dependencies on them go too. */
+export function withoutTasks(roadmap: Roadmap, keys: Iterable<string>): Roadmap {
+  const gone = new Set(keys);
+  if (gone.size === 0) return roadmap;
+  return {
+    ...roadmap,
+    phases: roadmap.phases.map((p) => ({
+      ...p,
+      tasks: p.tasks.filter((t) => !gone.has(t.key)).map((t) => ({ ...t, dependsOn: t.dependsOn.filter((d) => !gone.has(d)) })),
+    })),
+  };
 }

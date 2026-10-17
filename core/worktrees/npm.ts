@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { findExecutable, gitExecutable, isWithin, NO_CWD_SEARCH_ENV } from "../exec/index";
+import { findExecutable, gitExecutable, isWithin, NO_CWD_SEARCH_ENV, registeredRoots } from "../exec/index";
 
 export class NpmNotFoundError extends Error {}
 
@@ -22,7 +22,7 @@ const real = (file: string): string | undefined => {
  * gets to search PATH or the current folder.
  */
 export function npmCliPath(cwd: string, protect: readonly string[] = [], env: NodeJS.ProcessEnv = process.env): string {
-  const roots = [cwd, ...protect].flatMap((root) => [path.resolve(root), real(root)]).filter((root): root is string => !!root);
+  const roots = [cwd, ...protect, ...registeredRoots()].flatMap((root) => [path.resolve(root), real(root)]).filter((root): root is string => !!root);
   const safe = (file: string | undefined): string | undefined => {
     const resolved = file ? real(file) : undefined;
     if (!file || !resolved || path.basename(resolved) !== "npm-cli.js") return undefined;

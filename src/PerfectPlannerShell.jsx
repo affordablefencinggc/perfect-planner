@@ -70,6 +70,7 @@ import { ViewModeToggle } from "./components/ViewModeToggle.jsx";
 import { useCoreSummary, coreRosterLabel, coreAgentLabel } from "./core-screens/useCoreSummary.js";
 import { CORE_WORKSPACES, CoreWorkspace, coreWorkspaceContext, coreWorkspaceLabels, isCoreWorkspace } from "./core-screens/coreWorkspaces.jsx";
 import { LedgerSearchBox } from "./core-screens/LedgerSearchBox.jsx";
+import { useCorePlanApproval } from "./core-screens/coreApi.js";
 import { ViewModeContext, useViewModeState } from "./project/viewMode.js";
 import { AppSettingsContext, TEXT_SIZES, useAppSettings, useAppSettingsState } from "./settings/appSettings.js";
 import { GearSixIcon } from "@phosphor-icons/react";
@@ -160,7 +161,7 @@ const stageNavigation = [
     number: "02",
     workspaces: ["plan", "collision", "allocation", "decisions", "people"],
   },
-  { id: "build", label: "Build", number: "03", workspaces: ["build"] },
+  { id: "build", label: "Build", number: "03", workspaces: ["build", "tasks"] },
   {
     id: "prove",
     label: "Prove",
@@ -2858,6 +2859,8 @@ function ProjectHomeWorkspace({
   const workRecords = useProjectWorkRecords(demoMode ? null : activeProject?.projectId);
   usePlanTaskDriftWatch(activeProject, workRecords);
   const [homeActionError, setHomeActionError] = useState("");
+  // With no imported app, the core loop still runs on the local ledger ("default"): Home says so.
+  const corePlan = useCorePlanApproval(activeProject ? null : "default");
   const homeModel = useMemo(
     () => deriveProjectHomeModel(activeProject, workRecords),
     [activeProject, workRecords],
@@ -2865,7 +2868,7 @@ function ProjectHomeWorkspace({
   const runHomeNextAction = (nextAction) => {
     setHomeActionError("");
     if (nextAction.id !== "confirm-project-ready") return onWorkspace(nextAction.workspace);
-    try { confirmProjectReady(activeProject.projectId); } catch (error) { setHomeActionError(error?.message ?? "The confirmation could not be saved."); }
+    try { confirmProjectReady(activeProject.projectId, { records: workRecords }); } catch (error) { setHomeActionError(error?.message ?? "The confirmation could not be saved."); }
   };
   if (!demoMode) {
     const { binding, blockers, mode, nextAction, project, stage, summary } =
@@ -2919,7 +2922,8 @@ function ProjectHomeWorkspace({
         </section>
       );
     }
-    if (!hasProject) {
+    // Without the summary, an approved core plan still shows below instead of the folder prompt.
+    if (!hasProject && !corePlan?.approved) {
       return (
         <section
           className="workspace project-home-workspace project-home-truth project-home-empty"
@@ -2982,12 +2986,19 @@ function ProjectHomeWorkspace({
             <span className="eyebrow">
               {hasProject
                 ? <><span className="advanced-only">{`${project.projectId} · scan ${project.generation} · `}</span>{mode}</>
-                : "No project selected · honest empty state"}
+                : corePlan?.approved ? "Core loop · app folder not imported" : "No project selected · honest empty state"}
             </span>
             <h1>
-              {hasProject ? project.name : "Bring in a real app to begin"}
+              {hasProject ? project.name : corePlan?.approved ? "Your plan is approved and work is under way" : "Bring in a real app to begin"}
             </h1>
             <p>{summary.message}</p>
+            {!hasProject && corePlan?.approved && (
+              <p className="project-home-core-loop" data-home-core-plan={corePlan.latest?.plan ?? ""}>
+                Plan {corePlan.latest?.plan} approved by {corePlan.latest?.by}
+                {corePlan.tasks.length ? `, ${corePlan.tasks.length} task${corePlan.tasks.length === 1 ? "" : "s"} on the board` : ""}.{" "}
+                <button type="button" className="soft-button" onClick={() => onWorkspace("tasks")}>Open Tasks</button>
+              </p>
+            )}
           </div>
           <div
             className={`home-verdict ${verdictClass}`}

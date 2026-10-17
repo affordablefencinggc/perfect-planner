@@ -12,6 +12,7 @@ export const WORK_RECORD_SECTIONS = Object.freeze([
   "proof",           // proof items attached per task (Evidence)
   "review",          // integrity sign-off per plan revision (Integrity)
   "build",           // per-task build status (Build)
+  "planReady",       // "project is ready" confirmed against a core plan approval (P-n)
 ]);
 
 const PREFIX = "perfect-planner.work-records.v1:";

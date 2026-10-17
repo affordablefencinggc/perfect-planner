@@ -9,14 +9,15 @@ const CONNECT = {
   connection: "C-1",
   person: "owner",
   bridgeUrl: "http://127.0.0.1:5555",
-  token: TOKEN,
+  tokenFile: "/data/.perfect-planner/tokens/connect-C-1.token",
   agentPath: "/repo/dist/core-host/agent.mjs",
   agentBuilt: true,
-  claudeCode: `claude mcp add perfect-planner-core --env PP_BRIDGE_URL=http://127.0.0.1:5555 --env PP_AGENT_TOKEN=${TOKEN} -- node "/repo/dist/core-host/agent.mjs"`,
-  json: JSON.stringify({ mcpServers: { "perfect-planner-core": { command: "node", args: ["/repo/dist/core-host/agent.mjs"], env: { PP_BRIDGE_URL: "http://127.0.0.1:5555", PP_AGENT_TOKEN: TOKEN } } } }, null, 2),
+  claudeCode: "node '/repo/dist/core-host/connect.mjs' http://127.0.0.1:5555 '/data/.perfect-planner/tokens/connect-C-1.token'",
+  json: JSON.stringify({ mcpServers: { "perfect-planner-core": { command: "node", args: ["/repo/dist/core-host/agent.mjs"], env: { PP_BRIDGE_URL: "http://127.0.0.1:5555", PP_AGENT_TOKEN_FILE: "/data/.perfect-planner/tokens/connect-C-1.token" } } } }, null, 2),
 };
 const MAIN = { id: "claude-code-ab12cd", name: "Claude Code", model: "claude-opus", role: "main", person: "owner", connection: "C-1", connectedAt: "2026-10-09T10:00:00Z" };
-const list = (agents = [], connections = []) => ({ bridge: { enabled: true, url: "http://127.0.0.1:5555" }, agents, connections });
+const SKILL_LINE = 'node "/repo/dist/core-host/connect.mjs" --skill-only';
+const list = (agents = [], connections = []) => ({ bridge: { enabled: true, url: "http://127.0.0.1:5555" }, skillLine: SKILL_LINE, agents, connections });
 
 const ok = (result) => ({ ok: true, status: 200, json: async () => ({ ok: true, result }) });
 
@@ -47,6 +48,7 @@ describe("CoreAgentConnect", () => {
     routeFetch({ "GET /agents": () => new Promise((resolve) => { release = () => resolve(ok(list())); }) });
     renderWith();
     expect(screen.getByRole("status", { name: "Loading connected agents" })).toBeTruthy();
+    await waitFor(() => expect(release).toBeTypeOf("function")); // the read starts after the window's launch claim
     await act(async () => release());
     expect(await screen.findByText("No agents are connected yet.")).toBeTruthy();
     expect(screen.getByRole("button", { name: /Connect agent/ })).toBeTruthy();
@@ -130,5 +132,15 @@ describe("CoreAgentConnect", () => {
     renderWith();
     fireEvent.click(await screen.findByRole("button", { name: /Connect agent/ }));
     expect(await screen.findByText("Agent connections are turned off for this app.")).toBeTruthy();
+  });
+
+  test("offers the skill on its own, with no key in it", async () => {
+    routeFetch({ "GET /agents": () => ok(list()) });
+    renderWith();
+    const summary = await screen.findByText("Install the skill only");
+    fireEvent.click(summary);
+    const line = screen.getByLabelText("Skill install line");
+    expect(line.textContent).toBe(SKILL_LINE);
+    expect(line.textContent).not.toMatch(/pp_[cw]_/);
   });
 });

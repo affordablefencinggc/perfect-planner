@@ -162,5 +162,6 @@ export function profileRepo(
   const base = profileIdea(idea, opts);
   const signals = Object.keys(SIGNALS).filter((s) => base.signals.includes(s) || stack.signals.includes(s));
   const known = Object.fromEntries(stack.facts.map((f) => [f.id, f.text]));
-  return { ...base, signals, known: { ...base.known, ...known } };
+  // The person's own description wins over what the code shows.
+  return { ...base, signals, known: { ...known, ...base.known } };
 }

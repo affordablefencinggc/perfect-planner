@@ -9,6 +9,7 @@ import { LedgerError, type Actor, type EntryDraft, type Ledger, type LedgerEntry
 import { Relay, trustedEntry } from "../relay/relay";
 import { attemptLabel, foldBoard, type TaskView } from "./board";
 import { lookup } from "../lookup/index";
+import { TestGate } from "../gate/index";
 import { TokenStore, tokenId, type Grant } from "./tokens";
 import { TOOL_INFO, TOOL_INPUTS, type ToolInput, type ToolName } from "./tools";
 import { looksSecret, redactSecrets } from "../jev/redact";
@@ -43,12 +44,15 @@ export interface AgentServiceOptions {
   ledger: Ledger;
   tokens?: TokenStore;
   relay?: Relay;
+  /** The test gate propose_test defines tests through (default: one over the same ledger). */
+  gate?: TestGate;
 }
 
 export class AgentService {
   readonly ledger: Ledger;
   readonly tokens: TokenStore;
   readonly relay: Relay;
+  readonly gate: TestGate;
   private readonly agents = new Map<string, AgentRecord & { grant: Grant; token: string }>();
   /** person -> agent id of their main chat */
   private readonly mains = new Map<string, string>();
@@ -57,6 +61,7 @@ export class AgentService {
     this.ledger = options.ledger;
     this.tokens = options.tokens ?? new TokenStore();
     this.relay = options.relay ?? new Relay({ ledger: options.ledger });
+    this.gate = options.gate ?? new TestGate({ ledger: options.ledger });
   }
 
   /** Validate and run one tool call. Every transport goes through here. */
@@ -106,6 +111,8 @@ export class AgentService {
         return lookup(this.ledger.entries().filter(trustedEntry), (args as ToolInput<"lookup">).ref);
       case "release_task":
         return this.release(agent, args as ToolInput<"release_task">);
+      case "propose_test":
+        return this.proposeTest(agent, args as ToolInput<"propose_test">);
       default:
         throw new ToolError("NOT_FOUND", `There is no tool called ${name}.`);
     }
@@ -238,6 +245,32 @@ export class AgentService {
       if (error instanceof LedgerError) throw error;
       throw new ToolError("CONFLICT", (error as Error).message);
     }
+  }
+
+  /**
+   * Test first (spec 5.1): the worker proposes the test before claiming. It is only a proposal: the
+   * gate runs nothing an agent wrote until a person approves it, and the claim stays refused until
+   * the approved test has failed on the current code.
+   */
+  private proposeTest(agent: AgentRecord, { task, command, files }: ToolInput<"propose_test">) {
+    this.notPaused(agent);
+    const view = this.ownTask(agent, task, false);
+    if (view.status === "done") throw new ToolError("CONFLICT", `${task} is already done.`);
+    if (view.owner && view.owner !== agent.id) throw new ToolError("CONFLICT", `${task} is held by ${view.owner}.`);
+    let defined;
+    try {
+      defined = this.gate.define(attemptLabel(view), command, this.actor(agent), view.clauses, { files });
+    } catch (error) {
+      if (error instanceof LedgerError) throw error;
+      throw new ToolError("INVALID", (error as Error).message);
+    }
+    if (!defined.ok) throw new ToolError("CONFLICT", defined.reason);
+    return {
+      task: attemptLabel(view),
+      entry: defined.entry.n,
+      status: "waiting for approval",
+      note: `${agent.person} approves the test in Perfect Planner; it is then run to confirm it fails. Call list_tasks (testApproved) or try claim_task after that.`,
+    };
   }
 
   private release(agent: AgentRecord, { task, reason, blocked }: ToolInput<"release_task">) {

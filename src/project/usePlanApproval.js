@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { inspectTaskDraft, taskDraftBinding } from "./taskDraftLedger.js";
 import { createTaskDraftStore } from "./taskDraftStore.js";
-import { digestPlanTasks, notePlanTaskDrift, recordPlanApproval, validPlanApproval } from "./planApproval.js";
+import { activePlanTasks, digestPlanTasks, notePlanTaskDrift, recordPlanApproval, validPlanApproval } from "./planApproval.js";
+import { approveCorePlan, CoreApiError, coreProjectKey } from "../core-screens/coreApi.js";
 
 let sharedStore;
 const defaultStore = () => (sharedStore ??= createTaskDraftStore());
@@ -14,6 +15,21 @@ export const PLAN_BLOCKING_FINDINGS = Object.freeze(["dependency-cycle", "archiv
 export function planBlockingFindings(ledger) {
   if (!ledger) return [];
   return inspectTaskDraft(ledger).findings.filter((finding) => PLAN_BLOCKING_FINDINGS.includes(finding.kind));
+}
+
+/**
+ * The Plan page's approve writes the same person-signed plan.approved that Deep
+ * planning writes, so the core ledger stays the one plan approval. A refusal
+ * (e.g. a blocking planning question is open) stops the approval; only when the
+ * local service is not running at all does the approval stay on this device.
+ */
+async function approveInCoreLedger(projectId, tasks) {
+  try {
+    await approveCorePlan(coreProjectKey(projectId), activePlanTasks(tasks).map((task) => ({ id: task.id, title: String(task.title ?? "") })));
+  } catch (error) {
+    const unreachable = !(error instanceof CoreApiError) || ["OFFLINE", "BAD_RESPONSE"].includes(error.code) || error.status === 404 || error.status >= 500;
+    if (!unreachable) throw error;
+  }
 }
 
 /**
@@ -65,6 +81,7 @@ export function usePlanApproval(project, records, { store: providedStore, watch 
     const ledger = await store.read(binding);
     const blocking = planBlockingFindings(ledger);
     if (blocking.length) throw new Error(`The plan cannot be approved yet: ${blocking.map((finding) => finding.detail).join(" ")} Fix the dependencies in the Ledger first. Nothing was saved.`);
+    await approveInCoreLedger(binding.projectId, ledger.tasks);
     const record = await recordPlanApproval(binding.projectId, { tasks: ledger.tasks, censusDigest: binding.censusDigest, source: "local-approval" });
     await read();
     return record;

@@ -1,14 +1,14 @@
 import { useEffect, useState } from "react";
 import { ArrowClockwiseIcon, CheckCircleIcon, CopyIcon, PlugsConnectedIcon, SpinnerGapIcon, WarningCircleIcon } from "@phosphor-icons/react";
 import { copyText } from "../project/connectAgentSetup.js";
-import { CoreLoading, useAdvanced } from "./CoreScreen.jsx";
+import { CoreLoading, ReadOnlyNotice, useAdvanced } from "./CoreScreen.jsx";
 import { useCoreResource } from "./coreApi.js";
 import "./coreScreens.css";
 import "./CoreAgentConnect.css";
 
-// One-click Connect agent (core/host/routes/agents.ts). The token only ever
-// lives in this component's memory, inside the command shown once; it is never
-// written to storage and is dropped as soon as the agent checks in.
+// One-click Connect agent (core/host/routes/agents.ts). The token never reaches
+// this window: the app writes it to a file only this user can read, and the line
+// shown here names that file. The line is dropped once the agent checks in.
 export const CONNECT_POLL_MS = 1500;
 
 const ROLE_LABEL = { main: "Main chat", worker: "Worker", observer: "Read-only" };
@@ -26,7 +26,7 @@ function describeAgent(agent) {
 
 export function CoreAgentConnect() {
   const advanced = useAdvanced();
-  const [pending, setPending] = useState(null); // the connect response, token included
+  const [pending, setPending] = useState(null); // the connect response (no token in it)
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState(null);
   const [copied, setCopied] = useState(null);
@@ -38,7 +38,7 @@ export function CoreAgentConnect() {
   const linked = pending && data ? data.connections?.find((c) => c.id === pending.connection)?.agent : null;
   const checkedIn = linked ? agents.find((a) => a.id === linked) : null;
 
-  // Once the agent has checked in, forget the command (and the token in it).
+  // Once the agent has checked in, forget the command.
   useEffect(() => {
     if (!checkedIn) return;
     setJustConnected(checkedIn);
@@ -87,6 +87,8 @@ export function CoreAgentConnect() {
 
       {resource.status === "loading" && <CoreLoading label="Loading connected agents" />}
 
+      {resource.status === "no-session" && <ReadOnlyNotice />}
+
       {resource.status === "error" && (
         <div className="core-agent-connect-error" role="status">
           <WarningCircleIcon weight="fill" aria-hidden="true" />
@@ -112,7 +114,11 @@ export function CoreAgentConnect() {
 
           {pending && (
             <div className="core-agent-connect-setup">
-              <p>Paste this into a terminal on this computer. It adds Perfect Planner to Claude Code; then start Claude Code and ask it to check in.</p>
+              <p>
+                Open a terminal in the folder your agent will work in and paste this one line. It connects Claude Code to Perfect Planner for that folder
+                and installs the Perfect Planner skill for every Claude Code session on this computer. Then start Claude Code there and say{" "}
+                <strong>check in with Perfect Planner</strong>. Already in Claude Code? Paste the line into the chat; it shows you the line and runs it only after you say yes.
+              </p>
               {pending.warning && <p className="core-agent-connect-warn">{pending.warning}</p>}
               <div className="core-agent-connect-snippet">
                 <div className="core-agent-connect-snippet-head">
@@ -137,7 +143,7 @@ export function CoreAgentConnect() {
                 </div>
               </details>
               {copied && !copied.ok && <p className="core-agent-connect-warn">Copy did not work here. Select the text and copy it by hand.</p>}
-              <p className="core-muted">This command holds a private key for this agent. It is shown only now; keep it to yourself.</p>
+              <p className="core-muted">The line holds no key: it names a file on this computer that only you can read. Disconnecting deletes that file.</p>
             </div>
           )}
 
@@ -172,6 +178,25 @@ export function CoreAgentConnect() {
             </ul>
           ) : (
             !pending && <p className="core-empty">No agents are connected yet.</p>
+          )}
+
+          {data?.skillLine && (
+            <details className="core-agent-connect-json" data-skill-only>
+              <summary>Install the skill only</summary>
+              <p className="core-muted">
+                Teaches every Claude Code session on this computer, in every folder, how to work with Perfect Planner. No key, nothing connected.
+                Paste it into any terminal once; run it again after updating Perfect Planner.
+              </p>
+              <div className="core-agent-connect-snippet">
+                <div className="core-agent-connect-snippet-head">
+                  <strong>Skill install</strong>
+                  <button type="button" className="core-button" onClick={() => copy("skill", data.skillLine)} aria-label="Copy the skill install line">
+                    {copied?.id === "skill" && copied.ok ? <><CheckCircleIcon aria-hidden="true" /> Copied</> : <><CopyIcon aria-hidden="true" /> Copy</>}
+                  </button>
+                </div>
+                <pre tabIndex={0} aria-label="Skill install line"><code>{data.skillLine}</code></pre>
+              </div>
+            </details>
           )}
 
           {advanced && (

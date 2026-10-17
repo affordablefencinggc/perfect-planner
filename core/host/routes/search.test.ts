@@ -2,10 +2,11 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Actor, Ledger } from "../../ledger/index";
 import { addPlanText, changeClause } from "../../lookup/index";
 import { appendNumbered, cutRelease } from "../../numbering/index";
+import { asPersonRequest } from "../keys";
 import { hostCall, startTestHost } from "../testing";
 import { normalizeRef } from "./search";
 
-const owner: Actor = { kind: "person", id: "sam" };
+const owner: Actor = { kind: "person", id: "owner" };
 const watcher: Actor = { kind: "system", id: "watcher" };
 
 const PLAN = `# Invoices
@@ -21,6 +22,10 @@ Finish invoice sending.
 `;
 
 function seed(ledger: Ledger) {
+  asPersonRequest(() => seedAsPerson(ledger));
+}
+
+function seedAsPerson(ledger: Ledger) {
   addPlanText(ledger, owner, PLAN);
   appendNumbered(ledger, { actor: owner, type: "plan.approved", summary: "Invoice plan approved" });
   appendNumbered(ledger, { actor: owner, type: "task.created", summary: "Invoice identity survives reload", refs: ["P-1 §2.1"], evidence: ["https://example.test/issue/1"] });
@@ -36,7 +41,7 @@ describe("search routes", () => {
   beforeEach(async () => {
     ctx = await startTestHost({ owned: false }); // seeds write as sam; an owner pin would make person:owner the only first writer
     ctx.host.ensureKey("system");
-    ctx.host.ensurePersonKey(owner.id); // seeds write as sam, signed like the person's own window would
+    ctx.host.ensurePersonKey(owner.id); // seeds write as the pinned owner, signed like the person's own window would
   });
   afterEach(async () => {
     await ctx.stop();
@@ -76,7 +81,7 @@ describe("search routes", () => {
     expect(c.citedBy.map((e: { subject: string }) => e.subject)).toEqual(expect.arrayContaining(["T-1", "D-1"]));
 
     const release = (await hostCall(ctx.base, "GET", "/lookup?project=s2&ref=R-1")).body.result;
-    expect(release).toMatchObject({ found: true, kind: "release", who: { id: "sam" } });
+    expect(release).toMatchObject({ found: true, kind: "release", who: { id: "owner" } });
     expect(release.release).toMatchObject({ version: "v1.0.0", from: "L-000001", commit: "9f3c2e1" });
     expect(release.release.count).toBe(release.release.entries.length);
     expect(release.release.count).toBeGreaterThan(5);

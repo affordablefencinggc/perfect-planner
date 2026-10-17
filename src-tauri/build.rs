@@ -39,6 +39,7 @@ fn main() {
             "collision_authority_inspect",
             "collision_authority_approve",
             "collision_authority_commit",
+            "take_core_launch",
             "jev_key_status",
             "jev_key_save",
             "jev_key_clear",

@@ -1,16 +1,21 @@
 // The core host: serves the core loop modules to the app's screens as JSON under
 // /api/core/*. Mounted by the Vite dev server (src/node/coreHostVitePlugin.mjs)
 // and by the production server (scripts/serve-local.mjs, from the bundle that
-// scripts/build-core-host.mjs writes). Loopback, same-origin callers only.
+// scripts/build-core-host.mjs writes). Loopback, same-origin callers only, and every route
+// except /session/claim needs the session cookie of a window opened from a one-time link.
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { KeychainKeyProvider, LedgerError, MemoryKeyProvider, type KeyProvider } from "../ledger/index";
+import { LedgerError } from "../ledger/index";
 import { startBridge, ToolError, type Bridge } from "../mcp/index";
 import { PeopleError } from "../people/index";
-import { openCoreProject, projectKey, type CoreProject, type OwnerKeySource } from "./project";
+import { asPersonRequest, hostKeys, type HostKeys } from "./keys";
+import { excludePrivateFolder, isHomeOrDrive, ledgerIntegrity, openCoreProject, pinOwnerAfterWrite, priorUseSignals, projectKey, projectRootFor, type CoreProject, type OwnerKeySource } from "./project";
 import { HttpError, Router } from "./router";
 import { PersonSessions } from "./session";
 import { registerRoutes } from "./routes/index";
-import { localPersonId } from "./routes/people";
+import { syncJevPolicy } from "./routes/decisions";
+import { chosenRepoRoot } from "./routes/tasks";
+import { protectRoots } from "../exec/index";
+import { GitProgramRefusedError } from "../worktrees/index";
 
 export const CORE_PREFIX = "/api/core";
 export { PERSON_COOKIE, CSRF_HEADER } from "./session";
@@ -25,34 +30,47 @@ export interface CoreHostOptions {
   guard?: (req: IncomingMessage) => boolean;
   /** Start the agent bridge (127.0.0.1) so external agents can check in. Default true. */
   bridge?: boolean;
-  /** Signing keys for person and system entries. Default: the OS keychain. */
-  keys?: SigningKeys;
-  /** The project's owner key id, from a pin kept outside the project folder (see project.ts). None: projects open unowned. */
+  /** Signing keys for person and system entries. Default: the OS keychain (PP_CORE_KEYS=memory for throwaway keys). */
+  keys?: HostKeys;
+  /** Supplies each project's owner key instead of the app's signed pin (core/host/owner.ts). Tests and embedders only. */
   ownerKey?: OwnerKeySource;
 }
 
-/** A key provider that can also make a key on the person's own action. */
-export type SigningKeys = KeyProvider & { ensureKey?(principal: string): unknown };
-
+/** The host's key provider type (kept for callers of the older name). */
+export type SigningKeys = HostKeys;
 /** PP_CORE_KEYS=memory: throwaway keys for automated runs (CI, the browser journey). Never for real projects. */
-export function defaultKeys(env: NodeJS.ProcessEnv = process.env): SigningKeys {
-  return env.PP_CORE_KEYS === "memory" ? new MemoryKeyProvider({ autoCreate: false }) : new KeychainKeyProvider();
-}
+export const defaultKeys = hostKeys;
 
 export class CoreHost {
   readonly router = new Router();
   private readonly projects = new Map<string, CoreProject>();
   private readonly bridges = new Map<string, Promise<Bridge>>();
+  /** Signs of earlier Perfect Planner use in each project's repo, read before its first open touched it. */
+  private readonly priorUse = new Map<string, string[]>();
   readonly sessions = new PersonSessions();
-  readonly keys: SigningKeys;
+  readonly keys: HostKeys;
 
   constructor(private readonly options: CoreHostOptions) {
-    this.keys = options.keys ?? defaultKeys();
+    this.keys = options.keys ?? hostKeys();
     registerRoutes(this.router);
+    // The person's own window asks for a one-time link for another window (POST, so it needs the
+    // window's cookie, CSRF token and Origin). A process without the person's session cannot get one.
+    this.router.post("/session/new-window", () => ({ launch: this.issueLaunch() }));
+    // A folder nobody has written to as a person gets its history only from this explicit action in the
+    // person's window: nothing is pinned as a side effect of some other first write.
+    // A folder nobody has written to as a person gets its history only after this explicit action in the
+    // person's window: no first write pins an owner as a side effect. The pin follows the next write.
+    this.router.post("/owner/start", ({ project }) => {
+      if (project.owner.state !== "new") throw new HttpError(409, "NOT_NEW", "This project already has a history on this computer.");
+      project.owner.started = true;
+      return { started: true, signals: project.owner.signals ?? [] };
+    });
     this.router.get("/status", ({ project }) => ({
       project: project.key,
       ledger: project.ledger.status,
       keys: { description: this.keys.description, ...this.keys.state() },
+      owner: { state: project.owner.state, ...(project.owner.reason ? { reason: project.owner.reason } : {}), ...(project.owner.state === "new" ? { signals: project.owner.signals ?? [], started: Boolean(project.owner.started) } : {}) },
+      integrity: ledgerIntegrity(project.ledger),
     }));
   }
 
@@ -62,15 +80,23 @@ export class CoreHost {
   }
 
   /**
+   * The desktop shell's launch secret: the starter process puts the same value in
+   * PP_CORE_DESKTOP_LAUNCH for this host and for the shell, which hands it to its window
+   * over IPC (src-tauri/src/core_launch.rs). Read once and removed from the environment.
+   */
+  acceptDesktopLaunch(env: NodeJS.ProcessEnv = process.env): boolean {
+    const secret = env.PP_CORE_DESKTOP_LAUNCH;
+    delete env.PP_CORE_DESKTOP_LAUNCH;
+    return typeof secret === "string" && this.sessions.acceptLaunch(secret);
+  }
+
+  /**
    * Makes a signing key if it is missing ("person:<id>" or "system"). Called only
    * while handling a request from the person's own window, never for an agent.
    * When the key store is unavailable nothing is made and the ledger refuses the write (NOT_SIGNED).
    */
   ensureKey(principal: string): void {
-    if (!this.keys.state().available) return;
-    if (this.keys.trustedKeys().some((key) => key.principal === principal && !key.retired)) return;
-    if (this.keys.ensureKey) this.keys.ensureKey(principal);
-    else if (this.keys instanceof MemoryKeyProvider) this.keys.createKey(principal);
+    this.keys.ensure(principal);
   }
 
   ensurePersonKey(person: string): void {
@@ -83,6 +109,33 @@ export class CoreHost {
       project = openCoreProject(this.options.root, key, this.options.projectRootOverride, this.keys, this.options.ownerKey);
       this.projects.set(key, project);
     }
+    return project;
+  }
+
+  /**
+   * Opens a project for a request: .perfect-planner/ goes into the repo's info/exclude before the
+   * ledger's first file (its writer lock) is created, and every request waits until that is done.
+   */
+  async openProject(key: string): Promise<CoreProject> {
+    if (!this.projects.has(key)) {
+      // The project folder and the repo the person picked are protected before the first git run.
+      const root = projectRootFor(this.options.root, key, this.options.projectRootOverride);
+      const chosen = chosenRepoRoot(root);
+      const release = protectRoots([root, ...(chosen ? [chosen] : [])].filter((dir) => !isHomeOrDrive(dir)));
+      try {
+        // Read before the open adds its own exclude line and hook, so they never count as earlier use.
+        this.priorUse.set(key, await priorUseSignals(chosen ?? root));
+        await excludePrivateFolder(root);
+      } finally {
+        release();
+      }
+    }
+    const project = this.project(key);
+    if (project.owner.state === "new" && !project.owner.signals) project.owner.signals = this.priorUse.get(key) ?? [];
+    const chosen = chosenRepoRoot(project.root);
+    if (chosen) project.protectRoots([chosen]);
+    await project.ready;
+    await syncJevPolicy(project);
     return project;
   }
 
@@ -123,7 +176,7 @@ export class CoreHost {
       let body: unknown;
       try { body = await readJson(req); } catch { body = {}; }
       const claimed = sameOriginRequest(req) ? this.sessions.claim((body as { launch?: unknown })?.launch) : null;
-      if (!claimed) return send(401, { ok: false, code: "LAUNCH_REQUIRED", message: "Open Perfect Planner from its launcher to make changes. This window can only read." });
+      if (!claimed) return send(401, { ok: false, code: "LAUNCH_REQUIRED", message: "Open Perfect Planner from a one-time link. This window cannot show or change anything until then." });
       res.setHeader("set-cookie", this.sessions.setCookieHeader(claimed.cookie, CORE_PREFIX));
       return send(200, { ok: true, result: { csrf: claimed.csrf } });
     }
@@ -135,19 +188,27 @@ export class CoreHost {
     if (method === "POST" && !this.sessions.isPerson(req)) {
       return send(401, { ok: false, code: "PERSON_REQUIRED", message: "Only the person using Perfect Planner, in a window opened from its launcher, can do this. Agents act through the MCP tools." });
     }
+    // Every read needs the window's session cookie too. Origin and sec-fetch-site headers are not
+    // proof: any local process can send them. Agents read through the MCP bridge with their own tokens.
+    if (method !== "POST" && !this.sessions.hasSession(req)) {
+      return send(401, { ok: false, code: "PERSON_REQUIRED", message: "Open Perfect Planner from a one-time link to see this project. This window has no session, so it cannot show or change anything." });
+    }
     try {
       const body = method === "POST" ? await readJson(req) : undefined;
-      const project = this.project(projectKey(url.searchParams.get("project")));
-      if (method === "POST") {
-        // The person is here, in their own window: make their key and the system key
-        // (planning's asker, the gate) if this device has none yet.
-        this.ensurePersonKey(localPersonId(project));
-        this.ensureKey("system");
+      const project = await this.openProject(projectKey(url.searchParams.get("project")));
+      if (method === "POST" && project.owner.state === "new" && !project.owner.started && path !== "/owner/start") {
+        throw new HttpError(409, "START_HISTORY", "Start a new history for this folder first: nothing is written to a project until you do.");
       }
-      const result = await match.handler({ path, params: match.params, query: url.searchParams, body, project, host: this });
+      const call = () => match.handler({ path, params: match.params, query: url.searchParams, body, project, host: this });
+      // A person's POST may make their signing key on first use (keys.ts); nothing else can.
+      const result = await (method === "POST" ? asPersonRequest(call) : call());
+      // A new project's owner is pinned only after a write from the person's own window.
+      if (method === "POST") pinOwnerAfterWrite(this.options.root, project, this.keys);
       send(200, { ok: true, result: result ?? null });
     } catch (error) {
       if (error instanceof HttpError) return send(error.status, { ok: false, code: error.code, message: error.message });
+      // The repo's config names a program git would run (a filter or merge driver): a plain refusal, not a crash.
+      if (error instanceof GitProgramRefusedError) return send(409, { ok: false, code: "GIT_PROGRAM_REFUSED", message: error.message });
       const named = error as { code?: string; message?: string };
       if (error instanceof LedgerError || error instanceof ToolError || error instanceof PeopleError) {
         return send(422, { ok: false, code: String(named.code ?? "REFUSED"), message: named.message ?? "Refused." });
@@ -158,7 +219,12 @@ export class CoreHost {
 
   async close(): Promise<void> {
     for (const bridge of this.bridges.values()) await (await bridge).close().catch(() => undefined);
-    for (const project of this.projects.values()) project.ledger.close();
+    // Wait for the git runs started at open (exclude, protection) so none outlives the host in the project folder.
+    for (const project of this.projects.values()) await Promise.allSettled([project.ready, project.protection]);
+    for (const project of this.projects.values()) {
+      project.ledger.close();
+      project.releaseRoots();
+    }
     this.bridges.clear();
     this.projects.clear();
   }

@@ -3,7 +3,10 @@
 // the ledger and the agent service: no verification is implied.
 import type { Router } from "../router";
 import type { CoreProject } from "../project";
+import { isAuthoritative } from "../../ledger/index";
 import { buildPeopleView } from "../../people/index";
+import { ownerMissing } from "./people";
+import { planApprovalView } from "./plan";
 
 export interface CoreSummary {
   project: string;
@@ -18,8 +21,9 @@ export interface CoreSummary {
 export function coreSummary(project: CoreProject): CoreSummary {
   const entries = project.entries();
   const view = buildPeopleView(entries, { owner: project.ledger.owner });
-  const approved = entries.filter((e) => e.type === "plan.approved");
-  const latest = approved[approved.length - 1];
+  // The same answer as GET /plan: only a person-signed approval counts.
+  const plan = planApprovalView(entries);
+  const latest = plan.latest ? entries.find((e) => e.n === plan.latest!.entry) : undefined;
   const idea = typeof latest?.data?.idea === "string" ? latest.data.idea : undefined;
   const agents = project.service.listAgents();
   return {
@@ -28,13 +32,13 @@ export function coreSummary(project: CoreProject): CoreSummary {
     people: {
       members: view.members.length,
       ...(view.owner ? { owner: view.owner.name } : {}),
-      ownerMissing: !project.ledger.ownerKeyPinned,
+      ownerMissing: ownerMissing(project),
     },
     agents: { checkedIn: agents.length, names: agents.map((a) => a.name).slice(0, 8) },
     plan: {
-      approved: approved.length > 0,
-      ...(latest ? { latest: latest.subject } : {}),
-      tasks: entries.filter((e) => e.type === "task.created").length,
+      approved: plan.approved,
+      ...(plan.latest ? { latest: plan.latest.plan } : {}),
+      tasks: entries.filter((e) => e.type === "task.created" && isAuthoritative(e)).length,
       ...(idea ? { idea } : {}),
     },
   };

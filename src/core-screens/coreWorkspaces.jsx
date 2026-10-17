@@ -4,12 +4,13 @@ import { lazy, Suspense } from "react";
 import "./coreApi.js";
 
 // The core loop screens and where they sit in the stage navigation
-// (Define: planning, mvp · Coordinate: decisions, people · Release: lookup).
+// (Define: planning, mvp · Build: tasks · Coordinate: decisions, people · Release: lookup).
 const screens = {
   planning: lazy(() => import("./DeepPlanningScreen.jsx")),
   mvp: lazy(() => import("./MvpBoardScreen.jsx")),
   decisions: lazy(() => import("./DecisionsScreen.jsx")),
   people: lazy(() => import("./PeopleScreen.jsx")),
+  tasks: lazy(() => import("./TasksScreen.jsx")),
   lookup: lazy(() => import("./LedgerLookupScreen.jsx")),
 };
 
@@ -20,6 +21,7 @@ export const coreWorkspaceLabels = {
   mvp: "MVP board",
   decisions: "Decisions",
   people: "People",
+  tasks: "Tasks",
   lookup: "Ledger search",
 };
 
@@ -47,6 +49,12 @@ export const coreWorkspaceContext = {
     purpose: "Who is on this project, where each person is, and the documents you share.",
     outcome: "Helpers added with the right role; shared docs versioned.",
     unlock: "Add a helper or share a document.",
+  },
+  tasks: {
+    stage: "build",
+    purpose: "Start a worker on each task, approve its test, check the work, approve the diff and merge.",
+    outcome: "Every task merged with its approved test passing on the merge.",
+    unlock: "Start a worker on the next task.",
   },
   lookup: {
     stage: "release",

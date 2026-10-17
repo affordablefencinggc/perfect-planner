@@ -3,7 +3,7 @@ import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, realpathSy
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { findExecutable, gitExecutable, isLocalWindowsPath, NO_CWD_SEARCH_ENV } from "./executable";
+import { findExecutable, gitExecutable, isLocalWindowsPath, NO_CWD_SEARCH_ENV, protectRoots, registeredRoots } from "./executable";
 
 const isWindows = process.platform === "win32";
 const cleanups: (() => void)[] = [];
@@ -234,5 +234,31 @@ describe("isLocalWindowsPath", () => {
       "tools\\git",
       "",
     ]) expect(isLocalWindowsPath(bad)).toBe(false);
+  });
+});
+
+describe("protectRoots", () => {
+  it("skips a program inside a registered root until the registration is released", () => {
+    const base = realpathSync.native(mkdtempSync(path.join(os.tmpdir(), "pp-exec-protect-")));
+    try {
+      const repo = path.join(base, "repo");
+      const bin = path.join(repo, "bin");
+      mkdirSync(bin, { recursive: true });
+      const name = process.platform === "win32" ? "tool.exe" : "tool";
+      writeFileSync(path.join(bin, name), "");
+      chmodSync(path.join(bin, name), 0o755);
+      const env = { PATH: bin };
+      const cwd = path.join(base, "elsewhere");
+      expect(findExecutable("tool", env, cwd)).toBe(path.join(bin, name));
+      const release = protectRoots([repo, "relative/ignored"]);
+      expect(registeredRoots()).toContain(repo);
+      expect(registeredRoots()).not.toContain("relative/ignored");
+      expect(findExecutable("tool", env, cwd)).toBeNull();
+      release();
+      expect(registeredRoots()).not.toContain(repo);
+      expect(findExecutable("tool", env, cwd)).toBe(path.join(bin, name));
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
   });
 });
