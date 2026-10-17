@@ -101,7 +101,15 @@ function repoFacts(repo: string): RepoFacts {
   const gitDir = path.join(repo, ".git");
   const locks: string[] = [];
   const walk = (dir: string) => {
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch (error) {
+      // A git process that outlived the killed host removes its own temporary folders while this walks; a folder that is gone holds no lock.
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+      throw error;
+    }
+    for (const entry of entries) {
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) walk(full);
       else if (entry.name.endsWith(".lock") || entry.name === "locked") locks.push(path.relative(gitDir, full).replace(/\\/g, "/"));
