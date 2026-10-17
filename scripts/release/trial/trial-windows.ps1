@@ -20,6 +20,8 @@ function UninstallEntries {
 function AppProcesses { Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -and ($_.Path -like "*Perfect Planner*" -or $_.Path -like "*perfect-planner*") } }
 
 New-Item -ItemType Directory -Force -Path $Out | Out-Null
+# A fresh runner has no git identity; the app's merge needs one (an app finding, see RESULTS.md). The trial sets one so the loop can reach its end.
+git config --global user.name "Trial owner"; git config --global user.email "owner@example.invalid"; git config --global commit.gpgsign false
 $log = Join-Path $Out "$label-install.log"
 
 # 1. Silent install.

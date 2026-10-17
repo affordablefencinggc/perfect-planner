@@ -8,6 +8,8 @@ set -uo pipefail
 [ "${CI:-}" = true ] && [ "${GITHUB_ACTIONS:-}" = true ] || { echo "trial-linux.sh deletes app data and only runs on GitHub Actions" >&2; exit 2; }
 dir="$1"; out="$2"; folder="$3"; prefix="$4"
 mkdir -p "$out"
+# A fresh runner has no git identity; the app's merge needs one (an app finding, see RESULTS.md). The trial sets one so the loop can reach its end.
+git config --global user.name "Trial owner"; git config --global user.email "owner@example.invalid"; git config --global commit.gpgsign false
 check() { node scripts/release/trial/record-check.mjs "$out" "$1" "$2" "$3" "${4:-}"; }
 app_procs() { pgrep -af 'perfect-planner|Perfect Planner|\.AppImage' | grep -v -e pgrep -e trial-linux -e tauri-driver || true; }
 user_data() { for d in ~/.local/share/com.perfectplanner.desktop ~/.config/com.perfectplanner.desktop ~/.cache/com.perfectplanner.desktop ~/.local/share/perfect-planner-desktop ~/.cache/perfect-planner-desktop; do [ -e "$d" ] && echo "$d ($(find "$d" -type f | wc -l) files)"; done; }

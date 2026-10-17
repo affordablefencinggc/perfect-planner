@@ -103,7 +103,9 @@ async function step(name, fn) {
     return true;
   } catch (error) {
     const alerts = await run(`return [...document.querySelectorAll("[role=alert], [class*=error], [class*=warn]")].filter((e) => e.offsetParent !== null).map((e) => (e.innerText || "").trim()).filter(Boolean).slice(0, 3).join(" | ")`).catch(() => "");
-    record(name, false, `${error.message}${alerts ? ` Window says: ${alerts}` : ""}`.slice(0, 600));
+    const buttons = await run(`return [...document.querySelectorAll("button")].filter((e) => e.offsetParent !== null).map((e) => (e.innerText || e.getAttribute("aria-label") || "").trim().slice(0, 28)).filter(Boolean).slice(0, 40).join(" | ")`).catch(() => "");
+    const size = await run(`return innerWidth + "x" + innerHeight`).catch(() => "?");
+    record(name, false, `${error.message}${alerts ? ` Window says: ${alerts}` : ""} [window ${size}; visible buttons: ${buttons}]`.slice(0, 900));
     await shot(`failed-${name.replace(/\W+/g, "-").toLowerCase()}`);
     return false;
   }
@@ -146,6 +148,7 @@ let worker;
 async function main() {
   const created = await wd("POST", "/session", { capabilities: { alwaysMatch: capabilities } }, 120_000);
   session = created.sessionId;
+  if (args.size) { const [width, height] = args.size.split("x").map(Number); await wd("POST", `/session/${session}/window/rect`, { width, height }).catch(() => {}); }
   if (!(await waitText("Connect agent", 90_000))) throw new Error("The installed window never showed the app (Connect agent).");
   const folder = path.resolve(repo);
   const task1 = "T-1";
@@ -163,7 +166,7 @@ async function main() {
     if (!(await waitText("Your idea", 20_000))) throw new Error("No idea box.");
     await setValue("Your idea", "Notes helper: a small tool that saves a person's notes to a local file. One person, one laptop, no accounts, no cloud.");
     await click("Start planning");
-    if (!(await waitText("blocking questions", 40_000)) && !(await waitText("No blocking questions are open", 5_000))) throw new Error("Planning showed no questions.");
+    if (!(await waitFor(async () => /questions\s+answered|No blocking questions are open/.test(await text()), 90_000))) throw new Error("Planning showed no questions within 90 s.");
     let clicks = 0;
     for (let i = 0; i < 120; i++) {
       if ((await text()).includes("No blocking questions are open")) break;
