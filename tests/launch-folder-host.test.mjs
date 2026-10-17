@@ -56,3 +56,31 @@ test("launch folder reports unavailable when there is no folder", async (t) => {
   t.after(() => host.close());
   assert.deepEqual(await (await host.get("/api/launch-folder")).json(), { available: false });
 });
+
+test("a typed folder is checked, then offered read-only like the launch folder", async (t) => {
+  const folder = await mkdtemp(path.join(os.tmpdir(), "pp-typed-"));
+  await writeFile(path.join(folder, "README.md"), "# typed\n");
+  const middleware = createLaunchFolderMiddleware({ folder: null });
+  const server = http.createServer((req, res) => middleware(req, res, () => { res.statusCode = 418; res.end(); }));
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const headers = { "x-pp-launch-folder": "1", "content-type": "application/json" };
+  const choose = (value, h = headers) => fetch(`${base}/api/launch-folder/choose`, { method: "POST", headers: h, body: JSON.stringify({ path: value }) });
+
+  assert.deepEqual(await (await fetch(`${base}/api/launch-folder`, { headers })).json(), { available: false });
+  assert.equal((await choose(folder, { "content-type": "application/json" })).status, 403, "requires the same-page header");
+  for (const bad of ["", "relative/folder", path.join(folder, "missing"), path.join(folder, "README.md"), path.parse(folder).root, os.homedir(), 7, "/tmp/\0x"]) {
+    assert.equal((await choose(bad)).status, 400, `refuses ${JSON.stringify(bad)}`);
+  }
+  assert.deepEqual(await (await fetch(`${base}/api/launch-folder`, { headers })).json(), { available: false }, "a refused path changes nothing");
+
+  const ok = await choose(`  ${folder}  `);
+  assert.equal(ok.status, 200);
+  const info = await ok.json();
+  assert.equal(info.available, true);
+  assert.equal(info.name, path.basename(folder));
+  const root = await (await fetch(`${base}/api/launch-folder/list?path=`, { headers })).json();
+  assert.deepEqual(root.entries, [{ name: "README.md", kind: "file" }]);
+  assert.equal((await fetch(`${base}/api/launch-folder/file?path=README.md`, { method: "PUT", headers })).status, 405);
+});

@@ -73,3 +73,24 @@ export async function describeLaunchFolder({ fetchImpl = globalThis.fetch?.bind(
     return null;
   }
 }
+
+// A folder the person typed or pasted: the local host checks it (full local path, a real folder, never a whole
+// drive or the home folder) and then offers it read-only exactly like the launch folder. Resolves to
+// { name, path } or { error } with a plain reason.
+export async function chooseTypedFolder(path, { fetchImpl = globalThis.fetch?.bind(globalThis) } = {}) {
+  if (typeof fetchImpl !== "function") return { error: "This window cannot reach the local service." };
+  try {
+    const response = await fetchImpl(`${BASE}/choose`, {
+      method: "POST",
+      headers: { ...HEADERS, "content-type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify({ path }),
+    });
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) return { error: typeof value?.error === "string" ? value.error : "That folder could not be opened." };
+    if (value?.available !== true || typeof value.name !== "string" || !value.name) return { error: "That folder could not be opened." };
+    return { name: value.name, path: typeof value.path === "string" ? value.path : null };
+  } catch {
+    return { error: "The local service did not answer. Try again." };
+  }
+}

@@ -1,6 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { CoreAgentConnect } from "../../src/core-screens/CoreAgentConnect.jsx";
+import { resetPersonSession } from "../../src/core-screens/coreApi.js";
 import { ViewModeContext } from "../../src/project/viewMode.js";
 
 // A made-up connect value, assembled so it never reads as a stored secret (core/release push scan).
@@ -169,5 +170,23 @@ describe("CoreAgentConnect", () => {
     const line = screen.getByLabelText("Skill install line");
     expect(line.textContent).toBe(SKILL_LINE);
     expect(line.textContent).not.toMatch(/pp_[cw]_/);
+  });
+
+  test("on a folder with no history it offers Start a new history right here, then lets the person connect", async () => {
+    resetPersonSession();
+    window.sessionStorage.setItem("pp.core.csrf", "csrf-1");
+    let started = false;
+    const fn = routeFetch({
+      "GET /agents": async () => ok(list()),
+      "GET /status": async () => ok({ project: "default", owner: { state: "new", signals: [], started } }),
+      "POST /owner/start": async () => { started = true; return ok({ started: true, signals: [] }); },
+    });
+    renderWith();
+    const notice = await screen.findByRole("region", { name: "Start a new history" });
+    fireEvent.click(within(notice).getByRole("button", { name: "Start a new history for this folder" }));
+    await waitFor(() => expect(fn.mock.calls.some(([url, init]) => String(url).includes("/owner/start") && init?.method === "POST")).toBe(true));
+    await waitFor(() => expect(screen.queryByRole("region", { name: "Start a new history" })).toBeNull());
+    expect(screen.getByRole("button", { name: /Connect agent/ })).toBeTruthy();
+    resetPersonSession();
   });
 });

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { ArrowClockwiseIcon, CheckCircleIcon, CopyIcon, PlugsConnectedIcon, SpinnerGapIcon, WarningCircleIcon } from "@phosphor-icons/react";
 import { copyText } from "../project/connectAgentSetup.js";
-import { CoreLoading, ReadOnlyNotice, useAdvanced } from "./CoreScreen.jsx";
+import { CoreLoading, ReadOnlyNotice, StartHistoryNotice, useAdvanced } from "./CoreScreen.jsx";
 import { useCoreResource } from "./coreApi.js";
 import "./coreScreens.css";
 import "./CoreAgentConnect.css";
@@ -129,6 +129,7 @@ export function CoreAgentConnect() {
 
       {resource.status === "ready" && (
         <>
+          <StartHistoryNotice onStarted={() => { setActionError(null); resource.reload(); }} />
           {!pending && (
             <div className="core-agent-connect-actions">
               <button type="button" className="core-button primary" onClick={connect} disabled={busy}>

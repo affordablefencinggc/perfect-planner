@@ -9,6 +9,7 @@ import {
   TrashIcon,
   WarningIcon,
 } from "@phosphor-icons/react";
+import { servedByLocalService } from "../native/runtimeSnapshot.js";
 import { currentFolderContractInput } from "../engine/folderContractSeed.js";
 import {
   analyzeWorkspaceStructure,
@@ -92,6 +93,7 @@ function pickerFailureText(reason) {
   const text = String(reason ?? "");
   if (/user gesture|user activation/i.test(text)) return "The browser needs a fresh click to open the folder picker. Press Choose app folder again. Nothing was registered or read.";
   if (/SecurityError|NotAllowedError|not allowed|denied/i.test(text)) return "The browser did not allow folder access. Check this site's permissions, then try again. Nothing was registered or read.";
+  if (text === "browser-folder-picker-unavailable") return "This window has no folder picker. Type or paste the folder path below instead. Nothing was registered or read.";
   if (!text || /Failed to execute|DOMException|Error\b|^[a-z0-9-]+$/.test(text)) return "The folder picker could not open. Try again, or use the desktop app. Nothing was registered or read.";
   return text;
 }
@@ -292,6 +294,7 @@ export function StructureWorkspace({
   // One-click starts: the last folder used here, and the folder npm start was launched for.
   const [lastFolder, setLastFolder] = useState(null);
   const [launchFolder, setLaunchFolder] = useState(null);
+  const [typedPath, setTypedPath] = useState("");
   const refreshLastFolder = () => {
     if (workspaceAdapter.mode !== "browser") { setLastFolder(readLastNativeFolder()); return; }
     if (typeof workspaceAdapter.lastFolder !== "function") return;
@@ -1291,6 +1294,27 @@ export function StructureWorkspace({
                 ))}
               </ol>
             </div>
+            {workspaceAdapter.mode === "browser" && typeof workspaceAdapter.selectTypedFolder === "function" && (launchFolder || servedByLocalService()) && (
+              <form
+                className="folder-connect-form folder-typed-form"
+                onSubmit={(event) => { event.preventDefault(); chooseFolder(() => workspaceAdapter.selectTypedFolder(typedPath)); }}
+              >
+                <label>
+                  <span>OR TYPE OR PASTE THE FOLDER PATH</span>
+                  <input
+                    value={typedPath}
+                    onChange={(event) => setTypedPath(event.target.value)}
+                    disabled={mapLoading}
+                    autoComplete="off"
+                    spellCheck={false}
+                    placeholder={navigator.platform?.startsWith("Win") ? "C:\\projects\\my-app" : "/home/you/my-app"}
+                  />
+                </label>
+                <button className="soft-button" type="submit" disabled={!typedPath.trim() || mapLoading}>
+                  Use this folder
+                </button>
+              </form>
+            )}
             {workspaceAdapter.mode !== "browser" && (
               <form
                 className="folder-connect-form"
