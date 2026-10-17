@@ -1,17 +1,21 @@
-// People screen journey. Until the app's signed owner pin is in (#25, kept outside every project
-// folder), this build has no owner key for a project, so the people rules let nobody start the
-// roster. The screen must say that plainly and must not offer "Add the first person".
-// The add-helper / change-role / share-document steps come back with the pin.
+// People screen journey. The app's signed owner pin (kept outside every project folder) gives the project
+// an owner key, so the person at this window can add themselves as the first person (the owner) and then a helper.
 export const steps = [
   {
-    name: "core-people-says-owner-key-missing",
+    name: "core-people-add-the-owner-then-a-helper",
     run: async (page, at) => {
       await page.goto(at("people"));
       await page.expectText("See who is on this project");
-      await page.expectText("does not have this project's owner key");
-      const text = await page.text();
-      const offered = text.includes("Add the first person") || text.includes("Add person");
-      if (offered) throw new Error("People offers to add a first person although nobody can be added without an owner key");
+      await page.expectText("Add the first person");
+      await page.type({ label: "~Name" }, "Dana Owner");
+      await page.click({ role: "button", name: "Add person" });
+      await page.expectText("Dana Owner");
+      await page.expectText("Dana Owner is now the owner of this project.");
+      await page.expectText("Add helper");
+      await page.type({ label: "~Name" }, "Sam Helper");
+      await page.type({ label: "~Person id" }, "sam");
+      await page.click({ role: "button", name: "Add person" });
+      await page.expectText("Sam Helper");
     },
   },
 ];

@@ -370,11 +370,18 @@ async function journey(page, at, step) {
     await page.expectText(/2 tasks/);
   });
 
+  // A new project's ledger takes no write until the person starts its history (the core screens' notice).
+  await step("start-history", async () => {
+    await page.goto(at("planning"));
+    await page.click({ role: "button", name: "Start a new history for this folder" });
+    await waitFor(async () => !(await page.text()).includes("Start a new history for this folder"), { label: "history started" });
+  });
+
   await step("plan-approve", async () => {
     await page.goto(at("plan"));
     await page.expectText("Approve this plan");
     await page.click({ role: "button", name: "Approve this plan" });
-    await page.expectText(/2 tasks approved on this device/);
+    await page.expectText(/2 tasks approved .* on this device/);
   });
 
   await step("collision-evaluate-and-resolve", async () => {
@@ -491,7 +498,7 @@ async function journey(page, at, step) {
     await page.goto(at("index"));
     await page.expectText(/6\s*proof items/);
     await page.goto(at("plan"));
-    await page.expectText(/Plan approved: 2 tasks approved on this device/);
+    await page.expectText(/Plan approved: Plan P-\d+ approved on the Plan page by owner/);
     const map = await page.run((h) => h.findAll({ css: ".draft-map-node" }).map((el) => el.textContent));
     if (map.length !== 2 || map.some((text) => !/Approved/.test(text) || /Draft/.test(text))) throw new Error(`Plan map tasks should read Approved, saw ${JSON.stringify(map)}`);
     if (/could not be checked/.test(await page.text())) throw new Error("Plan still says the approval could not be checked");
