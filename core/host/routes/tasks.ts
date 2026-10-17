@@ -13,7 +13,7 @@ import path from "node:path";
 import { deriveState, sensitiveChanges, testSupportFiles, type GateState } from "../../gate/index";
 import type { Actor } from "../../ledger/index";
 import { attemptLabel, type TaskView } from "../../mcp/index";
-import { WorktreeError, WorktreeManager, git, runGit, WORKTREES_ACTOR, type WorktreeInfo } from "../../worktrees/index";
+import { WorktreeError, WorktreeManager, git, refreshCarriedSettings, runGit, WORKTREES_ACTOR, type WorktreeInfo } from "../../worktrees/index";
 import type { CoreHost } from "../host";
 import type { CoreProject } from "../project";
 import { HttpError, type Router } from "../router";
@@ -193,6 +193,27 @@ function findTask(project: CoreProject, id: string): TaskView {
   const task = project.service.board().get(id);
   if (!task) throw new HttpError(404, "NOT_FOUND", `${id} is not on the board. Approve the plan or add the task first.`);
   return task;
+}
+
+/**
+ * Plain text when git cannot name a committer (null when it can). A missing name and email gets the two
+ * commands to run; any other git failure gets a generic message so it is not blamed on the identity.
+ * The app only shows the commands; it never sets the person's git config or invents an identity.
+ * The copy of the person's git settings is refreshed first, so a name set a minute ago counts without a restart.
+ */
+export async function gitIdentityRefusal(root: string): Promise<string | null> {
+  refreshCarriedSettings();
+  const ident = await runGit(root, ["var", "GIT_COMMITTER_IDENT"]).catch((error: Error) => ({ code: -1, stdout: "", stderr: error.message }));
+  if (ident.code === 0) return null;
+  if (!/identity unknown|unable to auto-detect|no email was given|no name was given|empty ident/i.test(`${ident.stderr}${ident.stdout}`)) {
+    return "Git did not answer when the app asked it who you are, so nothing was merged and your work is safe. Press Merge again; if it keeps happening, check that Git still opens from a terminal.";
+  }
+  return [
+    "Git on this computer does not know your name and email yet, so it cannot record the merge. Nothing was merged and your work is safe.",
+    "Run these two commands once in a terminal (use your own name and email), then press Merge again:",
+    'git config --global user.name "Your Name"',
+    'git config --global user.email "you@example.com"',
+  ].join("\n");
 }
 
 function stale(message: string): HttpError {
@@ -518,6 +539,9 @@ export function registerTaskRoutes(router: Router): void {
     const tree = await worktreeFor(project, label);
     const approved = deriveState(project.entries(), label).diffApproval?.commit;
     if (!approved || !sameCommit(bodyOf(body).commit, approved)) throw stale("Merge the commit whose diff you approved; this screen is out of date.");
+    // Git cannot write the merge commit without a name and email; say so plainly, before anything is signed.
+    const missingIdentity = await gitIdentityRefusal(root);
+    if (missingIdentity) throw new HttpError(409, "GIT_IDENTITY_MISSING", missingIdentity);
     // The click is the person's merge approval: signed with their key, in their own window's request,
     // for exactly this commit. The gate refuses to merge without it (never reachable from an agent).
     const state = deriveState(project.entries(), label);
