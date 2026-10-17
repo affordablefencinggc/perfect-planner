@@ -3,17 +3,20 @@
 // and by the production server (scripts/serve-local.mjs, from the bundle that
 // scripts/build-core-host.mjs writes). Loopback, same-origin callers only, and every route
 // except /session/claim needs the session cookie of a window opened from a one-time link.
+import fs from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { LedgerError } from "../ledger/index";
 import { startBridge, ToolError, type Bridge } from "../mcp/index";
 import { PeopleError } from "../people/index";
+import { folderIdentity } from "./folderIdentity";
 import { asPersonRequest, hostKeys, type HostKeys } from "./keys";
-import { excludePrivateFolder, isHomeOrDrive, ledgerIntegrity, openCoreProject, pinOwnerAfterWrite, priorUseSignals, projectKey, projectRootFor, type CoreProject, type OwnerKeySource } from "./project";
+import { excludePrivateFolder, isHomeOrDrive, ledgerIntegrity, openCoreProject, pinOwnerAfterWrite, priorUseSignals, projectKey, projectKeyProblem, projectRootFor, type CoreProject, type OwnerKeySource } from "./project";
 import { HttpError, Router } from "./router";
 import { PersonSessions } from "./session";
 import { registerRoutes } from "./routes/index";
 import { syncJevPolicy } from "./routes/decisions";
 import { chosenRepoRoot } from "./routes/tasks";
+import { startProjectWatch, type ProjectWatchOptions } from "./watch";
 import { protectRoots } from "../exec/index";
 import { GitProgramRefusedError } from "../worktrees/index";
 
@@ -34,6 +37,11 @@ export interface CoreHostOptions {
   keys?: HostKeys;
   /** Supplies each project's owner key instead of the app's signed pin (core/host/owner.ts). Tests and embedders only. */
   ownerKey?: OwnerKeySource;
+  /**
+   * The git watcher every open project gets (core/host/watch.ts): collisions, stalled tasks and new commits go to the
+   * ledger and to the main chat's inbox. On by default; pass false to run none, or options to tune it.
+   */
+  watch?: false | ProjectWatchOptions;
 }
 
 /** The host's key provider type (kept for callers of the older name). */
@@ -44,6 +52,8 @@ export const defaultKeys = hostKeys;
 export class CoreHost {
   readonly router = new Router();
   private readonly projects = new Map<string, CoreProject>();
+  /** Which project key holds each folder (see folderIdentity), so one folder never carries two projects. */
+  private readonly folders = new Map<string, string>();
   private readonly bridges = new Map<string, Promise<Bridge>>();
   /** Signs of earlier Perfect Planner use in each project's repo, read before its first open touched it. */
   private readonly priorUse = new Map<string, string[]>();
@@ -110,10 +120,44 @@ export class CoreHost {
   project(key: string): CoreProject {
     let project = this.projects.get(key);
     if (!project) {
+      const folder = this.claimFolder(key);
       project = openCoreProject(this.options.root, key, this.options.projectRootOverride, this.keys, this.options.ownerKey);
+      if (this.options.watch !== false) project.watch = startProjectWatch(project, this.options.watch ?? {});
       this.projects.set(key, project);
+      this.folders.set(folder, key);
     }
     return project;
+  }
+
+  /** Stops one project's watcher, agent bridge and ledger, in that order, and forgets it. A later request opens it again. */
+  async closeProject(key: string): Promise<void> {
+    const project = this.projects.get(key);
+    if (!project) return;
+    // The watcher writes to the ledger: it stops (and its pass in flight finishes) before anything else is closed.
+    await project.watch?.stop().catch(() => undefined);
+    await (await this.bridges.get(key))?.close().catch(() => undefined);
+    this.bridges.delete(key);
+    await Promise.allSettled([project.ready, project.protection]);
+    project.ledger.close();
+    project.releaseRoots();
+    this.projects.delete(key);
+  }
+
+  /**
+   * The folder a project key would use, refused when another open project already holds the same folder
+   * (a name that differs only in case or trailing dots on Windows or macOS, a link to another project's
+   * folder, or PP_CORE_PROJECT_ROOT giving every key one folder). A second ledger on a folder would be a
+   * read-only twin with its own tokens and worktree view, so the second name is refused instead.
+   */
+  private claimFolder(key: string): string {
+    const root = projectRootFor(this.options.root, key, this.options.projectRootOverride);
+    fs.mkdirSync(root, { recursive: true });
+    const folder = folderIdentity(root);
+    const holder = this.folders.get(folder);
+    if (holder !== undefined && holder !== key) {
+      throw new HttpError(409, "FOLDER_IN_USE", `The project "${key}" would use the same folder as the project "${holder}" (${root}). Two projects never share a folder, so "${key}" was not opened and nothing was written.`);
+    }
+    return folder;
   }
 
   /**
@@ -122,6 +166,7 @@ export class CoreHost {
    */
   async openProject(key: string): Promise<CoreProject> {
     if (!this.projects.has(key)) {
+      this.claimFolder(key);
       // The project folder and the repo the person picked are protected before the first git run.
       const root = projectRootFor(this.options.root, key, this.options.projectRootOverride);
       const chosen = chosenRepoRoot(root);
@@ -199,7 +244,10 @@ export class CoreHost {
     }
     try {
       const body = method === "POST" ? await readJson(req) : undefined;
-      const project = await this.openProject(projectKey(url.searchParams.get("project")));
+      const named = url.searchParams.get("project");
+      const unusable = projectKeyProblem(named);
+      if (unusable) throw new HttpError(400, "INVALID_PROJECT", unusable);
+      const project = await this.openProject(projectKey(named));
       if (method === "POST" && project.owner.state === "new" && !project.owner.started && path !== "/owner/start") {
         throw new HttpError(409, "START_HISTORY", "Start a new history for this folder first: nothing is written to a project until you do.");
       }
@@ -222,6 +270,8 @@ export class CoreHost {
   }
 
   async close(): Promise<void> {
+    // Watchers first: they write to the ledger, so none may be mid-pass when it closes.
+    await Promise.all([...this.projects.values()].map((project) => project.watch?.stop().catch(() => undefined)));
     for (const bridge of this.bridges.values()) await (await bridge).close().catch(() => undefined);
     // Wait for the git runs started at open (exclude, protection) so none outlives the host in the project folder.
     for (const project of this.projects.values()) await Promise.allSettled([project.ready, project.protection]);
@@ -231,6 +281,7 @@ export class CoreHost {
     }
     this.bridges.clear();
     this.projects.clear();
+    this.folders.clear();
   }
 }
 

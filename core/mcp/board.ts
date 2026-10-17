@@ -11,6 +11,8 @@ export interface TaskView {
   owner: string | null;
   attempt: number;
   clauses: string[];
+  /** Task numbers that must be done before this one starts, from its signed task.created (planning writes them). */
+  dependsOn: string[];
   testApproved: boolean;
   proofs: { kind: string; link: string; n: string }[];
   lastProgress: string | null;
@@ -22,6 +24,48 @@ const ATTEMPT = /^(T-\d+)\.a\d+$/;
 
 export function isTaskId(value: string): boolean {
   return TASK_ID.test(value);
+}
+
+/**
+ * The dependencies a task.created carries. Anything that is not a clean task number is kept as written, so an
+ * unreadable dependency still blocks (it can never be "done") instead of being dropped from the check.
+ */
+function dependencyIds(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  const ids = raw.filter((item): item is string => typeof item === "string" && item.trim() !== "").map((item) => item.trim().slice(0, 40));
+  return [...new Set(ids)];
+}
+
+export interface UnmetDependency {
+  id: string;
+  /** The task's title, or empty when the number is not on the board. */
+  title: string;
+  /** "unknown" when the number is not a task on the board. */
+  status: TaskStatus | "unknown";
+}
+
+/** The dependencies of `task` that are not done yet. A dependency that is not on the board counts as not done. */
+export function unmetDependencies(board: ReadonlyMap<string, TaskView>, task: Pick<TaskView, "dependsOn">): UnmetDependency[] {
+  const unmet: UnmetDependency[] = [];
+  for (const id of task.dependsOn) {
+    const dependency = board.get(id);
+    if (dependency?.status === "done") continue;
+    unmet.push(dependency ? { id, title: dependency.title, status: dependency.status } : { id, title: "", status: "unknown" });
+  }
+  return unmet;
+}
+
+const STATE_WORDS: Record<TaskStatus | "unknown", string> = { open: "not started", claimed: "being worked on", blocked: "blocked", done: "done", unknown: "not on the board" };
+
+/** Plain words for why a task cannot start yet, naming each blocking task. Empty when nothing blocks it. */
+export function waitingMessage(label: string, unmet: readonly UnmetDependency[]): string {
+  if (!unmet.length) return "";
+  if (unmet.some((dependency) => dependency.id === label || dependency.id === label.replace(/\.a\d+$/, ""))) {
+    return `${label} lists itself as something it must wait for, so it can never start. The plan needs correcting.`;
+  }
+  const names = unmet.map((dependency) => `${dependency.id}${dependency.title ? ` (${dependency.title})` : ""} is ${STATE_WORDS[dependency.status]}`);
+  const list = names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}` : names[0]!;
+  return `${label} cannot start yet because it needs ${unmet.length === 1 ? "another task" : "other tasks"} finished and merged first: ${list}. Start it once ${unmet.length === 1 ? "that one is" : "they are"} done.`;
 }
 
 /** "T-14" on attempt 2 is shown as "T-14.a2" (spec §3.1). */
@@ -55,6 +99,7 @@ export function foldBoard(entries: readonly LedgerEntry[]): Map<string, TaskView
         owner: null,
         attempt: 1,
         clauses: [...entry.refs],
+        dependsOn: dependencyIds(entry.data?.dependsOn),
         testApproved: false,
         proofs: [],
         lastProgress: null,

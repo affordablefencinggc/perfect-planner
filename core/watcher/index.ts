@@ -10,3 +10,4 @@ export {
   type StalledTask,
   type WatchError,
 } from "./watcher";
+export { WatchNotifier, describeSpan, oneLine, type ConsumeContext, type WatchNotice, type WatchNoticeKind } from "./notices";

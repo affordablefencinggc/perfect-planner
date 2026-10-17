@@ -14,9 +14,12 @@ const REPO_FILE = "repo.json";
  * The repo folder the person picked for a project (kept in its .perfect-planner/), read without running
  * anything, so the host can protect it before its first git run. Never a whole drive or the home folder.
  */
-export function chosenRepoRoot(projectRoot: string): string | undefined {
+export function chosenRepoRoot(projectRoot: string, platform: NodeJS.Platform = process.platform): string | undefined {
   try {
     const root = (JSON.parse(fs.readFileSync(path.join(projectRoot, ".perfect-planner", REPO_FILE), "utf8")) as { root?: unknown }).root;
+    // On Windows only a drive-letter path is local: a network path in a hand-edited file is never looked at, since
+    // looking at \\host\share makes Windows talk to that machine.
+    if (typeof root === "string" && platform === "win32" && !isLocalWindowsPath(root)) return undefined;
     return typeof root === "string" && path.isAbsolute(root) && !repoRefusal(root) ? root : undefined;
   } catch {
     return undefined;
