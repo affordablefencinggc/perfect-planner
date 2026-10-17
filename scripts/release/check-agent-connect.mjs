@@ -51,8 +51,13 @@ export function parseConnectLine(line) {
   const placeholder = String(line).match(/<[^>]*>|\{\{[^}]*\}\}/);
   if (placeholder) throw new Error(`The line still has a placeholder (${placeholder[0]}), so it cannot run as copied.`);
   const words = shellWords(line);
-  const [node, connect, bridgeUrl, tokenFile, ...options] = words;
-  if (!/connect\.mjs$/.test(connect ?? "") || !/^http:\/\/127\.0\.0\.1:\d+$/.test(bridgeUrl ?? "") || !/\.token$/.test(tokenFile ?? "")) {
+  const [node, connect, ...rest] = words;
+  // Options such as `--agent claude` come before the bridge address; the token file follows it.
+  const at = rest.findIndex((word) => /^http:\/\/127\.0\.0\.1:\d+$/.test(word));
+  const bridgeUrl = rest[at];
+  const tokenFile = rest[at + 1];
+  const options = at < 0 ? rest : [...rest.slice(0, at), ...rest.slice(at + 2)];
+  if (!/connect\.mjs$/.test(connect ?? "") || at < 0 || !/\.token$/.test(tokenFile ?? "")) {
     throw new Error("That is not a Connect agent line (node, connect.mjs, bridge address, token file).");
   }
   return { node, connect, bridgeUrl, tokenFile, options };

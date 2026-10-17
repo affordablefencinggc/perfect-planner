@@ -143,7 +143,7 @@ describe("agent entry path", () => {
     vi.stubEnv("PP_NODE_BINARY", "C:\\Program Files\\Perfect Planner\\desktop-host\\node.exe");
     try {
       const setup = setupFor("http://127.0.0.1:1", "C:\\t\\c.token", "C:\\Program Files\\Perfect Planner\\desktop-host\\core-host\\agent.mjs", "win32");
-      expect(setup.claudeCode).toBe("& 'C:\\Program Files\\Perfect Planner\\desktop-host\\node.exe' 'C:\\Program Files\\Perfect Planner\\desktop-host\\core-host\\connect.mjs' http://127.0.0.1:1 'C:\\t\\c.token'");
+      expect(setup.claudeCode).toBe("& 'C:\\Program Files\\Perfect Planner\\desktop-host\\node.exe' 'C:\\Program Files\\Perfect Planner\\desktop-host\\core-host\\connect.mjs' --agent claude http://127.0.0.1:1 'C:\\t\\c.token'");
       expect(JSON.parse(setup.json).mcpServers["perfect-planner-core"].command).toBe("C:\\Program Files\\Perfect Planner\\desktop-host\\node.exe");
     } finally {
       vi.unstubAllEnvs();

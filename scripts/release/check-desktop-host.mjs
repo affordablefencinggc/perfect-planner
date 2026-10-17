@@ -209,7 +209,10 @@ export async function runLoop(origin, headers, work, appNode) {
   if (!checked.passed) throw new Error(`The check did not pass: ${JSON.stringify(checked).slice(0, 300)}`);
   steps.checkPassed = true;
   const diff = await api("GET", `/tasks/${task.id}/diff`);
-  await api("POST", `/tasks/${task.id}/approve-diff`, { commit: diff.commit });
+  // The diff holds a test file that runs code on the machine, so the person confirms exactly that file.
+  const sensitive = diff.sensitive ?? [];
+  steps.approvedWithConfirmation = sensitive.length > 0;
+  await api("POST", `/tasks/${task.id}/approve-diff`, { commit: diff.commit, confirmSensitive: sensitive });
   await api("POST", `/tasks/${task.id}/merge`, { commit: steps.proofAttached });
   const done = (await api("GET", "/tasks")).tasks.find((t) => t.id === task.id);
   steps.merged = done.status === "done" && git(repo, "show", "main:src/save.js").includes("saveNotes");
@@ -273,13 +276,16 @@ export async function checkDesktopHost(folder = path.join(projectRoot, "dist", "
     const before = await refusedWithoutTheWindow(ready.origin);
     const { headers, launch } = await personHeaders(ready.origin, ready.open);
     const after = await refusedWithoutTheWindow(ready.origin, launch);
+    // A folder nobody has written to waits for the person to start its history (what the window's button does).
+    const started = await request(`${ready.origin}/api/core/owner/start?project=default`, { method: "POST", headers, body: {} });
+    if (started.status !== 200) throw new Error(`Starting the history failed (${started.status}): ${started.json?.message ?? ""}`);
     const connect = await request(`${ready.origin}/api/core/agents/connect?project=default`, { method: "POST", headers, body: {} });
     if (connect.status !== 200 || !connect.json?.result?.claudeCode) throw new Error(`Connect agent failed (${connect.status}): ${connect.json?.message ?? ""}`);
     const agent = await checkAgentConnect(connect.json.result.claudeCode);
     const loop = await runLoop(ready.origin, headers, work, node);
-    const agents = await request(`${ready.origin}/api/core/agents?project=default`, { headers: { "sec-fetch-site": "same-origin" } });
+    const agents = await request(`${ready.origin}/api/core/agents?project=default`, { headers });
     const listed = agents.json?.result?.agents ?? [];
-    if (!listed.some((a) => a.name === "Release check agent" && a.role === "main")) throw new Error("The app does not list the agent that checked in.");
+    if (!listed.some((a) => a.name === "Release check agent" && a.role === "main")) throw new Error(`The app does not list the agent that checked in (status ${agents.status}, saw ${JSON.stringify(listed.map((a) => [a.name, a.role]))}).`);
     child.stdin.end();
     const stopped = await Promise.race([exited, new Promise((resolve) => setTimeout(() => resolve(null), 10_000))]);
     if (!stopped) throw new Error("The service did not stop when its stdin closed.");

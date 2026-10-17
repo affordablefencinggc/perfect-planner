@@ -124,6 +124,8 @@ export async function smokeInstalledApp({ installer, out, installDir = "C:\\PP S
     await client.screenshot(path.join(out, "1-installed-app-opened.png"));
 
     await until("the Connect agent drawer", () => client.evaluate(`document.querySelector(".core-screen-connect") !== null || ${clickButton("Connect agent")}`), 30_000);
+    // A folder nobody has written to waits for the person to start its history (the window's own button).
+    await until("the history to start", () => client.evaluate(`fetch("/api/core/owner/start?project=default", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }).then((r) => r.status === 200)`), 30_000);
     await until("the Connect agent card", () => client.evaluate(`document.querySelector(".core-screen-connect button.primary") !== null`), 30_000);
     await client.evaluate(clickButton("Connect agent", ".core-screen-connect"));
     const line = await until("the connect line", () => client.evaluate(`document.querySelector("[data-connect-command]")?.innerText?.trim() || ""`), 30_000);
