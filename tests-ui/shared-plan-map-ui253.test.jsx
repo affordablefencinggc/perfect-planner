@@ -4,6 +4,7 @@ import {render,screen,cleanup,act} from '@testing-library/react';
 import {ProjectContext} from '../src/project/ProjectProvider.jsx';
 import {TaskDraftMap} from '../src/components/TaskDraftMap.jsx';
 import {recordPlanApproval} from '../src/project/planApproval.js';
+import {resetPersonSession} from '../src/core-screens/coreApi.js';
 import {emptyTaskDraftLedger,updateTaskDraft,taskDraftBinding} from '../src/project/taskDraftLedger.js';
 afterEach(()=>{cleanup();localStorage.clear();});
 const project={projectId:'pp_shared_plan',name:'Shared plan',state:'observed',registration:{rootIdentity:'a'.repeat(64)},census:{digest:'b'.repeat(64)}};
@@ -25,4 +26,13 @@ test('gap 17: an approval made by the person is never shown as "not checked"; th
  expect(screen.queryByText(/not checked/i)).toBeNull();
  expect(screen.getByRole('button',{name:'Run saved-plan check'})).toBeTruthy();
  expect(screen.getByText(/^Saved-plan check: an extra step after you approve/)).toBeTruthy();
+});
+
+test('a new folder with no history offers the button that starts it, right under "No plan approved yet"',async()=>{
+ resetPersonSession();sessionStorage.setItem('pp.core.csrf','csrf-1');
+ vi.stubGlobal('fetch',vi.fn(async()=>({ok:true,status:200,json:async()=>({ok:true,result:{project:'default',owner:{state:'new',signals:[],started:false}}})})));
+ render(show(undefined));
+ expect(await screen.findByRole('button',{name:'Start a new history for this folder'})).toBeTruthy();
+ expect(screen.getByText(/^No plan approved yet\./)).toBeTruthy();
+ vi.unstubAllGlobals();resetPersonSession();sessionStorage.clear();
 });

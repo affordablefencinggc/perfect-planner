@@ -58,6 +58,8 @@ export interface RepoState {
   ok: boolean;
   root?: string;
   reason?: string;
+  /** The folder the person already imported (this project's own folder), offered as the starting answer. */
+  suggested?: string;
 }
 
 // ---------- the repository the worktrees branch from ----------
@@ -89,9 +91,11 @@ export async function repoState(project: CoreProject): Promise<RepoState> {
   // is never the project's repo, so it is neither used nor protected.
   const refusal = top ? repoRefusal(top) : null;
   if (top && !refusal) return { ok: true, root: top };
-  if (refusal) return { ok: false, reason: refusal };
+  const suggested = repoRefusal(project.root) ? undefined : project.root;
+  if (refusal) return { ok: false, reason: refusal, suggested };
   return {
     ok: false,
+    suggested,
     reason: chosen
       ? `${chosen} is no longer a git repository with a commit. Choose your project's git folder again.`
       : "Workers need your project's git folder (with at least one commit) to branch from. Choose it below.",
@@ -362,6 +366,12 @@ async function changedFiles(project: CoreProject, label: string, tree: { path: s
   return { files, sensitive: sensitiveChanges(files, pinned, support).sort() };
 }
 
+/** A refusal plus the end of the test's own output, so the person sees why the test failed. */
+export function withOutputTail(reason: string, output?: string): string {
+  const tail = (output ?? "").split(/\r?\n/).filter((line) => line.trim()).slice(-20).join("\n").slice(-2000);
+  return tail ? `${reason}\n\nEnd of the test output:\n${tail}` : reason;
+}
+
 export function registerTaskRoutes(router: Router): void {
   router.get("/tasks", ({ project }) => overview(project));
 
@@ -513,7 +523,7 @@ export function registerTaskRoutes(router: Router): void {
     const state = deriveState(project.entries(), label);
     if (!state.mergeApproval || state.mergeApproval.commit !== approved) refuse(project.service.gate.approveMerge(label, localPerson(project), approved));
     const merged = await project.service.gate.mergeAndVerify(label, { repoRoot: root, branch: tree.branch, integrationBranch: tree.baseRef, actor: localPerson(project) });
-    if (!merged.ok) throw new HttpError(409, "REFUSED", merged.reason);
+    if (!merged.ok) throw new HttpError(409, "REFUSED", withOutputTail(merged.reason, merged.output));
     revokeWorker(project, label);
     dispatches(project).delete(label);
     const removed = await manager(project, root).remove(label, WORKTREES_ACTOR).catch((error: Error) => ({ error: error.message }));

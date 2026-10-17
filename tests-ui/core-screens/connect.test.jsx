@@ -12,7 +12,12 @@ const CONNECT = {
   tokenFile: "/data/.perfect-planner/tokens/connect-C-1.token",
   agentPath: "/repo/dist/core-host/agent.mjs",
   agentBuilt: true,
-  claudeCode: "node '/repo/dist/core-host/connect.mjs' http://127.0.0.1:5555 '/data/.perfect-planner/tokens/connect-C-1.token'",
+  claudeCode: "node '/repo/dist/core-host/connect.mjs' --agent claude http://127.0.0.1:5555 '/data/.perfect-planner/tokens/connect-C-1.token'",
+  lines: {
+    claude: "node '/repo/dist/core-host/connect.mjs' --agent claude http://127.0.0.1:5555 '/data/.perfect-planner/tokens/connect-C-1.token'",
+    gemini: "node '/repo/dist/core-host/connect.mjs' --agent gemini http://127.0.0.1:5555 '/data/.perfect-planner/tokens/connect-C-1.token'",
+    codex: "node '/repo/dist/core-host/connect.mjs' --agent codex http://127.0.0.1:5555 '/data/.perfect-planner/tokens/connect-C-1.token'",
+  },
   json: JSON.stringify({ mcpServers: { "perfect-planner-core": { command: "node", args: ["/repo/dist/core-host/agent.mjs"], env: { PP_BRIDGE_URL: "http://127.0.0.1:5555", PP_AGENT_TOKEN_FILE: "/data/.perfect-planner/tokens/connect-C-1.token" } } } }, null, 2),
 };
 const MAIN = { id: "claude-code-ab12cd", name: "Claude Code", model: "claude-opus", role: "main", person: "owner", connection: "C-1", connectedAt: "2026-10-09T10:00:00Z" };
@@ -93,6 +98,28 @@ describe("CoreAgentConnect", () => {
     const agents = screen.getByRole("list", { name: "Connected agents" });
     expect(within(agents).getByText("Main chat")).toBeTruthy();
     for (let i = 0; i < localStorage.length; i++) expect(localStorage.getItem(localStorage.key(i))).not.toContain(TOKEN);
+  });
+
+  test("offers the same one line for Gemini CLI and Codex CLI, and remembers the pick", async () => {
+    const writeText = vi.fn().mockResolvedValue();
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    routeFetch({ "GET /agents": async () => ok(list()), "POST /agents/connect": async () => ok(CONNECT) });
+    renderWith();
+    fireEvent.click(await screen.findByRole("button", { name: /Connect agent/ }));
+    await screen.findByLabelText("Claude Code command");
+    const picker = screen.getByRole("radiogroup", { name: "Your agent" });
+    expect(within(picker).getByRole("radio", { name: "Claude Code" }).getAttribute("aria-checked")).toBe("true");
+
+    fireEvent.click(within(picker).getByRole("radio", { name: "Gemini CLI" }));
+    expect(screen.getByLabelText("Gemini CLI command").textContent).toBe(CONNECT.lines.gemini);
+    expect(screen.getByText(/choose Trust folder if it asks/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Copy the Gemini CLI command" }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(CONNECT.lines.gemini));
+
+    fireEvent.click(within(picker).getByRole("radio", { name: "Codex CLI" }));
+    expect(screen.getByLabelText("Codex CLI command").textContent).toBe(CONNECT.lines.codex);
+    expect(screen.getByText(/one Perfect Planner connection for the whole computer/)).toBeTruthy();
+    expect(localStorage.getItem("pp.connect.agent")).toBe("codex");
   });
 
   test("lists agents with role badges and disconnects one", async () => {

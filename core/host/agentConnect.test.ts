@@ -3,7 +3,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { bundledNodePath, claudeLaunch, runConnect, connectArgsProblem, connectLineProblem, validateConnectLine, connectPlan, installSkill, SKILL_NODE_PLACEHOLDER, SKILL_PROGRAM_PLACEHOLDER } from "./agentConnect";
+import { agentLaunch, bundledNodePath, claudeLaunch, runConnect, connectArgsProblem, connectLineProblem, validateConnectLine, connectPlan, detectAgent, installSkill, keepOutOfGit, parseArgs, SKILL_NODE_PLACEHOLDER, SKILL_PROGRAM_PLACEHOLDER } from "./agentConnect";
+import { AGENT_KINDS } from "./agentKinds";
 import { connectLine } from "./routes/agents";
 import { childEnv, protectFor } from "./protectedRoots";
 
@@ -14,7 +15,51 @@ describe("connect line", () => {
     expect(plan.remove).toEqual(["mcp", "remove", "perfect-planner-core", "-s", "local"]);
     expect(plan.add).toEqual(["mcp", "add", "perfect-planner-core", "-s", "local", "--env", "PP_BRIDGE_URL=http://127.0.0.1:5555", "--env", "PP_AGENT_TOKEN_FILE=/data/tokens/C-1.token", "--", process.execPath, path.join(here, "agent.mjs")]);
     expect(plan.skillFrom).toBe(path.join(here, "skill", "SKILL.md"));
-    expect(plan.skillTo).toBe(path.join("/home/me", ".claude", "skills", "perfect-planner-connect", "SKILL.md"));
+    expect(plan.skillTo).toEqual([
+      path.join("/home/me", ".claude", "skills", "perfect-planner-connect", "SKILL.md"),
+      path.join("/home/me", ".agents", "skills", "perfect-planner-connect", "SKILL.md"),
+    ]);
+  });
+
+  it("registers with Gemini CLI for this folder (project scope) and Codex CLI (user-wide), with the token file, never the token", () => {
+    const here = path.join("/pp", "dist", "core-host");
+    const base = { bridgeUrl: "http://127.0.0.1:5555", tokenFile: "/data/tokens/C-1.token", here, home: "/home/me" };
+    const agent = path.join(here, "agent.mjs");
+    const gemini = connectPlan({ ...base, agent: "gemini" });
+    expect(gemini.remove).toEqual(["mcp", "remove", "perfect-planner-core", "-s", "project"]);
+    // env after the command, so gemini's -e array option cannot swallow the positionals
+    expect(gemini.add).toEqual(["mcp", "add", "-s", "project", "perfect-planner-core", process.execPath, agent, "-e", "PP_BRIDGE_URL=http://127.0.0.1:5555", "-e", "PP_AGENT_TOKEN_FILE=/data/tokens/C-1.token"]);
+    const codex = connectPlan({ ...base, agent: "codex" });
+    expect(codex.remove).toEqual(["mcp", "remove", "perfect-planner-core"]);
+    expect(codex.add).toEqual(["mcp", "add", "perfect-planner-core", "--env", "PP_BRIDGE_URL=http://127.0.0.1:5555", "--env", "PP_AGENT_TOKEN_FILE=/data/tokens/C-1.token", "--", process.execPath, agent]);
+  });
+
+  it("picks the first installed agent in order claude, gemini, codex, or none", () => {
+    expect(detectAgent((a) => a !== "claude")).toBe("gemini");
+    expect(detectAgent((a) => a === "codex")).toBe("codex");
+    expect(detectAgent(() => true)).toBe("claude");
+    expect(detectAgent(() => false)).toBeNull();
+  });
+
+  it("reads --agent anywhere on the line and leaves the rest for the line checks", () => {
+    expect(parseArgs(["--agent", "gemini", "http://127.0.0.1:1", "/t/C-1.token"])).toEqual({ agent: "gemini", rest: ["http://127.0.0.1:1", "/t/C-1.token"] });
+    expect(parseArgs(["http://127.0.0.1:1", "/t/C-1.token", "--agent=codex"])).toEqual({ agent: "codex", rest: ["http://127.0.0.1:1", "/t/C-1.token"] });
+    expect(parseArgs(["--skill-only"])).toEqual({ agent: undefined, rest: ["--skill-only"] });
+  });
+
+  it("keeps Gemini's settings file out of git, once, and does nothing outside a checkout", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pp-git-"));
+    spawnSync("git", ["init", "-q", dir]);
+    expect(keepOutOfGit(dir)).toBe(true);
+    expect(keepOutOfGit(dir)).toBe(true);
+    expect(fs.readFileSync(path.join(dir, ".git", "info", "exclude"), "utf8").match(/\/\.gemini\/settings\.json/g)).toHaveLength(1);
+    fs.mkdirSync(path.join(dir, ".gemini"));
+    fs.writeFileSync(path.join(dir, ".gemini", "settings.json"), "{}");
+    expect(spawnSync("git", ["status", "--porcelain"], { cwd: dir, encoding: "utf8" }).stdout).toBe("");
+    fs.rmSync(dir, { recursive: true, force: true });
+    const plain = fs.mkdtempSync(path.join(os.tmpdir(), "pp-nogit-"));
+    expect(keepOutOfGit(plain)).toBe(false);
+    fs.rmSync(plain, { recursive: true, force: true });
   });
 
   it("accepts only a loopback bridge and an absolute .token file, and refuses a pasted key", () => {
@@ -40,16 +85,16 @@ describe("connect line", () => {
     expect(connectArgsProblem(["http://127.0.0.1:5555", "C:\\Users\\me\\C-1.token"], "win32")).toBeNull();
   });
 
-  it("installs the skill in the user's own Claude folder, names this program as the only line it may run, and replaces an older copy", () => {
+  it("installs the skill in Claude's and the shared Agent Skills folder, names this program as the only line it may run, and replaces an older copy", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pp-skill-"));
     const here = path.join(dir, "core-host");
     fs.mkdirSync(path.join(here, "skill"), { recursive: true });
     fs.writeFileSync(path.join(here, "skill", "SKILL.md"), `run only ${SKILL_PROGRAM_PLACEHOLDER} with ${SKILL_NODE_PLACEHOLDER}`);
     const plan = connectPlan({ bridgeUrl: "", tokenFile: "", here, home: path.join(dir, "home") });
-    fs.mkdirSync(path.dirname(plan.skillTo), { recursive: true });
-    fs.writeFileSync(plan.skillTo, "old");
+    fs.mkdirSync(path.dirname(plan.skillTo[0]), { recursive: true });
+    fs.writeFileSync(plan.skillTo[0], "old");
     installSkill(plan, here);
-    expect(fs.readFileSync(plan.skillTo, "utf8")).toBe(`run only ${path.join(here, "connect.mjs")} with ${bundledNodePath(here)}`);
+    for (const to of plan.skillTo) expect(fs.readFileSync(to, "utf8")).toBe(`run only ${path.join(here, "connect.mjs")} with ${bundledNodePath(here)}`);
     fs.rmSync(dir, { recursive: true, force: true });
   });
 });
@@ -96,6 +141,16 @@ describe("the line check the skill follows", () => {
     expect(connectLineProblem(`node '${winHere}\\connect.mjs' http://127.0.0.1:5555 '\\\\host\\share\\C-1.token'`, winHere, "win32")).toMatch(/network/);
     expect(connectLineProblem(`node '${unixHere}/connect.mjs' http://127.0.0.1:5555 'pp_c_0123456789abcdefghij'`, unixHere, "linux")).toMatch(/key/);
     expect(connectLineProblem(`node '${unixHere}/connect.mjs' --agent bash http://127.0.0.1:5555 '${unixToken}'`, unixHere, "linux")).toMatch(/shape/);
+  });
+
+  it("passes every agent's line the app hands out (Claude Code, Gemini CLI, Codex CLI) on both platforms", () => {
+    for (const agent of AGENT_KINDS) {
+      const unix = connectLine("http://127.0.0.1:5555", unixToken, `${unixHere}/agent.mjs`, "linux", agent);
+      const win = connectLine("http://127.0.0.1:5555", winToken, `${winHere}\\agent.mjs`, "win32", agent);
+      expect(unix).toContain(`--agent ${agent} `);
+      expect(validateConnectLine(unix, { connectProgram: `${unixHere}/connect.mjs`, platform: "linux" })).toBeNull();
+      expect(validateConnectLine(win, { connectProgram: `${winHere}\\connect.mjs`, platform: "win32" })).toBeNull();
+    }
   });
 
   it("refuses a relative Node path and a second &, and validateConnectLine takes the program path", () => {
@@ -231,6 +286,31 @@ describe("finding Claude Code", () => {
     expect(claudeLaunch([], { PATH: path.dirname(plain) }, project, [])).toEqual({ command: process.execPath, args: [plain] });
   });
 
+  it.runIf(!windows)("starts Gemini CLI and Codex CLI the same way: npm's script under this Node, never one in the project", () => {
+    const project = temp();
+    const outside = temp();
+    for (const [agent, pkg] of [["gemini", "@google/gemini-cli/bundle/gemini.js"], ["codex", "@openai/codex/bin/codex.js"]] as const) {
+      const script = path.join(outside, "lib", "node_modules", ...pkg.split("/"));
+      fs.mkdirSync(path.dirname(script), { recursive: true });
+      fs.writeFileSync(script, "#!/usr/bin/env node\n", { mode: 0o755 });
+      fs.mkdirSync(path.join(outside, `${agent}-bin`));
+      fs.symlinkSync(script, path.join(outside, `${agent}-bin`, agent));
+      program(path.join(project, agent));
+      const PATH = [project, path.join(outside, `${agent}-bin`)].join(sep);
+      expect(agentLaunch(agent, ["mcp", "list"], { PATH }, project, [])).toEqual({ command: process.execPath, args: [path.join(outside, `${agent}-bin`, agent), "mcp", "list"] });
+    }
+  });
+
+  it.runIf(windows)("runs the Gemini CLI and Codex CLI npm shims' package entries with Node, never the .cmd", () => {
+    const project = temp();
+    const npm = path.join(temp(), "npm");
+    for (const [agent, pkg] of [["gemini", "@google/gemini-cli/bundle/gemini.js"], ["codex", "@openai/codex/bin/codex.js"]] as const) {
+      program(path.join(npm, `${agent}.cmd`));
+      const entry = program(path.join(npm, "node_modules", ...pkg.split("/")));
+      expect(agentLaunch(agent, ["mcp", "list"], { Path: npm }, project, [])).toEqual({ command: process.execPath, args: [entry, "mcp", "list"] });
+    }
+  });
+
   it("connect.mjs started from a task worktree or from repo/src never runs a claude reached through a PATH link into the repo or the worktree", () => {
     // Claude Code's npm layout, whose package entry runs under this Node on every OS.
     const npmClaude = (dir: string, body: string) => {
@@ -269,6 +349,61 @@ describe("finding Claude Code", () => {
       expect(fs.readFileSync(ran, "utf8")).toContain("mcp add perfect-planner-core -s local");
     }
   });
+
+  for (const [agent, pkg, added] of [
+    ["gemini", "@google/gemini-cli/bundle/gemini.js", "mcp add -s project perfect-planner-core"],
+    ["codex", "@openai/codex/bin/codex.js", "mcp add perfect-planner-core"],
+  ] as const) {
+    it(`gives ${agent} a PATH with no folder in the project or repo, and never runs a ${agent} or git planted there through a link`, () => {
+      // The agent's npm layout, whose package entry runs under this Node on every OS.
+      const npmAgent = (dir: string, body: string) => {
+        const cli = path.join(dir, "node_modules", ...pkg.split("/"));
+        fs.mkdirSync(path.dirname(cli), { recursive: true });
+        fs.writeFileSync(cli, `#!/usr/bin/env node\n${body}\n`, { mode: 0o755 });
+        if (windows) fs.writeFileSync(path.join(dir, `${agent}.cmd`), "@echo off\r\n");
+        else fs.symlinkSync(cli, path.join(dir, agent));
+      };
+      const project = temp();
+      const repo = temp();
+      const outside = temp();
+      spawnSync("git", ["init", "-q", repo]);
+      fs.mkdirSync(path.join(repo, "src"), { recursive: true });
+      const tokenFile = path.join(project, ".perfect-planner", "tokens", "T-1.token");
+      fs.mkdirSync(path.dirname(tokenFile), { recursive: true });
+      fs.writeFileSync(tokenFile, "");
+      fs.writeFileSync(tokenFile.replace(/\.token$/, ".roots.json"), JSON.stringify({ roots: [project, repo] }));
+      const marker = path.join(outside, "planted-ran");
+      const plant = `require("fs").writeFileSync(${JSON.stringify(marker)}, "x");`;
+      npmAgent(path.join(repo, "tools"), plant);
+      // A git and a node planted beside it: keepOutOfGit (Gemini) must find the real git, and the agent's own lookups the real node.
+      if (!windows) for (const name of ["git", "node"]) fs.writeFileSync(path.join(repo, "tools", name), `#!/bin/sh\necho x > "${marker}"\n`, { mode: 0o755 });
+      else fs.writeFileSync(path.join(repo, "tools", "git.exe"), "");
+      link(path.join(repo, "tools"), path.join(outside, "to-repo"));
+      const seen = path.join(outside, "seen");
+      npmAgent(path.join(outside, "safe"), `for (const tool of ["git", "node"]) require("node:child_process").spawnSync(tool, ["--version"]);\nrequire("fs").appendFileSync(${JSON.stringify(seen)}, JSON.stringify({ args: process.argv.slice(2).join(" "), path: process.env.PATH ?? process.env.Path }) + "\\n");`);
+      const PATH = [path.join(outside, "to-repo"), path.join(repo, "tools"), path.join(outside, "safe"), process.env.PATH ?? ""].join(sep);
+      const cwd = path.join(repo, "src");
+      const output: string[] = [];
+      const code = runConnect(["--agent", agent, "http://127.0.0.1:5555", tokenFile], { cwd, env: { ...process.env, PATH, Path: PATH }, home: temp(), here: path.join(outside, "core-host"), out: (t) => output.push(t), err: (t) => output.push(t) });
+      expect(code, output.join("")).toBe(0);
+      expect(fs.existsSync(marker)).toBe(false);
+      const runs = fs.readFileSync(seen, "utf8").trim().split("\n").map((line) => JSON.parse(line) as { args: string; path: string });
+      expect(runs.map((r) => r.args).join("\n")).toContain(added);
+      const realRoots = [project, repo].map((root) => fs.realpathSync(root));
+      for (const run of runs) {
+        for (const dir of run.path.split(sep).filter(Boolean)) {
+          let real = dir;
+          try {
+            real = fs.realpathSync(dir);
+          } catch {
+            // a folder that does not exist reaches nothing
+          }
+          expect(realRoots.some((root) => real === root || real.startsWith(root + path.sep)), `${dir} reaches the project or repo`).toBe(false);
+        }
+      }
+      if (agent === "gemini") expect(fs.readFileSync(path.join(repo, ".git", "info", "exclude"), "utf8")).toContain("/.gemini/settings.json");
+    });
+  }
 
   it("gives the agent a PATH with this Node first and no folder inside a protected root, as written or through a link", () => {
     const project = temp();
