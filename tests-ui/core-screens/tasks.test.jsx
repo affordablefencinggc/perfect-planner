@@ -228,6 +228,126 @@ describe("TasksScreen", () => {
     expect(within(after).getByRole("button", { name: "Start worker" })).toBeTruthy();
   });
 
+  describe("small bugs and task folders (lane L10)", () => {
+    const launch = (value) => ({ "GET /api/launch-folder": async () => ({ ok: true, status: 200, json: async () => value }) });
+    const tree = { path: "/w/T-1", branch: "pp/T-1", base: "main", port: 5200 };
+    const building = (over = {}) => task({ status: "claimed", owner: "worker-1", stage: "building", worktree: tree, ...over });
+
+    test("the git folder box starts with the folder this window was opened for, never the app's own data folder", async () => {
+      routeFetch({ "GET /tasks": async () => ok(view([task()], { ok: false, reason: "Choose it below." })), ...launch({ available: true, name: "notes", path: "/work/notes" }) });
+      renderScreen();
+      await waitFor(() => expect(screen.getByLabelText("Git folder").value).toBe("/work/notes"));
+    });
+
+    test("the git folder box stays empty when no folder is known, and never overwrites what the person typed", async () => {
+      routeFetch({ "GET /tasks": async () => ok(view([task()], { ok: false, reason: "Choose it below." })), "GET /api/launch-folder": async () => { throw new Error("no local host"); } });
+      renderScreen();
+      expect((await screen.findByLabelText("Git folder")).value).toBe("");
+      cleanup();
+      let answer;
+      routeFetch({ "GET /tasks": async () => ok(view([task()], { ok: false, reason: "Choose it below." })), "GET /api/launch-folder": () => new Promise((resolve) => { answer = () => resolve({ ok: true, status: 200, json: async () => ({ available: true, name: "x", path: "/work/launch" }) }); }) });
+      renderScreen();
+      fireEvent.change(await screen.findByLabelText("Git folder"), { target: { value: "/work/typed" } });
+      await waitFor(() => expect(answer).toBeTypeOf("function"));
+      answer();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(screen.getByLabelText("Git folder").value).toBe("/work/typed");
+    });
+
+    test("a deleted task folder says so in plain words and offers to recreate it from its branch", async () => {
+      const note = "The folder for T-1 was deleted outside Perfect Planner. Its work is safe on the branch pp/T-1; recreate the folder from that branch to carry on.";
+      const waiting = (worktree) => task({ stage: "ready-to-claim", worktree, dispatch: { issuedAt: "now", model: "claude-sonnet-4-5" } });
+      let tasks = [waiting({ ...tree, state: "missing", note })];
+      const fetch = routeFetch({
+        "GET /tasks": async () => ok(view(tasks)),
+        "POST /tasks/T-1/dispatch": async () => refused(`${note} Press "Recreate the folder" on this task, then start the worker.`),
+        "POST /tasks/T-1/recreate-folder": async () => { tasks = [waiting(tree)]; return ok({ recreated: "T-1", branch: "pp/T-1", ...view(tasks) }); },
+      });
+      renderScreen();
+      const t1 = await card("T-1 Save notes");
+      expect(within(t1).getByText(/was deleted outside Perfect Planner\. Its work is safe on the branch pp\/T-1/)).toBeTruthy();
+      // Starting a worker on it is refused with the same explanation; it is not printed twice.
+      fireEvent.click(within(t1).getByRole("button", { name: "Start worker again" }));
+      await waitFor(() => expect(fetch.mock.calls.some(([u, i]) => String(u).includes("/tasks/T-1/dispatch") && i?.method === "POST")).toBe(true));
+      expect(within(t1).getAllByText(/was deleted outside Perfect Planner/)).toHaveLength(1);
+      fireEvent.click(within(t1).getByRole("button", { name: "Recreate the folder" }));
+      expect(await screen.findByText(/Recreated the folder for T-1 from its branch pp\/T-1/)).toBeTruthy();
+      expect(fetch.mock.calls.some(([u, i]) => String(u).includes("/tasks/T-1/recreate-folder") && i?.method === "POST")).toBe(true);
+      await waitFor(() => expect(within(screen.getByRole("article", { name: "T-1 Save notes" })).queryByRole("button", { name: "Recreate the folder" })).toBeNull());
+    });
+
+    test("a folder git no longer tracks is explained, with nothing offered that could change it", async () => {
+      routeFetch({ "GET /tasks": async () => ok(view([building({ worktree: { ...tree, state: "unlinked", note: "The folder for T-1 is still there (/w/T-1), but git no longer tracks it as a task folder. Perfect Planner has not changed it and will not remove it; your files are untouched." } })])) });
+      renderScreen();
+      const t1 = await card("T-1 Save notes");
+      expect(within(t1).getByText(/will not remove it; your files are untouched/)).toBeTruthy();
+      expect(within(t1).queryByRole("button", { name: "Recreate the folder" })).toBeNull();
+    });
+
+    test("Check the work, when it cannot run, is greyed with the reason in plain words", async () => {
+      routeFetch({ "GET /tasks": async () => ok(view([building({ checkReady: { ok: false, note: "The worker has unsaved changes in 1 file (scratch.txt). The check only counts saved (committed) work: ask the worker to commit them, then check again." } })])) });
+      renderScreen();
+      const t1 = await card("T-1 Save notes");
+      const button = within(t1).getByRole("button", { name: "Check the work" });
+      expect(button.disabled).toBe(true);
+      const why = document.getElementById(button.getAttribute("aria-describedby"));
+      expect(why.textContent).toMatch(/unsaved changes in 1 file \(scratch\.txt\)\. The check only counts saved \(committed\) work/);
+    });
+
+    test("Check the work, while the test runs, says it is checking and why the button is greyed", async () => {
+      let finish;
+      routeFetch({
+        "GET /tasks": async () => ok(view([building({ checkReady: { ok: true, note: "The worker has not said it is done yet (it has not attached its commit). You can still check what it has saved so far." } })])),
+        "POST /tasks/T-1/check": () => new Promise((resolve) => { finish = () => resolve(ok({ passed: false, reason: "The test failed.", output: "boom", ...view([building()]) })); }),
+      });
+      renderScreen();
+      const t1 = await card("T-1 Save notes");
+      expect(within(t1).getByText(/has not said it is done yet/)).toBeTruthy();
+      expect(within(t1).getByRole("button", { name: "Check the work" }).disabled).toBe(false);
+      fireEvent.click(within(t1).getByRole("button", { name: "Check the work" }));
+      const running = await within(t1).findByRole("button", { name: /Checking/ });
+      expect(running.disabled).toBe(true);
+      expect(document.getElementById(running.getAttribute("aria-describedby")).textContent).toMatch(/Running the approved test in the worker's folder\. This can take a minute or more\./);
+      finish();
+      expect(await screen.findByText(/The test failed\. Output: boom/)).toBeTruthy();
+      expect(within(t1).getByRole("button", { name: "Check the work" }).disabled).toBe(false);
+    });
+
+    test("Advanced view lists the folders nobody works in with owner, size and why each is kept, and the person chooses", async () => {
+      let folders = [
+        { task: "T-1", state: "ok", branch: "pp/T-1", path: "/w/T-1", owner: "you", launchedBy: "owner", sizeBytes: 12345, sizeApproximate: false, why: ["Has 2 commits not merged into main or pushed anywhere (they are on pp/T-1)."], removable: true },
+        { task: "T-2", state: "ok", branch: "pp/T-2", path: "/w/T-2", owner: "worker-2", launchedBy: "worker-2", sizeBytes: 3400000, sizeApproximate: true, why: ["Has 1 uncommitted or untracked file (draft.txt)."], removable: false },
+      ];
+      const fetch = routeFetch({
+        "GET /tasks": async () => ok(view([task()])),
+        "GET /worktrees": async () => ok({ folders, untracked: [] }),
+        "POST /worktrees/T-1/remove": async () => { folders = folders.slice(1); return ok({ task: "T-1", branchDeleted: false }); },
+        "POST /worktrees/clean": async () => ok({ removed: [], folders }),
+      });
+      renderScreen("advanced");
+      const panel = await screen.findByRole("region", { name: "Folders nobody is working in" });
+      expect(within(panel).getByText(/Owner: you · 12 KB/)).toBeTruthy();
+      expect(within(panel).getByText(/Owner: worker-2 · over 3\.4 MB/)).toBeTruthy();
+      expect(within(panel).getByText(/Has 1 uncommitted or untracked file \(draft\.txt\)/)).toBeTruthy();
+      expect(within(panel).getByText(/Has 2 commits not merged into main or pushed anywhere/)).toBeTruthy();
+      // Only the folder with nothing that would be lost can be removed from here.
+      expect(within(panel).queryByRole("button", { name: "Remove folder for T-2" })).toBeNull();
+      fireEvent.click(within(panel).getByRole("button", { name: "Clean up safe folders" }));
+      expect(await within(panel).findByText("Nothing was safe to remove.")).toBeTruthy();
+      fireEvent.click(within(panel).getByRole("button", { name: "Remove folder for T-1" }));
+      expect(await within(panel).findByText("Removed the folder for T-1. Its work stays on pp/T-1.")).toBeTruthy();
+      await waitFor(() => expect(within(screen.getByRole("region", { name: "Folders nobody is working in" })).queryByRole("button", { name: "Remove folder for T-1" })).toBeNull());
+      expect(fetch.mock.calls.some(([u, i]) => String(u).includes("/worktrees/T-1/remove") && i?.method === "POST")).toBe(true);
+    });
+
+    test("Simple view never asks for the folder list", async () => {
+      const fetch = routeFetch({ "GET /tasks": async () => ok(view([task()])) });
+      renderScreen("simple");
+      await card("T-1 Save notes");
+      expect(fetch.mock.calls.some(([u]) => String(u).includes("/worktrees"))).toBe(false);
+    });
+  });
+
   const jevTree = { path: "/w", branch: "pp/T-1", base: "main", port: 5200 };
   const jevTest = { entry: "L-000007", command: "npm test", files: ["save.test.js"], by: "worker-1" };
 

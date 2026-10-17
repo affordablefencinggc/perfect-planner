@@ -21,6 +21,7 @@ import { AGENT_SERVER_NAME, agentEntryPath, connectLine, nodeBinary, quoteFor, t
 
 export { quoteFor };
 import { localPerson, localPersonId } from "./people";
+import { annotate, checkReadiness, prepareForDispatch, registerWorktreeCareRoutes, tidy, withHygieneLock } from "./worktreeCare";
 import { protectRepository } from "../project";
 import { chosenRepoRoot, repoRefusal } from "../protectedRoots";
 import { syncJevPolicy } from "./decisions";
@@ -95,7 +96,8 @@ export async function repoState(project: CoreProject): Promise<RepoState> {
   } catch {
     chosen = undefined;
   }
-  const candidate = typeof chosen === "string" && chosen ? chosen : project.root;
+  // The app's own data folder is never a project's repo, and never offered as one (it would send workers there).
+  const candidate = typeof chosen === "string" && chosen ? chosen : project.appData ? "" : project.root;
   const top = await gitTop(candidate);
   // git found the repo by walking up from the folder: a whole drive or the home folder (a dotfiles repo)
   // is never the project's repo, so it is neither used nor protected.
@@ -105,7 +107,7 @@ export async function repoState(project: CoreProject): Promise<RepoState> {
     const taken = await repoClaimRefusal(project, top, { write: false });
     return taken ? { ok: false, reason: taken } : { ok: true, root: top };
   }
-  const suggested = repoRefusal(project.root) ? undefined : project.root;
+  const suggested = project.appData || repoRefusal(project.root) ? undefined : project.root;
   if (refusal) return { ok: false, reason: refusal, suggested };
   return {
     ok: false,
@@ -191,7 +193,9 @@ function personSummary(actor: Actor | undefined) {
   return actor ? { kind: actor.kind, id: actor.id, ...(actor.model ? { model: actor.model } : {}) } : undefined;
 }
 
-function viewTask(project: CoreProject, task: TaskView, worktrees: WorktreeInfo[], board: ReadonlyMap<string, TaskView>) {
+type FolderInfo = WorktreeInfo & { state?: string; note?: string };
+
+function viewTask(project: CoreProject, task: TaskView, worktrees: FolderInfo[], board: ReadonlyMap<string, TaskView>) {
   const label = attemptLabel(task);
   const gate = deriveState(project.entries(), label);
   const tree = worktrees.find((w) => w.taskId === label);
@@ -226,7 +230,7 @@ function viewTask(project: CoreProject, task: TaskView, worktrees: WorktreeInfo[
     check: gate.worktree ? { passed: gate.worktree.passed, commit: gate.worktree.commit, entry: gate.worktree.n } : null,
     diffApproval: gate.diffApproval ? { commit: gate.diffApproval.commit, by: personSummary(gate.diffApproval.reviewer), entry: gate.diffApproval.n } : null,
     merged: gate.merged ?? null,
-    worktree: tree ? { path: tree.path, branch: tree.branch, base: tree.baseRef, port: tree.port } : null,
+    worktree: tree ? { path: tree.path, branch: tree.branch, base: tree.baseRef, port: tree.port, state: tree.state ?? "ok", ...(tree.note ? { note: tree.note } : {}) } : null,
     dispatch: dispatch ? { issuedAt: dispatch.issuedAt, ...(dispatch.model ? { model: dispatch.model } : {}) } : null,
     // Why this task cannot start yet (dispatch refuses it for the same reason), in plain words; null when nothing blocks it.
     waitingFor: unmet.length ? { tasks: unmet.map((d) => d.id), message: waitingMessage(label, unmet) } : null,
@@ -237,9 +241,12 @@ function viewTask(project: CoreProject, task: TaskView, worktrees: WorktreeInfo[
   };
 }
 
-async function listWorktrees(project: CoreProject, repo: RepoState): Promise<WorktreeInfo[]> {
+async function listWorktrees(project: CoreProject, repo: RepoState): Promise<FolderInfo[]> {
   if (!repo.ok || !repo.root) return [];
-  return manager(project, repo.root).list().catch(() => []);
+  const worktrees = manager(project, repo.root);
+  // On the first look after the app starts (and when a task finishes) stale records and safe leftovers are tidied; see worktreeCare.
+  await tidy(project, worktrees, dispatches(project));
+  return annotate(worktrees, await worktrees.list().catch(() => []));
 }
 
 async function overview(project: CoreProject) {
@@ -247,6 +254,8 @@ async function overview(project: CoreProject) {
   const worktrees = await listWorktrees(project, repo);
   const board = project.service.board();
   const tasks = [...board.values()].map((task) => viewTask(project, task, worktrees, board));
+  // What is missing before "Check the work" can run, in plain words (only while a task is being built).
+  await Promise.all(tasks.filter((task) => task.stage === "building" && task.worktree).map(async (task) => Object.assign(task, { checkReady: await checkReadiness({ proofs: task.proofs, worktree: task.worktree! }) })));
   return { repo, tasks };
 }
 
@@ -293,6 +302,7 @@ async function worktreeFor(project: CoreProject, label: string): Promise<Worktre
   const root = await requireRepo(project);
   const tree = await manager(project, root).get(label);
   if (!tree) throw new HttpError(409, "NO_WORKTREE", `${label} has no worktree yet. Start a worker on it first.`);
+  if (!fs.existsSync(tree.path)) throw new HttpError(409, "WORKTREE_MISSING", `The folder for ${label} was deleted outside Perfect Planner. Its work is safe on the branch ${tree.branch}; press "Recreate the folder" on this task first.`);
   return tree;
 }
 
@@ -363,6 +373,7 @@ async function dispatch(project: CoreProject, host: CoreHost, id: string, body: 
   if (model !== undefined && !MODEL.test(model)) throw new HttpError(400, "INVALID", "Name the worker's model in letters, digits and . _ : / - (for example claude-sonnet-4).");
   const label = attemptLabel(task);
   const worktrees = manager(project, root);
+  await prepareForDispatch(worktrees, label);
   let tree = await worktrees.get(label);
   if (!tree) {
     try {
@@ -585,7 +596,7 @@ export function registerTaskRoutes(router: Router): void {
   });
 
   /** POST /tasks/:id/dispatch { model? }: worktree, worker token for this task, brief and command. */
-  router.post("/tasks/:id/dispatch", ({ project, host, params, body }) => dispatch(project, host, params.id!, bodyOf(body)));
+  router.post("/tasks/:id/dispatch", ({ project, host, params, body }) => withHygieneLock(project, () => dispatch(project, host, params.id!, bodyOf(body))));
 
   /** POST /tasks/:id/test { command, files }: the person writes the done-when test themselves. */
   router.post("/tasks/:id/test", ({ project, params, body }) => {
@@ -775,4 +786,6 @@ export function registerTaskRoutes(router: Router): void {
     const removed = await manager(project, root).remove(label, WORKTREES_ACTOR).catch((error: Error) => ({ error: error.message }));
     return { merged: true, commit: merged.mergeCommit, into: tree.baseRef, removed, ...(await overview(project)) };
   });
+
+  registerWorktreeCareRoutes(router, { requireRepo, manager, dispatched: dispatches, findTask, overview });
 }

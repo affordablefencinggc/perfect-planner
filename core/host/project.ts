@@ -24,6 +24,8 @@ export interface CoreProject {
   key: string;
   /** Folder whose .perfect-planner/ledger holds this project's ledger. */
   root: string;
+  /** True when `root` is the app's own data folder (the normal case), not a folder the person's project lives in. */
+  appData: boolean;
   ledger: Ledger;
   service: AgentService;
   /**
@@ -352,5 +354,5 @@ export function openCoreProject(baseRoot: string, key: string, override: string 
     }
     return report;
   });
-  return { key, root, ledger, service, policy, owner, ready, protection, protectRoots: guard, releaseRoots, state: new Map(), entries: () => ledger.entries() };
+  return { key, root, appData: override === undefined, ledger, service, policy, owner, ready, protection, protectRoots: guard, releaseRoots, state: new Map(), entries: () => ledger.entries() };
 }

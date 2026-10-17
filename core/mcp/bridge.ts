@@ -35,7 +35,8 @@ export interface Bridge {
 export async function startBridge(service: AgentService, port = 0): Promise<Bridge> {
   const server = createServer(async (req, res) => {
     const send = (status: number, body: unknown) => {
-      res.writeHead(status, { "content-type": "application/json", "cache-control": "no-store" });
+      // One call per connection: an agent that thinks for a while between calls would otherwise reuse a socket the host is closing at that very moment (ECONNRESET).
+      res.writeHead(status, { "content-type": "application/json", "cache-control": "no-store", connection: "close" });
       res.end(JSON.stringify(body));
     };
     if (req.method !== "POST" || req.url !== "/call") return send(404, { ok: false, code: "NOT_FOUND", message: "POST /call only." });
