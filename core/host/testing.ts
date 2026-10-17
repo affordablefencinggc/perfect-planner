@@ -5,9 +5,11 @@ import os from "node:os";
 import path from "node:path";
 import type { AddressInfo } from "node:net";
 import { MemoryKeyProvider, type LedgerEntry } from "../ledger/index";
+import { MemoryKeyProvider as JevMemoryKeys } from "../jev/index";
 import { CSRF_HEADER, createCoreHost, type CoreHost } from "./index";
 import type { CoreProject } from "./project";
 import { HostKeys } from "./keys";
+import { jevConfigured, setDecisionJev } from "./routes/decisions";
 
 interface PersonWindow {
   host: CoreHost;
@@ -55,6 +57,8 @@ class UnownedKeys extends HostKeys {
  */
 export async function startTestHost({ owned = true, autoStart = true, ...options }: { projectRootOverride?: string; owned?: boolean; autoStart?: boolean } = {}): Promise<{ host: CoreHost; base: string; dir: string; stop: () => Promise<void> }> {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "pp-core-host-"));
+  // A test host never reads this computer's key store, and so never calls Jev with a real key: no key unless the test sets one.
+  if (!jevConfigured()) setDecisionJev({ keys: new JevMemoryKeys() });
   const inner = new MemoryKeyProvider({ autoCreate: false });
   const h = createCoreHost({ root, bridge: true, ...options, keys: owned ? new HostKeys(inner) : new UnownedKeys(inner) });
   const s = http.createServer((req, res) => h.middleware(req, res, () => { res.statusCode = 404; res.end(); }));

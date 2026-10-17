@@ -9,6 +9,10 @@
 .core-screen-tasks .core-tasks-test code { font-family: var(--mono); overflow-wrap: anywhere; }
 .core-screen-tasks .core-tasks-line { margin: 0; font-size: var(--text-sm); overflow-wrap: anywhere; }
 .core-screen-tasks .core-tasks-line .core-muted { display: inline-block; min-width: 6.5em; }
+.core-screen-tasks .core-tasks-jev ul { margin: var(--space-1) 0 0; padding-left: 1.4em; font-size: var(--text-sm); }
+.core-screen-tasks .core-tasks-jev.gaps .core-tasks-line,
+.core-screen-tasks .core-tasks-jev.cannot-review .core-tasks-line { color: var(--red); }
+.core-screen-tasks .core-tasks-jev.approved .core-tasks-line { color: var(--green); }
 .core-screen-tasks .core-tasks-actions { display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--space-2); }
 .core-screen-tasks .core-tasks-start { display: inline-flex; flex-wrap: wrap; align-items: flex-end; gap: var(--space-2); }
 .core-screen-tasks label { display: grid; gap: var(--space-1); font-size: var(--text-xs); font-weight: 600; color: var(--muted); }
