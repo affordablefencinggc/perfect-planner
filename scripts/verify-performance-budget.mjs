@@ -10,8 +10,9 @@ export const PERFORMANCE_BUDGETS = Object.freeze({
   // v1 (Oct 2026): totals raised for the seven on-demand imported-project panels; first-load limits unchanged.
   // Oct 2026: +16 KiB for the self-plan gap fixes (Blueprint pre-fill, task paste, scripted intake guard, discovery details); per-file limit unchanged.
   // UI trial sweep (Oct 2026): ~150 defect fixes (validation, confirmations, focus handling, honest states) landed against the same total.
-  // Core loop screens (Oct 2026): six on-demand core screens (Planning, Tasks, People, Settings, start history, owner stop).
-  // Measured together after the UI trial sweep landed: 549.1 KiB gzip, hence 552. First-load limits unchanged.
+  // The per-file limit is unchanged, but the entry chunk itself grew about 7.5 KiB gzip over main, so first load is heavier.
+  // Both changes were sized against 480 KiB separately; together they measure 500.4 KiB, hence 504.
+  // Core loop screens (Oct 2026): six on-demand core screens on top of the above measure 539.2 KiB (#15). The run-loop-from-app work (Tasks, planning from the description, start history, owner stop) brings the total to 549.1 KiB; 552 leaves under 3 KiB of headroom. First-load limits unchanged.
   maxTotalJavaScriptGzipBytes: 552 * 1024,
   // UI trial sweep (Oct 2026): +1 KiB for the shared frame stylesheet (sr-only, popover bounds, small-screen rules).
   maxIndividualStylesheetGzipBytes: 45 * 1024,

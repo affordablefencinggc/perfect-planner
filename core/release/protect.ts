@@ -18,7 +18,7 @@ import type { CommandRunner } from "./types";
  * elsewhere must copy all of these; the hook imports the other two. protect.test.ts checks this list
  * against the hook's own imports.
  */
-export const PRE_PUSH_HOOK_FILES: readonly string[] = ["pre-push.mjs", "secrets-detector.mjs", "git-exec.mjs"];
+export const PRE_PUSH_HOOK_FILES: readonly string[] = ["pre-push.mjs", "secrets-detector.mjs", "git-runner.mjs", "git-exec.mjs"];
 
 /** The dependency-free pre-push scan this module ships; the hook shim runs it with node. */
 export const DEFAULT_PRE_PUSH_SCRIPT = fileURLToPath(new URL("./hooks/pre-push.mjs", import.meta.url));

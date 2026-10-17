@@ -142,6 +142,18 @@ export interface BranchScanResult {
   filesScanned: number;
 }
 
+/** `git ls-tree -r -z` output: path -> mode, type and object id. */
+function parseTree(stdout: string): Map<string, { mode: string; type: string; id: string }> {
+  const entries = new Map<string, { mode: string; type: string; id: string }>();
+  for (const record of stdout.split("\0")) {
+    const tab = record.indexOf("\t");
+    if (tab < 0) continue;
+    const [mode = "", type = "", id = ""] = record.slice(0, tab).split(" ");
+    entries.set(record.slice(tab + 1), { mode, type, id });
+  }
+  return entries;
+}
+
 /**
  * Layer 3: scan the full content of every file the branch adds or changes.
  * `approved` is the set of fingerprints a person approved in the signed ledger
@@ -154,19 +166,31 @@ export async function scanBranch(
   opts: { cwd: string; base: string; head?: string; approved?: ReadonlySet<string> },
 ): Promise<BranchScanResult> {
   const head = opts.head ?? "HEAD";
-  const list = await run("git", ["diff", "--name-only", "--diff-filter=ACMR", `${opts.base}...${head}`], { cwd: opts.cwd });
-  if (list.code !== 0) {
-    throw new Error(`git diff failed (exit ${list.code}): ${list.stderr.trim().split(/\r?\n/)[0] ?? ""}`);
-  }
-  const paths = list.stdout.split(/\r?\n/).map((p) => p.trim()).filter(Boolean);
+  const fail = (what: string, result: { code: number; stderr: string }) =>
+    new Error(`${what} failed (exit ${result.code}): ${result.stderr.trim().split(/\r?\n/)[0] ?? ""}`);
+  // base...head: what head changed since its merge-base with base. Only object reads (merge-base,
+  // ls-tree, cat-file blob) are used: they never touch the working tree, so no filter program can
+  // run, and the host git runner allows them in a repo whose config names one.
+  const mergeBase = await run("git", ["merge-base", opts.base, head], { cwd: opts.cwd });
+  if (mergeBase.code !== 0) throw fail("git merge-base", mergeBase);
+  const tree = async (rev: string) => {
+    const listed = await run("git", ["ls-tree", "-r", "-z", "--full-tree", rev], { cwd: opts.cwd });
+    if (listed.code !== 0) throw fail("git ls-tree", listed);
+    return parseTree(listed.stdout);
+  };
+  const before = await tree(mergeBase.stdout.trim());
+  const after = await tree(head);
   const findings: SecretFinding[] = [];
-  for (const path of paths) {
+  const paths: string[] = [];
+  for (const [path, entry] of after) {
+    const old = before.get(path);
+    // Added or changed files; a submodule (commit) or unchanged blob has nothing to read.
+    if (entry.type !== "blob" || (old && old.id === entry.id && old.mode === entry.mode)) continue;
+    paths.push(path);
     const rule = isForbiddenFile(path);
     if (rule) findings.push(...forbiddenFinding(path, rule, opts.approved));
-    const shown = await run("git", ["show", `${head}:${path}`], { cwd: opts.cwd });
-    if (shown.code !== 0) {
-      throw new Error(`git show failed for ${path} (exit ${shown.code}): ${shown.stderr.trim().split(/\r?\n/)[0] ?? ""}`);
-    }
+    const shown = await run("git", ["cat-file", "blob", entry.id], { cwd: opts.cwd });
+    if (shown.code !== 0) throw fail(`git cat-file for ${path}`, shown);
     if (shown.stdout.includes("\0")) continue;
     findings.push(...scanText(path, shown.stdout, opts.approved));
   }

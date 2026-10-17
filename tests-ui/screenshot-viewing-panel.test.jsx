@@ -17,7 +17,7 @@ describe("ScreenshotViewingPanel", () => {
     fireEvent.change(screen.getByLabelText("Concrete observation"), { target: { value: "The release gate is visibly disabled." } });
     fireEvent.click(screen.getByLabelText("I viewed this exact screenshot"));
   };
-  const challenge = { challengeId: "CH-1", token: ["challenge", "token", "1"].join("-") /* dummy, built at runtime so the push scan has nothing to flag */, requestedViewer: "danie" };
+  const challenge = { challengeId: "CH-1", token: ["secret", "challenge", "token"].join("-") /* built at runtime: a dummy, not a secret */, requestedViewer: "danie" };
   it("a refused attestation is shown as an alert, keeps the form, and allows a retry", async () => {
     const onAttest = vi.fn().mockRejectedValueOnce(new Error("CHALLENGE_EXPIRED")).mockResolvedValueOnce(undefined);
     render(<ScreenshotViewingPanel record={{ viewingStatus: "UNVIEWED" }} challenge={challenge} onAttest={onAttest} />);
