@@ -3,6 +3,8 @@
    each screen's own CSS file and stay scoped under .core-screen-<id>. */
 .app-shell .core-screen {
   display: grid;
+  /* Coordinate gives its workspace min-height:100%; keep rows at their content height. */
+  align-content: start;
   gap: var(--space-5);
   padding: var(--space-5) var(--frame-pad);
   /* Room below the last row so the fixed Settings button (bottom-left) never covers it. */
