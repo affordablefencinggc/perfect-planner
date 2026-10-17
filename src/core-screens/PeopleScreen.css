@@ -1,0 +1,24 @@
+.core-screen-people .people-screen-intro { margin: 0; max-width: 80ch; color: var(--ink); font-size: var(--text-md); }
+.core-screen-people .people-screen-notice {
+  margin: 0;
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-md);
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  font-size: var(--text-sm);
+}
+.core-screen-people .people-screen-notice.is-good { background: var(--green-soft); color: var(--green); border-color: transparent; }
+.core-screen-people .people-screen-notice.is-bad { background: var(--red-soft); color: var(--red); border-color: transparent; }
+.core-screen-people .people-panel { max-width: 1200px; }
+@media (min-width: 1600px) {
+  .core-screen-people .people-panel { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); align-items: start; max-width: 1800px; }
+}
+.core-screen-people .people-screen-details { display: grid; gap: var(--space-3); max-width: 1200px; font-family: var(--mono); font-size: var(--text-xs); }
+.core-screen-people .people-screen-details dl { display: grid; grid-template-columns: max-content 1fr; gap: var(--space-1) var(--space-3); margin: 0; }
+.core-screen-people .people-screen-details dt { color: var(--muted); }
+.core-screen-people .people-screen-details dd { margin: 0; }
+.core-screen-people .people-screen-details table { border-collapse: collapse; width: 100%; }
+.core-screen-people .people-screen-details caption { text-align: left; font-weight: 600; padding-bottom: var(--space-1); color: var(--ink); }
+.core-screen-people .people-screen-details th,
+.core-screen-people .people-screen-details td { text-align: left; padding: var(--space-1) var(--space-2); border-top: 1px solid var(--border); overflow-wrap: anywhere; }
+.core-screen-people .people-screen-details th { color: var(--muted); font-weight: 600; }

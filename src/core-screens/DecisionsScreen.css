@@ -1,0 +1,113 @@
+/* Decisions screen. Every selector is scoped under .core-screen-decisions. */
+.core-screen-decisions { max-width: 1280px; }
+.core-screen-decisions .decisions-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-3);
+  margin: 0;
+}
+.core-screen-decisions .decisions-summary > div {
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+.core-screen-decisions .decisions-summary dt { color: var(--muted); font-size: var(--text-sm); }
+.core-screen-decisions .decisions-summary dd { margin: var(--space-1) 0 0; font-size: var(--text-2xl); font-weight: 700; }
+
+.core-screen-decisions .decisions-jev {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-md);
+  background: var(--amber-soft);
+  color: var(--amber-text);
+  font-size: var(--text-sm);
+}
+.core-screen-decisions .decisions-jev > svg { flex: none; margin-top: 2px; }
+.core-screen-decisions .decisions-jev.is-connected { background: var(--green-soft); color: var(--green); }
+
+.core-screen-decisions h3 { margin: 0 0 var(--space-3); font-size: var(--text-lg); display: flex; align-items: center; gap: var(--space-2); }
+.core-screen-decisions .decisions-list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-4); grid-template-columns: repeat(auto-fill, minmax(min(100%, 520px), 1fr)); }
+.core-screen-decisions .decisions-none { margin: 0; }
+
+.core-screen-decisions .decisions-card { display: grid; gap: var(--space-3); align-content: start; height: 100%; box-sizing: border-box; }
+.core-screen-decisions .decisions-card-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-start; gap: var(--space-2); }
+.core-screen-decisions .decisions-card-head h4 { margin: 0; font-size: var(--text-lg); line-height: 1.35; flex: 1 1 260px; }
+.core-screen-decisions .decisions-card-tags,
+.core-screen-decisions .decisions-chips { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.core-screen-decisions .decisions-asked { margin: 0; font-size: var(--text-sm); }
+
+.core-screen-decisions .decisions-rec {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border-left: 3px solid var(--ink);
+  border-radius: var(--radius-sm);
+  background: var(--surface-muted);
+}
+.core-screen-decisions .decisions-rec-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); }
+.core-screen-decisions .decisions-rec-label,
+.core-screen-decisions .decisions-why-label { color: var(--muted); font-size: var(--text-xs); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
+.core-screen-decisions .decisions-rec-option { font-size: var(--text-lg); }
+.core-screen-decisions .decisions-why ul,
+.core-screen-decisions .decisions-review-notes { margin: var(--space-1) 0 0; padding-left: var(--space-5); font-size: var(--text-sm); }
+.core-screen-decisions .decisions-why li + li { margin-top: var(--space-1); }
+.core-screen-decisions .decisions-norec { margin: 0; color: var(--muted); font-size: var(--text-sm); }
+.core-screen-decisions .decisions-numbers { margin: 0; overflow-wrap: anywhere; }
+
+.core-screen-decisions .decisions-card-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.core-screen-decisions .decisions-error { margin: 0; color: var(--red); font-size: var(--text-sm); }
+.core-screen-decisions .decisions-done { margin: 0; color: var(--green); font-size: var(--text-sm); }
+
+.core-screen-decisions .decisions-choose { display: grid; gap: var(--space-3); padding-top: var(--space-3); border-top: 1px solid var(--border); }
+.core-screen-decisions .decisions-choose fieldset { margin: 0; padding: 0; border: 0; display: grid; gap: var(--space-2); }
+.core-screen-decisions .decisions-choose legend { font-weight: 600; margin-bottom: var(--space-2); }
+.core-screen-decisions .decisions-radio,
+.core-screen-decisions .decisions-check { display: flex; align-items: center; gap: var(--space-2); font-size: var(--text-sm); cursor: pointer; }
+.core-screen-decisions .decisions-field { display: grid; gap: var(--space-1); font-size: var(--text-sm); }
+.core-screen-decisions .decisions-field > span { font-weight: 600; }
+.core-screen-decisions .decisions-field input,
+.core-screen-decisions .decisions-field textarea {
+  font: inherit;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--ink);
+}
+.core-screen-decisions .decisions-field input:focus-visible,
+.core-screen-decisions .decisions-field textarea:focus-visible,
+.core-screen-decisions .decisions-radio input:focus-visible,
+.core-screen-decisions .decisions-check input:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+
+.core-screen-decisions .decisions-ask { display: grid; gap: var(--space-3); max-width: 720px; text-align: left; color: var(--ink); }
+.core-screen-decisions .decisions-ask p { margin: 0; }
+.core-screen-decisions .decisions-ask-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); }
+.core-screen-decisions .decisions-empty { display: grid; gap: var(--space-3); justify-items: center; }
+.core-screen-decisions .decisions-empty > p { margin: 0; }
+.core-screen-decisions .decisions-empty .decisions-ask { width: 100%; margin-top: var(--space-3); }
+
+.core-screen-decisions .decisions-decided > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  cursor: pointer;
+  font-size: var(--text-lg);
+  font-weight: 600;
+  padding: var(--space-2) 0;
+  list-style: none;
+}
+.core-screen-decisions .decisions-decided > summary::-webkit-details-marker { display: none; }
+.core-screen-decisions .decisions-decided > summary:focus-visible { outline: none; box-shadow: var(--focus-ring); border-radius: var(--radius-sm); }
+.core-screen-decisions .decisions-decided[open] .decisions-caret { transform: rotate(90deg); }
+.core-screen-decisions .decisions-decided > .decisions-list { margin-top: var(--space-3); }
+.core-screen-decisions .decisions-card.is-decided { box-shadow: none; }
+.core-screen-decisions .decisions-outcome p { margin: 0 0 var(--space-1); font-size: var(--text-sm); }
+.core-screen-decisions .decisions-was { margin: 0; font-size: var(--text-sm); }
+
+@media (max-width: 720px) {
+  .core-screen-decisions .decisions-summary { grid-template-columns: 1fr; }
+}

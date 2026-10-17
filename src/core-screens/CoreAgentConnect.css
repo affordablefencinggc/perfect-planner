@@ -1,0 +1,53 @@
+/* One-click Connect agent card (CoreAgentConnect.jsx). Scoped under .core-screen-connect. */
+.core-screen-connect { display: grid; gap: var(--space-3); color: var(--ink); }
+.core-screen-connect .core-agent-connect-head { display: flex; gap: var(--space-3); align-items: flex-start; }
+.core-screen-connect .core-agent-connect-head h3 { margin: 0 0 var(--space-1); font-size: var(--text-lg); }
+.core-screen-connect .core-agent-connect-head p { margin: 0; font-size: var(--text-sm); line-height: 1.5; }
+.core-screen-connect .core-agent-connect-icon {
+  display: inline-grid; place-items: center; flex: none;
+  width: 32px; height: 32px; border-radius: var(--radius-md);
+  background: var(--green-soft); color: var(--green); font-size: 18px;
+}
+.core-screen-connect .core-agent-connect-actions { display: flex; gap: var(--space-2); }
+.core-screen-connect .core-agent-connect-setup { display: grid; gap: var(--space-2); font-size: var(--text-sm); }
+.core-screen-connect .core-agent-connect-setup > p { margin: 0; line-height: 1.5; }
+.core-screen-connect .core-agent-connect-snippet { display: grid; gap: var(--space-1); }
+.core-screen-connect .core-agent-connect-snippet-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
+.core-screen-connect .core-agent-connect-snippet pre {
+  margin: 0; padding: var(--space-2) var(--space-3);
+  max-width: 100%; overflow-x: auto; white-space: pre-wrap; word-break: break-all;
+  background: var(--surface-muted); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  font-family: var(--mono); font-size: var(--text-xs); line-height: 1.5;
+}
+.core-screen-connect .core-agent-connect-snippet pre:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.core-screen-connect .core-agent-connect-json summary { cursor: pointer; font-weight: 600; font-size: var(--text-sm); }
+.core-screen-connect .core-agent-connect-json summary:focus-visible { outline: none; box-shadow: var(--focus-ring); border-radius: var(--radius-sm); }
+.core-screen-connect .core-agent-connect-json[open] { display: grid; gap: var(--space-2); }
+.core-screen-connect .core-agent-connect-status:empty { display: none; }
+.core-screen-connect .core-agent-connect-waiting,
+.core-screen-connect .core-agent-connect-done {
+  display: inline-flex; align-items: center; gap: var(--space-2);
+  padding: var(--space-2) var(--space-3); border-radius: var(--radius-sm); font-size: var(--text-sm);
+}
+.core-screen-connect .core-agent-connect-waiting { background: var(--amber-soft); color: var(--amber-text); }
+.core-screen-connect .core-agent-connect-waiting svg { animation: core-agent-connect-spin 1.2s linear infinite; }
+.core-screen-connect .core-agent-connect-done { background: var(--green-soft); color: var(--green); font-weight: 600; }
+.core-screen-connect .core-agent-connect-warn { margin: 0; color: var(--amber-text); font-size: var(--text-sm); }
+.core-screen-connect .core-agent-connect-error {
+  display: grid; grid-template-columns: auto 1fr auto; gap: var(--space-3); align-items: start;
+  padding: var(--space-3); border-radius: var(--radius-sm); background: var(--red-soft); color: var(--ink);
+}
+.core-screen-connect .core-agent-connect-error > svg { color: var(--red); font-size: 20px; }
+.core-screen-connect .core-agent-connect-error p { margin: var(--space-1) 0 0; font-size: var(--text-sm); }
+.core-screen-connect .core-agent-connect-list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-2); }
+.core-screen-connect .core-agent-connect-list li {
+  display: grid; grid-template-columns: 1fr auto auto; gap: var(--space-2); align-items: center;
+  padding: var(--space-2) var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: var(--text-sm);
+}
+.core-screen-connect .core-agent-connect-list code { font-family: var(--mono); font-size: var(--text-xs); color: var(--muted); }
+.core-screen-connect .core-agent-connect-advanced { display: grid; grid-template-columns: auto 1fr; gap: var(--space-1) var(--space-3); margin: 0; font-size: var(--text-xs); }
+.core-screen-connect .core-agent-connect-advanced dt { color: var(--muted); }
+.core-screen-connect .core-agent-connect-advanced dd { margin: 0; word-break: break-all; }
+.core-screen-connect .core-agent-connect-advanced code { font-family: var(--mono); }
+@keyframes core-agent-connect-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .core-screen-connect .core-agent-connect-waiting svg { animation: none; } }

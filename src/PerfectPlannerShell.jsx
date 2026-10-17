@@ -67,6 +67,9 @@ import { ImportedProjectWorkflowWorkspace } from "./components/ImportedProjectWo
 const ConnectAgentDrawer = lazy(() => import("./components/ConnectAgentDrawer.jsx").then((module) => ({ default: module.ConnectAgentDrawer })));
 import { ProjectTruthGate } from "./components/ProjectTruthGate.jsx";
 import { ViewModeToggle } from "./components/ViewModeToggle.jsx";
+import { useCoreSummary, coreRosterLabel, coreAgentLabel } from "./core-screens/useCoreSummary.js";
+import { CORE_WORKSPACES, CoreWorkspace, coreWorkspaceContext, coreWorkspaceLabels, isCoreWorkspace } from "./core-screens/coreWorkspaces.jsx";
+import { LedgerSearchBox } from "./core-screens/LedgerSearchBox.jsx";
 import { ViewModeContext, useViewModeState } from "./project/viewMode.js";
 import { AppSettingsContext, TEXT_SIZES, useAppSettings, useAppSettingsState } from "./settings/appSettings.js";
 import { GearSixIcon } from "@phosphor-icons/react";
@@ -125,6 +128,7 @@ const workspaceOrder = [
   "evidence",
   "ledger",
   "index",
+  ...CORE_WORKSPACES,
 ];
 const GLOBAL_DIAGNOSTIC_PROJECT_ID = "pp_global_runtime";
 const EMPTY_RUNTIME_CAPABILITY_RECEIPTS = Object.freeze([]);
@@ -141,19 +145,20 @@ const workspaceLabels = {
   integrity: "Integrity",
   evidence: "Evidence",
   ledger: "To-do / Ledger",
+  ...coreWorkspaceLabels,
 };
 const stageNavigation = [
   {
     id: "define",
     label: "Define",
     number: "01",
-    workspaces: ["blueprint", "structure", "components"],
+    workspaces: ["blueprint", "structure", "components", "planning", "mvp"],
   },
   {
     id: "coordinate",
     label: "Coordinate",
     number: "02",
-    workspaces: ["plan", "collision", "allocation"],
+    workspaces: ["plan", "collision", "allocation", "decisions", "people"],
   },
   { id: "build", label: "Build", number: "03", workspaces: ["build"] },
   {
@@ -162,9 +167,10 @@ const stageNavigation = [
     number: "04",
     workspaces: ["integrity", "evidence"],
   },
-  { id: "release", label: "Release", number: "05", workspaces: ["ledger"] },
+  { id: "release", label: "Release", number: "05", workspaces: ["ledger", "lookup"] },
 ];
 const workspaceContext = {
+  ...coreWorkspaceContext,
   home: {
     stage: "home",
     purpose: "See the whole project without reading the whole project.",
@@ -458,6 +464,7 @@ function TopBar({
   onCheckPlannerConnection,
   onDisconnectPlannerConnection,
   onOpenSettings,
+  coreSummary = null,
 }) {
   const { settings: appSettings } = useAppSettings();
   const activeStage = stageForWorkspace(workspace);
@@ -728,6 +735,8 @@ function TopBar({
           </button>
         </nav>
 
+        <LedgerSearchBox onWorkspace={onWorkspace} />
+
         <div className="top-metrics">
           <div className="topbar-menu-anchor">
             <button
@@ -738,7 +747,7 @@ function TopBar({
               <UsersThreeIcon />{" "}
               {demoMode
                 ? `${people.length} developers`
-                : "Roster not connected"}{" "}
+                : (coreRosterLabel(coreSummary) ?? "Roster not connected")}{" "}
               <CaretDownIcon />
             </button>
             {openMenu === "developers" && (
@@ -756,6 +765,20 @@ function TopBar({
                       : "No roster connected"}
                   </span>
                 </header>
+                {!demoMode && coreRosterLabel(coreSummary) && (
+                  <div className="popover-empty" data-core-roster="true">
+                    <strong>{coreRosterLabel(coreSummary)}</strong>
+                    <small>Core project roster, kept in the People workspace.</small>
+                    <button
+                      onClick={() => {
+                        onWorkspace("people");
+                        setOpenMenu(null);
+                      }}
+                    >
+                      Open People
+                    </button>
+                  </div>
+                )}
                 {!people.length && (
                   <div className="popover-empty">
                     <strong>No people connected</strong>
@@ -816,7 +839,7 @@ function TopBar({
               setOpenMenu("actions");
             }}
           >
-            <RobotIcon /> {demoMode ? "Agent connection · unavailable in Demo" : agentObservations.label}
+            <RobotIcon /> {demoMode ? "Agent connection · unavailable in Demo" : agentChipLabel(agentObservations.label, coreSummary)}
           </button>
           <div className="topbar-menu-anchor">
             <button
@@ -947,7 +970,7 @@ function TopBar({
                         <RobotIcon />
                         <span>
                           <strong>Agent connection</strong>
-                          <small>{demoMode ? "Agent connection · unavailable in Demo" : agentObservations.label}</small>
+                          <small>{demoMode ? "Agent connection · unavailable in Demo" : agentChipLabel(agentObservations.label, coreSummary)}</small>
                         </span>
                         <ArrowRightIcon />
                       </button>
@@ -1321,6 +1344,7 @@ function TopBar({
         projectContext={projectContext}
         onProjectSelect={onProjectSelect}
         onOpenDemo={onOpenDemo}
+        coreSummary={coreSummary}
       />
     </header>
   );
@@ -2582,6 +2606,18 @@ const projectIndexEntries = [
   })),
 ].sort((a, b) => a.term.localeCompare(b.term));
 
+const NOTHING_KNOWN_AGENT_LABELS = ["Agent connection · unverified", "No paired agents", "No live agent observations"];
+// Only "nothing known" observation labels give way to the core count; failures are never replaced.
+function agentChipLabel(observationLabel, coreSummary) {
+  const core = coreAgentLabel(coreSummary);
+  return core && NOTHING_KNOWN_AGENT_LABELS.includes(observationLabel) ? core : observationLabel;
+}
+function coreProjectName(coreSummary) {
+  const idea = String(coreSummary?.plan?.idea ?? "").trim();
+  if (!idea) return "Core project";
+  return idea.length > 32 ? `${idea.slice(0, 31).trimEnd()}…` : idea;
+}
+
 function WorkspaceContextBar({
   workspace,
   onWorkspace,
@@ -2589,6 +2625,7 @@ function WorkspaceContextBar({
   projectContext,
   onProjectSelect,
   onOpenDemo,
+  coreSummary = null,
 }) {
   const context = workspaceContext[workspace] ?? workspaceContext.home;
   const activeProject = projectContext.activeProject;
@@ -2724,7 +2761,19 @@ function WorkspaceContextBar({
           )}
         </div>
         <nav className="project-tabs" aria-label="Open projects">
-          {!projects.length && (
+          {!projects.length && coreSummary?.started && (
+            <button
+              type="button"
+              className="active"
+              data-core-project-tab="true"
+              onClick={() => onWorkspace("planning")}
+              title="Open Deep planning for the core project"
+            >
+              <FolderIcon />
+              <span>{coreProjectName(coreSummary)}</span>
+            </button>
+          )}
+          {!projects.length && !coreSummary?.started && (
             <button
               type="button"
               className="empty active"
@@ -2798,6 +2847,7 @@ function ProjectHomeWorkspace({
   activeProject,
   onOpenDemo,
   onChooseFolder,
+  coreSummary = null,
 }) {
   const projectContext = useOptionalProject();
   const architectureRefresh = projectContext?.architectureRefreshStatus;
@@ -2821,6 +2871,54 @@ function ProjectHomeWorkspace({
     const { binding, blockers, mode, nextAction, project, stage, summary } =
       homeModel;
     const hasProject = mode !== "empty";
+    if (!hasProject && coreSummary?.started) {
+      const plan = coreSummary.plan ?? {};
+      const tasks = plan.tasks ?? 0;
+      const stageText = plan.approved
+        ? `Plan approved${plan.latest ? ` (${plan.latest})` : ""}, ${tasks} task${tasks === 1 ? "" : "s"}`
+        : "Planning in progress";
+      const members = coreSummary.people?.members ?? 0;
+      const agents = coreSummary.agents?.checkedIn ?? 0;
+      return (
+        <section
+          className="workspace project-home-workspace project-home-truth project-home-core"
+          aria-label="Project Home workspace"
+          data-home-mode="core"
+          data-home-project-id=""
+          data-home-generation=""
+        >
+          <header className="project-home-hero">
+            <div>
+              <span className="eyebrow">Core project</span>
+              <h1>{String(plan.idea ?? "").trim() || "Core project"}</h1>
+              <p>{members} {members === 1 ? "person" : "people"} on the project · {agents} agent{agents === 1 ? "" : "s"} checked in</p>
+            </div>
+            <div className="home-verdict truth-observed" aria-label="Current project stage">
+              <WarningIcon weight="fill" />
+              <span>
+                <small>CURRENT STAGE</small>
+                <strong>{stageText}</strong>
+              </span>
+            </div>
+          </header>
+          <section className="project-home-next-action" aria-label="Project next action">
+            <div className="project-home-action-copy">
+              <small>NEXT STEP</small>
+              <strong>Open Deep planning</strong>
+              <p>See the plan, its questions and its tasks. No app folder is imported yet; that is optional.</p>
+            </div>
+            <div className="project-home-action-buttons">
+              <button type="button" className="primary-button" data-home-next-action="open-deep-planning" onClick={() => onWorkspace("planning")}>
+                Open Deep planning <ArrowRightIcon />
+              </button>
+              <button type="button" className="soft-button" data-home-next-action="choose-app-folder" onClick={onChooseFolder}>
+                Choose app folder
+              </button>
+            </div>
+          </section>
+        </section>
+      );
+    }
     if (!hasProject) {
       return (
         <section
@@ -5843,6 +5941,7 @@ function PerfectPlannerShellCore({
   diagnosticSession,
 }) {
   const viewMode = useViewModeState();
+  const coreSummary = useCoreSummary();
   const appSettings = useAppSettingsState();
   const settings = appSettings.settings;
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -6406,6 +6505,7 @@ function PerfectPlannerShellCore({
         onCheckPlannerConnection={checkPlannerConnection}
         onDisconnectPlannerConnection={disconnectPlannerConnection}
         onOpenSettings={() => setSettingsOpen(true)}
+        coreSummary={coreSummary}
       />
       <main className="app-main">
         {demoMode && <DemoSampleBadge />}
@@ -6417,6 +6517,7 @@ function PerfectPlannerShellCore({
           </div>
         )}
         <div className="workspace-stage" key={workspace}>
+          {isCoreWorkspace(workspace) && <CoreWorkspace workspace={workspace} onWorkspace={navigateWorkspace} />}
           {workspace === "home" && (
             <ProjectHomeWorkspace
               collisionGate={collisionGate}
@@ -6425,6 +6526,7 @@ function PerfectPlannerShellCore({
               activeProject={activeProject}
               onOpenDemo={openDemoProject}
               onChooseFolder={chooseAppFolder}
+              coreSummary={coreSummary}
             />
           )}
           {workspace === "blueprint" &&
