@@ -1,0 +1,10 @@
+{
+  "label": "windows-nsis",
+  "checks": [
+    {
+      "name": "plan: idea and recommended answers",
+      "pass": false,
+      "seen": "Blocking questions are still open after 0 recommendations."
+    }
+  ]
+}
