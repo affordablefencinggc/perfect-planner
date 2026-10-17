@@ -1,6 +1,9 @@
 // Deep planning journey: idea -> questions -> a refused "TBD" -> a refused approval ->
 // every blocker settled by its recommendation -> approval -> mind map and roadmap.
 const IDEA = "Desktop invoice app with Stripe payments that works offline";
+// The Plan page step before this one already recorded an approval in the project ledger, so this screen
+// offers "Approve changed plan" until the plan is approved again as it now stands.
+const APPROVE = { role: "button", name: { re: "^Approve (changed )?plan$", flags: "i" } };
 
 export const steps = [
   {
@@ -23,7 +26,7 @@ export const steps = [
       await page.click({ role: "button", name: "Save answer" });
       await page.expectText(/"TBD" puts Q-\d+ off/);
       await page.expectText("Set a dated spike");
-      await page.click({ role: "button", name: "Approve plan" });
+      await page.click(APPROVE);
       await page.expectText(/cannot be approved yet: \d+ blocking questions? (is|are) still open/);
     },
   },
@@ -40,7 +43,7 @@ export const steps = [
         await waitFor(() => page.run((h, text) => !h.findAll({ role: "region", name: "Open blocking questions" }).some((r) => h.norm(r.textContent).includes(text)), next), { label: `blocker "${next}" settled` });
       }
       await page.expectText("No blocking questions are open.");
-      await page.click({ role: "button", name: "Approve plan" });
+      await page.click(APPROVE);
       await page.expectText(/Plan approved\. \d+ roadmap tasks were added\./);
     },
   },
