@@ -12,8 +12,11 @@ import { hostCall, startTestHost } from "./testing";
 export const git = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
 
 const cleanups: (() => Promise<void> | void)[] = [];
-/** Undoes everything registered with track(), newest first. */
+const stops: (() => Promise<void> | void)[] = [];
+/** Undoes everything registered with track(), newest first, after every host registered with trackStop() has stopped. */
 export async function cleanAll(): Promise<void> {
+  // A running host watches its workers' folders with git processes that hold them open, and Windows cannot remove a folder then.
+  for (const stop of stops.splice(0).reverse()) await stop();
   for (const clean of cleanups.splice(0).reverse()) await clean();
 }
 /** Call once per test file: everything registered with track() is undone after each test. */
@@ -22,6 +25,10 @@ export function cleanAfterEach(): void {
 }
 export function track(clean: () => Promise<void> | void): void {
   cleanups.push(clean);
+}
+/** Like track(), for a host: it is stopped before any folder registered with track() is removed. */
+export function trackStop(stop: () => Promise<void> | void): void {
+  stops.push(stop);
 }
 
 export function newRepo(label: string): string {
@@ -51,7 +58,7 @@ export const person = { kind: "person", id: "owner" } as const;
 /** Two projects in one host, each with one task T-1 (same id on purpose) and its own git folder. */
 export async function twoProjects(): Promise<{ ctx: Ctx; alpha: Side; beta: Side }> {
   const ctx = await startTestHost();
-  track(() => ctx.stop());
+  trackStop(() => ctx.stop());
   const sides = [] as Side[];
   for (const key of ["alpha", "beta"]) {
     const repo = newRepo(key);
