@@ -22,7 +22,9 @@ export async function committedFiles(worktreePath: string, baseSha: string): Pro
 
 /** Staged, unstaged and untracked paths. A staged rename reports both its new and old name. */
 export async function uncommittedFiles(worktreePath: string): Promise<string[]> {
-  const out = await git(worktreePath, ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignore-submodules=none"]);
+  // --no-optional-locks: status normally refreshes the index and takes index.lock for a moment. The watcher runs
+  // every few seconds beside the worker's own git, whose add or commit fails if it meets that lock.
+  const out = await git(worktreePath, ["--no-optional-locks", "status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignore-submodules=none"]);
   const parts = zsplit(out);
   const files: string[] = [];
   for (let index = 0; index < parts.length; index += 1) {
