@@ -9,15 +9,18 @@ import { changedFiles } from "./changes";
 import { makeTaskRepo, type Fixture } from "./fixtures";
 
 let fixture: Fixture | undefined;
+// Cleanup removes a repo with dozens of commits. On a loaded CI runner that has taken longer than vitest's 10 s
+// default hook limit (run 39034316282), so the hook gets a limit as generous as the test's own.
 afterEach(() => {
   fixture?.cleanup();
   fixture = undefined;
-});
+}, 60_000);
 
 const WORKER = `
 const { spawnSync } = require("child_process");
 const fs = require("fs");
-const env = { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t.invalid", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t.invalid" };
+// No background gc or maintenance: a detached git process still writing into .git is what makes removing the repo fail.
+const env = { ...process.env, GIT_CONFIG_COUNT: "2", GIT_CONFIG_KEY_0: "gc.auto", GIT_CONFIG_VALUE_0: "0", GIT_CONFIG_KEY_1: "maintenance.auto", GIT_CONFIG_VALUE_1: "false", GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t.invalid", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t.invalid" };
 const failures = [];
 for (let i = 0; i < 60; i += 1) {
   fs.writeFileSync("src/f" + i + ".ts", i + "\\n");
