@@ -167,6 +167,8 @@ async function main() {
     await setValue("Your idea", "Notes helper: a small tool that saves a person's notes to a local file. One person, one laptop, no accounts, no cloud.");
     await click("Start planning");
     if (!(await waitFor(async () => /questions\s+answered|No blocking questions are open/.test(await text()), 90_000))) throw new Error("Planning showed no questions within 90 s.");
+    // Keep the last few answers' HTTP outcomes, so a stuck plan says what the service replied.
+    await run(`if (!window.__ppLog) { window.__ppLog = []; const f = window.fetch; window.fetch = async (...a) => { try { const r = await f(...a); window.__ppLog.push((a[1]?.method || "GET") + " " + String(a[0]).replace(/\\?.*/, "") + " " + r.status); return r; } catch (e) { window.__ppLog.push("ERR " + String(a[0]).replace(/\\?.*/, "") + " " + e.message); throw e; } }; } return true;`);
     let clicks = 0;
     for (let i = 0; i < 120; i++) {
       if ((await text()).includes("No blocking questions are open")) break;
@@ -175,7 +177,11 @@ async function main() {
       clicks += 1;
       await sleep(900);
     }
-    if (!(await text()).includes("No blocking questions are open")) throw new Error(`Blocking questions are still open after ${clicks} recommendations.`);
+    if (!(await text()).includes("No blocking questions are open")) {
+      const log = await run(`return (window.__ppLog || []).filter((l) => /planning/.test(l)).slice(-6).join("; ")`).catch(() => "");
+      const card = await run(`const b = [...document.querySelectorAll("button")].find((e) => e.offsetParent !== null && e.innerText.includes("Use recommendation")); const c = b?.closest("article, section, li, div[id^=planning-q-]"); return c ? c.innerText.slice(0, 260) : "no recommendation card"`).catch(() => "");
+      throw new Error(`Blocking questions are still open after ${clicks} recommendations. Planning calls: ${log || "none seen"}. First open card: ${card.replace(/\s+/g, " ")}`);
+    }
     return `${clicks} recommendations used; no blocking questions`;
   });
 
