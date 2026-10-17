@@ -133,7 +133,7 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-  # Install and smoke-test what was just built on clean Windows, macOS and Linux runners.
+  # Install and smoke-test what was just built on clean Windows and Linux runners.
   # Reported, not gating: a red trial does not stop a person from publishing the draft.
   trial:
     name: Installer trial

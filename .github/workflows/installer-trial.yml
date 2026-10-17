@@ -1,7 +1,7 @@
 name: Installer Trial
 
-# Installs the desktop installers a Release run built, on clean GitHub-hosted Windows, macOS and
-# Linux runners, and smoke-tests them the way a person would: install, launch, first-run screen,
+# Installs the desktop installers a Release run built, on clean GitHub-hosted Windows and
+# Linux runners (no macOS: its minutes cost far more), and smoke-tests them the way a person would: install, launch, first-run screen,
 # Settings, open a project folder, Connect agent, close, uninstall, look for leftovers.
 # - Called by release.yml after its builds (workflow_call) so every dry run and R-<n> tag is trialed.
 # - Push to a trial/** branch, or Run workflow, to trial earlier Release runs by id.
@@ -32,7 +32,7 @@ concurrency:
 
 env:
   # Push-triggered trials: PR #31's newest dry run (core host bundled) and the PR #12 head build (main + pipeline).
-  DEFAULT_SOURCE_RUNS: '["branch:release/desktop-core-host","37918632579"]'
+  DEFAULT_SOURCE_RUNS: '["branch:main"]'
 
 jobs:
   plan:
@@ -132,7 +132,7 @@ jobs:
         with:
           name: trial-windows-${{ matrix.source }}
           path: evidence
-          retention-days: 14
+          retention-days: 2
 
   linux:
     name: Linux ${{ matrix.os }} (run ${{ matrix.source }})
@@ -179,7 +179,7 @@ jobs:
         with:
           name: trial-linux-${{ matrix.os }}-${{ matrix.source }}
           path: evidence
-          retention-days: 14
+          retention-days: 2
 
   linux-rpm:
     name: Linux Fedora rpm (run ${{ matrix.source }})
@@ -226,50 +226,11 @@ jobs:
         with:
           name: trial-linux-rpm-${{ matrix.source }}
           path: evidence
-          retention-days: 14
-
-  macos:
-    name: macOS ${{ matrix.target.platform }} (run ${{ matrix.source }})
-    needs: plan
-    runs-on: ${{ matrix.target.os }}
-    timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        source: ${{ fromJSON(needs.plan.outputs.sources) }}
-        target:
-          - { platform: macos-arm64, os: macos-latest }
-          - { platform: macos-x64, os: macos-15-intel }
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-        with:
-          sparse-checkout: scripts
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
-        with:
-          node-version: 22
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          run-id: ${{ matrix.source }}
-          github-token: ${{ github.token }}
-          pattern: PerfectPlanner-*-${{ matrix.target.platform }}
-          path: installers
-          merge-multiple: true
-      - name: Trial the DMG
-        run: |
-          ls -la installers
-          sw_vers; uname -m
-          mkdir -p "$RUNNER_TEMP/trial-sample-app"
-          bash scripts/release/trial/trial-macos.sh installers evidence "$RUNNER_TEMP/trial-sample-app" "${{ matrix.target.platform }}"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        if: always()
-        with:
-          name: trial-${{ matrix.target.platform }}-${{ matrix.source }}
-          path: evidence
-          retention-days: 14
+          retention-days: 2
 
   summary:
     name: Trial summary
-    needs: [windows, linux, linux-rpm, macos]
+    needs: [windows, linux, linux-rpm]
     if: always()
     runs-on: ubuntu-latest
     permissions:
