@@ -11,7 +11,7 @@ export type RemoteCall = (call: { tool: ToolName; args: unknown; agent?: string 
 const INSTRUCTIONS = [
   "Perfect Planner coordinates agents through one strict ledger.",
   "Call hello once when you connect. The first agent to connect becomes the main chat; workers launched on a task get a token for that task only.",
-  "Workers: claim_task, report_progress, attach_proof, ask_main, release_task. Main chat: check_inbox between steps, answer questions by Q number.",
+  "Workers: claim_task, report_progress, attach_proof, ask_main, release_task. Main chat: check_inbox between steps (open questions, plus notices of what Perfect Planner saw the workers do), answer questions by Q number.",
   "Every write is a ledger entry. Nothing you report marks a task done; Perfect Planner runs the approved test itself.",
 ].join(" ");
 

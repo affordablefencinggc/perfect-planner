@@ -1,5 +1,6 @@
 import { existsSync, statSync } from "node:fs";
 import path from "node:path";
+import { redactSecrets } from "../secrets/index";
 import { WATCHER_ACTOR, type EntryDraft, type LedgerPort } from "../worktrees/ports";
 import type { WorktreeInfo } from "../worktrees/types";
 import { changedFiles } from "./changes";
@@ -16,6 +17,10 @@ export interface GitWatcherOptions {
   now?: () => number;
   /** Called with a tick that threw outside the per-worktree guard (for example the worktree list failed). Only used by start(). */
   onError?: (error: unknown) => void;
+  /** Called once with each completed tick's result, whether the timer or a caller ran it. A throw goes to onError. */
+  onTick?: (result: TickResult) => void;
+  /** When it returns false a tick reads nothing and writes nothing (for example while the ledger is not the person's). Default: always. */
+  shouldRun?: () => boolean;
 }
 
 export interface ObservedTaskCommit extends ObservedCommit {
@@ -48,6 +53,8 @@ export interface TickResult {
   active: Collision[];
   /** Worktrees that could not be read, and ledger writes that failed. Retried next tick. */
   errors: WatchError[];
+  /** True when `shouldRun` said no: nothing was read or written, and the empty lists above say nothing about the worktrees. */
+  skipped?: boolean;
 }
 
 interface TaskProgress {
@@ -88,6 +95,8 @@ export class GitWatcher {
   private readonly stallMs: number;
   private readonly now: () => number;
   private readonly onError?: (error: unknown) => void;
+  private readonly onTick?: (result: TickResult) => void;
+  private readonly shouldRun?: () => boolean;
 
   private seeded = false;
   /** taskId -> commits already written, for tasks with a worktree; rebuilt from the ledger when a task comes back. */
@@ -106,14 +115,25 @@ export class GitWatcher {
     this.stallMs = options.stallMs ?? DEFAULT_STALL_MS;
     this.now = options.now ?? Date.now;
     this.onError = options.onError;
+    this.onTick = options.onTick;
+    this.shouldRun = options.shouldRun;
   }
 
   /** One pass over every worktree. Concurrent calls share the pass already running. */
   tick(): Promise<TickResult> {
     if (!this.running) {
-      this.running = this.runTick().finally(() => {
-        this.running = undefined;
-      });
+      this.running = this.runTick()
+        .then((result) => {
+          try {
+            this.onTick?.(result);
+          } catch (error) {
+            this.onError?.(error);
+          }
+          return result;
+        })
+        .finally(() => {
+          this.running = undefined;
+        });
     }
     return this.running;
   }
@@ -188,6 +208,7 @@ export class GitWatcher {
 
   private async runTick(): Promise<TickResult> {
     const result: TickResult = { observed: [], collisions: [], resolved: [], stalled: [], active: [], errors: [] };
+    if (this.shouldRun && !this.shouldRun()) return { ...result, skipped: true };
     if (!this.seeded) {
       try {
         this.seed();
@@ -233,7 +254,8 @@ export class GitWatcher {
       } catch {
         files = [];
       }
-      const subject = commit.subject || "(no commit message)";
+      // A worker's commit message is its own text and the ledger is permanent: a pasted key never goes in.
+      const subject = redactSecrets(commit.subject || "(no commit message)");
       const ok = this.write(
         {
           type: "commit.observed",

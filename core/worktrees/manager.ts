@@ -57,6 +57,31 @@ export interface RemoveResult {
   branchKeptReason?: string;
 }
 
+export type UpdateRefusal = "dirty" | "conflict" | "unfinished" | "folder-missing" | "wrong-branch" | "base-missing" | "would-overwrite" | "identity" | "git-too-old" | "failed";
+
+/** What bringing a task up to date with its integration branch did. Nothing is thrown for a refusal: the folder was left as it was. */
+export interface UpdateFromMainResult {
+  status: "updated" | "up-to-date" | "refused";
+  taskId: string;
+  branch: string;
+  /** The integration branch brought in (the task's baseRef, for example "main"). */
+  base: string;
+  /** Plain words for the person. */
+  message: string;
+  /** refused only. */
+  reason?: UpdateRefusal;
+  /** refused: the files that stopped it (changed files, conflicting files, files that would be overwritten). updated: files the update brought in. */
+  files?: string[];
+  /** updated: the branch tip before and after, and the integration commit that was merged in. */
+  before?: string;
+  after?: string;
+  mergedIn?: string;
+  /** updated: how many commits of the integration branch the task did not have. */
+  commits?: number;
+  /** updated: true when the branch only moved forward (it had no commits of its own the integration branch lacked). */
+  fastForward?: boolean;
+}
+
 interface Registry {
   schemaVersion: 1;
   worktrees: WorktreeInfo[];
@@ -203,6 +228,134 @@ export class WorktreeManager {
       }
     }
     return conflicts;
+  }
+
+  /** Drop file claims a task holds (all of them, or just the given files). Returns what was released and what it still holds. */
+  releaseClaims(taskId: string, files?: string[]): Promise<{ released: string[]; remaining: string[] }> {
+    return this.serial(async () => {
+      const registry = await this.readRegistry();
+      const info = registry.worktrees.find((item) => item.taskId === taskId);
+      if (!info) throw new WorktreeError(`${taskId} has no worktree.`);
+      const wanted = files ? new Set(files.map(toRepoPath)) : undefined;
+      const released = info.claims.filter((file) => !wanted || wanted.has(file));
+      if (!released.length) return { released: [], remaining: [...info.claims] };
+      info.claims = info.claims.filter((file) => !released.includes(file));
+      await this.writeRegistry(registry);
+      return { released, remaining: [...info.claims] };
+    });
+  }
+
+  /**
+   * Bring a task's branch up to date with the branch it will merge into, inside its own worktree, without
+   * ever touching work in progress. The merge is worked out first with git's in-memory merge
+   * (merge-tree --write-tree), which changes no file: a conflict or a dirty worktree is reported and the
+   * folder is left exactly as it was. Only a clean merge is applied, as a fast-forward of a clean folder,
+   * which git refuses outright (changing nothing) if it would overwrite anything. Nothing is reset,
+   * stashed or deleted. On success the task's base moves to the merged-in commit, so "what the worker
+   * changed" stays the worker's own changes. The approvals made at the old tip no longer match the new one,
+   * so the work must be checked and its diff approved again.
+   */
+  updateFromMain(taskId: string): Promise<UpdateFromMainResult> {
+    return this.serial(() => this.updateNow(taskId));
+  }
+
+  private async updateNow(taskId: string): Promise<UpdateFromMainResult> {
+    const registry = await this.readRegistry();
+    const info = registry.worktrees.find((item) => item.taskId === taskId);
+    if (!info) throw new WorktreeError(`${taskId} has no worktree.`);
+    const where = { taskId, branch: info.branch, base: info.baseRef };
+    const refuse = (reason: UpdateRefusal, message: string, files?: string[]): UpdateFromMainResult => ({ status: "refused", ...where, reason, message: `${message} Nothing in ${taskId}'s folder was changed.`, ...(files?.length ? { files } : {}) });
+
+    if (!existsSync(info.path)) return refuse("folder-missing", `${taskId}'s folder is missing (${toRepoPath(path.relative(this.repoRoot, info.path))}), so there is nothing to update.`);
+    const onBranch = (await runGit(info.path, ["symbolic-ref", "--short", "-q", "HEAD"])).stdout.trim();
+    if (onBranch !== info.branch) return refuse("wrong-branch", `${taskId}'s folder is on ${onBranch ? `branch ${onBranch}` : "no branch"}, not on ${info.branch}.`);
+    for (const name of ["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-merge", "rebase-apply"]) {
+      const marker = (await runGit(info.path, ["rev-parse", "--git-path", name])).stdout.trim();
+      if (marker && existsSync(path.resolve(info.path, marker))) return refuse("unfinished", `${taskId} is in the middle of a merge, rebase or cherry-pick (${name}). Finish or abort that first.`);
+    }
+
+    const before = await snapshot(info.path);
+    if (before.status.length) {
+      const names = before.status.map((line) => line.slice(3));
+      return refuse("dirty", `${taskId} has changes that are not committed yet (${listNames(names)}). Let the worker commit them, or move them aside, then update again.`, names);
+    }
+
+    const target = await runGit(this.repoRoot, ["rev-parse", "--verify", "-q", `${info.baseRef}^{commit}`]);
+    const tip = target.stdout.trim();
+    if (target.code !== 0 || !tip) return refuse("base-missing", `${info.baseRef}, the branch ${taskId} merges into, can no longer be found.`);
+
+    const moveBase = async (): Promise<void> => {
+      if (info.baseSha === tip) return;
+      info.baseSha = tip;
+      await this.writeRegistry(registry);
+    };
+    if ((await runGit(info.path, ["merge-base", "--is-ancestor", tip, before.head])).code === 0) {
+      await moveBase();
+      return { status: "up-to-date", ...where, message: `${taskId} already has everything that is in ${info.baseRef}. Nothing was changed.` };
+    }
+    const commits = Number((await runGit(info.path, ["rev-list", "--count", `${before.head}..${tip}`])).stdout.trim()) || 0;
+
+    let after: string;
+    let fastForward = false;
+    if ((await runGit(info.path, ["merge-base", "--is-ancestor", before.head, tip])).code === 0) {
+      after = tip;
+      fastForward = true;
+    } else {
+      // The merge is worked out in git's object store only: no file, index or branch changes yet.
+      const merged = await runGit(info.path, ["merge-tree", "--write-tree", "--no-messages", "--name-only", before.head, tip]);
+      if (merged.code === 1) {
+        const [, ...rest] = merged.stdout.split(/\r?\n/);
+        const conflicted = rest.slice(0, rest.findIndex((line) => line === "") < 0 ? rest.length : rest.findIndex((line) => line === "")).filter(Boolean);
+        return refuse("conflict", `${taskId} cannot be brought up to date because the same lines were changed in ${conflicted.length ? listNames(conflicted) : "some files"} here and in ${info.baseRef}. A person has to choose which change to keep.`, conflicted);
+      }
+      if (merged.code !== 0) {
+        return /usage|unknown option|write-tree/i.test(merged.stderr)
+          ? refuse("git-too-old", "Updating a task needs Git 2.38 or later (git merge-tree --write-tree). Update Git and try again.")
+          : refuse("failed", `Git could not work out the merge (${firstLine(merged.stderr || merged.stdout)}).`);
+      }
+      const tree = merged.stdout.split(/\r?\n/)[0]!.trim();
+      const made = await runGit(info.path, ["commit-tree", tree, "-p", before.head, "-p", tip, "-m", `Bring ${info.branch} up to date with ${info.baseRef}`]);
+      if (made.code !== 0) {
+        return /identity unknown|unable to auto-detect|no email was given|no name was given|empty ident/i.test(made.stderr)
+          ? refuse("identity", "Git on this computer does not know your name and email yet, so it cannot record the merge. Set them with git config --global user.name and user.email, then update again.")
+          : refuse("failed", `Git could not record the merge (${firstLine(made.stderr || made.stdout)}).`);
+      }
+      after = made.stdout.trim();
+    }
+
+    // Files the update will write. Ignored files are expendable to git but may be the worker's notes or data.
+    const incoming = lines((await runGit(info.path, ["-c", "core.quotePath=false", "diff", "--name-only", "--no-renames", before.head, after])).stdout);
+    const ignored = lines((await runGit(info.path, ["--no-optional-locks", "-c", "core.quotePath=false", "status", "--porcelain=v1", "--ignored=matching", "--untracked-files=all"])).stdout)
+      .filter((line) => line.startsWith("!! "))
+      .map((line) => line.slice(3).replace(/\/$/, ""));
+    const clash = incoming.filter((file) => ignored.some((hidden) => file === hidden || file.startsWith(`${hidden}/`) || hidden.startsWith(`${file}/`)));
+    if (clash.length) return refuse("would-overwrite", `${info.baseRef} has files at the same place as files ${taskId} keeps out of git (${listNames(clash)}). Move those files first.`, clash);
+
+    const applied = await runGit(info.path, ["merge", "--ff-only", "--quiet", after]);
+    if (applied.code !== 0) {
+      const now = await snapshot(info.path).catch(() => undefined);
+      const intact = now && now.head === before.head && now.status.length === 0;
+      return {
+        status: "refused",
+        ...where,
+        reason: "failed",
+        message: intact
+          ? `Git would not apply the update (${firstLine(applied.stderr || applied.stdout)}). Nothing in ${taskId}'s folder was changed.`
+          : `Git stopped part-way through the update (${firstLine(applied.stderr || applied.stdout)}) and ${taskId}'s folder is not as it was. Its commits are all still on ${info.branch}; look at "git status" in the folder before doing anything else.`,
+      };
+    }
+    await moveBase();
+    return {
+      status: "updated",
+      ...where,
+      message: `${taskId} now has the ${commits === 1 ? "1 new change" : `${commits} new changes`} from ${info.baseRef}${fastForward ? "" : ", merged with its own work"}. Its own files were not touched.`,
+      before: before.head,
+      after,
+      mergedIn: tip,
+      commits,
+      fastForward,
+      files: incoming.slice(0, 50),
+    };
   }
 
   /**
@@ -364,6 +517,21 @@ export class WorktreeManager {
       throw new WorktreeError(`npm ci failed in ${path.basename(worktreePath)} (exit ${code}): ${output.trim().split(/\r?\n/).slice(-3).join(" ")}${hint}`);
     }
   }
+}
+
+/** Where a worktree stands: its tip and every changed or untracked file git reports (ignored files are not listed). */
+async function snapshot(worktreePath: string): Promise<{ head: string; status: string[] }> {
+  const head = await git(worktreePath, ["rev-parse", "--verify", "HEAD^{commit}"]);
+  const status = lines(await git(worktreePath, ["--no-optional-locks", "-c", "core.quotePath=false", "status", "--porcelain=v1", "--untracked-files=all"]));
+  return { head, status };
+}
+
+function listNames(names: readonly string[], shown = 4): string {
+  return names.length <= shown ? names.join(", ") : `${names.slice(0, shown).join(", ")} and ${names.length - shown} more`;
+}
+
+function firstLine(text: string): string {
+  return text.trim().split(/\r?\n/)[0]?.slice(0, 200) || "no message";
 }
 
 function portIsFree(port: number): Promise<boolean> {

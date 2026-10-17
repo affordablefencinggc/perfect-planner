@@ -14,6 +14,7 @@ import { PersonSessions } from "./session";
 import { registerRoutes } from "./routes/index";
 import { syncJevPolicy } from "./routes/decisions";
 import { chosenRepoRoot } from "./routes/tasks";
+import { startProjectWatch, type ProjectWatchOptions } from "./watch";
 import { protectRoots } from "../exec/index";
 import { GitProgramRefusedError } from "../worktrees/index";
 
@@ -34,6 +35,11 @@ export interface CoreHostOptions {
   keys?: HostKeys;
   /** Supplies each project's owner key instead of the app's signed pin (core/host/owner.ts). Tests and embedders only. */
   ownerKey?: OwnerKeySource;
+  /**
+   * The git watcher every open project gets (core/host/watch.ts): collisions, stalled tasks and new commits go to the
+   * ledger and to the main chat's inbox. On by default; pass false to run none, or options to tune it.
+   */
+  watch?: false | ProjectWatchOptions;
 }
 
 /** The host's key provider type (kept for callers of the older name). */
@@ -111,9 +117,24 @@ export class CoreHost {
     let project = this.projects.get(key);
     if (!project) {
       project = openCoreProject(this.options.root, key, this.options.projectRootOverride, this.keys, this.options.ownerKey);
+      if (this.options.watch !== false) project.watch = startProjectWatch(project, this.options.watch ?? {});
       this.projects.set(key, project);
     }
     return project;
+  }
+
+  /** Stops one project's watcher, agent bridge and ledger, in that order, and forgets it. A later request opens it again. */
+  async closeProject(key: string): Promise<void> {
+    const project = this.projects.get(key);
+    if (!project) return;
+    // The watcher writes to the ledger: it stops (and its pass in flight finishes) before anything else is closed.
+    await project.watch?.stop().catch(() => undefined);
+    await (await this.bridges.get(key))?.close().catch(() => undefined);
+    this.bridges.delete(key);
+    await Promise.allSettled([project.ready, project.protection]);
+    project.ledger.close();
+    project.releaseRoots();
+    this.projects.delete(key);
   }
 
   /**
@@ -222,6 +243,8 @@ export class CoreHost {
   }
 
   async close(): Promise<void> {
+    // Watchers first: they write to the ledger, so none may be mid-pass when it closes.
+    await Promise.all([...this.projects.values()].map((project) => project.watch?.stop().catch(() => undefined)));
     for (const bridge of this.bridges.values()) await (await bridge).close().catch(() => undefined);
     // Wait for the git runs started at open (exclude, protection) so none outlives the host in the project folder.
     for (const project of this.projects.values()) await Promise.allSettled([project.ready, project.protection]);

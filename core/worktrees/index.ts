@@ -1,4 +1,4 @@
-export { WorktreeManager, WorktreeError, type CreateOptions, type ClaimConflict, type Installer, type RemoveResult, type WorktreeManagerOptions } from "./manager";
+export { WorktreeManager, WorktreeError, type CreateOptions, type ClaimConflict, type Installer, type RemoveResult, type UpdateFromMainResult, type UpdateRefusal, type WorktreeManagerOptions } from "./manager";
 export { filterPrograms, git, GitError, GitHardeningError, GitProgramRefusedError, refreshCarriedSettings, runGit, type GitOptions, type GitResult } from "./git";
 export { caseInsensitiveFs, isWithin, lines, pathKey, realDir, samePath, toRepoPath } from "./platform";
 export { evidenceValue, GATE_ACTOR, WATCHER_ACTOR, WORKTREES_ACTOR, type LedgerPort } from "./ports";

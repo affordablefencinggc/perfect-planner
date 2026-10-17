@@ -17,6 +17,7 @@ import { installPlanningRules } from "../planning/index";
 import { installReleaseRules, protectProject, type CommandRunner, type ProtectionReport } from "../release/index";
 import { ensureRequiredIgnores, PRIVATE_DIR, runGit } from "../worktrees/index";
 import { protectRoots, registeredRoots } from "../exec/index";
+import type { ProjectWatch } from "./watch";
 
 export interface CoreProject {
   /** Safe key from the client ("default" when none was given). */
@@ -44,6 +45,8 @@ export interface CoreProject {
   protectRoots(roots: readonly string[]): void;
   /** Removes this project's protected roots (the host calls it when it closes the project). */
   releaseRoots(): void;
+  /** The git watcher the host started for this project (core/host/watch.ts); the host stops it before the ledger closes. */
+  watch?: ProjectWatch;
   /** Per-screen scratch state that is not ledger truth (e.g. a planning session in progress). */
   state: Map<string, unknown>;
   entries(): readonly LedgerEntry[];

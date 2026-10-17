@@ -144,7 +144,7 @@ export class AgentService {
   private welcome(agent: AgentRecord): { agent: string; role: AgentRole; task?: string; person: string; instructions: string } {
     const instructions =
       agent.role === "main"
-        ? "You are the main chat. Call check_inbox between steps; answer worker questions with answer(Q, text), or ask the person here when you cannot."
+        ? "You are the main chat. Call check_inbox between steps; answer worker questions with answer(Q, text), or ask the person here when you cannot. check_inbox also lists what Perfect Planner itself saw the workers do (two tasks changing one file, a task gone quiet, new commits) in notices; tell the person about anything that needs them."
         : agent.role === "worker"
           ? `You work on ${agent.task} only. claim_task, then report_progress as you go, attach_proof for evidence, and ask_main for anything you need decided. Perfect Planner runs the approved test itself.`
           : "You are connected read-only: list_tasks, lookup and check_inbox. The main chat for this person is another agent.";
