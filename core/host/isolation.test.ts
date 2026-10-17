@@ -15,7 +15,7 @@ import { asPersonRequest } from "./keys";
 import { ledgerIntegrity, projectKeyProblem } from "./project";
 import { chosenRepoRoot } from "./protectedRoots";
 import { isNetworkPath } from "./tokenFile";
-import { cleanAfterEach, dispatch, git, newRepo, person, track, twoProjects, type Ctx, type Side } from "./isolation-testing";
+import { cleanAfterEach, dispatch, git, newRepo, person, track, trackStop, twoProjects, type Ctx, type Side } from "./isolation-testing";
 import { hostCall, personHeaders, startTestHost } from "./testing";
 
 cleanAfterEach();
@@ -199,7 +199,7 @@ describe("project names", () => {
 
   it("no odd project name reaches another project or a folder outside the app's data folder, and none silently becomes 'default'", async () => {
     const ctx = await startTestHost();
-    track(() => ctx.stop());
+    trackStop(() => ctx.stop());
     for (const key of ["alpha", "beta"]) await hostCall(ctx.base, "GET", `/status?project=${key}`);
     const rootBefore = fs.readdirSync(ctx.dir).sort();
     const projectsBefore = fs.readdirSync(path.join(ctx.dir, "projects")).sort();
@@ -224,7 +224,7 @@ describe("project names", () => {
 
   it("no name, or an empty one, is the 'default' project: the only fallback left; spaces around a real name are trimmed, not a new project", async () => {
     const ctx = await startTestHost();
-    track(() => ctx.stop());
+    trackStop(() => ctx.stop());
     for (const route of ["/status", "/status?project=", "/status?project=%20%20"]) expect((await hostCall(ctx.base, "GET", route)).body.result.project, route).toBe("default");
     for (const route of ["/status?project=%20alpha", "/status?project=alpha%0A", "/status?project=alpha%20"]) expect((await hostCall(ctx.base, "GET", route)).body.result.project, route).toBe("alpha");
     expect(fs.readdirSync(path.join(ctx.dir, "projects")).sort()).toEqual(["alpha", "default"]);
@@ -246,14 +246,14 @@ describe("project names", () => {
     expect(identityWithin(folderIdentity("/repo", "linux", (p) => p), folderIdentity("/repository", "linux", (p) => p))).toBe(false);
     if (process.platform === "win32" || process.platform === "darwin") {
       const ctx = await startTestHost();
-      track(() => ctx.stop());
+      trackStop(() => ctx.stop());
       expect((await hostCall(ctx.base, "GET", "/status?project=beta")).status).toBe(200);
       const upper = await hostCall(ctx.base, "GET", "/status?project=BETA");
       expect(upper.status).toBe(409);
       expect(upper.body.code).toBe("FOLDER_IN_USE");
     } else {
       const ctx = await startTestHost();
-      track(() => ctx.stop());
+      trackStop(() => ctx.stop());
       expect((await hostCall(ctx.base, "GET", "/status?project=beta")).status).toBe(200);
       expect((await hostCall(ctx.base, "GET", "/status?project=BETA")).status).toBe(200);
       expect(ctx.host.project("beta").root).not.toBe(ctx.host.project("BETA").root);
@@ -263,7 +263,7 @@ describe("project names", () => {
   it("a project folder that is a link to another project's folder is refused as the same folder, in either order", async () => {
     for (const order of ["real first", "link first"]) {
       const ctx = await startTestHost();
-      track(() => ctx.stop());
+      trackStop(() => ctx.stop());
       const real = path.join(ctx.dir, "projects", "alpha");
       fs.mkdirSync(real, { recursive: true });
       fs.symlinkSync(real, path.join(ctx.dir, "projects", "linked"), "junction");
@@ -281,7 +281,7 @@ describe("project names", () => {
   it("PP_CORE_PROJECT_ROOT gives every name one folder: the second name is refused, the first keeps writing", async () => {
     const repo = newRepo("override");
     const ctx = await startTestHost({ projectRootOverride: repo });
-    track(() => ctx.stop());
+    trackStop(() => ctx.stop());
     expect((await hostCall(ctx.base, "GET", "/status?project=alpha")).status).toBe(200);
     const second = await hostCall(ctx.base, "GET", "/status?project=beta");
     expect(second.status).toBe(409);
@@ -294,7 +294,7 @@ describe("project names", () => {
 describe("one folder, one ledger writer", () => {
   it("a second host (a second app) on the same data folder opens every project read-only and its writes are refused", async () => {
     const ctx = await startTestHost();
-    track(() => ctx.stop());
+    trackStop(() => ctx.stop());
     await hostCall(ctx.base, "POST", "/planning/start?project=alpha", { idea: "A notes app that syncs" });
     const second = createCoreHost({ root: ctx.dir, bridge: false, keys: ctx.host.keys });
     track(() => second.close());
