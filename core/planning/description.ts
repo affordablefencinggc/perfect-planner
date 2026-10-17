@@ -23,7 +23,7 @@ export interface DescriptionFact {
 
 /** Something the description rules out or pins down for the whole idea. */
 export interface RuledOut {
-  id: "accounts" | "single-user" | "sync" | "server" | "offline-only" | "payments" | "ai" | "sharing";
+  id: "accounts" | "single-user" | "sync" | "server" | "offline-only" | "payments" | "ai" | "sharing" | "not-an-app";
   label: string;
   phrase: string;
 }
@@ -44,7 +44,50 @@ const LABELS: Readonly<Record<RuledOut["id"], string>> = {
   payments: "No payments",
   ai: "No AI",
   sharing: "No sharing between people",
+  "not-an-app": "A library or command-line tool, not an app",
 };
+
+/**
+ * What a library or command-line tool never has: no app framework, hosting,
+ * database or sign-in. Shared by the description and the repo reader, so an
+ * idea that says "library" and a package.json with a `bin` plan the same way.
+ */
+export const NOT_AN_APP_FACTS: readonly { id: string; choice?: string; text: string; detail?: string }[] = [
+  { id: "stack.framework", text: "Not needed: no app framework" },
+  { id: "stack.hosting", choice: "no-server", text: "No server" },
+  { id: "data.store", choice: "none", text: "Nothing stored" },
+  { id: "data.schema", text: "Not needed: nothing is stored" },
+  { id: "data.migrations", text: "Not needed: nothing is stored" },
+  { id: "data.backups", text: "Not needed: nothing is stored" },
+  { id: "auth.signin", choice: "no-login", text: "No sign-in" },
+  { id: "auth.provider", choice: "none", text: "No sign-in" },
+  { id: "auth.roles", text: "Not needed: no accounts, so no roles" },
+  { id: "offline.required", text: "Not needed: runs locally, nothing to sync" },
+  { id: "offline.sync-engine", choice: "none", text: "No sync" },
+  { id: "offline.conflicts", text: "Not needed: nothing syncs between devices" },
+  { id: "scale.users", text: "Not needed: a library has no users to host" },
+  { id: "scale.budget", text: "Not needed: nothing runs on a server" },
+  { id: "scale.cost-watch", text: "Not needed: nothing runs on a server" },
+  { id: "platforms.first", text: "Not needed: a library has no screens" },
+  { id: "platforms.desktop-shell", text: "Not needed: no desktop app" },
+  { id: "platforms.mobile-stack", text: "Not needed: no mobile app" },
+  { id: "platforms.shared", text: "Not needed: one codebase, no app platforms" },
+];
+
+/** Also true when nothing is stored or sent anywhere: security has nothing to guard. */
+export const NOTHING_LEAVES_FACTS: readonly { id: string; choice?: string; text: string; detail?: string }[] = [
+  { id: "security.personal-data", choice: "store-none", text: "Not needed: nothing is stored or sent" },
+  { id: "security.encryption", text: "Not needed: nothing is stored or sent" },
+  { id: "security.access", text: "Not needed: nothing is stored or sent" },
+  { id: "security.secrets", text: "Not needed: nothing is stored or sent" },
+  { id: "ai.use", choice: "no", text: "No AI" },
+  { id: "ai.model", text: "Not needed: nothing is sent anywhere" },
+  { id: "ai.fallback", text: "Not needed: nothing is sent anywhere" },
+  { id: "ai.cost-cap", text: "Not needed: nothing is sent anywhere" },
+  { id: "money.payments", choice: "not-v1", text: "No payments" },
+  { id: "money.pricing", choice: "free", text: "No payments", detail: "no payments" },
+  { id: "money.tax-refunds", choice: "not-needed", text: "No payments" },
+];
 
 /** Negatable words, each tied to what it rules out. Order matters where one starts like another ("cloud sync" before "cloud"). */
 const TERMS: readonly { flag: Flag; pattern: string }[] = [
@@ -54,7 +97,7 @@ const TERMS: readonly { flag: Flag; pattern: string }[] = [
   { flag: "payments", pattern: "payments?|billing|subscriptions?|in-?app\\s+purchases?|paywalls?|charges?" },
   { flag: "ai", pattern: "ai|a\\.i\\.|llms?|machine\\s+learning|chatbots?" },
   { flag: "sharing", pattern: "sharing|collaboration|multi-?user|multiple\\s+users|other\\s+users|teams?" },
-  { flag: "internet", pattern: "internet(?:\\s+connection)?|network\\s+connection|connection|wi-?fi" },
+  { flag: "internet", pattern: "internet(?:\\s+connection)?|network\\s+connection|connection|wi-?fi|network(?:\\s+(?:access|calls?|requests?))?" },
 ];
 
 const NEG = "(?:no|without(?:\\s+any)?|zero|(?:doesn'?t|does\\s+not|don'?t|do\\s+not|won'?t|will\\s+not|never)\\s+(?:need|have|use|require|take|support)s?(?:\\s+any)?)";
@@ -67,6 +110,7 @@ const ITEM = new RegExp(`\\b(?:no\\s+)?(${TERM})\\b`, "gi");
 const SINGLE_USER = /\b(?:single[- ]user|one[- ]user|(?:for\s+)?(?:only\s+)?one\s+person|just\s+(?:for\s+)?me|only\s+(?:for\s+)?me|for\s+my\s+own\s+use|personal\s+use)\b/i;
 const OFFLINE_ONLY = /\b(?:offline[- ]only|only\s+(?:works\s+)?offline|fully\s+offline|entirely\s+offline)\b/i;
 const WORKS_OFFLINE = /\b(?:works?|working|usable|runs?)\s+offline\b|\boffline[- ]first\b/i;
+const NOT_AN_APP = /\b(?:librar(?:y|ies)|npm\s+(?:package|module)|cli|command[- ]line(?:\s+(?:tool|app|utility|program))?|sdk)\b/i;
 const LOCAL_ONLY = /\b(?:local[- ]only|(?:on[- ])?device[- ]only)\b/i;
 
 interface Positive {
@@ -237,6 +281,16 @@ export function readDescription(idea: string): Description {
   }
 
   const facts = [...negatives, ...positives.filter((p) => !negatives.some((n) => n.id === p.id))];
+  // A library or command-line tool has no app parts. What the person named or ruled out above wins.
+  const library = phraseOf(plain.match(NOT_AN_APP));
+  if (library) {
+    said.set("not-an-app", library);
+    const quiet = said.has("server") || said.has("sync") || said.has("offline-only") || said.has("internet");
+    for (const f of [...NOT_AN_APP_FACTS, ...(quiet ? NOTHING_LEAVES_FACTS : [])]) {
+      if (facts.some((x) => x.id === f.id)) continue;
+      facts.push({ id: f.id, ...(f.choice ? { choice: f.choice, ...(f.detail ? { text: f.detail } : {}) } : { text: f.text }), phrase: library });
+    }
+  }
   const ruledOut: RuledOut[] = (Object.keys(LABELS) as RuledOut["id"][])
     .filter((id) => said.has(id))
     .map((id) => ({ id, label: LABELS[id], phrase: said.get(id)! }));

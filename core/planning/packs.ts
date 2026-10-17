@@ -100,6 +100,7 @@ const data = pack("data", (p) => {
         opt("postgres", "Hosted Postgres", "Shared data, many users, one source of truth on a server.", "free to $25/mo"),
         opt("sqlite-sync", "Local-first SQLite with sync", "Must work offline, syncing to a server when online.", "$0 to $20/mo"),
         opt("sqlite-local", "Local SQLite only", "One person, one device, no sharing."),
+        opt("none", "Nothing stored", "A library or command-line tool that keeps no data of its own."),
       ],
       recommendation: offline
         ? rec("sqlite-sync", "It must work offline, so data lives on the device and syncs when there is a connection.", 0.8)

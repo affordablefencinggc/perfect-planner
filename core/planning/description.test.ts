@@ -223,4 +223,22 @@ describe("the person's own tasks", () => {
     expect(ledger.entries().some((e) => e.type === "task.created" && e.data?.key === victim.key)).toBe(false);
     expect(() => session.dropRoadmapTask(owner, tasks.find((t) => t.key !== victim.key && t.key !== "K-first-release")!.key)).toThrow(/already/);
   });
+
+  it("reads 'library' or 'CLI' as not an app: no framework, hosting, store, sign-in or sync, and the idea's own words still win", () => {
+    const lib = readDescription("A tiny slugify library. No accounts, no network.");
+    expect(lib.ruledOut.map((r) => r.id)).toEqual(expect.arrayContaining(["accounts", "not-an-app"]));
+    const by = Object.fromEntries(lib.facts.map((f) => [f.id, f]));
+    expect(by["data.store"]).toMatchObject({ choice: "none" });
+    expect(by["stack.hosting"]).toMatchObject({ choice: "no-server" });
+    expect(by["offline.sync-engine"]).toMatchObject({ choice: "none" });
+    expect(by["security.secrets"]).toBeDefined(); // nothing leaves the device
+    expect(by["money.payments"]).toMatchObject({ choice: "not-v1" });
+    const cli = readDescription("A command-line tool that renames photos");
+    expect(cli.facts.find((f) => f.id === "data.store")).toMatchObject({ choice: "none" });
+    expect(cli.facts.find((f) => f.id === "security.secrets")).toBeUndefined(); // may still call an API
+    const named = readDescription("A library that wraps Postgres access with Stripe billing");
+    expect(named.facts.find((f) => f.id === "data.store")).toMatchObject({ choice: "postgres" });
+    expect(named.facts.find((f) => f.id === "money.payments")).toMatchObject({ choice: "stripe-checkout" });
+    expect(readDescription("A habit tracker for my phone").ruledOut.map((r) => r.id)).not.toContain("not-an-app");
+  });
 });

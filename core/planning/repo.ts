@@ -5,6 +5,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { NOT_AN_APP_FACTS } from "./description";
 import { profileIdea, SIGNALS } from "./profile";
 import type { IdeaProfile } from "./types";
 
@@ -145,6 +146,14 @@ export function readRepoStack(root: string): RepoStack {
     signals.add("mobile");
   }
   if (has("react") || has("vite") || has("next")) signals.add("web");
+
+  // A package with a `bin`, or a plain library with an entry point and no UI, app or server framework, is not an app.
+  const appDeps = ["react", "next", "vue", "svelte", "@sveltejs/kit", "electron", "@capacitor/core", "expo", "react-native", "express", "fastify", "koa", "hono", "@nestjs/core"];
+  const entry = Boolean(pkg && (pkg.bin || pkg.main || pkg.exports || pkg.module));
+  const appLike = appDeps.some(has) || hasPrefix("@tauri-apps/") || exists(root, "src-tauri") || facts.some((f) => f.id === "data.store" || f.id === "stack.hosting");
+  if (entry && !appLike) {
+    for (const f of NOT_AN_APP_FACTS) if (!facts.some((x) => x.id === f.id)) add({ id: f.id, ...(f.choice ? { choice: f.choice } : {}), text: f.text, evidence: [PKG] });
+  }
 
   return { facts, signals: [...signals] };
 }

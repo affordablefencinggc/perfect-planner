@@ -82,6 +82,13 @@ cannot answer (pricing, offline, sign-in) stay open for a person. Found running 
 Looplet, where planning recommended Tauri, Expo and SQLite for an Electron,
 Capacitor and Supabase app.
 
+`/planning/start` in the host runs `readRepoStack` on the project folder and
+records the facts before it asks anything, then records what the idea settles
+(the idea wins over the repo). A `bin` or a plain library (an entry point and no
+app, UI or server dependency) counts as "not an app": no framework, hosting,
+store, sign-in or sync questions. The mind map skips an area whose answer
+declines it, and the roadmap lists what the repo already has.
+
 ## The person's own description (`description.ts`)
 
 The idea text is authoritative. `readDescription(idea)` is rule based (fixed

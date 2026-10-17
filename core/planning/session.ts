@@ -137,7 +137,8 @@ export class PlanningSession {
     const decided: string[] = [];
     for (const fact of facts) {
       const question = findQuestion(profile, fact.id);
-      if (!question || this.questions().some((x) => x.id === fact.id && x.status !== "open")) continue;
+      // The person's own description wins over what the code shows.
+      if (!question || profile.described?.some((d) => d.id === fact.id) || this.questions().some((x) => x.id === fact.id && x.status !== "open")) continue;
       const q = this.ask(actor, question);
       if (this.questions().find((x) => x.q === q)?.status !== "open") continue;
       const label = fact.choice ? question.options.find((o) => o.id === fact.choice)?.label : undefined;
