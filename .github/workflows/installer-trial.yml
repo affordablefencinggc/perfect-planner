@@ -102,6 +102,9 @@ jobs:
             try { Invoke-WebRequest $url -OutFile "$dest\d.zip"; Expand-Archive "$dest\d.zip" $dest -Force; $ok = $true; break } catch { Write-Output "could not fetch $url" }
           }
           $driver = if ($ok) { "$dest\msedgedriver.exe" } else { Join-Path $env:EdgeWebDriver msedgedriver.exe }
+          # The download cannot be pinned to a hash (its version follows the runner's WebView2), so require Microsoft's signature.
+          $sig = Get-AuthenticodeSignature $driver
+          if ($sig.Status -ne "Valid" -or $sig.SignerCertificate.Subject -notmatch "O=Microsoft Corporation") { throw "msedgedriver is not validly signed by Microsoft: $($sig.Status) $($sig.SignerCertificate.Subject)" }
           & $driver --version
           "NATIVE_DRIVER=$driver" | Out-File -Append $env:GITHUB_ENV
       - name: Make a sample project folder

@@ -4,17 +4,28 @@
 # runs the AppImage the same way. Must run inside a D-Bus session with DISPLAY set (see the workflow).
 #   scripts/release/trial/trial-linux.sh <artifact dir> <out dir> <project folder> <label prefix>
 set -uo pipefail
+# This script deletes Perfect Planner data folders (the app's own, after each trial); never run it on a real PC.
+[ "${CI:-}" = true ] && [ "${GITHUB_ACTIONS:-}" = true ] || { echo "trial-linux.sh deletes app data and only runs on GitHub Actions" >&2; exit 2; }
 dir="$1"; out="$2"; folder="$3"; prefix="$4"
 mkdir -p "$out"
 check() { node scripts/release/trial/record-check.mjs "$out" "$1" "$2" "$3" "${4:-}"; }
 app_procs() { pgrep -af 'perfect-planner|Perfect Planner|\.AppImage' | grep -v -e pgrep -e trial-linux -e tauri-driver || true; }
 user_data() { for d in ~/.local/share/com.perfectplanner.desktop ~/.config/com.perfectplanner.desktop ~/.cache/com.perfectplanner.desktop ~/.local/share/perfect-planner-desktop ~/.cache/perfect-planner-desktop; do [ -e "$d" ] && echo "$d ($(find "$d" -type f | wc -l) files)"; done; }
 
+clean_user_data() { rm -rf ~/.local/share/com.perfectplanner.desktop ~/.config/com.perfectplanner.desktop ~/.cache/com.perfectplanner.desktop ~/.local/share/perfect-planner-desktop ~/.cache/perfect-planner-desktop; }
+
 smoke() { # label app
   local label="$1" app="$2"
   tauri-driver > "$out/$label-driver.log" 2>&1 & local driver=$!
   sleep 3
   node scripts/release/trial/smoke-app.mjs --app "$app" --folder "$folder" --out "$out" --label "$label"
+  sleep 5
+  # The whole loop through the installed window, on a clean slate and a fresh git folder of its own.
+  clean_user_data
+  local repo="$RUNNER_TEMP/loop-repo-$label"
+  rm -rf "$repo"; mkdir -p "$repo"
+  git -C "$repo" init -q -b main && echo "# Pocket notes" > "$repo/README.md" && git -C "$repo" add -A && git -C "$repo" -c user.name=Owner -c user.email=owner@example.invalid -c commit.gpgsign=false commit -q -m Initial
+  node scripts/release/trial/loop-app.mjs --app "$app" --repo "$repo" --out "$out" --label "$label" || true
   sleep 5
   local left; left="$(app_procs)"
   if [ -z "$left" ]; then check "$label" "no process after close" pass "none running"; else check "$label" "no process after close" fail "$left"; pkill -9 -f 'perfect-planner|\.AppImage' || true; fi
@@ -41,7 +52,7 @@ if [ ! -f "$deb" ]; then check "$label" install fail "no .deb in artifact"; else
     if [ $status -eq 0 ] && [ -z "$left" ]; then check "$label" "uninstall program files" pass "apt purge exit 0; nothing left"; else check "$label" "uninstall program files" fail "exit $status; left: $left"; fi
     data="$(user_data | tr '\n' ' ')"
     if [ -z "$data" ]; then check "$label" "uninstall user data" pass "no app data left"; else check "$label" "uninstall user data" fail "left: $data"; fi
-    rm -rf ~/.local/share/com.perfectplanner.desktop ~/.config/com.perfectplanner.desktop ~/.cache/com.perfectplanner.desktop ~/.local/share/perfect-planner-desktop ~/.cache/perfect-planner-desktop
+    clean_user_data
   else
     check "$label" install fail "apt-get install failed: $(tail -n 5 "$out/$label-apt.log" | tr '\n' ' ')"
   fi

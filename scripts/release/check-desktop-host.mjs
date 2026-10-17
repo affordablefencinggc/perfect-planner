@@ -74,7 +74,7 @@ export async function refusedWithoutTheWindow(origin, replayLaunch) {
 }
 
 /** A worker's MCP session over stdio, started exactly as the app's MCP JSON says. */
-function mcpWorker({ command, args, env }, cwd) {
+export function mcpWorker({ command, args, env }, cwd) {
   const child = spawn(command, args, { cwd, env, stdio: ["pipe", "pipe", "pipe"] });
   const waiting = new Map();
   let buffer = "";

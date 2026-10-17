@@ -9,6 +9,8 @@ param(
   [Parameter(Mandatory)][string]$NativeDriver  # msedgedriver.exe matching the WebView2 runtime
 )
 $ErrorActionPreference = "Continue"
+# This script deletes Perfect Planner data folders (the app's own, between trials); never run it on a real PC.
+if ($env:CI -ne "true" -or $env:GITHUB_ACTIONS -ne "true") { Write-Error "trial-windows.ps1 deletes app data and only runs on GitHub Actions"; exit 2 }
 $label = "windows-$Kind"
 function Check($name, $verdict, $seen) { node scripts/release/trial/record-check.mjs $Out $label $name $verdict "$seen" }
 function UninstallEntries {
@@ -84,6 +86,29 @@ if ($exe) {
   Check "no process after close" $(if ($left -or $webviews) { "fail" } else { "pass" }) "$(if ($left -or $webviews) { (@($left | ForEach-Object { "$($_.Name) pid $($_.Id)" }) + @($webviews | ForEach-Object { "msedgewebview2 pid $($_.ProcessId)" })) -join ', ' } else { 'none running' })"
   $left | Stop-Process -Force -ErrorAction SilentlyContinue
   $webviews | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+  # The whole loop through the installed window: a clean slate, a fresh git folder, a new app instance.
+  if ($ready) {
+    @("$env:APPDATA\com.perfectplanner.desktop", "$env:LOCALAPPDATA\com.perfectplanner.desktop") | ForEach-Object { if (Test-Path $_) { Remove-Item $_ -Recurse -Force -ErrorAction SilentlyContinue } }
+    $loopRepo = Join-Path $env:RUNNER_TEMP "loop-repo-$label"
+    if (Test-Path $loopRepo) { Remove-Item $loopRepo -Recurse -Force }
+    New-Item -ItemType Directory -Force $loopRepo | Out-Null
+    "# Pocket notes" | Out-File (Join-Path $loopRepo "README.md") -Encoding utf8
+    git -C $loopRepo init -q -b main
+    git -C $loopRepo add -A
+    git -C $loopRepo -c user.name=Owner -c user.email=owner@example.invalid -c commit.gpgsign=false commit -q -m Initial
+    $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-port=9222"
+    $app2 = Start-Process -FilePath $exe.FullName -PassThru
+    Remove-Item Env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS
+    $up = $null
+    for ($i = 0; $i -lt 60 -and -not $up; $i++) { try { $up = Invoke-RestMethod http://127.0.0.1:9222/json/version -TimeoutSec 2 } catch { Start-Sleep -Milliseconds 500 } }
+    if ($up) { node scripts/release/trial/loop-app.mjs --app $exe.FullName --repo $loopRepo --out $Out --label $label --attach 127.0.0.1:9222 }
+    else { Check "loop: window up" fail "no WebView2 DevTools endpoint for the second launch" }
+    $main2 = Get-Process -Id $app2.Id -ErrorAction SilentlyContinue
+    if ($main2) { [void]$main2.CloseMainWindow(); [void]$main2.WaitForExit(15000) }
+    Start-Sleep -Seconds 3
+    AppProcesses | Stop-Process -Force -ErrorAction SilentlyContinue
+    Get-CimInstance Win32_Process -Filter "Name='msedgewebview2.exe'" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -like "*com.perfectplanner.desktop*" } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+  }
   Stop-Process -Id $driver.Id -Force -ErrorAction SilentlyContinue
   Remove-ItemProperty -Path $policy -Name $exe.Name -ErrorAction SilentlyContinue
 }
