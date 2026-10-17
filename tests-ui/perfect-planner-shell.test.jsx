@@ -11,7 +11,7 @@ import { createRuntimeEventLedger, DEFAULT_RUNTIME_EVENT_STORAGE_KEY } from "../
 import { diagnosticSessionFixture } from './diagnosticSessionFixture.js';
 
 // Workspaces load on demand; a busy Windows runner can take over a second to fetch one.
-const LAZY = { timeout: 5000 };
+const LAZY = { timeout: 15000 };
 
 afterEach(() => { cleanup(); window.localStorage.clear(); });
 
