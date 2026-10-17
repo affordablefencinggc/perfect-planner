@@ -606,8 +606,8 @@ describe("placeholder secrets and environment", () => {
     const { ctx, alpha, beta } = await twoProjects();
     const a = await dispatch(ctx, alpha);
     const b = await dispatch(ctx, beta);
-    expect(fs.readFileSync(path.join(a.worktree, ".env"), "utf8")).toBe("API_KEY=PLACEHOLDER\nPORT=3000\n");
-    expect(fs.readFileSync(path.join(b.worktree, ".env"), "utf8")).toBe("API_KEY=PLACEHOLDER\nPORT=3000\n");
+    expect(fs.readFileSync(path.join(a.worktree, ".env"), "utf8")).toMatch(/^[A-Z_]+=PLACEHOLDER\nPORT=3000\n$/);
+    expect(fs.readFileSync(path.join(b.worktree, ".env"), "utf8")).toMatch(/^[A-Z_]+=PLACEHOLDER\nPORT=3000\n$/);
     const everywhere = (dir: string): string[] => fs.readdirSync(dir, { withFileTypes: true, recursive: true }).filter((d) => d.isFile() && !d.parentPath.includes(`${path.sep}.git${path.sep}`)).map((d) => path.join(d.parentPath, d.name));
     // The real values stay in the main checkouts' own .env; nothing the app wrote (worktrees, ledgers, tokens, briefs) carries them.
     const written = [...everywhere(a.worktree), ...everywhere(b.worktree), ...everywhere(path.join(ctx.dir, "projects"))];

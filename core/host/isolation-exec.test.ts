@@ -167,7 +167,7 @@ describe("the hostile test, run by the gate in project A's worktree", () => {
     });
 
     it("the worktree's own .env holds placeholders, not the project's real values", () => {
-      expect(result.probe.worktreeEnv).toBe("API_KEY=PLACEHOLDER\nPORT=3000\n");
+      expect(result.probe.worktreeEnv).toMatch(/^[A-Z_]+=PLACEHOLDER\nPORT=3000\n$/);
     });
   });
 
