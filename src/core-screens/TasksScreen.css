@@ -16,7 +16,7 @@
 .core-screen-tasks textarea { min-height: 34px; padding: var(--space-1) var(--space-2); border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--surface); color: var(--ink); font: inherit; font-size: var(--text-sm); font-weight: 400; }
 .core-screen-tasks .core-tasks-start input { width: 15em; }
 .core-screen-tasks textarea { min-width: min(100%, 36em); resize: vertical; }
-.core-screen-tasks .core-tasks-notice { margin: 0; padding: var(--space-2) var(--space-3); border-radius: var(--radius-sm); font-size: var(--text-sm); background: var(--surface-muted); overflow-wrap: anywhere; }
+.core-screen-tasks .core-tasks-notice { margin: 0; padding: var(--space-2) var(--space-3); border-radius: var(--radius-sm); font-size: var(--text-sm); background: var(--surface-muted); overflow-wrap: anywhere; white-space: pre-wrap; }
 .core-screen-tasks .core-tasks-notice.good { background: var(--green-soft); }
 .core-screen-tasks .core-tasks-notice.warn { background: var(--amber-soft); }
 .core-screen-tasks .core-tasks-notice.bad { background: var(--red-soft); }

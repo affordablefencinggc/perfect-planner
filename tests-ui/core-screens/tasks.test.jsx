@@ -57,6 +57,12 @@ describe("TasksScreen", () => {
     expect(await screen.findByText("/work/notes")).toBeTruthy();
   });
 
+  test("the git folder box starts with the folder already imported", async () => {
+    routeFetch({ "GET /tasks": async () => ok(view([task()], { ok: false, reason: "Choose it below.", suggested: "/work/imported" })) });
+    renderScreen();
+    expect((await screen.findByLabelText("Git folder")).value).toBe("/work/imported");
+  });
+
   test("Start worker dispatches with the model and shows the brief and commands once", async () => {
     let tasks = [task()];
     const fetch = routeFetch({
@@ -150,6 +156,7 @@ describe("TasksScreen", () => {
     fireEvent.click(within(await card("T-1 Save notes")).getByRole("button", { name: "Show diff" }));
     const block = await screen.findByRole("alert", { name: "Files that can run code in T-1" });
     expect(block.textContent).toMatch(/can run code on your computer/);
+    expect(block.textContent).toMatch(/Test files are listed too/);
     expect(within(block).getByText("package.json")).toBeTruthy();
     expect(within(block).getByText(".github/workflows/ci.yml")).toBeTruthy();
     const approve = within(await card("T-1 Save notes")).getByRole("button", { name: "Approve diff at abc123" });
