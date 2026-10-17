@@ -23,6 +23,8 @@ export { quoteFor };
 import { localPerson, localPersonId } from "./people";
 import { protectRepository } from "../project";
 import { chosenRepoRoot, repoRefusal } from "../protectedRoots";
+import { repoClaimRefusal } from "../repoClaim";
+import { isNetworkPath } from "../tokenFile";
 
 // Kept here too for older imports; they live in ../protectedRoots so connect.mjs can use them without the routes.
 export { chosenRepoRoot, repoRefusal };
@@ -69,6 +71,9 @@ function repoFile(project: CoreProject): string {
 }
 
 async function gitTop(dir: string): Promise<string | null> {
+  // A network path (\\host\share, //host/share) is never a project's git folder, and even looking at it makes Windows
+  // talk to that machine (and offer this user's credentials). Refused before anything touches it.
+  if (isNetworkPath(dir)) return null;
   if (!fs.existsSync(dir)) return null;
   const top = await runGit(dir, ["rev-parse", "--show-toplevel"]).catch(() => null);
   if (!top || top.code !== 0) return null;
@@ -90,7 +95,11 @@ export async function repoState(project: CoreProject): Promise<RepoState> {
   // git found the repo by walking up from the folder: a whole drive or the home folder (a dotfiles repo)
   // is never the project's repo, so it is neither used nor protected.
   const refusal = top ? repoRefusal(top) : null;
-  if (top && !refusal) return { ok: true, root: top };
+  if (top && !refusal) {
+    // One git folder, one project: another project's worktrees must never be handed to this one (core/host/repoClaim.ts).
+    const taken = await repoClaimRefusal(project, top, { write: false });
+    return taken ? { ok: false, reason: taken } : { ok: true, root: top };
+  }
   const suggested = repoRefusal(project.root) ? undefined : project.root;
   if (refusal) return { ok: false, reason: refusal, suggested };
   return {
@@ -105,6 +114,8 @@ export async function repoState(project: CoreProject): Promise<RepoState> {
 async function requireRepo(project: CoreProject): Promise<string> {
   const repo = await repoState(project);
   if (!repo.ok || !repo.root) throw new HttpError(409, "NO_REPO", repo.reason ?? "Choose your project's git folder first.");
+  const taken = await repoClaimRefusal(project, repo.root, { write: true });
+  if (taken) throw new HttpError(409, "REPO_IN_USE", taken);
   project.protectRoots([repo.root]);
   return repo.root;
 }
@@ -409,10 +420,27 @@ export function registerTaskRoutes(router: Router): void {
     if (current.ok && current.root !== top && (await listWorktrees(project, current)).length) {
       throw new HttpError(409, "WORKERS_ACTIVE", `Workers still have worktrees in ${current.root}. Merge or send back their tasks before choosing another folder.`);
     }
-    // Shipping safety follows the folder: release rules on, and the pre-push secret scan installed there.
-    const protection = await protectRepository(project.ledger, top);
+    // One git folder, one project (core/host/repoClaim.ts). Looked at first, then recorded in repo.json before
+    // the claim is taken, because another project tells whether this one still uses a folder by that file.
+    const refused = await repoClaimRefusal(project, top, { write: false });
+    if (refused) throw new HttpError(409, "REPO_IN_USE", refused);
+    let previous: string | undefined;
+    try {
+      previous = fs.readFileSync(repoFile(project), "utf8");
+    } catch {
+      previous = undefined;
+    }
     fs.mkdirSync(path.dirname(repoFile(project)), { recursive: true });
     fs.writeFileSync(repoFile(project), JSON.stringify({ root: top, at: new Date().toISOString() }, null, 2));
+    const lost = await repoClaimRefusal(project, top, { write: true });
+    if (lost) {
+      // Another project took the folder between the look and the claim: put this project's choice back as it was.
+      if (previous === undefined) fs.rmSync(repoFile(project), { force: true });
+      else fs.writeFileSync(repoFile(project), previous);
+      throw new HttpError(409, "REPO_IN_USE", lost);
+    }
+    // Shipping safety follows the folder: release rules on, and the pre-push secret scan installed there.
+    const protection = await protectRepository(project.ledger, top);
     return { protection, ...(await overview(project)) };
   });
 
