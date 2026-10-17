@@ -1,0 +1,5 @@
+
+(perfect-planner-desktop:10019): dbind-WARNING **: 05:50:19.534: AT-SPI: Error retrieving accessibility bus address: org.freedesktop.DBus.Error.ServiceUnknown: The name org.a11y.Bus was not provided by any .service files
+WebKitWebProcess: ../src/GLdispatch/GLdispatch.c:222: DispatchCurrentUnref: Assertion `dispatch->currentThreads >= 0' failed.
+
+(perfect-planner-desktop:10594): dbind-WARNING **: 05:51:44.777: AT-SPI: Error retrieving accessibility bus address: org.freedesktop.DBus.Error.ServiceUnknown: The name org.a11y.Bus was not provided by any .service files

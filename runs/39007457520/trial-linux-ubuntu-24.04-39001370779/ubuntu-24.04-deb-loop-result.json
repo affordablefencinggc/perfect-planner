@@ -1,0 +1,60 @@
+{
+  "label": "ubuntu-24.04-deb",
+  "checks": [
+    {
+      "name": "plan: idea and recommended answers",
+      "pass": true,
+      "seen": "25 recommendations used; no blocking questions"
+    },
+    {
+      "name": "plan: approve",
+      "pass": true,
+      "seen": "Plan approved"
+    },
+    {
+      "name": "open git folder in Tasks",
+      "pass": true,
+      "seen": "Workers branch from /home/runner/work/_temp/loop-repo-ubuntu-24.04-deb"
+    },
+    {
+      "name": "connect agent: line runs as copied, agent checks in",
+      "pass": true,
+      "seen": "checked in as main; line on the app's own Node"
+    },
+    {
+      "name": "start worker on T-1 (window gives the set-up command)",
+      "pass": true,
+      "seen": "set-up command shown (355 chars, private key not logged)"
+    },
+    {
+      "name": "stand-in worker checks in over MCP and proposes a test",
+      "pass": true,
+      "seen": "trial-worker-9d173908 checked in as worker on T-1; window shows \"Test to approve\""
+    },
+    {
+      "name": "approve test in the window (it fails first)",
+      "pass": true,
+      "seen": "T-1 | Build App shell | Waiting for the worker to claim | Done-when test | node tests/notes.check.mjs | tests/notes.check.mjs · Proposed by trial-worker-9d173908 (claude-trial) · approved by you (owner) · fails on today's code"
+    },
+    {
+      "name": "stand-in worker builds, commits, attaches proof",
+      "pass": true,
+      "seen": "proof attached at b28a34efdca3"
+    },
+    {
+      "name": "check the work in the window",
+      "pass": true,
+      "seen": "check passed"
+    },
+    {
+      "name": "read the diff and approve it",
+      "pass": true,
+      "seen": "diff approved"
+    },
+    {
+      "name": "merge into main",
+      "pass": false,
+      "seen": "main does not hold src/notes.mjs. Window says: T-1\nBuild App shell\nReady to merge\nDone-when test\nnode tests/notes.check.mjs\ntests/notes.check.mjs · Proposed by trial-worker-9d173908 (claude-trial) · approved by you (owner) · fails on today's code\n Window says: This diff changes a file that can run code on your computer.\nInstall scripts, lockfiles, git settings and hooks, CI workflows and npm settings run or change programs when you install, push or merge. Test files are listed too, because a test can change what the approved test checks or run code when it is run, so the worker's own test file"
+    }
+  ]
+}
