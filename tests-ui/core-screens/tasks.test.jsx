@@ -227,4 +227,86 @@ describe("TasksScreen", () => {
     expect(within(after).queryByRole("button", { name: "Release claim" })).toBeNull();
     expect(within(after).getByRole("button", { name: "Start worker" })).toBeTruthy();
   });
+
+  describe("the contract", () => {
+    const contract = (over = {}) => ({
+      status: "signed",
+      clauses: ["Make saving work."],
+      doneWhen: "the approved test passes",
+      listed: ["src/notes/**"],
+      allowedFiles: ["src/notes/**"],
+      sizeCap: { maxFiles: 3, maxLines: 40 },
+      flags: [],
+      flagsAccepted: false,
+      widened: [],
+      check: null,
+      ...over,
+    });
+
+    test("shows a collapsed Contract with the files and the limit, and says plainly when a task has none", async () => {
+      routeFetch({ "GET /tasks": async () => ok(view([task({ contract: contract() }), task({ id: "T-2", label: "T-2", title: "Open notes", contract: null })])) });
+      renderScreen();
+      const t1 = await card("T-1 Save notes");
+      const details = t1.querySelector("details.core-contract");
+      expect(details.open).toBe(false);
+      expect(within(t1).getByText(/Contract/, { selector: "summary" }).textContent).toMatch(/1 file or folder · up to 3 files and 40 lines/);
+      expect(within(t1).getByText("src/notes/**")).toBeTruthy();
+      expect(within(t1).getByText(/Anything else is refused, including dependency files/)).toBeTruthy();
+      const t2 = await card("T-2 Open notes");
+      expect(t2.querySelector("details.core-contract")).toBeNull();
+      expect(within(t2).getByText(/None\. This task is not limited to any files\./)).toBeTruthy();
+    });
+
+    test("shows what the last check said, what the owner allowed, and a contract that is not the signed one", async () => {
+      routeFetch({
+        "GET /tasks": async () => ok(view([
+          task({ contract: contract({ allowedFiles: ["package.json", "src/notes/**"], widened: [{ decision: "D-4", files: ["package.json"], by: "owner", reason: "it needs left-pad" }], check: { ok: false, commit: "a".repeat(40), files: 2, lines: 5, reason: "T-1's contract does not allow this work. It changes a file that is not on its list: src/other/other.js." } }) }),
+          task({ id: "T-2", label: "T-2", title: "Open notes", contract: contract({ status: "unsigned", problem: "The contract on T-2 is not the one you approved with P-1: its digest differs." }) }),
+        ])),
+      });
+      renderScreen();
+      const t1 = await card("T-1 Save notes");
+      expect(within(t1).getByText(/You allowed package\.json \(D-4\): it needs left-pad/)).toBeTruthy();
+      expect(within(t1).getByText(/not on its list: src\/other\/other\.js/)).toBeTruthy();
+      const t2 = await card("T-2 Open notes");
+      expect(within(t2).getByRole("alert").textContent).toMatch(/not the one you approved with P-1.*Nothing is started or checked until it is/);
+      // An unsigned contract cannot be widened.
+      expect(within(t2).queryByRole("button", { name: "Allow more files" })).toBeNull();
+    });
+
+    test("the person allows more files with a reason; nothing is sent until they submit", async () => {
+      let tasks = [task({ contract: contract() })];
+      const fetch = routeFetch({
+        "GET /tasks": async () => ok(view(tasks)),
+        "POST /tasks/T-1/widen": async (init) => {
+          expect(JSON.parse(init.body)).toEqual({ files: ["package.json", "docs/notes.md"], reason: "it needs left-pad" });
+          tasks = [task({ contract: contract({ allowedFiles: ["docs/notes.md", "package.json", "src/notes/**"], widened: [{ decision: "D-4", files: ["docs/notes.md", "package.json"], by: "owner", reason: "it needs left-pad" }] }) })];
+          return ok({ widened: { decision: "D-4", entry: "L-000030", files: ["docs/notes.md", "package.json"] }, ...view(tasks) });
+        },
+      });
+      renderScreen();
+      const t1 = await card("T-1 Save notes");
+      fireEvent.click(within(t1).getByRole("button", { name: "Allow more files" }));
+      const submit = within(t1).getByRole("button", { name: "Allow these files" });
+      expect(submit.disabled).toBe(true);
+      fireEvent.change(within(t1).getByLabelText(/Files or folders to allow/), { target: { value: "package.json\n docs/notes.md\n" } });
+      fireEvent.change(within(t1).getByLabelText("Why"), { target: { value: "it needs left-pad" } });
+      expect(fetch.mock.calls.some(([u]) => String(u).includes("/widen"))).toBe(false);
+      fireEvent.click(within(t1).getByRole("button", { name: "Allow these files" }));
+      expect(await screen.findByText(/Allowed docs\/notes\.md, package\.json\./)).toBeTruthy();
+      await waitFor(() => expect(within(t1).getByText(/You allowed docs\/notes\.md, package\.json \(D-4\)/)).toBeTruthy());
+    });
+
+    test("a refused check is shown in plain words, naming the files", async () => {
+      const reason = "T-1's contract does not allow this work. It changes a file that is not on its list: src/other/other.js. Nothing was approved.";
+      routeFetch({
+        "GET /tasks": async () => ok(view([task({ status: "claimed", owner: "worker-1", stage: "building", contract: contract() })])),
+        "POST /tasks/T-1/check": async () => ok({ passed: false, contractRefused: true, commit: "a".repeat(40), reason, ...view([task({ status: "claimed", owner: "worker-1", stage: "building", contract: contract() })]) }),
+      });
+      renderScreen();
+      const t1 = await card("T-1 Save notes");
+      fireEvent.click(within(t1).getByRole("button", { name: "Check the work" }));
+      expect(await screen.findByText(/not on its list: src\/other\/other\.js/, { selector: "p.core-tasks-notice" })).toBeTruthy();
+    });
+  });
 });

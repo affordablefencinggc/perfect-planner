@@ -17,19 +17,29 @@ import {
   isPhase,
   latestByQuestionId,
   openBlockers,
+  approvalContracts,
+  contractOf,
   ownTasks,
   planningAnswers,
   profileRepo,
   readRepoStack,
+  roadmapTasks,
   stackForIdea,
+  summarizeContracts,
   toMermaid,
+  unacceptedFlags,
+  writtenContracts,
   type AnswerInput,
   type IdeaProfile,
+  type PlanContractSummary,
+  type PlannedContract,
   type PlanningQuestionState,
+  type Roadmap,
 } from "../../planning/index";
 import type { CoreProject } from "../project";
 import { fingerprintOf, requireFingerprint } from "../fingerprint";
 import { HttpError, type Router } from "../router";
+import { repoIndex } from "./contract";
 import { localPerson, localPersonId } from "./people";
 
 const STATE_KEY = "planning";
@@ -168,7 +178,25 @@ function tasksView(entries: readonly LedgerEntry[]) {
   };
 }
 
-function overview(project: CoreProject) {
+/**
+ * The contracts the plan being shown carries. Before the roadmap is written they are the draft's (guessed from
+ * the repo's files right now); once it is written they are the ones in the ledger, so the plan does not look
+ * "changed since approval" every time the repo changes. A roadmap written before contracts existed has none.
+ */
+function contractPlan(project: CoreProject, state: PlanningState): { roadmap?: Roadmap; summary: PlanContractSummary; written: boolean; legacy: boolean } {
+  const entries = project.entries();
+  const written = writtenContracts(entries);
+  if (written.size > 0) {
+    const planned: PlannedContract[] = [...written].map(([key, w]) => ({ key, title: w.task, contract: w.contract, flags: w.flags }));
+    return { summary: summarizeContracts(planned), written: true, legacy: false };
+  }
+  if (writtenTasks(entries).size > 0) return { summary: summarizeContracts([]), written: true, legacy: true };
+  const roadmap = state.session.roadmap(ideaLabel(state), state.person, repoIndex(project));
+  const planned: PlannedContract[] = roadmapTasks(roadmap).map((t) => ({ key: t.key, title: t.title, contract: t.contract, flags: t.contractFlags ?? [] }));
+  return { roadmap, summary: summarizeContracts(planned), written: false, legacy: false };
+}
+
+function overview(project: CoreProject, plan?: ReturnType<typeof contractPlan>) {
   const state = planning(project);
   const entries = project.entries();
   // A question asked again (reopened) replaces the older one: list only the newest per id.
@@ -186,8 +214,10 @@ function overview(project: CoreProject) {
     questions: questions.filter((q) => q.area === area).map((q) => ({ ...questionView(q, numbers), why: why.get(q.q) ?? "" })),
   })).filter((a) => a.questions.length > 0);
   const answered = questions.filter((q) => q.status !== "open").length;
-  const fingerprint = planFingerprint(state.idea, areas);
+  const contracts = plan ?? contractPlan(project, state);
+  const fingerprint = planFingerprint(state.idea, areas, contracts.legacy ? undefined : { digest: contracts.summary.digest, flagged: contracts.summary.flagged.map((f) => ({ key: f.key, flags: f.flags })) });
   const approved = approvals(entries);
+  const needsAcceptance = contracts.written ? [] : contracts.summary.flagged;
   // The plan exactly as shown is already approved: approving it again would only add a duplicate P-n.
   const current = approved.length > 0 && approved[approved.length - 1]!.fingerprint === fingerprint;
   return {
@@ -202,7 +232,10 @@ function overview(project: CoreProject) {
     areas,
     description: descriptionView(state, questions),
     tasks: tasksView(entries),
+    contracts: { written: contracts.written, flagged: contracts.summary.flagged },
     approval: {
+      /** Tasks whose contract the person must read and accept before approving ("split this"). */
+      flagged: needsAcceptance,
       canApprove: questions.length > 0 && open.length === 0 && !current,
       current,
       /** The same fact under the names the core-screens UI reads. */
@@ -214,9 +247,9 @@ function overview(project: CoreProject) {
   };
 }
 
-/** What the person reviews before approving: the idea and every question as shown (see fingerprint.ts). */
-function planFingerprint(idea: unknown, areas: unknown): string {
-  return fingerprintOf({ idea: idea ?? null, areas });
+/** What the person reviews before approving: the idea, every question and every task's contract as shown (see fingerprint.ts). */
+function planFingerprint(idea: unknown, areas: unknown, contracts?: { digest: string; flagged: unknown }): string {
+  return fingerprintOf({ idea: idea ?? null, areas, ...(contracts ? { contracts } : {}) });
 }
 
 function mindMapView(project: CoreProject) {
@@ -239,9 +272,20 @@ function writtenTasks(entries: readonly LedgerEntry[]): Map<string, { task: stri
   return out;
 }
 
+/** A task's contract as the Plan screen shows it: the signed one once written, else the draft. */
+function contractShown(entries: readonly LedgerEntry[], written: { task: string } | undefined, draft: { contract: unknown; contractFlags?: unknown }) {
+  const view = written ? contractOf(entries, written.task) : null;
+  if (!view) return { contract: draft.contract, contractFlags: draft.contractFlags ?? [] };
+  return {
+    contract: view.contract,
+    contractFlags: view.flags,
+    contractState: { status: view.status, ...(view.problem ? { problem: view.problem } : {}), allowedFiles: view.allowedFiles, flagsAccepted: view.flagsAccepted, widened: view.widened.length },
+  };
+}
+
 function roadmapView(project: CoreProject) {
   const state = planning(project);
-  const roadmap = state.session.roadmap(ideaLabel(state), state.person);
+  const roadmap = contractPlan(project, state).roadmap ?? state.session.roadmap(ideaLabel(state), state.person, repoIndex(project));
   const entries = project.entries();
   const written = writtenTasks(entries);
   const number = (key: string) => written.get(key)?.task;
@@ -255,6 +299,7 @@ function roadmapView(project: CoreProject) {
       tasks: [
         ...p.tasks.map((t) => ({
           ...t,
+          ...contractShown(entries, written.get(t.key), t),
           ...(written.get(t.key) ? { task: written.get(t.key)!.task, entry: written.get(t.key)!.entry } : {}),
           dependsOnTasks: t.dependsOn.map((d) => number(d) ?? d),
         })),
@@ -282,6 +327,14 @@ function roadmapView(project: CoreProject) {
     /** Parts the repo already has: named here, with no build task. */
     existing: roadmap.existing ?? [],
   };
+}
+
+/** The task keys the person ticked as "read, and accepted as they are". */
+function acceptedKeys(body: unknown): string[] {
+  const raw = body && typeof body === "object" ? (body as { acceptFlagged?: unknown }).acceptFlagged : undefined;
+  if (raw === undefined) return [];
+  if (!Array.isArray(raw) || raw.length > 500 || raw.some((key) => typeof key !== "string" || key.length > 200)) throw new HttpError(400, "INVALID", "acceptFlagged must be a list of task keys.");
+  return raw as string[];
 }
 
 function text(value: unknown, field: string, max = 4000): string {
@@ -458,24 +511,39 @@ export function registerPlanningRoutes(router: Router): void {
     if (!state.session.questions().length) throw new HttpError(409, "NOT_STARTED", "Start with your idea first; there is nothing to approve yet.");
     const open = openBlockers(entries);
     if (open.length) throw new HttpError(409, "BLOCKERS_OPEN", blockerMessage(open));
-    // Bound to the plan the person is looking at: a changed plan needs a fresh look.
-    const view = overview(project);
+    // Bound to the plan the person is looking at: a changed plan needs a fresh look. The contracts signed below are
+    // the very draft this fingerprint covers (one repo scan, read once), and nothing else.
+    const contracts = contractPlan(project, state);
+    const view = overview(project, contracts);
     requireFingerprint(body, view.fingerprint, "plan");
     if (view.approval.current) throw new HttpError(409, "ALREADY_APPROVED", "This plan is already approved as it stands.");
     const actor = actorFor(project);
     const already = writtenTasks(entries).size > 0;
+    // A task flagged "split this" is approved only when the person says so for that task; nothing is accepted silently.
+    const accepted = acceptedKeys(body);
+    const unaccepted = already ? [] : unacceptedFlags(contracts.summary, accepted);
+    if (unaccepted.length) {
+      const names = unaccepted.map((f) => `"${f.title}"`).join(", ");
+      throw new HttpError(409, "CONTRACT_FLAGGED", `${unaccepted.length === 1 ? "A task is" : `${unaccepted.length} tasks are`} marked "split this" and need your eye before the plan is approved: ${names}. Read what is wrong, then accept ${unaccepted.length === 1 ? "it" : "them"} as ${unaccepted.length === 1 ? "it is" : "they are"} or split ${unaccepted.length === 1 ? "it" : "them"} into smaller tasks.`);
+    }
     // The ledger's planning rule refuses this too if a blocker is open (LedgerError -> 422).
     const plan = appendNumbered(project.ledger, {
       actor,
       type: "plan.approved",
       summary: `Plan approved: ${(state.idea ?? "deep planning").replace(/\s+/g, " ").slice(0, 100)}`,
       refs: ["plan"],
-      data: { source: "planning", idea: state.idea, fingerprint: view.fingerprint, answered: state.session.questions().filter((q) => q.status !== "open").length },
+      data: {
+        source: "planning",
+        idea: state.idea,
+        fingerprint: view.fingerprint,
+        answered: state.session.questions().filter((q) => q.status !== "open").length,
+        ...(already ? {} : { contracts: approvalContracts(contracts.summary, accepted) }),
+      },
     });
     let tasks: Record<string, string> = {};
-    if (!already) {
+    if (!already && contracts.roadmap) {
       try {
-        tasks = state.session.writeRoadmap(actor, state.session.roadmap(ideaLabel(state), state.person));
+        tasks = state.session.writeRoadmap(actor, contracts.roadmap);
       } catch (error) {
         refuse(error);
       }

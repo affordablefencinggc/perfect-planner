@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { FileStore, Ledger, type LedgerEntry } from "../ledger/index";
 import { installClauseRules } from "../lookup/index";
-import { TestGate, gateRule, type GatePolicy } from "../gate/index";
+import { TestGate, contractRule, gateRule, type GatePolicy } from "../gate/index";
 import { AgentService } from "../mcp/index";
 import type { HostKeys } from "./keys";
 import { hostWitness } from "./witness";
@@ -292,6 +292,9 @@ export function openCoreProject(baseRoot: string, key: string, override: string 
   // on the current code, and only the gate writes task.done after the test passes on the merge.
   const policy: GatePolicy = { requireJevTestReview: false };
   ledger.addRule(gateRule(policy));
+  // Added after the gate's rule and only ever adds a refusal: a diff or merge approval for a task under contract
+  // needs the gate's passing contract check at that exact commit.
+  ledger.addRule(contractRule());
   const gate = new TestGate({ ledger, requireJevTestReview: policy.requireJevTestReview });
   // TestGate copies its policy; give it the shared object so the host's switch reaches the gate and the rule together.
   Object.assign(gate, { policy });

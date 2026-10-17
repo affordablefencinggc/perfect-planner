@@ -2,6 +2,7 @@ import { useState } from "react";
 import { CheckCircleIcon, CopyIcon, GitMergeIcon, PlayIcon, SpinnerGapIcon, WarningCircleIcon } from "@phosphor-icons/react";
 import { copyText } from "../project/connectAgentSetup.js";
 import { AdvancedOnly, CoreScreen } from "./CoreScreen.jsx";
+import ContractDetails from "./ContractDetails.jsx";
 import { coreGet, useCoreResource } from "./coreApi.js";
 import "./TasksScreen.css";
 
@@ -137,6 +138,27 @@ function DiffView({ diff }) {
   );
 }
 
+// Only the person can allow more files; a worker can only ask (ask_main). The server checks all of it.
+function WidenForm({ label, working, onWiden }) {
+  const [open, setOpen] = useState(false);
+  const [files, setFiles] = useState("");
+  const [why, setWhy] = useState("");
+  if (!open) return <button type="button" className="core-button" onClick={() => setOpen(true)} disabled={working}>Allow more files</button>;
+  const submit = async (e) => {
+    e.preventDefault();
+    const ok = await onWiden({ files: files.split(/\n+/).map((f) => f.trim()).filter(Boolean), reason: why.trim() });
+    if (ok) { setOpen(false); setFiles(""); setWhy(""); }
+  };
+  return (
+    <form className="core-tasks-sendback" aria-label={`Allow more files for ${label}`} onSubmit={submit}>
+      <label>Files or folders to allow (one per line)<textarea value={files} onChange={(e) => setFiles(e.target.value)} rows={2} /></label>
+      <label>Why<input value={why} onChange={(e) => setWhy(e.target.value)} autoComplete="off" /></label>
+      <button type="submit" className="core-button primary" disabled={working || !files.trim() || !why.trim()}>Allow these files</button>
+      <button type="button" className="core-button" onClick={() => setOpen(false)}>Cancel</button>
+    </form>
+  );
+}
+
 function TaskCard({ task, project, act, busy, notice, dispatchFor, onDispatched, onHideDispatch }) {
   const [model, setModel] = useState(task.dispatch?.model ?? DEFAULT_WORKER_MODEL);
   const [diff, setDiff] = useState(null);
@@ -197,6 +219,23 @@ function TaskCard({ task, project, act, busy, notice, dispatchFor, onDispatched,
         <p className="core-tasks-line"><span className="core-muted">Last check</span> {task.check.passed ? "passed" : "failed"}{task.check.commit ? ` at ${task.check.commit.slice(0, 12)}` : ""}</p>
       )}
       {task.merged && <p className="core-tasks-line"><span className="core-muted">Merged</span> {task.merged.commit?.slice(0, 12)}</p>}
+      {task.contract ? (
+        <ContractDetails
+          contract={{
+            files: task.contract.allowedFiles,
+            sizeCap: task.contract.sizeCap,
+            clauses: task.contract.clauses,
+            doneWhen: task.contract.doneWhen,
+            warnings: task.contract.status === "signed" ? [] : [`${task.contract.problem ?? "This contract is not the one you approved."} Nothing is started or checked until it is.`],
+            widened: task.contract.widened,
+            check: task.contract.check,
+          }}
+        >
+          {task.contract.status === "signed" && task.stage !== "done" && <WidenForm label={task.label} working={working} onWiden={(body) => run("widen", `/tasks/${id}/widen`, body)} />}
+        </ContractDetails>
+      ) : (
+        <p className="core-tasks-line"><span className="core-muted">Contract</span> None. This task is not limited to any files.</p>
+      )}
       <AdvancedOnly as="p">{task.worktree ? `${task.worktree.branch} · ${task.worktree.path} · port ${task.worktree.port}` : "No worktree"}</AdvancedOnly>
 
       {notice && <p className={`core-tasks-notice ${notice.tone}`} role="status">{notice.text}</p>}
@@ -276,6 +315,7 @@ const NOTICE = {
   check: (r) => (r.passed
     ? { tone: "good", text: `The approved test passes in the worktree at ${String(r.commit ?? "").slice(0, 12)}. Review the diff next.` }
     : { tone: "bad", text: `${r.reason ?? "The test failed."}${r.output ? ` Output: ${r.output.slice(-300)}` : ""}` }),
+  widen: (r) => ({ tone: "good", text: `Allowed ${(r.widened?.files ?? []).join(", ")}. Dependency files stay outside unless named exactly. The next check uses the longer list.` }),
   "approve-diff": () => ({ tone: "good", text: "Diff approved. Merging reruns the test on the merged code first." }),
   reject: (r) => ({ tone: "warn", text: `Reopened as ${r.reopenedAs}. Start a worker on it when you are ready.` }),
   release: (r) => ({ tone: "warn", text: `Released ${r.released} from ${r.from}. Its worktree and commits are kept; start a worker on it when you are ready.` }),
