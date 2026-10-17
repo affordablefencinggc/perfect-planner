@@ -48,6 +48,22 @@ Pass `secretScan: false` to skip the hook and leave the config alone.
 | `list()`, `get(taskId)` | Running worktrees (`WorktreeInfo`: branch, path, baseSha, baseRef, port, claims) |
 | `claim(taskId, files)` | Adds file claims; returns conflicts (folder and case aware, same rules as the collision engine) |
 | `reconcile()` | Compares the registry with `git worktree list`: entries git lost, and pp worktrees nobody tracks |
+| `updateFromMain(taskId)` | Merges the task's integration branch (`baseRef`) into its branch, inside its worktree, without touching unsaved work (below) |
+| `releaseClaims(taskId, files?)` | Drops a task's file claims (all, or just the files named). The host route decides when that is allowed |
+
+## Bringing a task up to date with main
+
+`updateFromMain` never starts a merge in the worker's folder. It refuses, changing nothing, when the folder is
+missing or on another branch, a merge/rebase/cherry-pick is already in progress, or anything is modified, staged or
+untracked (it names the files). Otherwise git works the merge out in memory (`merge-tree --write-tree`, Git 2.38+):
+a conflict is reported with the files and nothing else happens. Only a clean merge is applied: a commit made with
+`commit-tree` (parents: the task's tip and the integration tip) and then a `merge --ff-only` of a clean folder.
+Git itself refuses that if it would overwrite a file, and the manager refuses first when the update would write over
+an ignored file (the worker's notes or data). Nothing is reset, stashed, aborted or deleted. After a failed apply the
+folder is compared with how it was and the answer says whether it is unchanged. On success `baseSha` moves to the
+integration commit, so "what the worker changed" (the diff screen, the watcher) stays the worker's own work. The
+check and diff approval for the old tip no longer match: the gate checks the exact commit, so it must be checked and
+approved again. Status calls use `--no-optional-locks` so they never take `index.lock` from the worker's own git.
 
 State lives in `<git common dir>/perfect-planner/worktrees.json`, so it survives restarts and is shared by every worktree.
 

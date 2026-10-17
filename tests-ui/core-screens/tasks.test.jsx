@@ -348,3 +348,69 @@ describe("TasksScreen", () => {
     });
   });
 });
+
+describe("TasksScreen: waiting on other tasks, updating from main, releasing file claims", () => {
+  const tree = { path: "/w", branch: "pp/T-2", base: "main", port: 5201 };
+
+  test("a task that waits for another says why and cannot be started", async () => {
+    const message = "T-2 cannot start yet because it needs another task finished and merged first: T-1 (Save notes) is not started. Start it once that one is done.";
+    routeFetch({ "GET /tasks": async () => ok(view([task({ id: "T-2", label: "T-2", title: "Export notes", waitingFor: { tasks: ["T-1"], message } }), task({ title: "Save notes" })])) });
+    renderScreen();
+    const t2 = await card("T-2 Export notes");
+    expect(within(t2).getByText(message)).toBeTruthy();
+    expect(within(t2).getByRole("button", { name: "Start worker" }).disabled).toBe(true);
+    expect(within(await card("T-1 Save notes")).getByRole("button", { name: "Start worker" }).disabled).toBe(false);
+  });
+
+  test("Bring this task up to date with main is offered with a worktree, sends nothing else, and shows the plain answer", async () => {
+    let calls = 0;
+    const fetch = routeFetch({
+      "GET /tasks": async () => ok(view([task({ id: "T-2", label: "T-2", title: "Export notes", stage: "building", status: "claimed", owner: "w", worktree: tree }), task({ title: "Save notes" })])),
+      "POST /tasks/T-2/update-from-main": async (init) => {
+        calls += 1;
+        expect(JSON.parse(init.body)).toEqual({});
+        return ok({ updated: true, message: "T-2 now has the 2 new changes from main, merged with its own work. Its own files were not touched. The work changed, so run Check the work again and approve the diff again.", tasks: [] });
+      },
+    });
+    renderScreen();
+    const t2 = await card("T-2 Export notes");
+    expect(within(await card("T-1 Save notes")).queryByRole("button", { name: /up to date with/ })).toBeNull();
+    fireEvent.click(within(t2).getByRole("button", { name: "Bring this task up to date with main" }));
+    expect(await screen.findByText(/T-2 now has the 2 new changes from main/)).toBeTruthy();
+    expect(calls).toBe(1);
+    expect(fetch.mock.calls.filter(([u, i]) => i?.method === "POST").length).toBe(1);
+  });
+
+  test("a refused update shows the reason in plain words", async () => {
+    routeFetch({
+      "GET /tasks": async () => ok(view([task({ id: "T-2", label: "T-2", title: "Export notes", stage: "building", status: "claimed", owner: "w", worktree: tree })])),
+      "POST /tasks/T-2/update-from-main": async () => refused("T-2 has changes that are not committed yet (src/a.ts). Let the worker commit them, or move them aside, then update again. Nothing in T-2's folder was changed."),
+    });
+    renderScreen();
+    const t2 = await card("T-2 Export notes");
+    fireEvent.click(within(t2).getByRole("button", { name: "Bring this task up to date with main" }));
+    expect(await screen.findByText(/not committed yet \(src\/a\.ts\)\. .* Nothing in T-2's folder was changed\./)).toBeTruthy();
+  });
+
+  test("Release file claims appears only for stale claims, names the reason, and posts once", async () => {
+    let tasks = [
+      task({ id: "T-2", label: "T-2", title: "Export notes", worktree: tree, claims: ["src/a.ts", "docs/**"], staleClaims: "T-2 has no worker on it" }),
+      task({ title: "Save notes", worktree: { ...tree, branch: "pp/T-1" }, claims: ["src/b.ts"], staleClaims: null }),
+    ];
+    const fetch = routeFetch({
+      "GET /tasks": async () => ok(view(tasks)),
+      "POST /tasks/T-2/release-claims": async () => {
+        tasks = [{ ...tasks[0], claims: [], staleClaims: null }, tasks[1]];
+        return ok({ released: ["src/a.ts", "docs/**"], message: "Released src/a.ts, docs/**. Other tasks can claim them now.", ...view(tasks) });
+      },
+    });
+    renderScreen();
+    const t2 = await card("T-2 Export notes");
+    expect(within(t2).getByText(/src\/a\.ts, docs\/\*\* \(T-2 has no worker on it, so these can be released\)/)).toBeTruthy();
+    expect(within(await card("T-1 Save notes")).queryByRole("button", { name: "Release file claims" })).toBeNull();
+    fireEvent.click(within(t2).getByRole("button", { name: "Release file claims" }));
+    expect(await screen.findByText(/Other tasks can claim them now/)).toBeTruthy();
+    expect(fetch.mock.calls.filter(([u, i]) => String(u).includes("release-claims") && i?.method === "POST").length).toBe(1);
+    await waitFor(() => expect(within(t2).queryByRole("button", { name: "Release file claims" })).toBeNull());
+  });
+});
