@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { Ledger, MemoryStore, type Actor } from "../ledger/index";
 import { foldBoard } from "../mcp/board";
 import { installNumberingRules } from "../numbering/index";
-import { readDescription } from "./description";
+import { libraryPhrase, readDescription } from "./description";
 import { questionsFor } from "./packs";
 import { profileIdea } from "./profile";
 import { installPlanningRules } from "./rules";
@@ -240,5 +240,31 @@ describe("the person's own tasks", () => {
     expect(named.facts.find((f) => f.id === "data.store")).toMatchObject({ choice: "postgres" });
     expect(named.facts.find((f) => f.id === "money.payments")).toMatchObject({ choice: "stripe-checkout" });
     expect(readDescription("A habit tracker for my phone").ruledOut.map((r) => r.id)).not.toContain("not-an-app");
+  });
+
+  it("calls it a library only when that is what is being built, and any app word wins", () => {
+    const isLib = (idea: string) => libraryPhrase(idea) !== undefined;
+    for (const idea of [
+      "A tiny slugify library. No accounts, no network.",
+      "A tiny slugify library for turning titles into URL slugs",
+      "I want to build a CLI that renames photos by date",
+      "a command-line tool to merge CSV files",
+      "An npm package that formats currencies",
+      "Python SDK for the weather API",
+    ]) expect(isLib(idea), idea).toBe(true);
+    for (const idea of [
+      "A photo library app where families share albums and sign in",
+      "A library management system for schools with student accounts",
+      "A library for people to borrow books, with a website",
+      "A mobile app with a built-in component library",
+      "A CLI that needs accounts and a login",
+      "A habit tracker that uses a charting library",
+      "A web app that wraps an SDK",
+      "Shared photo library for my family",
+    ]) expect(isLib(idea), idea).toBe(false);
+    // And the app ideas keep their app questions.
+    const app = readDescription("A library management system for schools with student accounts");
+    expect(app.facts.find((f) => f.id === "data.store")).toBeUndefined();
+    expect(app.ruledOut.map((r) => r.id)).not.toContain("not-an-app");
   });
 });

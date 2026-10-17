@@ -21,6 +21,7 @@ import {
   planningAnswers,
   profileRepo,
   readRepoStack,
+  stackForIdea,
   toMermaid,
   type AnswerInput,
   type IdeaProfile,
@@ -72,7 +73,7 @@ function planning(project: CoreProject): PlanningState {
   let state = project.state.get(STATE_KEY) as PlanningState | undefined;
   if (!state || state.person !== person) {
     const idea = state?.idea ?? readIdea(project);
-    state = { session: new PlanningSession(project.ledger, { person }), person, idea, profile: idea ? profileRepo(idea, readRepoStack(project.root)) : null };
+    state = { session: new PlanningSession(project.ledger, { person }), person, idea, profile: idea ? profileRepo(idea, stackForIdea(readRepoStack(project.root), idea)) : null };
     project.state.set(STATE_KEY, state);
   }
   return state;
@@ -300,7 +301,7 @@ export function registerPlanningRoutes(router: Router): void {
     if (idea.length < 3) throw new HttpError(400, "EMPTY", "Describe your idea in a sentence first.");
     const state = planning(project);
     // What the repo already has (package.json, config files) and what the idea says both count; the idea wins.
-    const stack = readRepoStack(project.root);
+    const stack = stackForIdea(readRepoStack(project.root), idea);
     const profile = profileRepo(idea, stack);
     let fromRepo: string[] = [];
     try {

@@ -5,7 +5,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { NOT_AN_APP_FACTS } from "./description";
+import { mentionsApp, NOT_AN_APP_FACTS } from "./description";
 import { profileIdea, SIGNALS } from "./profile";
 import type { IdeaProfile } from "./types";
 
@@ -19,6 +19,8 @@ export interface RepoFact {
   text: string;
   /** Repo-relative files that show it. */
   evidence: string[];
+  /** Read from "this package is a library or tool", which an idea that names an app overrides. */
+  notAnApp?: true;
 }
 
 export interface RepoStack {
@@ -152,10 +154,15 @@ export function readRepoStack(root: string): RepoStack {
   const entry = Boolean(pkg && (pkg.bin || pkg.main || pkg.exports || pkg.module));
   const appLike = appDeps.some(has) || hasPrefix("@tauri-apps/") || exists(root, "src-tauri") || facts.some((f) => f.id === "data.store" || f.id === "stack.hosting");
   if (entry && !appLike) {
-    for (const f of NOT_AN_APP_FACTS) if (!facts.some((x) => x.id === f.id)) add({ id: f.id, ...(f.choice ? { choice: f.choice } : {}), text: f.text, evidence: [PKG] });
+    for (const f of NOT_AN_APP_FACTS) if (!facts.some((x) => x.id === f.id)) add({ id: f.id, ...(f.choice ? { choice: f.choice } : {}), text: f.text, evidence: [PKG], notAnApp: true });
   }
 
   return { facts, signals: [...signals] };
+}
+
+/** The stack without the "library or tool" guesses when the idea says it is an app ("sign in", "accounts", "users"). */
+export function stackForIdea(stack: RepoStack, idea: string): RepoStack {
+  return mentionsApp(idea) ? { ...stack, facts: stack.facts.filter((f) => !f.notAnApp) } : stack;
 }
 
 /**

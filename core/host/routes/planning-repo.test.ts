@@ -70,4 +70,13 @@ describe("deep planning reads the repo and the idea", () => {
     const store = (start.overview.areas as any[]).flatMap((a) => a.questions).find((q) => q.id === "data.store");
     expect(store.choice).toBe("postgres");
   });
+
+  it("an idea that names an app is not turned into a library by a library-shaped package or word", async () => {
+    for (const idea of ["A photo library app where families share albums and sign in", "A library management system for schools with student accounts"]) {
+      const { open, start } = await plan({ "package.json": { name: "x", main: "index.js" } }, idea);
+      expect(open, idea).toContain("data.store");
+      expect(open, idea).toContain("stack.framework");
+      expect(start.overview.description.ruledOut.map((r: any) => r.id), idea).not.toContain("not-an-app");
+    }
+  });
 });
