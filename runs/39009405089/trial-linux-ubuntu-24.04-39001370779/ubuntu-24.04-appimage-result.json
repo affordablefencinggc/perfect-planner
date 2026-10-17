@@ -1,0 +1,38 @@
+{
+  "label": "ubuntu-24.04-appimage",
+  "app": "/home/runner/work/perfect-planner/perfect-planner/installers/PerfectPlanner-dry-run-v0.1.0-2aac100-linux-x64.AppImage",
+  "platform": "linux",
+  "checks": [
+    {
+      "name": "launch",
+      "pass": true,
+      "seen": "WebDriver session up after 511 ms"
+    },
+    {
+      "name": "first-run screen",
+      "pass": true,
+      "seen": "\"Perfect Planner Starting Perfect Planner…\""
+    },
+    {
+      "name": "settings opens",
+      "pass": true,
+      "seen": "opened via \"Settings\": \"Settings Fine-tune every stage and feature. Changes apply immediately and are saved on this device. Safety rules (collision gates, proof, review) are never rela\""
+    },
+    {
+      "name": "open project folder",
+      "pass": false,
+      "seen": "dialog: xdg-desktop-portal-gtk (exit 2); app never showed \"trial-sample-app\" or a read-only scan step; page says: \"BLOCKED / no diagnostic errors\""
+    },
+    {
+      "name": "connect agent shows a line",
+      "pass": false,
+      "seen": "no line; panel says \"AGENT CHECK-IN Connect agent Connect an agent Give your coding agent its own way to check in. The first agent you connect becomes your main chat: it answers questions from the agents working on tasks. Connect agent Start a new history for t\""
+    },
+    {
+      "name": "close",
+      "pass": true,
+      "seen": "session closed in 44 ms"
+    }
+  ],
+  "fatal": null
+}

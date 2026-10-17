@@ -1,0 +1,10 @@
+{
+  "label": "windows-nsis",
+  "checks": [
+    {
+      "name": "plan: idea and recommended answers",
+      "pass": false,
+      "seen": "Blocking questions are still open after 28 recommendations. Planning calls: POST /api/core/planning/answer 200 48008ms; POST /api/core/planning/answer 200 40095ms; POST /api/core/planning/answer 200 43099ms; POST /api/core/planning/answer 200 45876ms; POST /api/core/planning/answer 200 50749ms; POST /api/core/planning/answer 200 50885ms. First open card: Blocking Which language runs the app, and why this one over the next best? Every later choice (framework, libraries, hiring helpers) follows the language. Recommended: TypeScript everywhere 50% No platform signal yet; TypeScript is the broadest default. No Window says: 9 | Blocking | Blocking [window 1008x681; visible buttons: PP\nPerfect Planner\nv0.1 clea | Home | 01Define | 02Coordinate | 03Build | 04Prove | 05Release | Index | Connect agent | More actions | Open project folders | Core project | Simple | Advanced | Blueprint | Structure"
+    }
+  ]
+}

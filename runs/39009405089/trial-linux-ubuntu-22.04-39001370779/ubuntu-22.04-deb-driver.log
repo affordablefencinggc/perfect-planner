@@ -1,0 +1,4 @@
+
+(perfect-planner-desktop:4947): dbind-WARNING **: 06:19:42.969: AT-SPI: Error retrieving accessibility bus address: org.freedesktop.DBus.Error.ServiceUnknown: The name org.a11y.Bus was not provided by any .service files
+
+(perfect-planner-desktop:5559): dbind-WARNING **: 06:21:13.156: AT-SPI: Error retrieving accessibility bus address: org.freedesktop.DBus.Error.ServiceUnknown: The name org.a11y.Bus was not provided by any .service files
