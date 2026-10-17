@@ -53,10 +53,29 @@ export interface CoreProject {
 }
 
 const KEY = /^[a-z0-9][a-z0-9._-]{0,63}$/i;
+/** Names Windows treats as devices (with or without an extension), wherever the folder is made. */
+const DEVICE_NAME = /^(?:con|prn|aux|nul|com[0-9]|lpt[0-9])(?:\..*)?$/i;
+
+/** Whether a (trimmed, non-empty) name may become a project's folder name on every OS the app runs on. */
+function safeFolderName(key: string): boolean {
+  // A trailing dot is dropped by Windows ("beta." would be "beta"); a device name is not a folder there.
+  return KEY.test(key) && !key.endsWith(".") && !DEVICE_NAME.test(key);
+}
 
 export function projectKey(raw: string | null | undefined): string {
   const key = (raw ?? "").trim();
-  return KEY.test(key) ? key : "default";
+  return safeFolderName(key) ? key : "default";
+}
+
+/**
+ * Why a project name sent with a request cannot be used, or undefined when it can. No name (or an empty
+ * one) means the "default" project. A name that is present but unusable is refused, never turned into
+ * "default": two different bad names must not end up sharing one project's ledger.
+ */
+export function projectKeyProblem(raw: string | null | undefined): string | undefined {
+  const key = (raw ?? "").trim();
+  if (!key || safeFolderName(key)) return undefined;
+  return "That project name cannot be used. Use letters, digits, dots, dashes and underscores, start with a letter or digit, stay under 64 characters, do not end with a dot and do not use a name Windows reserves for devices (con, nul, aux, prn, com1, lpt1).";
 }
 
 /**
@@ -145,7 +164,12 @@ export function chosenRepository(root: string): string | null {
 
 /** Folder whose .perfect-planner/ holds a project's ledger. */
 export function projectRootFor(baseRoot: string, key: string, override?: string): string {
-  return override ?? path.join(baseRoot, "projects", key);
+  if (override) return override;
+  const projects = path.join(baseRoot, "projects");
+  const root = path.join(projects, key);
+  // Defence in depth: the host refuses odd names first, but nothing may build a path outside projects/.
+  if (!safeFolderName(key) || path.dirname(root) !== projects) throw new Error(`"${key}" is not a project name that can be a folder.`);
+  return root;
 }
 
 /**

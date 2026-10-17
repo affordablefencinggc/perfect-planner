@@ -3,12 +3,14 @@
 // and by the production server (scripts/serve-local.mjs, from the bundle that
 // scripts/build-core-host.mjs writes). Loopback, same-origin callers only, and every route
 // except /session/claim needs the session cookie of a window opened from a one-time link.
+import fs from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { LedgerError } from "../ledger/index";
 import { startBridge, ToolError, type Bridge } from "../mcp/index";
 import { PeopleError } from "../people/index";
+import { folderIdentity } from "./folderIdentity";
 import { asPersonRequest, hostKeys, type HostKeys } from "./keys";
-import { excludePrivateFolder, isHomeOrDrive, ledgerIntegrity, openCoreProject, pinOwnerAfterWrite, priorUseSignals, projectKey, projectRootFor, type CoreProject, type OwnerKeySource } from "./project";
+import { excludePrivateFolder, isHomeOrDrive, ledgerIntegrity, openCoreProject, pinOwnerAfterWrite, priorUseSignals, projectKey, projectKeyProblem, projectRootFor, type CoreProject, type OwnerKeySource } from "./project";
 import { HttpError, Router } from "./router";
 import { PersonSessions } from "./session";
 import { registerRoutes } from "./routes/index";
@@ -50,6 +52,8 @@ export const defaultKeys = hostKeys;
 export class CoreHost {
   readonly router = new Router();
   private readonly projects = new Map<string, CoreProject>();
+  /** Which project key holds each folder (see folderIdentity), so one folder never carries two projects. */
+  private readonly folders = new Map<string, string>();
   private readonly bridges = new Map<string, Promise<Bridge>>();
   /** Signs of earlier Perfect Planner use in each project's repo, read before its first open touched it. */
   private readonly priorUse = new Map<string, string[]>();
@@ -116,9 +120,11 @@ export class CoreHost {
   project(key: string): CoreProject {
     let project = this.projects.get(key);
     if (!project) {
+      const folder = this.claimFolder(key);
       project = openCoreProject(this.options.root, key, this.options.projectRootOverride, this.keys, this.options.ownerKey);
       if (this.options.watch !== false) project.watch = startProjectWatch(project, this.options.watch ?? {});
       this.projects.set(key, project);
+      this.folders.set(folder, key);
     }
     return project;
   }
@@ -138,11 +144,29 @@ export class CoreHost {
   }
 
   /**
+   * The folder a project key would use, refused when another open project already holds the same folder
+   * (a name that differs only in case or trailing dots on Windows or macOS, a link to another project's
+   * folder, or PP_CORE_PROJECT_ROOT giving every key one folder). A second ledger on a folder would be a
+   * read-only twin with its own tokens and worktree view, so the second name is refused instead.
+   */
+  private claimFolder(key: string): string {
+    const root = projectRootFor(this.options.root, key, this.options.projectRootOverride);
+    fs.mkdirSync(root, { recursive: true });
+    const folder = folderIdentity(root);
+    const holder = this.folders.get(folder);
+    if (holder !== undefined && holder !== key) {
+      throw new HttpError(409, "FOLDER_IN_USE", `The project "${key}" would use the same folder as the project "${holder}" (${root}). Two projects never share a folder, so "${key}" was not opened and nothing was written.`);
+    }
+    return folder;
+  }
+
+  /**
    * Opens a project for a request: .perfect-planner/ goes into the repo's info/exclude before the
    * ledger's first file (its writer lock) is created, and every request waits until that is done.
    */
   async openProject(key: string): Promise<CoreProject> {
     if (!this.projects.has(key)) {
+      this.claimFolder(key);
       // The project folder and the repo the person picked are protected before the first git run.
       const root = projectRootFor(this.options.root, key, this.options.projectRootOverride);
       const chosen = chosenRepoRoot(root);
@@ -220,7 +244,10 @@ export class CoreHost {
     }
     try {
       const body = method === "POST" ? await readJson(req) : undefined;
-      const project = await this.openProject(projectKey(url.searchParams.get("project")));
+      const named = url.searchParams.get("project");
+      const unusable = projectKeyProblem(named);
+      if (unusable) throw new HttpError(400, "INVALID_PROJECT", unusable);
+      const project = await this.openProject(projectKey(named));
       if (method === "POST" && project.owner.state === "new" && !project.owner.started && path !== "/owner/start") {
         throw new HttpError(409, "START_HISTORY", "Start a new history for this folder first: nothing is written to a project until you do.");
       }
@@ -254,6 +281,7 @@ export class CoreHost {
     }
     this.bridges.clear();
     this.projects.clear();
+    this.folders.clear();
   }
 }
 
