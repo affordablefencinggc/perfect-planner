@@ -16,8 +16,13 @@ export function isLocalWindowsPath(file: string): boolean {
   return /^[A-Za-z]:[\\/]/.test(file);
 }
 
-/** Filesystem calls findExecutable makes; tests inject them to stand in for links to network shares. */
+/**
+ * Filesystem calls findExecutable makes (tests inject them to stand in for links to network shares), and
+ * the one option a caller may widen: the Windows extensions to accept.
+ */
 export interface ExecutableIo {
+  /** Windows file extensions to accept; default [".exe"]. A caller that never hands the file to a shell may also accept an npm shim (.cmd) to read its folder, never to run it. */
+  windowsExtensions?: readonly string[];
   /** Real path of a file or folder; throws when it cannot be resolved. */
   realpath?: (file: string) => string;
   /** True when `file` is a regular file this user may run. */
@@ -57,7 +62,7 @@ export function findExecutable(
   const local = (file: string) => !windows || isLocalWindowsPath(file);
   const pathValue = Object.entries(env).find(([key]) => (windows ? key.toUpperCase() === "PATH" : key === "PATH"))?.[1] ?? "";
   const roots = protectedRoots(cwd, protect, p, real);
-  const extensions = windows ? [".exe"] : [""];
+  const extensions = windows ? (io.windowsExtensions ?? [".exe"]) : [""];
   for (const entry of pathValue.split(windows ? ";" : ":")) {
     const dir = entry.trim().replace(/^"(.*)"$/, "$1");
     if (!dir || !p.isAbsolute(dir) || !local(dir)) continue;

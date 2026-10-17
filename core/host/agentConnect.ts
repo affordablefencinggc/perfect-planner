@@ -13,7 +13,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { findExecutable, isNetworkPath, launchFor } from "./tokenFile";
+import { findExecutable, isWithin, NO_CWD_SEARCH_ENV, registeredRoots } from "../exec/index";
+import { childEnv, protectFor } from "./protectedRoots";
+import { isNetworkPath } from "./tokenFile";
 
 const SERVER = "perfect-planner-core";
 const SKILL = "perfect-planner-connect";
@@ -42,6 +44,8 @@ export function connectLineProblem(line: string, here: string, platform: NodeJS.
   const p = windows ? path.win32 : path.posix;
   if (/[\r\n]/.test(line)) return "It must be one line.";
   if (/pp_[cw]_/.test(line)) return "It contains a key. Never paste keys; copy a fresh line from Connect agent.";
+  // PowerShell also ends a single-quoted string at the curly quotes U+2018-U+201B.
+  if (/[\u2018-\u201b]/.test(line)) return "It contains a curly quote, which PowerShell treats as the end of a quoted path.";
   const quoted = windows ? "'((?:[^']|'')*)'" : "'((?:[^']|'\\\\'')*)'";
   const unquote = (value: string) => (windows ? value.replaceAll("''", "'") : value.replaceAll("'\\''", "'"));
   const first = windows ? `(?:node|& ${quoted})` : `(?:node|${quoted})`;
@@ -49,6 +53,8 @@ export function connectLineProblem(line: string, here: string, platform: NodeJS.
   const match = shape.exec(line.trim());
   if (!match) return "It is not the shape Connect agent shows: node, connect.mjs, the bridge address and the token file, nothing else.";
   const [, node, program, , , tokenFile] = match as unknown as [string, string | undefined, string, string | undefined, string, string];
+  // Defence in depth: no shell metacharacter inside any quoted part, whatever the shell.
+  for (const part of [node, program, tokenFile]) if (part !== undefined && /[;|&<>$`]/.test(part)) return "A quoted path contains a shell character (; | & < > $ or `).";
   if (node !== undefined && unquote(node) !== bundledNodePath(here, platform)) return "The Node program is not the one that ships with Perfect Planner.";
   if (unquote(program) !== p.join(here, "connect.mjs")) return "The program is not Perfect Planner's own connect.mjs.";
   const file = unquote(tokenFile);
@@ -84,7 +90,7 @@ export function connectArgsProblem(argv: string[], platform: NodeJS.Platform = p
   const absolute = platform === "win32" ? path.win32.isAbsolute(tokenFile) : path.posix.isAbsolute(tokenFile);
   if (!absolute || !tokenFile.endsWith(".token")) return "The second part must be the full path of the .token file the app wrote.";
   if (platform === "win32") {
-    // An unusual claude.cmd still runs through cmd.exe, which expands % and splits on ".
+    // cmd.exe and PowerShell read % and " differently; refusing them keeps the path the same in every shell.
     for (const bad of ["%", '"']) if (argv.some((arg) => arg.includes(bad))) return `The path contains ${bad}, which Windows would rewrite. Move Perfect Planner's data to a folder without it.`;
   }
   return null;
@@ -111,70 +117,148 @@ export function installSkill(plan: Pick<ConnectPlan, "skillFrom" | "skillTo">, h
   fs.writeFileSync(plan.skillTo, text);
 }
 
+/** The npm package entry an npm shim (claude.cmd) starts; Perfect Planner runs it with Node itself. */
+const NPM_ENTRY = ["node_modules", "@anthropic-ai", "claude-code", "cli.js"];
+
+export interface Launch {
+  command: string;
+  args: string[];
+}
+
 /**
- * Runs Claude Code from the project folder (claude mcp add -s local registers that folder) without a
- * shell, by the absolute path found on PATH, so a claude or claude.cmd planted in the repo never runs.
+ * How to start Claude Code without a shell, by core/exec's finder, so a claude planted in the project,
+ * the picked repo or a PATH folder that links into either never runs. On Windows a claude.exe runs as
+ * itself; on macOS and Linux an npm-installed claude (a node script) runs under this Node, never
+ * through its `env node` shebang; an npm shim (claude.cmd) is never run: its package entry runs under this Node instead, and only
+ * when that entry also lies outside every protected folder. Null when no usable Claude Code is found.
  */
-function claude(args: string[]) {
-  const program = findExecutable("claude", process.env, process.cwd());
-  if (!program) return { error: Object.assign(new Error("claude not found"), { code: "ENOENT" }), status: null, stdout: "", stderr: "" };
-  const launch = launchFor(program, args, "@anthropic-ai/claude-code/cli.js");
+export function claudeLaunch(
+  args: string[],
+  env: NodeJS.ProcessEnv,
+  cwd: string,
+  protect: readonly string[],
+  platform: NodeJS.Platform = process.platform,
+): Launch | null {
+  const program = findExecutable("claude", env, cwd, platform, protect, { windowsExtensions: [".exe", ".cmd"] });
+  if (!program) return null;
+  if (platform !== "win32") return nodeScript(program) ? { command: process.execPath, args: [program, ...args] } : { command: program, args };
+  if (!/\.cmd$/i.test(program)) return { command: program, args };
+  const entry = path.join(path.dirname(program), ...NPM_ENTRY);
+  let real: string;
+  try {
+    if (!fs.statSync(entry).isFile()) return null;
+    real = fs.realpathSync.native(entry);
+  } catch {
+    return null;
+  }
+  const roots = [cwd, ...protect, ...registeredRoots()];
+  if (roots.some((root) => isWithin(root, entry) || isWithin(root, real) || isWithin(safeReal(root), real))) return null;
+  return { command: process.execPath, args: [entry, ...args] };
+}
+
+/**
+ * True for an npm-installed claude on macOS and Linux: a link to a .js file or a script starting
+ * `#!/usr/bin/env node`. Its shebang would look node up on PATH, where a planted node could sit, so
+ * it runs under this Node instead.
+ */
+function nodeScript(program: string): boolean {
+  try {
+    if (/\.[cm]?js$/i.test(fs.realpathSync.native(program))) return true;
+    const fd = fs.openSync(program, "r");
+    try {
+      const head = Buffer.alloc(128);
+      const read = fs.readSync(fd, head, 0, head.length, 0);
+      return /^#!\s*\S*\/env\s+(?:-S\s+)?node(?:\s|$)/.test(head.subarray(0, read).toString("utf8"));
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return false;
+  }
+}
+
+function safeReal(p: string): string {
+  try {
+    return fs.realpathSync.native(p);
+  } catch {
+    return path.resolve(p);
+  }
+}
+
+/** Where connect.mjs runs: the terminal's folder and environment, and where it writes. */
+export interface ConnectIo {
+  cwd: string;
+  env: NodeJS.ProcessEnv;
+  home: string;
+  /** The folder connect.mjs (and skill/SKILL.md) sits in. */
+  here: string;
+  out(text: string): void;
+  err(text: string): void;
+}
+
+/** Runs Claude Code from the project folder (claude mcp add -s local registers that folder). */
+function claude(args: string[], tokenFile: string | null, io: ConnectIo) {
+  const protect = protectFor(tokenFile);
+  const launch = claudeLaunch(args, io.env, io.cwd, protect);
+  if (!launch) return { error: Object.assign(new Error("claude not found"), { code: "ENOENT" }), status: null, stdout: "", stderr: "" };
   return spawnSync(launch.command, launch.args, {
+    cwd: io.cwd,
     encoding: "utf8",
     windowsHide: true,
-    ...(launch.verbatim ? { windowsVerbatimArguments: true } : {}),
-    // Windows: never resolve a bare program name (node, git) from the current folder either.
-    env: { ...process.env, NoDefaultCurrentDirectoryInExePath: "1" },
+    // Claude's own lookups (git, node) see only PATH folders outside the protected roots; on Windows
+    // nothing is ever resolved from the current folder either.
+    env: { ...childEnv(io.env, { cwd: io.cwd, protect }), ...NO_CWD_SEARCH_ENV },
   });
 }
 
-function main(argv: string[]): number {
-  const here = path.dirname(fileURLToPath(import.meta.url));
+/** connect.mjs itself: `<bridge url> <token file>`, or `--skill-only`. Returns the exit code. */
+export function runConnect(argv: string[], io: ConnectIo): number {
+  const { here } = io;
   if (argv.length === 1 && argv[0] === "--skill-only") {
-    const plan = connectPlan({ bridgeUrl: "", tokenFile: "", here, home: os.homedir() });
+    const plan = connectPlan({ bridgeUrl: "", tokenFile: "", here, home: io.home });
     try {
       installSkill(plan, here);
     } catch (error) {
-      process.stderr.write(`Perfect Planner: could not install the skill (${(error as Error).message}).\n`);
+      io.err(`Perfect Planner: could not install the skill (${(error as Error).message}).\n`);
       return 1;
     }
-    process.stdout.write(`Installed the ${SKILL} skill for every Claude Code session on this computer (${plan.skillTo}).\n`);
+    io.out(`Installed the ${SKILL} skill for every Claude Code session on this computer (${plan.skillTo}).\n`);
     return 0;
   }
   const problem = connectArgsProblem(argv) ?? (process.platform === "win32" && /[%"]/.test(here + process.execPath) ? "Perfect Planner or Node.js is installed in a folder whose name has % or \", which Windows would rewrite." : null);
   if (problem) {
-    process.stderr.write(`Perfect Planner: ${problem}\n`);
+    io.err(`Perfect Planner: ${problem}\n`);
     return 2;
   }
   const [bridgeUrl, tokenFile] = argv as [string, string];
   if (!fs.existsSync(tokenFile)) {
-    process.stderr.write("Perfect Planner: the token file is gone (the app restarted, or you disconnected). Click Connect agent again for a fresh line.\n");
+    io.err("Perfect Planner: the token file is gone (the app restarted, or you disconnected). Click Connect agent again for a fresh line.\n");
     return 2;
   }
-  const plan = connectPlan({ bridgeUrl, tokenFile, here, home: os.homedir() });
+  const plan = connectPlan({ bridgeUrl, tokenFile, here, home: io.home });
 
   let skill = false;
   try {
     installSkill(plan, here);
     skill = true;
   } catch (error) {
-    process.stderr.write(`Perfect Planner: could not install the skill (${(error as Error).message}). Connecting anyway.\n`);
+    io.err(`Perfect Planner: could not install the skill (${(error as Error).message}). Connecting anyway.\n`);
   }
 
-  claude(plan.remove); // nothing to remove the first time; that is fine
-  const added = claude(plan.add);
+  claude(plan.remove, tokenFile, io); // nothing to remove the first time; that is fine
+  const added = claude(plan.add, tokenFile, io);
   if (added.error || added.status !== 0) {
     const missing = (added.error as NodeJS.ErrnoException | undefined)?.code === "ENOENT";
-    process.stderr.write(
+    io.err(
       missing
         ? "Perfect Planner: Claude Code (the claude command) is not installed here. For another agent, use the MCP settings from Connect agent instead.\n"
         : `Perfect Planner: claude mcp add failed.\n${added.stderr || added.stdout}\n`,
     );
     return 1;
   }
-  process.stdout.write(
+  io.out(
     [
-      `Connected this folder (${process.cwd()}) to Perfect Planner.`,
+      `Connected this folder (${io.cwd}) to Perfect Planner.`,
       skill ? `Installed the ${SKILL} skill for every Claude Code session on this computer.` : "",
       "Next: start Claude Code in this folder and say: check in with Perfect Planner",
     ]
@@ -184,4 +268,28 @@ function main(argv: string[]): number {
   return 0;
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) process.exit(main(process.argv.slice(2)));
+function main(argv: string[]): number {
+  return runConnect(argv, {
+    cwd: process.cwd(),
+    env: process.env,
+    home: os.homedir(),
+    here: path.dirname(fileURLToPath(import.meta.url)),
+    out: (text) => process.stdout.write(text),
+    err: (text) => process.stderr.write(text),
+  });
+}
+
+/**
+ * True when `script` (process.argv[1]) is this module, compared as real paths: a path through a link
+ * (macOS /var is /private/var, an app folder behind a symlink) must still run connect.mjs.
+ */
+export function isMainModule(script: string | undefined, moduleUrl: string): boolean {
+  if (!script) return false;
+  try {
+    return fs.realpathSync.native(script) === fs.realpathSync.native(fileURLToPath(moduleUrl));
+  } catch {
+    return false;
+  }
+}
+
+if (isMainModule(process.argv[1], import.meta.url)) process.exit(main(process.argv.slice(2)));
