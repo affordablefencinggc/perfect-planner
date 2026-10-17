@@ -195,6 +195,21 @@ function findTask(project: CoreProject, id: string): TaskView {
   return task;
 }
 
+/**
+ * Plain text for a computer whose git has no name and email (null when it has them). The app only shows the
+ * two commands; it never sets the person's git config, and the merge never runs with an invented identity.
+ */
+export async function gitIdentityRefusal(root: string): Promise<string | null> {
+  const ident = await runGit(root, ["var", "GIT_COMMITTER_IDENT"]).catch(() => null);
+  if (!ident || ident.code === 0) return null;
+  return [
+    "Git on this computer does not know your name and email yet, so it cannot record the merge. Nothing was merged and your work is safe.",
+    "Run these two commands once in a terminal (use your own name and email), then press Merge again:",
+    'git config --global user.name "Your Name"',
+    'git config --global user.email "you@example.com"',
+  ].join("\n");
+}
+
 function stale(message: string): HttpError {
   return new HttpError(409, "STALE", message);
 }
@@ -518,6 +533,9 @@ export function registerTaskRoutes(router: Router): void {
     const tree = await worktreeFor(project, label);
     const approved = deriveState(project.entries(), label).diffApproval?.commit;
     if (!approved || !sameCommit(bodyOf(body).commit, approved)) throw stale("Merge the commit whose diff you approved; this screen is out of date.");
+    // Git cannot write the merge commit without a name and email; say so plainly, before anything is signed.
+    const missingIdentity = await gitIdentityRefusal(root);
+    if (missingIdentity) throw new HttpError(409, "GIT_IDENTITY_MISSING", missingIdentity);
     // The click is the person's merge approval: signed with their key, in their own window's request,
     // for exactly this commit. The gate refuses to merge without it (never reachable from an agent).
     const state = deriveState(project.entries(), label);

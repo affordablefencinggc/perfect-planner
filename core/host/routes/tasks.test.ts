@@ -5,14 +5,14 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { bridgeCall } from "../../mcp/index";
 import { isAuthoritative } from "../../ledger/index";
 import { appendNumbered } from "../../numbering/index";
 import { asPersonRequest } from "../keys";
 import { hostCall, startTestHost } from "../testing";
 import { icaclsPath } from "../tokenFile";
-import { quoteFor, repoRefusal, withOutputTail, workerCommands } from "./tasks";
+import { gitIdentityRefusal, quoteFor, repoRefusal, withOutputTail, workerCommands } from "./tasks";
 
 const git = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, encoding: "utf8", env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t.invalid", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t.invalid" } }).trim();
 const write = (dir: string, file: string, text: string) => {
@@ -361,5 +361,43 @@ describe("a refused merge shows why the test failed", () => {
     expect(text).toContain("line 40");
     expect(text).not.toContain("line 20\n");
     expect(withOutputTail("refused", "")).toBe("refused");
+  });
+});
+
+describe("a computer whose git has no name and email", () => {
+  const keep = { ...process.env };
+  afterEach(() => {
+    for (const key of ["HOME", "USERPROFILE", "XDG_CONFIG_HOME", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM"]) {
+      if (keep[key] === undefined) delete process.env[key];
+      else process.env[key] = keep[key];
+    }
+  });
+
+  it("gets a plain message with the two commands, and nothing in git config is changed", async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "pp-nohome-"));
+    const bare = fs.mkdtempSync(path.join(os.tmpdir(), "pp-noident-"));
+    try {
+      execFileSync("git", ["init", "-q", "-b", "main", bare]);
+      Object.assign(process.env, { HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: path.join(home, "xdg"), GIT_CONFIG_NOSYSTEM: "1" });
+      process.env.GIT_CONFIG_GLOBAL = path.join(home, "none");
+      // Git may guess an email from the host name; refuse the guess so this matches a beginner's machine.
+      execFileSync("git", ["config", "user.useConfigOnly", "true"], { cwd: bare });
+      // The app copies the person's git settings once per process; load it fresh, as on a computer with none.
+      vi.resetModules();
+      const fresh = await import("./tasks");
+      const text = await fresh.gitIdentityRefusal(bare);
+      expect(text).toContain('git config --global user.name "Your Name"');
+      expect(text).toContain('git config --global user.email "you@example.com"');
+      expect(text).not.toMatch(/Committer identity unknown|conflict/i);
+      expect(fs.existsSync(path.join(home, ".gitconfig"))).toBe(false);
+      expect(execFileSync("git", ["config", "--local", "--list"], { cwd: bare, encoding: "utf8" })).not.toMatch(/user\.(name|email)/);
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+      fs.rmSync(bare, { recursive: true, force: true });
+    }
+  });
+
+  it("is not in the way when git has an identity", async () => {
+    expect(await gitIdentityRefusal(repo)).toBeNull();
   });
 });
