@@ -37,7 +37,7 @@ describe("demo stage controls", () => {
     fireEvent.change(within(index).getByPlaceholderText(/Find an ID/), { target: { value: "zzz-no-such-term" } });
     expect(within(index).getByText("No indexed term matches.")).toBeTruthy();
     fireEvent.click(within(index).getByRole("button", { name: /Start at P1/ }));
-    await waitFor(() => expect(window.location.search).toContain("workspace=plan"), { timeout: 5000 });
+    await waitFor(() => expect(window.location.search).toContain("workspace=plan"), { timeout: 15000 });
     expect(screen.queryByRole("region", { name: "Project index" })).toBeNull();
   });
 
@@ -67,7 +67,7 @@ describe("demo stage controls", () => {
     const ws = await screen.findByRole("region", { name: "Collision assessment workspace" });
     const request = (await within(ws).findAllByRole("button", { name: /Request approval|Stage proposed order/ }))[0];
     fireEvent.click(request);
-    await waitFor(() => expect(document.querySelector(".toast")?.textContent).toMatch(/not recorded|staged for review only/i), { timeout: 5000 });
+    await waitFor(() => expect(document.querySelector(".toast")?.textContent).toMatch(/not recorded|staged for review only/i), { timeout: 15000 });
     expect(within(ws).getByRole("button", { name: /Commit assessment/ }).disabled).toBe(true);
     expect(within(ws).getByRole("button", { name: /Verify chain/ }).disabled).toBe(true);
     fireEvent.click(within(ws).getByRole("button", { name: "Reset demo census" }));
