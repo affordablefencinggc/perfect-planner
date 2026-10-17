@@ -64,6 +64,17 @@ describe("readRepoStack", () => {
     expect(readRepoStack(tmp({ "README.md": "x" }))).toEqual({ facts: [], signals: [] });
     expect(readRepoStack(tmp({ "package.json": "{ not json" }))).toEqual({ facts: [], signals: [] });
   });
+
+  it("ignores a package.json symlinked from outside the repo", () => {
+    const outside = tmp({ "package.json": JSON.stringify({ dependencies: { electron: "1" } }) });
+    const root = tmp({ "README.md": "x" });
+    try {
+      fs.symlinkSync(path.join(outside, "package.json"), path.join(root, "package.json"));
+    } catch {
+      return; // symlinks need extra rights on some Windows runners
+    }
+    expect(readRepoStack(root)).toEqual({ facts: [], signals: [] });
+  });
 });
 
 describe("planning an existing repo", () => {

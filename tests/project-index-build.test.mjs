@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { emptyTaskDraftLedger, updateTaskDraft } from "../src/project/taskDraftLedger.js";
-import { agentBrief, buildRunProgress, deriveBuildBoard, nextBuildRecord, resolveApprovedTasks } from "../src/project/projectBuildModel.js";
+import { agentBrief, buildRunProgress, deriveBuildBoard, doneRefusal, nextBuildRecord, resolveApprovedTasks } from "../src/project/projectBuildModel.js";
 import { buildProjectIndex, searchProjectIndex } from "../src/project/projectIndexModel.js";
 import { receiptDerivers as indexBuild } from "../src/project/receipts/indexBuild.js";
 import { ledgerTasksReceipt } from "../src/project/receipts/ledger.js";
@@ -130,6 +130,39 @@ test("the agent brief names files, criteria, owner, constraints and how to repor
   assert.match(empty, /No acceptance criteria were written/);
 });
 
+test("Build tells 'nothing approved yet' apart from a real out-of-date approval (gap 26)", () => {
+  const ledger = sample();
+  // An unchecked or invalidated planning check is not an approval going out of date.
+  const nothing = resolveApprovedTasks({ project, ledger, sections: {}, planStatus: { state: "stale", projectId: binding.projectId, reason: "ledger-context-changed" } });
+  assert.equal(nothing.state, "missing");
+  const missing = resolveApprovedTasks({ project, ledger, sections: {}, planStatus: { state: "missing", projectId: binding.projectId } });
+  assert.equal(missing.state, "missing");
+  // A recorded approval made against an earlier folder scan is really out of date.
+  const data = { planDigest: "c".repeat(64), taskIds: ["T0001"], tasks: [{ id: "T0001", title: "Add checkout page" }], taskCount: 1, approvedAt: "2026-10-01T00:00:00.000Z", source: "local-approval", censusDigest: "d".repeat(64), confirmedAt: null, confirmedDigest: null, tasksChangedAt: null };
+  const stale = resolveApprovedTasks({ project, ledger, sections: { planAuthority: { revision: 2, data } }, planStatus: null });
+  assert.equal(stale.state, "stale");
+  assert.deepEqual(stale.taskIds, []);
+  const current = resolveApprovedTasks({ project, ledger, sections: { planAuthority: { revision: 2, data: { ...data, censusDigest: binding.censusDigest } } }, planStatus: null });
+  assert.equal(current.state, "approved");
+});
+
+test("the agent brief's Depends on includes ordering decided on the Collision page (gap 24)", () => {
+  const ledger = ledgerWith(
+    { title: "Settings page", owner: "Sam", claims: [{ path: "src/settings.jsx", access: "write" }] },
+    { title: "Theme switch", owner: "Ann", claims: [{ path: "src/settings.jsx", access: "write" }] },
+  );
+  const record = buildCollisionRecord({ ledger, censusDigest: binding.censusDigest, now: "2026-10-02T00:00:00.000Z" });
+  const [collision] = record.collisions;
+  const decided = { ...record, resolutions: { [collision.key]: createResolution(collision, "order", "T0002", "2026-10-02T00:01:00.000Z") } };
+  const board = deriveBuildBoard({ project, ledger, sections: { collisions: { revision: 2, data: decided } }, planStatus: observed(ledger) });
+  const first = agentBrief(board.cards[0], { projectName: "Shop app", statusOf: () => "not-started" });
+  assert.match(first, /Depends on:\n- T0002 \(from the Collision decision: run after\) — currently Not started/);
+  assert.doesNotMatch(first, /Depends on:\n- Nothing/);
+  const second = agentBrief(board.cards[1], { projectName: "Shop app" });
+  assert.match(second, /Depends on:\n- Nothing\./);
+  assert.ok(board.cards[0].blockers.some((item) => item.kind === "dependency" && /T0002/.test(item.text)), "the decided order also shows on the card");
+});
+
 test("the index searches tasks, areas, saved plans, proof, named files and build notes", () => {
   const sections = {
     proof: { data: { items: [{ taskId: "T0001", label: "Checkout screenshot", kind: "screenshot" }] } },
@@ -169,4 +202,50 @@ test("INDEX-BUILD needs a census; LEDGER-TASKS needs at least one saved draft fo
   assert.match(receipt.detail, /3 task drafts active/);
   assert.equal(ledgerTasksReceipt({}, { project: { ...project, census: { digest: "c".repeat(64) } } }, storage).state, "review");
   assert.equal(deriveWorkRecordReceipt("INDEX-BUILD", null, { project }).state, "recorded");
+});
+
+test("an owner cleared in Allocation stays cleared on Build instead of falling back to the draft", () => {
+  const ledger = sample();
+  const sections = { allocation: { revision: 2, data: { taskIds: ["T0001", "T0002", "T0003"], assignments: { T0001: { owner: "", wave: 1 }, T0002: { owner: "agent:", wave: 2 }, T0003: { owner: "Ann", wave: 1 } } } } };
+  const [first, second, third] = deriveBuildBoard({ project, ledger, sections, planStatus: observed(ledger) }).cards;
+  assert.equal(first.owner, null);
+  assert.equal(first.ownerSource, null);
+  assert.ok(first.blockers.some((item) => item.kind === "owner"), "the draft owner Sam does not come back");
+  assert.ok(second.blockers.some((item) => item.kind === "owner"), "a bare 'agent:' is not an owner");
+  assert.equal(third.ownerSource, "allocation");
+});
+
+test("Done is refused while blockers remain", () => {
+  const blockers = [{ kind: "owner", text: "No owner named yet. Assign one in Allocation." }];
+  assert.match(doneRefusal(blockers), /Can’t mark Done while 1 thing is in the way: No owner named yet/);
+  assert.equal(doneRefusal([]), null);
+  assert.throws(() => nextBuildRecord(null, { taskId: "T0001", state: "done", approvedTaskIds: ["T0001"], blockers }), /Can’t mark Done/);
+  assert.equal(nextBuildRecord(null, { taskId: "T0001", state: "in-progress", approvedTaskIds: ["T0001"], blockers }).status.T0001.state, "in-progress");
+});
+
+test("Ledger edits after a recorded approval are flagged and a stale overlap check is re-run live", () => {
+  const ledger = sample();
+  const record = buildCollisionRecord({ ledger, censusDigest: binding.censusDigest });
+  const collision = record.collisions[0];
+  const decided = { ...record, resolutions: { [collision.key]: createResolution(collision, "order", "T0001") } };
+  const approval = { revision: 1, data: { approvedTaskIds: ["T0001", "T0002", "T0003"], tasks: ledger.tasks.map((task) => ({ id: task.id, title: task.title })), planDigest: "a".repeat(64), tasksChangedAt: null } };
+  const clean = deriveBuildBoard({ project, ledger, sections: { planAuthority: approval, collisions: { revision: 1, data: decided } }, ledgerDigest: "a".repeat(64) });
+  assert.equal(clean.approval.changed, false);
+  assert.equal(clean.collisionsLive, false);
+  assert.equal(clean.cards[0].blockers.filter((item) => item.kind === "collision").length, 0);
+  // T0003 now writes the same file as T0001: a new hard overlap after approval.
+  const edited = updateTaskDraft(ledger, { ...ledger.tasks[2], title: "Draft only, now with files", claims: [{ path: "src/checkout.jsx", access: "write" }] });
+  const board = deriveBuildBoard({ project, ledger: edited, sections: { planAuthority: approval, collisions: { revision: 1, data: decided } }, ledgerDigest: "b".repeat(64) });
+  assert.equal(board.approval.changed, true);
+  assert.equal(board.collisionsLive, true);
+  assert.equal(board.cards[2].changedSinceApproval, true);
+  assert.ok(board.cards[2].blockers.some((item) => item.kind === "collision" && /T0001/.test(item.text)), "the new overlap is in the way, not 'nothing in the way'");
+  assert.equal(board.cards[1].blockers.filter((item) => item.kind === "collision" && /T0001/.test(item.text)).length, 0, "the unchanged decided pair keeps its decision");
+  assert.equal(deriveBuildBoard({ project, ledger, sections: { planAuthority: { ...approval, data: { ...approval.data, tasksChangedAt: "2026-10-05T00:00:00.000Z" } } } }).approval.changed, true);
+});
+
+test("without a recorded approval the board never says the approval is out of date", () => {
+  const board = deriveBuildBoard({ project, ledger: sample(), sections: {}, planStatus: { state: "stale", projectId: binding.projectId } });
+  assert.equal(board.approval.state, "missing");
+  assert.equal(board.approval.observedState, "stale");
 });

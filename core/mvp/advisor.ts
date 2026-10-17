@@ -64,8 +64,10 @@ function pickJourneyFeatures(input: ProposalInput): string[] {
       userFacing.find((f) => JOURNEY_NAME.test(f.name) || JOURNEY_NAME.test(f.id)) ??
       input.features.find((f) => JOURNEY_NAME.test(f.name) || JOURNEY_NAME.test(f.id));
     // The journey is the e2e feature and what it touches directly; the MVP
-    // still takes the full dependency closure.
-    if (e2e) return [e2e.id, ...e2e.dependsOn.filter((id) => id !== e2e.id && input.features.some((f) => f.id === id))];
+    // still takes the full dependency closure. A name match that touches
+    // nothing (a UI folder called "journey") is not an end-to-end journey:
+    // fall through to the goal.
+    if (e2e && e2e.dependsOn.some((id) => id !== e2e.id && input.features.some((f) => f.id === id))) return [e2e.id, ...e2e.dependsOn.filter((id) => id !== e2e.id && input.features.some((f) => f.id === id))];
   }
 
   const goalWords = new Set(words(input.goal));

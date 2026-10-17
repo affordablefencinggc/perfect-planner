@@ -267,6 +267,26 @@ function assertRelativePath(root, absolutePath) {
   return relative;
 }
 
+function partialNotice(reason, scannedFiles, seenFiles, walkComplete, limits) {
+  const limit = { files: limits.maxFiles, entries: limits.maxEntries, directories: limits.maxDirectories, depth: limits.maxDepth, bytes: limits.bytes }[reason];
+  const of = walkComplete ? `${seenFiles}` : `at least ${seenFiles}`;
+  const what = {
+    files: `${limit}-file limit`,
+    entries: `${limit}-entry limit`,
+    directories: `${limit}-folder limit`,
+    depth: `${limit}-level folder depth limit`,
+    bytes: `${Math.round(limit / (1024 * 1024))} MB read budget`,
+  }[reason];
+  return Object.freeze({
+    reason,
+    limit,
+    scannedFiles,
+    seenFiles,
+    walkComplete,
+    notice: `Scanned ${scannedFiles} of ${of} files; stopped at the ${what}. Pick a subfolder to cover the rest.`,
+  });
+}
+
 export async function scanWorkspaceSnapshot(rootPath, options, operation) {
   const root = path.resolve(rootPath);
   const maxFiles = boundedInteger(options?.maxFiles, MCP_OPERATION_LIMITS.maxFiles, 1, MCP_OPERATION_LIMITS.maxFiles);
@@ -277,6 +297,18 @@ export async function scanWorkspaceSnapshot(rootPath, options, operation) {
   const ignored = new Set(options?.ignored ?? DEFAULT_IGNORED);
   const extensions = new Set(options?.extensions ?? DEFAULT_EXTENSIONS);
   const retainContent = options?.retainContent === true;
+  // allowPartial: on a repo past a ceiling, keep what was read and say how much
+  // was left out instead of refusing the whole scan. Every bound still holds:
+  // nothing past maxFiles is read, and walking stops at the entry or
+  // directory ceiling.
+  const allowPartial = options?.allowPartial === true;
+  let truncated = null;
+  let eligibleFiles = 0;
+  let walkComplete = true;
+  // Bytes still owed to the re-read pass below, so a partial scan stops
+  // reading while the whole operation can still finish inside its budget.
+  let pendingVerifyBytes = 0;
+  const partialReserveBytes = Math.min(1024 * 1024, Math.floor(operation.maxAggregateBytes / 8));
   const contentByPath = retainContent ? new Map() : null;
   const files = [];
   const skipped = [];
@@ -292,8 +324,13 @@ export async function scanWorkspaceSnapshot(rootPath, options, operation) {
   const rootRealPath = await realpath(root);
   operation.check();
 
-  while (queue.length) {
+  walk: while (queue.length) {
     if (directorySnapshots.length >= maxDirectories) {
+      if (allowPartial) {
+        truncated ??= "directories";
+        walkComplete = false;
+        break;
+      }
       throw operationError("MCP_DIRECTORY_LIMIT", `Workspace scan exceeded ${maxDirectories} directories.`);
     }
     const current = queue.shift();
@@ -322,6 +359,11 @@ export async function scanWorkspaceSnapshot(rootPath, options, operation) {
     for (const entry of entries) {
       visitedEntries += 1;
       if (visitedEntries > maxEntries) {
+        if (allowPartial) {
+          truncated ??= "entries";
+          walkComplete = false;
+          break walk;
+        }
         throw operationError("MCP_ENTRY_LIMIT", `Workspace scan exceeded ${maxEntries} entries.`);
       }
       if (entry.isDirectory() && ignored.has(entry.name)) continue;
@@ -335,6 +377,11 @@ export async function scanWorkspaceSnapshot(rootPath, options, operation) {
       }
       if (stats.isDirectory()) {
         if (current.depth + 1 > maxDepth) {
+          if (allowPartial) {
+            truncated ??= "depth";
+            skipped.push({ path: relativePath, reason: `over ${maxDepth} directory levels` });
+            continue;
+          }
           throw operationError("MCP_DEPTH_LIMIT", `Workspace scan exceeded ${maxDepth} directory levels.`);
         }
         queue.push({ absolutePath, depth: current.depth + 1 });
@@ -343,7 +390,12 @@ export async function scanWorkspaceSnapshot(rootPath, options, operation) {
       const extension = path.extname(entry.name).toLowerCase();
       const isDeliveryHook = [".githooks/pre-commit", ".githooks/pre-push"].includes(relativePath);
       if (!stats.isFile() || (!isDeliveryHook && !extensions.has(extension))) continue;
+      eligibleFiles += 1;
       if (files.length >= maxFiles) {
+        if (allowPartial) {
+          truncated ??= "files";
+          continue;
+        }
         throw operationError("MCP_FILE_LIMIT", `Workspace scan exceeded ${maxFiles} readable files.`);
       }
       if (stats.size > maxFileBytes) {
@@ -351,7 +403,12 @@ export async function scanWorkspaceSnapshot(rootPath, options, operation) {
         continue;
       }
 
+      if (allowPartial && operation.consumedBytes + pendingVerifyBytes + 2 * stats.size + partialReserveBytes > operation.maxAggregateBytes) {
+        truncated ??= "bytes";
+        continue;
+      }
       const bytes = await readOpenRegularFile(absolutePath, stats, operation, relativePath);
+      pendingVerifyBytes += bytes.length;
       const digest = sha256(bytes);
       const file = {
         path: relativePath,
@@ -426,6 +483,7 @@ export async function scanWorkspaceSnapshot(rootPath, options, operation) {
     files: Object.freeze(files.map((file) => Object.freeze(file))),
     skipped: Object.freeze(skipped.map((item) => Object.freeze(item))),
     digest: sha256(Buffer.from(files.map((file) => `${file.path}:${file.sha256}`).join("\n"))),
+    partial: truncated ? partialNotice(truncated, files.length, eligibleFiles, walkComplete, { maxFiles, maxEntries, maxDirectories, maxDepth, bytes: operation.maxAggregateBytes }) : null,
   });
   return Object.freeze({ census, contentByPath, scannedDirectories: directorySnapshots.length, visitedEntries });
 }

@@ -4,7 +4,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { emptyTaskDraftLedger, updateTaskDraft } from "../src/project/taskDraftLedger.js";
-import { buildCollisionRecord, collisionStatus, createResolution, overlapReview, overlapReviewText, resolutionState } from "../src/project/taskCoordination.js";
+import { buildCollisionRecord, collisionStatus, createResolution, overlapFileLines, overlapReview, overlapReviewText, resolutionState } from "../src/project/taskCoordination.js";
 import { deriveWorkRecordReceipt } from "../src/project/workRecordReceipts.js";
 import { collisionSummary } from "../src/project/integritySummary.js";
 import { recordedCollisions } from "../src/project/workRecordReaders.js";
@@ -97,4 +97,27 @@ test("without a saved check every overlap is open; a ledger without overlaps has
   const review = overlapReview(clean, null);
   assert.equal(review.total, 0);
   assert.equal(overlapReviewText(review).headline, null);
+});
+
+// Gap 20: a folder claim against several files inside it listed the folder once
+// per file ("src/components, src/components, src/components").
+test("overlap text names each overlapping path once, keeping the author's letter case", () => {
+  const ledger = ledgerOf(
+    task("Folder", [["write", "src/Components"]]),
+    task("Files", [["write", "src/components/A.jsx"], ["write", "src/components/B.jsx"], ["read", "src/components/C.jsx"]]),
+  );
+  const record = buildCollisionRecord({ ledger, censusDigest: binding.censusDigest, now: "2026-10-02T00:00:00.000Z" });
+  const [collision] = record.collisions;
+  // The stored record is unchanged (its signature keeps earlier decisions matching).
+  assert.equal(collision.files.length, 3);
+  const lines = overlapFileLines(collision.files);
+  assert.deepEqual(lines.map((line) => [line.path, line.paths, line.severity]), [
+    ["src/Components", ["src/components/A.jsx", "src/components/B.jsx"], "hard-stop"],
+    ["src/Components", ["src/components/C.jsx"], "ordered"],
+  ]);
+  const read = recordedCollisions({ collisions: { data: record } });
+  assert.deepEqual(read[0].paths, ["src/Components"]);
+  // Plain recorded paths that differ only by letter case are listed once too.
+  const plain = recordedCollisions({ collisions: { data: { collisions: [{ taskIds: ["T0001", "T0002"], paths: ["src/app.js", "SRC/app.js", "src/app.js", "src/b.js"] }] } } });
+  assert.deepEqual(plain[0].paths, ["src/app.js", "src/b.js"]);
 });

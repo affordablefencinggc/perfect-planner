@@ -48,15 +48,15 @@ export const phases = [
 ];
 
 export const repositories = [
-  { key: "P", name: "Perfect Planner", path: "/repos/perfect-planner", count: 3, tone: "green" },
-  { key: "S", name: "Shared Sync Engine", path: "/repos/shared-sync-engine", count: 2, tone: "amber" },
-  { key: "N", name: "Native Shell", path: "/repos/native-shell", count: 1, tone: "neutral" },
+  { key: "P", name: "Perfect Planner", path: "/repos/perfect-planner", tone: "green" },
+  { key: "S", name: "Shared Sync Engine", path: "/repos/shared-sync-engine", tone: "amber" },
+  { key: "N", name: "Native Shell", path: "/repos/native-shell", tone: "neutral" },
 ];
 
 export const plans = [
-  { id: "PP-014", name: "Local Collaboration Workspace", owner: "Danie", state: "in progress", progress: "8/24" },
-  { id: "PP-021", name: "Cross-repo Collision Assessor", owner: "Agent A", state: "blocked", progress: "6/18" },
-  { id: "PP-008", name: "MCP Vault + Invoices", owner: "Review Agent B", state: "queued", progress: "14/30" },
+  { id: "PP-014", repoKey: "P", name: "Local Collaboration Workspace", owner: "Danie", state: "in progress", progress: "8/24" },
+  { id: "PP-021", repoKey: "S", name: "Cross-repo Collision Assessor", owner: "Agent A", state: "blocked", progress: "6/18" },
+  { id: "PP-008", repoKey: "N", name: "MCP Vault + Invoices", owner: "Review Agent B", state: "queued", progress: "14/30" },
 ];
 
 export const allocationRows = [

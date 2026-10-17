@@ -114,6 +114,11 @@ export interface TestGateOptions {
   requireJevTestReview?: boolean;
   /** Let the merge candidate's clean install run packages' install scripts. Only a person turns this on; default false. */
   allowInstallScripts?: boolean;
+  /**
+   * Folders the host registered (the project folder, the worktree root) that no test program may come
+   * from. The repo's checkout and every worktree git lists are always added (see testRoots).
+   */
+  protect?: readonly string[];
 }
 
 export interface GatePolicy {
@@ -255,6 +260,24 @@ async function changedTestFiles(cwd: string, pins: Pins): Promise<string[]> {
     if (committed?.code === 0 && contentHash(committed.stdoutBytes) !== hash) changed.add(file);
   }
   return [...changed].sort();
+}
+
+/** Why the merge commit about to land is not exactly the merge of `base` and `approved`, or null when it is. */
+export async function verifyMergeCommit(candidate: string, mergeCommit: string, base: string, approved: string): Promise<string | null> {
+  const head = (await runGit(candidate, ["rev-parse", "--verify", "HEAD^{commit}"])).stdout.trim();
+  if (head !== mergeCommit) return `The merge candidate moved from ${mergeCommit.slice(0, 12)} to ${head.slice(0, 12) || "nothing"} after the merge.`;
+  const parents = (await runGit(candidate, ["rev-list", "--parents", "-n", "1", mergeCommit])).stdout.trim().split(/\s+/).slice(1);
+  if (parents.length !== 2 || parents[0] !== base || parents[1] !== approved) return `The merge commit's parents are not ${base.slice(0, 12)} and the approved ${approved.slice(0, 12)}.`;
+  const pure = await runGit(candidate, ["merge-tree", "--write-tree", "--no-messages", base, approved]);
+  if (pure.code !== 0) {
+    return /usage|unknown option|write-tree/i.test(pure.stderr)
+      ? "Checking the merge needs Git 2.38 or later (git merge-tree --write-tree); update Git and merge again."
+      : `A clean re-merge of the approved commit does not succeed (${oneLine(pure.stderr || pure.stdout) || `exit ${pure.code}`}).`;
+  }
+  const expected = pure.stdout.trim().split(/\r?\n/)[0]!;
+  const actual = (await runGit(candidate, ["rev-parse", `${mergeCommit}^{tree}`])).stdout.trim();
+  if (actual !== expected) return `The merge commit's content (tree ${actual.slice(0, 12)}) is not the clean merge of the approved commit (tree ${expected.slice(0, 12)}); something changed it while git ran.`;
+  return null;
 }
 
 /** The ledger, worker tokens and task worktrees in .perfect-planner/ must never be committed. */
@@ -477,6 +500,24 @@ const IMPORT_EXTENSIONS = ["", ".js", ".mjs", ".cjs", ".ts", ".mts", ".cts", ".t
  * files import (relative imports, followed transitively) and files named in package.json scripts
  * or in the test command. A change to any of them can change what the test checks.
  */
+/**
+ * Every checkout of the repo `cwd` belongs to (its top level, the main checkout and each worktree git
+ * lists), none of which a test program may be started from: a worker can plant one in any of them and
+ * reach it through a PATH link. Empty when `cwd` is not in a repo.
+ */
+export async function testRoots(cwd: string): Promise<string[]> {
+  const roots: string[] = [];
+  try {
+    const top = await runGit(cwd, ["rev-parse", "--show-toplevel"]);
+    if (top.code === 0 && top.stdout.trim()) roots.push(path.resolve(cwd, top.stdout.trim()));
+    const list = await runGit(cwd, ["worktree", "list", "--porcelain"]);
+    if (list.code === 0) for (const line of lines(list.stdout)) if (line.startsWith("worktree ")) roots.push(path.resolve(line.slice("worktree ".length)));
+  } catch {
+    // No git, or git refused: cwd itself is still protected by the runner.
+  }
+  return [...new Set(roots)];
+}
+
 export async function testSupportFiles(repoRoot: string, commits: readonly string[], pinned: readonly string[], command: string): Promise<Set<string>> {
   const support = new Set<string>();
   for (const commit of commits) {
@@ -551,6 +592,7 @@ export class TestGate {
   private readonly timeoutMs: number;
   private readonly policy: GatePolicy;
   private readonly allowInstallScripts: boolean;
+  private readonly protect: readonly string[];
 
   constructor(options: TestGateOptions) {
     this.ledger = options.ledger;
@@ -559,6 +601,12 @@ export class TestGate {
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.policy = { requireJevTestReview: options.requireJevTestReview ?? false };
     this.allowInstallScripts = options.allowInstallScripts ?? false;
+    this.protect = options.protect ?? [];
+  }
+
+  /** Run the approved command with the protected roots for `cwd` (see TestRunOptions.protect). */
+  private async runTest(command: string, cwd: string, extra: readonly string[] = []): Promise<TestRunResult> {
+    return this.run(command, cwd, { timeoutMs: this.timeoutMs, protect: [...this.protect, ...extra, ...(await testRoots(cwd))] });
   }
 
   state(taskId: string): GateState {
@@ -624,7 +672,7 @@ export class TestGate {
       });
       return { ok: false, reason: `The test files differ from the approved ones (${tampered.join(", ")}).`, entry, commit };
     }
-    const run = await this.run(definition.command, cwd, { timeoutMs: this.timeoutMs });
+    const run = await this.runTest(definition.command, cwd);
     const draft = { ...base, evidence: [...base.evidence, ...runEvidence(run)] };
     if (run.passed) {
       const entry = this.ledger.append({
@@ -779,7 +827,7 @@ export class TestGate {
       });
       return { ok: false, reason: `The approved test was changed (${tampered.join(", ")}). Restore it, or define a new test and get it approved again.`, entry, commit };
     }
-    const run = await this.run(definition.command, worktreePath, { timeoutMs: this.timeoutMs });
+    const run = await this.runTest(definition.command, worktreePath);
     const draft = { ...base, evidence: [...base.evidence, ...runEvidence(run)] };
     if (run.passed) {
       const entry = this.ledger.append({ ...draft, type: "test.passed", summary: `Done-when test for ${taskId} passes in its worktree at ${commit.slice(0, 12)}` });
@@ -957,11 +1005,17 @@ export class TestGate {
         linked = deps.linked;
         if (deps.failure) return refuse(`${deps.failure} ${integrationBranch} was left untouched.`, { mergeCommit });
       }
-      const run = await this.run(definition.command, candidate, { timeoutMs: this.timeoutMs });
+      const run = await this.runTest(definition.command, candidate, [repoRoot]);
       if (!run.passed) {
         entries.push(this.ledger.append({ ...proof(mergeCommit, run), type: "test.failed", summary: `Done-when test for ${taskId} fails after merging into ${integrationBranch}`, reason: failureReason(run) }));
         return refuse(`The test fails after the merge (${describeRun(run)}); ${integrationBranch} was left untouched.`, { output: run.outputTail, run, mergeCommit });
       }
+
+      // Land only the merge that was approved: the candidate's commit must still be HEAD, have exactly the
+      // integration tip and the approved commit as parents, and hold the tree a pure in-memory merge of the
+      // two produces (git merge-tree runs no hooks or filters). Anything changed in between is refused.
+      const landing = await verifyMergeCommit(candidate, mergeCommit, oldIntegration, branchTip);
+      if (landing) return refuse(`${landing} ${integrationBranch} was left untouched.`, { run, mergeCommit });
 
       const advanced = await this.advance(repoRoot, integrationBranch, oldIntegration, mergeCommit, candidate);
       if (!advanced.ok) return refuse(advanced.reason, { run, mergeCommit });

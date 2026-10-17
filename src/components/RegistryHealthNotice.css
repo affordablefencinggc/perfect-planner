@@ -1,0 +1,37 @@
+.registry-health-notice {
+  position: fixed;
+  top: calc(var(--app-header-height, 118px) + 8px);
+  left: 50%;
+  z-index: 1000;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  width: min(720px, calc(100vw - 32px));
+  padding: 12px 14px;
+  border: 1px solid var(--amber, #c38a2a);
+  border-left-width: 4px;
+  border-radius: 10px;
+  background: var(--amber-soft, #fbefd7);
+  color: var(--ink, #1f2a28);
+  font-size: 14px;
+  line-height: 1.45;
+  box-shadow: 0 6px 18px rgb(0 0 0 / 0.12);
+  transform: translateX(-50%);
+}
+.registry-health-notice__text { display: grid; gap: 2px; min-width: 0; flex: 1; }
+.registry-health-notice strong { font-weight: 700; }
+.registry-health-notice button {
+  flex: none;
+  min-height: 36px;
+  padding: 6px 12px;
+  border: 1px solid var(--ink, #1f2a28);
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.registry-health-notice button:focus-visible { outline: 2px solid var(--blue-focus, #3c6ee8); outline-offset: 2px; }
+@media (forced-colors: active) {
+  .registry-health-notice { border: 2px solid CanvasText; }
+}

@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, copyFileSync, existsSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
@@ -140,8 +141,47 @@ describe("secret scan hook starts the real git", () => {
     // A PATH folder that reaches the repo through a symlink (a junction on Windows) is the repo too.
     const link = path.join(path.dirname(repo.root), `${path.basename(repo.root)}-link`);
     symlinkSync(repo.root, link, isWindows ? "junction" : "dir");
-    cleanups.push(() => rmSync(link, { recursive: true, force: true }));
+    cleanups.push(() => rmSync(link, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }));
     expect(resolveGit({ PATH: link, GIT_EXEC_PATH: link }, repo.root)).toBeNull();
     expect(resolveGit({ PATH: repo.root }, link)).toBeNull();
+  });
+});
+
+describe("secret scan hook bundled into another program", () => {
+  it("never runs its scan when the host that bundles it starts", async () => {
+    const { build } = await import("esbuild");
+    const out = mkdtempSync(path.join(os.tmpdir(), "pp-bundle-"));
+    cleanups.push(() => rmSync(out, { recursive: true, force: true }));
+    const entry = path.join(out, "entry.mjs");
+    const worktrees = fileURLToPath(new URL("./index.ts", import.meta.url));
+    writeFileSync(
+      entry,
+      `import * as worktrees from ${JSON.stringify(worktrees)};\n` +
+        `import { scanDiff } from ${JSON.stringify(HOOK)};\n` +
+        `console.log("host started", typeof scanDiff, typeof worktrees.runGit);\n`,
+    );
+    // Like dist/core-host/index.mjs: one file, so import.meta.url is the bundle's own address.
+    const bundle = path.join(out, "core-host", "index.mjs");
+    await build({ entryPoints: [entry], bundle: true, platform: "node", format: "esm", outfile: bundle, logLevel: "silent" });
+
+    const empty = mkdtempSync(path.join(os.tmpdir(), "pp-not-a-repo-"));
+    cleanups.push(() => rmSync(empty, { recursive: true, force: true }));
+    const repo = await makeRepo({ "a.txt": "a\n" });
+    cleanups.push(repo.cleanup);
+    plantGit(repo.root);
+    writeFileSync(path.join(repo.root, "config.js"), `const api_${"key"} = "${"abcdefghijklm"}nopqrstuvwxyz";\n`);
+    await git(repo.root, ["add", "config.js"]);
+
+    for (const cwd of [empty, repo.root]) {
+      const run = spawnSync(process.execPath, [bundle], {
+        cwd,
+        env: { ...process.env, PATH: `.${path.delimiter}${process.env.PATH}` },
+        encoding: "utf8",
+      });
+      expect(run.stdout).toContain("host started function function");
+      expect(run.stderr).not.toContain("secret scan");
+      expect(run.status).toBe(0);
+    }
+    expect(existsSync(path.join(repo.root, "planted-ran"))).toBe(false);
   });
 });

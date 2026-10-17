@@ -24,13 +24,22 @@ beforeAll(async () => {
   await build({ entryPoints: { connect: path.resolve("core/host/agentConnect.ts") }, outdir: out, bundle: true, platform: "node", format: "esm", target: "node20", outExtension: { ".js": ".mjs" }, packages: "external", logLevel: "error" });
   fs.mkdirSync(path.join(out, "skill"));
   fs.copyFileSync(path.resolve("core/mcp/skill/SKILL.md"), path.join(out, "skill", "SKILL.md"));
-  connect = path.join(out, "connect.mjs");
+  // Run it through a linked folder, as on macOS (/var is /private/var) or an app folder behind a symlink.
+  const linked = path.join(temp(), "linked-core-host");
+  link(out, linked);
+  connect = path.join(linked, "connect.mjs");
 }, 60_000);
 afterAll(() => {
   for (const dir of made.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
 
 describe("built connect.mjs", () => {
+  it("runs when started through a linked folder", () => {
+    const run = spawnSync(process.execPath, [connect, "--skill-only"], { env: { ...process.env, HOME: temp(), USERPROFILE: temp() }, encoding: "utf8" });
+    expect(run.status, run.stderr).toBe(0);
+    expect(run.stdout).toContain("Installed the perfect-planner-connect skill");
+  });
+
   it("runs from outside any repo and from repo/src without running a planted git or claude", () => {
     const outside = temp();
     const project = temp();
@@ -87,7 +96,9 @@ appendFileSync(${JSON.stringify(report)}, JSON.stringify({ args: process.argv.sl
           } catch {
             // missing folders cannot hold a program
           }
-          expect(path.relative(realRepo, real).startsWith(".."), dir).toBe(true);
+          // On another drive path.relative gives an absolute path: that folder is outside the repo too.
+          const rel = path.relative(realRepo, real);
+          expect(rel.startsWith("..") || path.isAbsolute(rel), dir).toBe(true);
         }
       }
     }
