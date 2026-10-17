@@ -57,6 +57,12 @@ describe("TasksScreen", () => {
     expect(await screen.findByText("/work/notes")).toBeTruthy();
   });
 
+  test("the git folder box starts with the folder already imported", async () => {
+    routeFetch({ "GET /tasks": async () => ok(view([task()], { ok: false, reason: "Choose it below.", suggested: "/work/imported" })) });
+    renderScreen();
+    expect((await screen.findByLabelText("Git folder")).value).toBe("/work/imported");
+  });
+
   test("Start worker dispatches with the model and shows the brief and commands once", async () => {
     let tasks = [task()];
     const fetch = routeFetch({
@@ -136,6 +142,31 @@ describe("TasksScreen", () => {
     expect(fetch.mock.calls.filter(([, i]) => i?.method === "POST").map(([u]) => String(u).split("?")[0].replace("/api/core", ""))).toEqual(["/tasks/T-1/check", "/tasks/T-1/approve-diff", "/tasks/T-1/merge"]);
   });
 
+  test("a diff that changes files able to run code needs its own confirmation before Approve", async () => {
+    const tree = { path: "/w", branch: "pp/T-1", base: "main", port: 5200 };
+    const tasks = [task({ status: "claimed", owner: "worker-1", stage: "review-diff", worktree: tree, check: { passed: true, commit: "abc123" } })];
+    const sensitive = [".github/workflows/ci.yml", "package.json"];
+    let approvedWith = null;
+    routeFetch({
+      "GET /tasks": async () => ok(view(tasks)),
+      "GET /tasks/T-1/diff": async () => ok({ task: "T-1", files: [...sensitive, "src/save.js"], sensitive, text: '+  "postinstall": "node setup.js"', commit: "abc123" }),
+      "POST /tasks/T-1/approve-diff": async (init) => { approvedWith = JSON.parse(init.body); return ok(view(tasks)); },
+    });
+    renderScreen();
+    fireEvent.click(within(await card("T-1 Save notes")).getByRole("button", { name: "Show diff" }));
+    const block = await screen.findByRole("alert", { name: "Files that can run code in T-1" });
+    expect(block.textContent).toMatch(/can run code on your computer/);
+    expect(block.textContent).toMatch(/Test files are listed too/);
+    expect(within(block).getByText("package.json")).toBeTruthy();
+    expect(within(block).getByText(".github/workflows/ci.yml")).toBeTruthy();
+    const approve = within(await card("T-1 Save notes")).getByRole("button", { name: "Approve diff at abc123" });
+    expect(approve.disabled).toBe(true);
+    fireEvent.click(within(block).getByRole("checkbox", { name: /safe to run on my computer/ }));
+    expect(approve.disabled).toBe(false);
+    fireEvent.click(approve);
+    await waitFor(() => expect(approvedWith).toEqual({ commit: "abc123", confirmSensitive: sensitive }));
+  });
+
   test("a refused merge shows the gate's reason", async () => {
     routeFetch({
       "GET /tasks": async () => ok(view([task({ status: "claimed", stage: "ready-to-merge", worktree: { path: "/w", branch: "pp/T-1", base: "main", port: 5200 } })])),
@@ -164,5 +195,36 @@ describe("TasksScreen", () => {
     fireEvent.change(screen.getByLabelText("What should change"), { target: { value: "Use a real file" } });
     fireEvent.click(send);
     expect(await screen.findByText(/Reopened as T-1.a2/)).toBeTruthy();
+  });
+
+  test("Release claim is offered only while a worker holds the task, says the work is kept, and frees it", async () => {
+    const tree = { path: "/w", branch: "pp/T-1", base: "main", port: 5200 };
+    let tasks = [
+      task({ status: "claimed", owner: "worker-1", stage: "building", worktree: tree }),
+      task({ id: "T-2", label: "T-2", title: "Open notes", stage: "ready-to-claim" }),
+      task({ id: "T-3", label: "T-3", title: "Sync notes", status: "done", stage: "done" }),
+    ];
+    const fetch = routeFetch({
+      "GET /tasks": async () => ok(view(tasks)),
+      "POST /tasks/T-1/release": async (init) => {
+        expect(JSON.parse(init.body)).toEqual({ owner: "worker-1", reason: "Its window was closed" });
+        tasks = [{ ...tasks[0], status: "open", owner: null, stage: "ready-to-claim" }, tasks[1], tasks[2]];
+        return ok({ released: "T-1", from: "worker-1", entry: "L-000020", ...view(tasks) });
+      },
+    });
+    renderScreen();
+    const t1 = await card("T-1 Save notes");
+    expect(within(await card("T-2 Open notes")).queryByRole("button", { name: "Release claim" })).toBeNull();
+    expect(within(await card("T-3 Sync notes")).queryByRole("button", { name: "Release claim" })).toBeNull();
+    fireEvent.click(within(t1).getByRole("button", { name: "Release claim" }));
+    expect(within(t1).getByText(/Release this task so another worker can take it\. Its worktree and commits are kept\./)).toBeTruthy();
+    // Nothing is sent until the person confirms.
+    expect(fetch.mock.calls.some(([u]) => String(u).includes("/release"))).toBe(false);
+    fireEvent.change(within(t1).getByLabelText("Why (optional)"), { target: { value: "Its window was closed" } });
+    fireEvent.click(within(t1).getByRole("button", { name: "Release T-1" }));
+    expect(await screen.findByText(/Released T-1 from worker-1\. Its worktree and commits are kept/)).toBeTruthy();
+    const after = await card("T-1 Save notes");
+    expect(within(after).queryByRole("button", { name: "Release claim" })).toBeNull();
+    expect(within(after).getByRole("button", { name: "Start worker" })).toBeTruthy();
   });
 });

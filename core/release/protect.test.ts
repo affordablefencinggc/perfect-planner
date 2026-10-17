@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { Ledger, MemoryStore } from "../ledger/index";
 import { appendNumbered, installNumberingRules } from "../numbering/index";
-import { DEFAULT_PRE_PUSH_SCRIPT, prePushScanWanted, protectProject, setPrePushScan } from "./protect";
+import { DEFAULT_PRE_PUSH_SCRIPT, PRE_PUSH_HOOK_FILES, prePushScanWanted, protectProject, setPrePushScan } from "./protect";
 import { prePushInstalled } from "./layers";
 import type { CommandRunner } from "./types";
 
@@ -43,6 +43,19 @@ function withRepo(fn: (dir: string) => Promise<void>): () => Promise<void> {
 describe("protectProject: shipping safety is on by default", () => {
   it("ships the pre-push scan script it points the hook at", () => {
     expect(existsSync(DEFAULT_PRE_PUSH_SCRIPT)).toBe(true);
+  });
+
+  it("lists every file the hook needs: itself plus everything it imports relatively, transitively", () => {
+    const dir = join(DEFAULT_PRE_PUSH_SCRIPT, "..");
+    const seen = new Set<string>();
+    const visit = (file: string) => {
+      if (seen.has(file)) return;
+      seen.add(file);
+      const text = readFileSync(join(dir, file), "utf8");
+      for (const m of text.matchAll(/(?:^|\n)\s*import[^"']*["']\.\/([^"']+)["']/g)) visit(m[1]!);
+    };
+    visit("pre-push.mjs");
+    expect([...seen].sort()).toEqual([...PRE_PUSH_HOOK_FILES].sort());
   });
 
   it("installs the release rules and the pre-push scan when a project opens", withRepo(async (dir) => {
@@ -83,6 +96,18 @@ describe("protectProject: shipping safety is on by default", () => {
     appendNumbered(ledger, { actor: system, type: "decision.made", summary: "off", reason: "x", evidence: [], refs: [], data: { topic: "release-safety", prePush: false } });
     expect(prePushScanWanted(ledger.entries())).toBe(true);
     expect((await protectProject(ledger, { run, cwd: dir })).prePush.state).toBe("installed");
+  }));
+
+  it("rewrites its own hook on open when the Node or script path changed, so pushes never fail on a stale path", withRepo(async (dir) => {
+    const hook = join(dir, ".git", "hooks", "pre-push");
+    const ledger = open();
+    await protectProject(ledger, { run, cwd: dir });
+    const fresh = readFileSync(hook, "utf8");
+    // The shim an older app version wrote: same mark, a Node that no longer exists.
+    writeFileSync(hook, fresh.replace(/exec '[^']*'/, "exec '/old/app/node'"));
+    const report = await protectProject(ledger, { run, cwd: dir });
+    expect(report.prePush.state).toBe("installed");
+    expect(readFileSync(hook, "utf8")).toBe(fresh);
   }));
 
   it("leaves someone else's hook alone and says so", withRepo(async (dir) => {

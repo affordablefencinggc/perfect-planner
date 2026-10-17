@@ -1,5 +1,7 @@
 // The project owner pin (core/host/owner.ts) and key rotation (POST /keys/rotate).
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { appendNumbered } from "../../numbering/index";
@@ -24,6 +26,12 @@ const personWrite = (summary: string) =>
 const reopen = async () => {
   await ctx.host.close();
   return ctx.host.project("keys");
+};
+
+/** Closes a project opened in a test after its git work is done (Windows cannot remove a folder git is still in). */
+const closeProject = async (project: { ready: Promise<unknown>; protection: Promise<unknown>; ledger: { close(): void } }) => {
+  await Promise.allSettled([project.ready, project.protection]);
+  project.ledger.close();
 };
 
 const genesisOf = (project: { entries(): readonly { hash: string }[] }) => project.entries()[0]!.hash;
@@ -67,14 +75,14 @@ describe("project owner pin", () => {
     await claim();
     const other = openCoreProject(ctx.dir, "other", path.join(ctx.dir, "other"), ctx.host.keys);
     asPersonRequest(() => appendNumbered(other.ledger, { actor: { kind: "person", id: "owner" }, type: "task.created", summary: "Other", data: { title: "Other" } }));
-    other.ledger.close();
+    await closeProject(other);
     fs.copyFileSync(ownerPinFile(ctx.dir, genesisOf(ctx.host.project("keys"))), ownerPinFile(ctx.dir, genesisOf(other)));
     const reopened = openCoreProject(ctx.dir, "other", path.join(ctx.dir, "other"), ctx.host.keys);
     try {
       expect(reopened.owner).toMatchObject({ state: "tampered", reason: expect.stringMatching(/does not belong/) });
       expect(reopened.ledger.owner).toBeUndefined();
     } finally {
-      reopened.ledger.close();
+      await closeProject(reopened);
     }
   });
 
@@ -84,7 +92,7 @@ describe("project owner pin", () => {
     asPersonRequest(() => appendNumbered(opened.ledger, { actor: { kind: "person", id: "owner" }, type: "task.created", summary: "Save notes", data: { title: "Save notes" } }));
     pinOwnerAfterWrite(ctx.dir, opened, ctx.host.keys);
     expect(opened.owner.state).toBe("pinned");
-    opened.ledger.close();
+    await closeProject(opened);
     const after = path.join(ctx.dir, "renamed");
     fs.renameSync(before, after);
     const moved = openCoreProject(ctx.dir, "moving", after, ctx.host.keys);
@@ -92,7 +100,7 @@ describe("project owner pin", () => {
       expect(moved.owner).toMatchObject({ ownerKey: opened.owner.ownerKey, principal: "person:owner", state: "pinned" });
       expect(moved.ledger.owner).toBe("person:owner");
     } finally {
-      moved.ledger.close();
+      await closeProject(moved);
     }
   });
 
@@ -112,13 +120,77 @@ describe("project owner pin", () => {
     const written = openCoreProject(ctx.dir, "written", path.join(ctx.dir, "written"), ctx.host.keys);
     asPersonRequest(() => appendNumbered(written.ledger, { actor: { kind: "person", id: "owner" }, type: "task.created", summary: "Save notes", data: { title: "Save notes" } }));
     pinOwnerAfterWrite(ctx.dir, written, ctx.host.keys);
-    written.ledger.close();
+    await closeProject(written);
     const lost = openCoreProject(ctx.dir, "written", path.join(ctx.dir, "written"), new HostKeys(new MemoryKeyProvider({ autoCreate: false })));
     try {
       expect(lost.owner.state).toMatch(/^(tampered|replaced)$/);
       expect(lost.ledger.owner).toBeUndefined();
     } finally {
-      lost.ledger.close();
+      await closeProject(lost);
+    }
+  });
+});
+
+describe("starting a new history", () => {
+  const gitIn = (cwd: string, ...args: string[]) => execFileSync("git", ["-c", "user.name=Owner", "-c", "user.email=owner@example.invalid", ...args], { cwd, encoding: "utf8" });
+  const repoWithCommit = () => {
+    const repo = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "pp-start-")));
+    gitIn(repo, "init", "-q", "-b", "main");
+    fs.writeFileSync(path.join(repo, "README.md"), "# App\n");
+    gitIn(repo, "add", "-A");
+    gitIn(repo, "commit", "-qm", "init");
+    return repo;
+  };
+
+  it("refuses a new project's first write until the person starts its history, then pins on the next write", async () => {
+    const repo = repoWithCommit();
+    const host = await startTestHost({ projectRootOverride: repo, autoStart: false });
+    try {
+      const status = (await hostCall(host.base, "GET", "/status?project=s")).body.result;
+      expect(status.owner).toMatchObject({ state: "new", signals: [], started: false });
+      const refused = await hostCall(host.base, "POST", "/people/claim?project=s", { name: "Solo" });
+      expect(refused.status).toBe(409);
+      expect(refused.body.code).toBe("START_HISTORY");
+      expect(host.host.project("s").entries()).toHaveLength(0);
+      // Agents never reach it: no session, no start.
+      expect((await hostCall(host.base, "POST", "/owner/start?project=s", {}, { asAgent: true })).status).toBe(401);
+      expect((await hostCall(host.base, "POST", "/owner/start?project=s", {})).status).toBe(200);
+      expect((await hostCall(host.base, "POST", "/people/claim?project=s", { name: "Solo" })).status).toBe(200);
+      expect(host.host.project("s").owner.state).toBe("pinned");
+      expect((await hostCall(host.base, "POST", "/owner/start?project=s", {})).body.code).toBe("NOT_NEW");
+    } finally {
+      await host.stop();
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("warns when the folder's repo shows earlier Perfect Planner use, as a wiped history would", async () => {
+    const repo = repoWithCommit();
+    const first = await startTestHost({ projectRootOverride: repo });
+    let appData: string;
+    try {
+      expect((await hostCall(first.base, "POST", "/people/claim?project=w", { name: "Solo" })).status).toBe(200);
+      await first.host.project("w").protection;
+      gitIn(repo, "branch", "pp/T-1");
+      appData = first.dir;
+    } finally {
+      await first.host.close();
+    }
+    // Ledger, pin and the app's record of the folder all deleted: the app cannot tell it was pinned.
+    fs.rmSync(path.join(repo, ".perfect-planner"), { recursive: true, force: true });
+    fs.rmSync(path.join(appData!, "owners"), { recursive: true, force: true });
+    const second = await startTestHost({ projectRootOverride: repo, autoStart: false });
+    try {
+      const owner = (await hostCall(second.base, "GET", "/status?project=w")).body.result.owner;
+      expect(owner.state).toBe("new");
+      expect(owner.signals.join(" ")).toMatch(/pre-push scan/);
+      expect(owner.signals.join(" ")).toMatch(/task branch/);
+      expect(owner.signals.join(" ")).toMatch(/\.perfect-planner/);
+      expect((await hostCall(second.base, "POST", "/people/claim?project=w", { name: "Solo" })).body.code).toBe("START_HISTORY");
+    } finally {
+      await second.stop();
+      await first.stop().catch(() => undefined);
+      fs.rmSync(repo, { recursive: true, force: true });
     }
   });
 });
@@ -136,8 +208,7 @@ describe("ownerKey source (CoreHostOptions.ownerKey)", () => {
     expect(unowned.ledger.ownerKeyPinned).toBe(false);
     // Nothing is written to app data for a supplied owner.
     expect(fs.existsSync(path.join(base, "owners"))).toBe(false);
-    for (const project of [owned, unowned]) project.ledger.close();
-    await Promise.allSettled([owned.ready, owned.protection, unowned.ready, unowned.protection]);
+    for (const project of [owned, unowned]) await closeProject(project);
   });
 });
 
@@ -157,6 +228,26 @@ describe("POST /keys/rotate", () => {
     expect(retired.sig?.key).toBe(res.body.result.key);
     expect(personWrite("Export notes").sig?.key).toBe(res.body.result.key);
     expect(ctx.host.project("keys").ledger.owner).toBe("person:owner");
+  });
+
+  it("returns the new recovery code once when rotating voided the old one", async () => {
+    personWrite("Save notes");
+    const ledger = ctx.host.project("keys").ledger;
+    const old = asPersonRequest(() => ledger.setRecoveryCode({ kind: "person", id: "owner" }, "first code"));
+    const res = await hostCall(ctx.base, "POST", `/keys/rotate${q}`, { reason: "old PC may be stolen" });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(res.body.result.recovery.code).toEqual(expect.any(String));
+    expect(res.body.result.recovery.code).not.toBe(old.code);
+    expect(ledger.checkRecoveryCode(res.body.result.recovery.code)).toMatchObject({ owner: "person:owner" });
+    expect(() => ledger.checkRecoveryCode(old.code)).toThrow();
+    // Not kept anywhere the window could read again.
+    expect(JSON.stringify((await hostCall(ctx.base, "GET", `/status${q}`)).body)).not.toContain(res.body.result.recovery.code);
+  });
+
+  it("without a recovery code in force, rotating makes none", async () => {
+    personWrite("Save notes");
+    const res = await hostCall(ctx.base, "POST", `/keys/rotate${q}`, { reason: "new PC" });
+    expect(res.body.result.recovery).toBeUndefined();
   });
 
   it("cannot be done from outside the person's own request", () => {

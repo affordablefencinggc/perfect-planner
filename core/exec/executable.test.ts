@@ -3,7 +3,7 @@ import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, realpathSy
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { findExecutable, gitExecutable, isLocalWindowsPath, NO_CWD_SEARCH_ENV } from "./executable";
+import { findExecutable, gitExecutable, isLocalWindowsPath, NO_CWD_SEARCH_ENV, protectRoots, registeredRoots } from "./executable";
 
 const isWindows = process.platform === "win32";
 const cleanups: (() => void)[] = [];
@@ -137,6 +137,84 @@ describe("git resolver", () => {
     expect(realpathSync.native(gitExecutable(repo)).startsWith(repo)).toBe(false);
     expect(existsSync(path.join(repo, "bin", "planted-ran"))).toBe(false);
   });
+
+  // Review of 4c317f7: the project can be a subfolder of the repo (core/ledger/ignore.ts runs git
+  // there), so a PATH entry at the repo root, such as an activated .venv/bin, was still searched.
+  it("skips PATH entries inside the roots the host protects, with a subfolder cwd", () => {
+    const repo = makeRepo();
+    const project = path.join(repo, "apps", "web");
+    mkdirSync(project, { recursive: true });
+    mkdirSync(path.join(repo, ".venv", "bin"), { recursive: true });
+    plantGit(path.join(repo, ".venv", "bin"));
+    const tools = tempDir("pp-exe-tools-");
+    const real = plantGit(tools);
+    const env = { PATH: [path.join(repo, ".venv", "bin"), tools].join(path.delimiter) };
+    // cwd alone does not cover the repo root; that is what `protect` is for.
+    expect(findExecutable("git", env, project)).not.toBe(real);
+    expect(findExecutable("git", env, project, process.platform, [repo])).toBe(real);
+  });
+
+  it("gitExecutable looks again when its cached git is inside a protected root", () => {
+    const repo = makeRepo();
+    const project = path.join(repo, "apps", "web");
+    mkdirSync(project, { recursive: true });
+    plantGit(repo);
+    process.env.PATH = `${repo}${path.delimiter}${originalPath}`;
+    // A first call without the root caches the repo's git, which is never run here.
+    expect(gitExecutable(project).startsWith(repo)).toBe(true);
+    const safe = gitExecutable(project, [repo]);
+    expect(realpathSync.native(safe).startsWith(repo)).toBe(false);
+    expect(execFileSync(safe, ["--version"], { cwd: project, encoding: "utf8", env: { ...process.env, ...NO_CWD_SEARCH_ENV } })).toMatch(/^git version \d/);
+    expect(existsSync(path.join(repo, "planted-ran"))).toBe(false);
+  });
+});
+
+describe("network shares on Windows (injected real paths)", () => {
+  // Windows rules run on every OS here: the real paths below stand in for links (junctions,
+  // symlinks, subst drives) whose targets are network shares.
+  const links: Record<string, string> = {
+    "C:\\tools": "\\\\server\\share\\tools",
+    "C:\\dev": "C:\\dev",
+    "C:\\dev\\git.exe": "\\??\\UNC\\server\\share\\git.exe",
+    "C:\\safe": "C:\\safe",
+    "C:\\safe\\git.exe": "C:\\safe\\git.exe",
+    "C:\\tools\\git.exe": "\\\\server\\share\\tools\\git.exe",
+    "C:\\repo": "C:\\repo",
+    // The folder check stands alone: this folder is a share even though its file reads as local.
+    "C:\\mix": "\\\\server\\share\\mix",
+    "C:\\mix\\git.exe": "C:\\mix\\git.exe",
+  };
+  const io = {
+    realpath: (file: string) => {
+      const real = links[file];
+      if (real === undefined) throw Object.assign(new Error(`ENOENT: ${file}`), { code: "ENOENT" });
+      return real;
+    },
+    isProgram: (file: string) => file.toLowerCase().endsWith("git.exe") && file in links,
+  };
+  const find = (pathValue: string) => findExecutable("git", { Path: pathValue }, "C:\\repo", "win32", [], io);
+
+  it("skips a local PATH folder whose real path is a share", () => {
+    expect(find("C:\\tools;C:\\safe")).toBe("C:\\safe\\git.exe");
+    expect(find("C:\\mix")).toBeNull();
+  });
+
+  it("skips a local git whose real path is a share in the \\??\\UNC spelling", () => {
+    expect(find("C:\\dev;C:\\safe")).toBe("C:\\safe\\git.exe");
+    expect(find("C:\\dev")).toBeNull();
+  });
+
+  it("still finds a local git when nothing points at a share", () => {
+    expect(find("C:\\safe")).toBe("C:\\safe\\git.exe");
+  });
+
+  it("accepts only drive-letter paths", () => {
+    expect(isLocalWindowsPath("C:\\Program Files\\Git\\cmd\\git.exe")).toBe(true);
+    expect(isLocalWindowsPath("d:/tools/git.exe")).toBe(true);
+    for (const share of ["\\\\server\\share\\git.exe", "//server/share/git.exe", "\\\\?\\UNC\\server\\share\\git.exe", "\\??\\UNC\\server\\share\\git.exe", "\\\\.\\C:\\git.exe", "C:git.exe", "\\git.exe"]) {
+      expect(isLocalWindowsPath(share), share).toBe(false);
+    }
+  });
 });
 
 describe("isLocalWindowsPath", () => {
@@ -159,22 +237,28 @@ describe("isLocalWindowsPath", () => {
   });
 });
 
-describe("isLocalWindowsPath", () => {
-  it("accepts only local drive-letter paths and refuses UNC in every spelling", () => {
-    for (const ok of ["C:\\Program Files\\Git\\cmd", "c:/tools/git", "D:\\"]) expect(isLocalWindowsPath(ok)).toBe(true);
-    for (const bad of [
-      "\\\\server\\share\\git",
-      "//server/share/git",
-      "\\/server\\share",
-      "/\\server/share",
-      "\\\\?\\UNC\\server\\share",
-      "\\??\\UNC\\server\\share",
-      "\\\\?\\C:\\tools",
-      "\\\\.\\pipe\\x",
-      "\\tools\\git",
-      "C:tools",
-      "tools\\git",
-      "",
-    ]) expect(isLocalWindowsPath(bad)).toBe(false);
+describe("protectRoots", () => {
+  it("skips a program inside a registered root until the registration is released", () => {
+    const base = realpathSync.native(mkdtempSync(path.join(os.tmpdir(), "pp-exec-protect-")));
+    try {
+      const repo = path.join(base, "repo");
+      const bin = path.join(repo, "bin");
+      mkdirSync(bin, { recursive: true });
+      const name = process.platform === "win32" ? "tool.exe" : "tool";
+      writeFileSync(path.join(bin, name), "");
+      chmodSync(path.join(bin, name), 0o755);
+      const env = { PATH: bin };
+      const cwd = path.join(base, "elsewhere");
+      expect(findExecutable("tool", env, cwd)).toBe(path.join(bin, name));
+      const release = protectRoots([repo, "relative/ignored"]);
+      expect(registeredRoots()).toContain(repo);
+      expect(registeredRoots()).not.toContain("relative/ignored");
+      expect(findExecutable("tool", env, cwd)).toBeNull();
+      release();
+      expect(registeredRoots()).not.toContain(repo);
+      expect(findExecutable("tool", env, cwd)).toBe(path.join(bin, name));
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
   });
 });

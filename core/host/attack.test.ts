@@ -50,7 +50,13 @@ describe("a local process cannot act as the person", () => {
     expect(noCsrf.status).toBe(401);
     const wrongOrigin = await fetch(`${base}/planning/start?project=p`, { method: "POST", headers: { cookie, "x-pp-csrf": result.csrf, origin: "http://evil.example", "content-type": "application/json" }, body: JSON.stringify({ idea: "A notes app that syncs" }) });
     expect(wrongOrigin.status).toBe(401);
-    const ok = await fetch(`${base}/planning/start?project=p`, { method: "POST", headers: { cookie, "x-pp-csrf": result.csrf, origin: origin(), "content-type": "application/json" }, body: JSON.stringify({ idea: "A notes app that syncs" }) });
+    const person = { cookie, "x-pp-csrf": result.csrf, origin: origin(), "content-type": "application/json" };
+    // A new project waits for "Start a new history for this folder" before its first write.
+    const first = await fetch(`${base}/planning/start?project=p`, { method: "POST", headers: person, body: JSON.stringify({ idea: "A notes app that syncs" }) });
+    expect(first.status).toBe(409);
+    expect(((await first.json()) as { code: string }).code).toBe("START_HISTORY");
+    expect((await fetch(`${base}/owner/start?project=p`, { method: "POST", headers: person, body: "{}" })).status).toBe(200);
+    const ok = await fetch(`${base}/planning/start?project=p`, { method: "POST", headers: person, body: JSON.stringify({ idea: "A notes app that syncs" }) });
     expect(ok.status).toBe(200);
   });
 });

@@ -135,3 +135,17 @@ test('glob claims overlap other tasks only when some path could match both',()=>
  assert.deepEqual(findingsFor([[{path:'src/**',access:'read'}],[{path:'src/core/**',access:'read'}]]),[]);
  assert.deepEqual(findingsFor([[{path:'mcp/**',access:'write'}],[{path:'src/**',access:'write'}],[{path:'MCP/server.mjs',access:'write'}]]),[['T0001','T0003']]);
 });
+// Gap 15: claims that name nothing in the last folder scan get a non-blocking marker.
+test('claim scan markers flag new plain paths and globs that match no scanned file',async()=>{
+ const {claimScanMarkers}=await import('../src/project/taskDraftLedger.js');
+ const scanned=['src/App.jsx','src/components/Header.jsx','tests/app.test.mjs','package.json'];
+ const claims=[{access:'write',path:'src/core'},{access:'write',path:'tests/core-*.test.mjs'},{access:'write',path:'src/components/SettingsPage.jsx'},
+  {access:'read',path:'package.json'},{access:'write',path:'src/components'},{access:'write',path:'SRC/app.jsx'},{access:'write',path:'tests/*.test.mjs'},{access:'read',path:'src/**'}];
+ const markers=claimScanMarkers(claims,scanned);
+ assert.deepEqual(markers.map(m=>m&&m.kind),['new-file','no-match','new-file',null,null,null,null,null]);
+ assert.equal(markers[0].message,'New file (not in the last scan)');
+ assert.equal(markers[1].message,'Matches no scanned file yet');
+ // Without a scan list nothing is claimed either way, and saving is never refused for it.
+ assert.deepEqual(claimScanMarkers(claims,null),claims.map(()=>null));
+ assert.doesNotThrow(()=>updateTaskDraft(emptyTaskDraftLedger(binding),task({claims:claims.slice(0,3)})));
+});

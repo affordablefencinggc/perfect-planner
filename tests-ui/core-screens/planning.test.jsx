@@ -1,3 +1,4 @@
+import { resetPersonSession } from "../../src/core-screens/coreApi.js";
 import React from "react";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -214,6 +215,39 @@ describe("Deep planning screen", () => {
     renderScreen();
     const stop = await screen.findByText(/owner key is not on this computer/);
     expect(stop.closest("[role=alert]").textContent).toMatch(/start a new project in a new folder/);
+  });
+
+  it("asks the person to start a new history first, and warns when the folder shows earlier use", async () => {
+    resetPersonSession();
+    window.sessionStorage.setItem("pp.core.csrf", "csrf-1");
+    const signals = ["This repo has Perfect Planner's pre-push scan installed.", "This repo has 1 Perfect Planner task branch (pp/T-1)."];
+    let started = false;
+    const calls = mockApi({
+      "GET /planning": () => ok(overview()),
+      "GET /status": () => ok({ project: "default", owner: { state: "new", signals, started } }),
+      "POST /owner/start": () => { started = true; return ok({ started: true, signals }); },
+    });
+    renderScreen();
+    const notice = await screen.findByRole("alert", { name: "Start a new history" });
+    expect(notice.textContent).toMatch(/may have had a Perfect Planner history before/);
+    expect(notice.textContent).toMatch(/signs, not proof/);
+    expect(notice.textContent).toContain("pp/T-1");
+    fireEvent.click(within(notice).getByRole("button", { name: "Start a new history for this folder" }));
+    await waitFor(() => expect(calls.some((c) => c.method === "POST" && c.path === "/owner/start")).toBe(true));
+    await waitFor(() => expect(screen.queryByRole("alert", { name: "Start a new history" })).toBeNull());
+    resetPersonSession();
+  });
+
+  it("stops plainly when an older copy of the project's history was put back", async () => {
+    mockApi({
+      "GET /planning": () => ok(overview()),
+      "GET /status": () => ok({ project: "default", owner: { state: "pinned" }, integrity: { state: "rolled-back", writesStopped: true, reason: "the ledger ends at L-000002 but the copy of the head this computer keeps says L-000004 was written" } }),
+    });
+    renderScreen();
+    const stop = await screen.findByText(/missing work this computer saw written/);
+    const alert = stop.closest("[role=alert]");
+    expect(alert.getAttribute("data-integrity-state")).toBe("rolled-back");
+    expect(alert.textContent).toMatch(/Restore the missing entries from git or a backup/);
   });
 
   it("switches to the mind map and the roadmap", async () => {

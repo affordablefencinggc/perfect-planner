@@ -7,11 +7,12 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { bridgeCall } from "../../mcp/index";
+import { isAuthoritative } from "../../ledger/index";
 import { appendNumbered } from "../../numbering/index";
 import { asPersonRequest } from "../keys";
 import { hostCall, startTestHost } from "../testing";
 import { icaclsPath } from "../tokenFile";
-import { quoteFor, repoRefusal, workerCommands } from "./tasks";
+import { quoteFor, repoRefusal, withOutputTail, workerCommands } from "./tasks";
 
 const git = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, encoding: "utf8", env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t.invalid", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t.invalid" } }).trim();
 const write = (dir: string, file: string, text: string) => {
@@ -45,7 +46,7 @@ afterEach(async () => {
   fs.rmSync(repo, { recursive: true, force: true });
 });
 
-const tasks = async () => (await hostCall(ctx.base, "GET", `/tasks${q}`)).body.result as { repo: { ok: boolean; root?: string; reason?: string }; tasks: any[] };
+const tasks = async () => (await hostCall(ctx.base, "GET", `/tasks${q}`)).body.result as { repo: { ok: boolean; root?: string; reason?: string; suggested?: string }; tasks: any[] };
 const post = (route: string, body: unknown = {}) => hostCall(ctx.base, "POST", `${route}${q}`, body);
 
 describe("tasks routes", () => {
@@ -56,7 +57,7 @@ describe("tasks routes", () => {
   });
 
   it("only the person's app window can dispatch, approve, check, approve a diff or merge", async () => {
-    for (const route of ["/tasks/T-1/dispatch", "/tasks/T-1/test", "/tasks/T-1/approve-test", "/tasks/T-1/check", "/tasks/T-1/approve-diff", "/tasks/T-1/merge"]) {
+    for (const route of ["/tasks/T-1/dispatch", "/tasks/T-1/test", "/tasks/T-1/approve-test", "/tasks/T-1/check", "/tasks/T-1/approve-diff", "/tasks/T-1/merge", "/tasks/T-1/release"]) {
       const res = await hostCall(ctx.base, "POST", `${route}${q}`, {}, { asAgent: true });
       expect(res.status, route).toBe(401);
     }
@@ -74,6 +75,9 @@ describe("tasks routes", () => {
     if (process.platform !== "win32") expect(fs.statSync(d.tokenFile).mode & 0o077).toBe(0);
     else expect(execFileSync(icaclsPath(), [d.tokenFile], { encoding: "utf8" })).not.toMatch(/Everyone|BUILTIN\\Users|Authenticated Users|\(I\)/i);
     expect(fs.existsSync(d.worktree)).toBe(true);
+    // connect.mjs, run from the worktree in its own process, learns the worktree folders from the file beside the token.
+    const roots = JSON.parse(fs.readFileSync(d.tokenFile.replace(/\.token$/, ".roots.json"), "utf8")).roots as string[];
+    expect(roots.some((root) => fs.realpathSync(d.worktree).startsWith(fs.realpathSync(root) + path.sep))).toBe(true);
     expect(d.brief).toContain("T-1");
     expect(d.brief).toContain("propose_test");
     expect(d.setup).toContain("connect.mjs");
@@ -106,6 +110,9 @@ describe("tasks routes", () => {
     // 4. The worker claims, builds and attaches its commit.
     expect(await call({ tool: "claim_task", args: { task: "T-1" }, agent })).toMatchObject({ status: "claimed" });
     write(d.worktree, "src/save.js", "export const save = (note) => note;\n");
+    // Files that can run code on the person's machine: the diff screen asks for their own confirmation.
+    write(d.worktree, "package.json", '{ "name": "notes", "scripts": { "postinstall": "node setup.js" } }\n');
+    write(d.worktree, ".github/workflows/ci.yml", "on: push\n");
     git(d.worktree, "add", "-A");
     git(d.worktree, "commit", "-q", "-m", "Save notes");
     const head = git(d.worktree, "rev-parse", "HEAD");
@@ -118,16 +125,34 @@ describe("tasks routes", () => {
     expect(checked.status, JSON.stringify(checked.body)).toBe(200);
     expect(checked.body.result).toMatchObject({ passed: true, commit: head });
     const diff = (await hostCall(ctx.base, "GET", `/tasks/T-1/diff${q}`)).body.result;
-    expect(diff.files).toEqual(["src/save.js", "tests/save.check.mjs"]);
+    expect(diff.files).toEqual([".github/workflows/ci.yml", "package.json", "src/save.js", "tests/save.check.mjs"]);
+    // The gate's own list: the proposed test file counts too, since a change there changes what is checked.
+    expect(diff.sensitive).toEqual([".github/workflows/ci.yml", "package.json", "tests/save.check.mjs"]);
     expect(diff.text).toContain("export const save");
     expect((await tasks()).tasks[0]).toMatchObject({ stage: "review-diff" });
+    // A program planted in the repo's config (a filter git would run on diff) is a plain refusal, never a crash.
+    const planted = path.join(repo, "planted-ran");
+    git(repo, "config", "filter.planted.clean", `node -e "require('fs').writeFileSync('${planted.replace(/\\/g, "/")}', '')"`);
+    const refusedDiff = await hostCall(ctx.base, "GET", `/tasks/T-1/diff${q}`);
+    expect(refusedDiff.status, JSON.stringify(refusedDiff.body)).toBe(409);
+    expect(refusedDiff.body).toMatchObject({ code: "GIT_PROGRAM_REFUSED", message: expect.stringContaining("filter.planted.clean") });
+    const refusedApprove = await post("/tasks/T-1/approve-diff", { commit: diff.commit, confirmSensitive: diff.sensitive });
+    expect(refusedApprove.status, JSON.stringify(refusedApprove.body)).toBe(409);
+    expect(refusedApprove.body.code).toBe("GIT_PROGRAM_REFUSED");
+    expect(fs.existsSync(planted)).toBe(false);
+    git(repo, "config", "--unset", "filter.planted.clean");
     const early = await post("/tasks/T-1/merge", { commit: head });
     expect(early.status).toBe(409);
     expect(early.body.code).toBe("STALE");
 
     // 6. The person approves the diff at the commit they read and merges; the gate reruns the test on the merge first.
     expect((await post("/tasks/T-1/approve-diff")).body.code).toBe("STALE");
-    expect((await post("/tasks/T-1/approve-diff", { commit: diff.commit })).status).toBe(200);
+    const unconfirmed = await post("/tasks/T-1/approve-diff", { commit: diff.commit });
+    expect(unconfirmed.status).toBe(409);
+    expect(unconfirmed.body.code).toBe("CONFIRM_SENSITIVE");
+    expect(unconfirmed.body.message).toContain("package.json");
+    expect((await post("/tasks/T-1/approve-diff", { commit: diff.commit, confirmSensitive: ["package.json"] })).body.code).toBe("CONFIRM_SENSITIVE");
+    expect((await post("/tasks/T-1/approve-diff", { commit: diff.commit, confirmSensitive: diff.sensitive })).status).toBe(200);
     expect((await tasks()).tasks[0]).toMatchObject({ stage: "ready-to-merge" });
     expect((await post("/tasks/T-1/merge", { commit: "0".repeat(40) })).body.code).toBe("STALE");
     const merged = await post("/tasks/T-1/merge", { commit: head });
@@ -171,9 +196,14 @@ describe("tasks routes", () => {
     const view = await tasks();
     expect(view.repo.ok).toBe(false);
     expect(view.repo.reason).toMatch(/git/);
+    // The folder the person already imported is offered as the answer, not an empty box.
+    expect(view.repo.suggested).toBe(fs.realpathSync(plain));
     const res = await post("/tasks/T-1/dispatch");
     expect(res.status).toBe(409);
-    fs.rmSync(plain, { recursive: true, force: true });
+    // Close the host before removing its folder: Windows refuses to delete a folder whose ledger is still open.
+    await ctx.stop();
+    fs.rmSync(plain, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+    ctx = await startTestHost({ projectRootOverride: repo });
   });
 });
 
@@ -214,6 +244,56 @@ describe("approvals are bound to what the person saw", () => {
   }, 60_000);
 });
 
+describe("releasing a dead worker's claim", () => {
+  it("writes the person's signed release, ends the worker's token, keeps the worktree and its commits, and lets a new worker take it", async () => {
+    expect((await post("/tasks/T-1/release")).body.code).toBe("NOT_CLAIMED");
+    const d = (await post("/tasks/T-1/dispatch", {})).body.result;
+    const token = fs.readFileSync(d.tokenFile, "utf8");
+    const call = bridgeCall(d.bridgeUrl, token);
+    const { agent } = (await call({ tool: "hello", args: { name: "Worker" } })) as { agent: string };
+    write(d.worktree, "tests/save.check.mjs", 'import { existsSync } from "node:fs";\nprocess.exit(existsSync("src/save.js") ? 0 : 1);\n');
+    git(d.worktree, "add", "-A");
+    git(d.worktree, "commit", "-q", "-m", "Test");
+    await call({ tool: "propose_test", args: { task: "T-1", command: "node tests/save.check.mjs", files: ["tests/save.check.mjs"] }, agent });
+    expect((await post("/tasks/T-1/approve-test", { test: (await tasks()).tasks[0].test.entry })).status).toBe(200);
+    await call({ tool: "claim_task", args: { task: "T-1" }, agent });
+    write(d.worktree, "src/half.js", "export const half = 1;\n");
+    git(d.worktree, "add", "-A");
+    git(d.worktree, "commit", "-q", "-m", "Half done");
+    const tip = git(d.worktree, "rev-parse", "HEAD");
+    const held = (await tasks()).tasks[0];
+    expect(held).toMatchObject({ status: "claimed", stage: "building" });
+
+    expect((await post("/tasks/T-1/release", { owner: "someone-else" })).body.code).toBe("STALE");
+    expect((await post("/tasks/T-1/release", { reason: 5 })).status).toBe(400);
+    const released = await post("/tasks/T-1/release", { owner: held.owner, reason: "The worker's window was closed" });
+    expect(released.status, JSON.stringify(released.body)).toBe(200);
+    expect(released.body.result).toMatchObject({ released: "T-1", from: held.owner });
+
+    // The release is the person's own signed entry, with the reason kept.
+    const project = ctx.host.project("loop");
+    const entry = project.entries().find((e) => e.n === released.body.result.entry)!;
+    expect(entry).toMatchObject({ type: "task.progress", subject: "T-1", reason: "The worker's window was closed", data: { released: true, from: held.owner } });
+    expect(isAuthoritative(entry, { personOnly: true })).toBe(true);
+    // The old worker is cut off.
+    expect(fs.existsSync(d.tokenFile)).toBe(false);
+    await expect(call({ tool: "report_progress", args: { task: "T-1", summary: "still here" }, agent })).rejects.toThrow();
+    // The work is kept: same worktree, same branch, same commit.
+    expect(fs.existsSync(d.worktree)).toBe(true);
+    expect(git(d.worktree, "rev-parse", "HEAD")).toBe(tip);
+    const free = (await tasks()).tasks[0];
+    expect(free).toMatchObject({ status: "open", owner: null, stage: "ready-to-claim", worktree: { path: d.worktree }, dispatch: null });
+
+    // A new worker is dispatched on the same worktree and can claim it.
+    const again = (await post("/tasks/T-1/dispatch", {})).body.result;
+    expect(again.worktree).toBe(d.worktree);
+    const call2 = bridgeCall(again.bridgeUrl, fs.readFileSync(again.tokenFile, "utf8"));
+    const second = (await call2({ tool: "hello", args: { name: "Worker 2" } })) as { agent: string };
+    expect(await call2({ tool: "claim_task", args: { task: "T-1" }, agent: second.agent })).toMatchObject({ status: "claimed" });
+    expect(git(again.worktree, "log", "--format=%s", "-1")).toBe("Half done");
+  }, 60_000);
+});
+
 describe("choosing the repository", () => {
   it("refuses a whole drive or the home folder, and switching folders under a running worker", async () => {
     expect(repoRefusal(path.parse(repo).root)).toMatch(/whole drive/);
@@ -235,7 +315,7 @@ describe("worker commands", () => {
     expect(quoteFor(false)("/tmp/$(touch pwned)/it's")).toBe("'/tmp/$(touch pwned)/it'\\''s'");
     expect(quoteFor(true)("C:\\$(calc)\\it's")).toBe("'C:\\$(calc)\\it''s'");
     const posix = workerCommands({ worktree: "/w/$(x)", bridgeUrl: "http://127.0.0.1:1", tokenFile: "/t/T-1.token", entry: "/a/agent.mjs", briefFile: "/b/`x`.md", platform: "linux" });
-    expect(posix.setup).toBe("cd '/w/$(x)' && node '/a/connect.mjs' http://127.0.0.1:1 '/t/T-1.token'");
+    expect(posix.setup).toBe("cd '/w/$(x)' && node '/a/connect.mjs' --agent claude http://127.0.0.1:1 '/t/T-1.token'");
     expect(posix.start).toBe("claude \"$(cat '/b/`x`.md')\"");
     expect(workerCommands({ worktree: "C:\\w", bridgeUrl: "http://127.0.0.1:1", tokenFile: "C:\\t", entry: "C:\\a", briefFile: "C:\\b.md", platform: "win32" }).start).toBe("claude (Get-Content -Raw 'C:\\b.md')");
   });
@@ -269,5 +349,17 @@ describe("a forged local request is not the person", () => {
     const types = ctx.host.project("loop").entries().map((e) => e.type);
     expect(types).not.toContain("plan.approved");
     expect(types).not.toContain("test.approved");
+  });
+});
+
+describe("a refused merge shows why the test failed", () => {
+  it("adds the end of the test's own output to the reason, and nothing when there is none", () => {
+    const output = Array.from({ length: 40 }, (_, i) => `line ${i + 1}`).join("\n");
+    const text = withOutputTail("The test fails after the merge (exit code 1); main was left untouched.", output);
+    expect(text).toContain("exit code 1");
+    expect(text).toContain("End of the test output:\nline 21\n");
+    expect(text).toContain("line 40");
+    expect(text).not.toContain("line 20\n");
+    expect(withOutputTail("refused", "")).toBe("refused");
   });
 });

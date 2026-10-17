@@ -1,7 +1,7 @@
 // Roadmap: turns a mind map into phased tasks, and writes them to the ledger
 // as numbered task.created entries.
 
-import type { Actor, Ledger, LedgerEntry } from "../ledger/index";
+import { isAuthoritative, type Actor, type Ledger, type LedgerEntry } from "../ledger/index";
 import { appendNumbered } from "../numbering/index";
 import { nodeArea } from "./mindmap";
 import type { MindMap, MindNode, PhaseId, Roadmap, RoadmapPhase, RoadmapTask } from "./types";
@@ -234,7 +234,7 @@ export function isPhase(value: unknown): value is PhaseId {
 /** Tasks the person added by hand (task.created with source "person"), in ledger order. */
 export function ownTasks(entries: readonly LedgerEntry[]): OwnTask[] {
   return entries
-    .filter((e) => e.type === "task.created" && e.data?.source === OWN_TASK_SOURCE && e.actor.kind === "person")
+    .filter((e) => e.type === "task.created" && e.data?.source === OWN_TASK_SOURCE && isAuthoritative(e, { personOnly: true }))
     .map((e) => ({
       task: e.subject,
       entry: e.n,
@@ -255,7 +255,7 @@ export function ownTasks(entries: readonly LedgerEntry[]): OwnTask[] {
 export function droppedRoadmapTasks(entries: readonly LedgerEntry[]): Map<string, { key: string; title: string; decision: string }> {
   const dropped = new Map<string, { key: string; title: string; decision: string }>();
   for (const e of entries) {
-    if (e.type !== "decision.made" || e.actor.kind !== "person") continue;
+    if (e.type !== "decision.made" || !isAuthoritative(e, { personOnly: true })) continue;
     const change = e.data?.roadmap as { drop?: unknown; restore?: unknown; title?: unknown } | undefined;
     if (!change || typeof change !== "object") continue;
     if (typeof change.drop === "string") dropped.set(change.drop, { key: change.drop, title: typeof change.title === "string" ? change.title : change.drop, decision: e.subject });

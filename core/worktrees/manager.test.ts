@@ -7,7 +7,7 @@ import { git, runGit } from "./git";
 import { WorktreeManager, preCommitHook } from "./manager";
 import { lines, samePath } from "./platform";
 import { PLACEHOLDER } from "./settings";
-import { commitAll, makeRepo, memoryLedger, writeFiles } from "./testing";
+import { commitAll, makeRepo, memoryLedger, workerGit, writeFiles } from "./testing";
 
 const person = { kind: "person", id: "looplet-spare" } as const;
 const SLOW = 60_000;
@@ -90,16 +90,17 @@ describe("WorktreeManager", () => {
   it("installs a commit-time secret scan that blocks a planted key in the task worktree only", async () => {
     const info = await manager.create({ taskId: "T-6", actor: person });
     writeFiles(info.path, { "src/config.ts": `export const key = "AKIA${"A".repeat(16)}";\n` });
+    // The worker commits with its own git, which runs the worktree's hooks (the app's own git never does).
     await git(info.path, ["add", "-A"]);
-    const blocked = await runGit(info.path, ["commit", "-m", "add config"]);
+    const blocked = workerGit(info.path, ["commit", "-m", "add config"]);
     expect(blocked.code).not.toBe(0);
     expect(blocked.stderr).toMatch(/blocked this commit[\s\S]*src\/config\.ts:1 \(aws-access-key\)/);
     expect(blocked.stderr).not.toContain("AKIA");
     writeFiles(info.path, { "src/config.ts": "export const key = process.env.KEY;\n" });
     await git(info.path, ["add", "-A"]);
-    expect((await runGit(info.path, ["commit", "-m", "read key from env"])).code).toBe(0);
+    expect(workerGit(info.path, ["commit", "-m", "read key from env"]).code).toBe(0);
     // The main checkout keeps its own hooks.
-    expect((await runGit(repo.root, ["config", "--get", "core.hooksPath"])).stdout.trim()).toBe("");
+    expect((await runGit(repo.root, ["config", "--local", "--get", "core.hooksPath"])).stdout.trim()).toBe("");
   }, SLOW);
 
   it("runs the dependency installer in the new worktree and rolls back if it fails", async () => {

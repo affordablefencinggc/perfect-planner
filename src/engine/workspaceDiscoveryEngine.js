@@ -303,6 +303,25 @@ function inspectCensusFiles(census) {
   });
 }
 
+// Git lives in a root ".git" folder (skipped by every census, never indexed) or,
+// for a linked worktree, a root ".git" file. Only the name is used: nothing
+// inside .git (objects, config, credentials) is read here.
+function hasRootGitMetadata(census, files) {
+  if (files.some((file) => file.normalizedPath === ".git" || file.normalizedPath.startsWith(".git/")))
+    return true;
+  try {
+    const skipped = Array.isArray(census?.skipped) ? census.skipped : [];
+    const limit = Math.min(skipped.length, workspaceDiscoveryLimits.maxFiles);
+    for (let index = 0; index < limit; index += 1) {
+      const path = skipped[index]?.path;
+      if (typeof path === "string" && normalize(path).replace(/\/$/, "") === ".git") return true;
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
+
 function safeSkippedCount(census) {
   try {
     return Array.isArray(census?.skipped) ? census.skipped.length : 0;
@@ -328,13 +347,16 @@ function discoveryCategories(findings) {
       Object.freeze({
         ...definition,
         findings: Object.freeze(findings.get(definition.id)),
-        state: findings
-          .get(definition.id)
-          .some((item) => item.certainty === "observed")
-          ? "observed"
-          : findings.get(definition.id).length
-            ? "signal"
-            : "unanswered",
+        // An area is "observed" only when every finding in it is observed. Any
+        // low-confidence finding keeps the whole area open for the user's review,
+        // so a misleading guess cannot hide behind a confident neighbour.
+        state: !findings.get(definition.id).length
+          ? "unanswered"
+          : findings
+                .get(definition.id)
+                .every((item) => item.certainty === "observed")
+            ? "observed"
+            : "signal",
       }),
     ),
   );
@@ -378,15 +400,15 @@ export function buildWorkspaceDiscovery(
           "A Rust manifest exists at the app root.",
         ),
       );
-    if (files.some((file) => file.normalizedPath.startsWith(".git/")))
+    if (hasRootGitMetadata(census, files))
       add(
         "A01",
         finding(
           "S003",
           "Git metadata present",
           "observed",
-          [".git/"],
-          "Git is present, but remains optional to the Planner workflow.",
+          [".git"],
+          "A .git folder or file sits at the app root. Its contents were not read or indexed. Git remains optional to the Planner workflow.",
         ),
       );
 
@@ -445,7 +467,18 @@ export function buildWorkspaceDiscovery(
     );
     const backend = matching(files, /(^|\/)(server|api|backend|functions)\//);
     const native = matching(files, /(^|\/)src-tauri\//);
-    const workers = matching(files, /(^|\/)(worker|workers)\//);
+    const workerFolders = matching(files, /(^|\/)(worker|workers)\//);
+    // A folder name alone does not prove a worker runtime (worker/index.js may only
+    // add response headers). Require a worker config, a *.worker.* module, or a
+    // worker folder with its own package manifest.
+    const workerCorroboration = matching(
+      files,
+      /(^|\/)wrangler\.(toml|json|jsonc)$|\.worker\.(js|mjs|cjs|ts|mts|jsx|tsx)$|(^|\/)(worker|workers)\/package\.json$/,
+    );
+    const workers = workerCorroboration.length
+      ? [...new Set([...workerCorroboration, ...workerFolders])]
+      : [];
+    const unconfirmedWorkers = workerCorroboration.length ? [] : workerFolders;
     if (frontend.length)
       add(
         "A03",
@@ -487,12 +520,31 @@ export function buildWorkspaceDiscovery(
           "Worker boundary",
           "signal",
           workers.map((file) => file.path),
-          `${workers.length} files sit in worker-named folders.`,
+          `${workers.length} worker-related files, including a worker config or worker module.`,
+        ),
+      );
+    if (unconfirmedWorkers.length)
+      add(
+        "A08",
+        finding(
+          "S080",
+          "Worker-named folder, purpose unknown",
+          "signal",
+          unconfirmedWorkers.map((file) => file.path),
+          "A folder is named like a background worker, but no worker config or worker module was found. Say what it does.",
         ),
       );
 
     const migrations = matching(files, /(^|\/)(migrations|prisma|supabase)\//);
-    const auth = matching(files, /(^|\/)(auth|identity|permissions?)(\/|\.)/);
+    // Tauri capability/permission files describe what the desktop app may do on the
+    // computer; they are not user sign-in, accounts or a security policy.
+    const desktopPermissionPattern = /(^|\/)src-tauri\/(capabilities|permissions|gen\/schemas)\//;
+    const desktopPermissions = matching(files, desktopPermissionPattern);
+    const outsideDesktopPermissions = (list) =>
+      list.filter((file) => !desktopPermissionPattern.test(file.normalizedPath));
+    const auth = outsideDesktopPermissions(
+      matching(files, /(^|\/)(auth|identity|permissions?)(\/|\.)/),
+    );
     const tenancy = matching(
       files,
       /(^|\/)(tenant|tenants|tenancy|multi-tenant|multitenant)(\/|\.|-)/,
@@ -564,9 +616,11 @@ export function buildWorkspaceDiscovery(
       );
 
     const envFiles = matching(files, /(^|\/)\.env(\.|$)|\.env\.example$/);
-    const security = matching(
-      files,
-      /(^|\/)(security|secrets?|vault|polic(y|ies)|capabilities)\//,
+    const security = outsideDesktopPermissions(
+      matching(
+        files,
+        /(^|\/)(security|secrets?|vault|polic(y|ies)|capabilities)\//,
+      ),
     );
     if (envFiles.length)
       add(
@@ -590,6 +644,17 @@ export function buildWorkspaceDiscovery(
           `${security.length} security-named paths need contract review.`,
         ),
       );
+    if (desktopPermissions.length)
+      add(
+        "A06",
+        finding(
+          "S052",
+          "Desktop app permission files",
+          "signal",
+          desktopPermissions.map((file) => file.path),
+          `${desktopPermissions.length} Tauri capability or permission files set what the desktop app may do on the computer. They are not user sign-in or accounts. Check they grant only what the app needs.`,
+        ),
+      );
 
     const tests = matching(
       files,
@@ -601,8 +666,9 @@ export function buildWorkspaceDiscovery(
     );
     const deploy = matching(
       files,
-      /(^|\/)(dockerfile|wrangler\.toml|vercel\.json|netlify\.toml|fly\.toml|\.openai\/hosting\.json)$/,
+      /(^|\/)(dockerfile|wrangler\.toml|vercel\.json|netlify\.toml|fly\.toml)$/,
     );
+    const hosting = matching(files, /(^|\/)\.openai\/hosting\.json$/);
     if (tests.length)
       add(
         "A07",
@@ -634,6 +700,17 @@ export function buildWorkspaceDiscovery(
           "observed",
           deploy.map((file) => file.path),
           `${deploy.length} deployment configuration files were indexed.`,
+        ),
+      );
+    if (hosting.length)
+      add(
+        "A07",
+        finding(
+          "S063",
+          "Hosting metadata file",
+          "signal",
+          hosting.map((file) => file.path),
+          "A hosting metadata file exists. Only its name was read, so it may be a leftover. Say how this app is actually released.",
         ),
       );
   }

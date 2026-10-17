@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { findExecutable, icaclsPath, isNetworkPath, writeOwnerOnlyFile } from "./tokenFile";
+import { icaclsPath, isNetworkPath, writeOwnerOnlyFile } from "./tokenFile";
 
 let dir: string;
 beforeEach(() => {
@@ -65,33 +65,5 @@ describe("owner-only token file", () => {
       expect(acl).not.toMatch(/Everyone|BUILTIN\\Users|Authenticated Users|\(I\)/i);
     }
     expect(fs.readFileSync(file, "utf8")).toBe("secret");
-  });
-});
-
-describe("finding Claude Code", () => {
-  const touch = (file: string) => {
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, "");
-    fs.chmodSync(file, 0o755);
-  };
-
-  it("never picks a program from the project folder or a relative PATH entry", () => {
-    const project = path.join(dir, "project");
-    const bin = path.join(dir, "bin");
-    touch(path.join(project, "claude"));
-    touch(path.join(project, "claude.cmd"));
-    touch(path.join(bin, "claude"));
-    touch(path.join(bin, "claude.cmd"));
-    // A Windows host's C:\ paths cannot be written as a ":"-separated PATH, so the POSIX case runs elsewhere.
-    if (process.platform !== "win32") {
-      const posix = findExecutable("claude", { PATH: [".", "relative/bin", project, bin].join(":") }, project, "linux");
-      expect(posix).toBe(path.join(bin, "claude"));
-    }
-    const windows = findExecutable("claude", { Path: [".", project, bin].join(";"), PATHEXT: ".COM;.EXE;.BAT;.CMD" }, project, "win32");
-    expect(windows).toBe(path.join(bin, "claude.cmd"));
-  });
-
-  it("returns null when Claude Code is not installed", () => {
-    expect(findExecutable("claude", { PATH: path.join(dir, "empty") }, dir, "linux")).toBeNull();
   });
 });

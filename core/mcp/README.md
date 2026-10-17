@@ -48,3 +48,29 @@ the agent receives as a `REFUSED` error. Error codes: `UNAUTHORIZED`,
 
 `lookup` is `core/lookup`'s; the board fold (`foldBoard`) is the agent-facing
 task view.
+
+## Windows setup for agents
+
+The one-line connect (`--agent claude|gemini|codex`) registers Perfect Planner
+with the agent by Node's full path, and on Windows the agent should run the line
+in PowerShell. PowerShell never runs a program from the project folder just
+because it has the same name, so a `node.cmd` someone left in a repo cannot run
+in place of Node. cmd.exe does look in the project folder first, which is why
+the skill says never to use `cmd /c` for the line
+(`core/host/windowsCwdSearch.test.ts` shows both on a real Windows machine).
+
+One gap is in Gemini CLI itself, not in Perfect Planner. When Gemini runs a
+shell command it uses PowerShell 7 (`pwsh.exe`) if it is installed. If it is
+not, and the `ComSpec` setting does not point at PowerShell, Gemini starts
+Windows PowerShell by the bare name `powershell.exe`, and Windows may look for
+that name in the current project folder first. A `powershell.exe` planted in a
+repo could then run whenever Gemini runs a command there, in any repo, with or
+without Perfect Planner.
+
+- **Recommended:** install PowerShell 7 (`winget install Microsoft.PowerShell`).
+  Gemini then uses `pwsh.exe` from its install folder and the gap is gone.
+- **Your own choice:** Windows has an account-wide setting,
+  `NoDefaultCurrentDirectoryInExePath` (an environment variable set to `1`),
+  that stops programs started by name from being looked up in the current
+  folder. It affects every program you run, so whether to set it is up to you.
+  Perfect Planner and its skill never set it for you.

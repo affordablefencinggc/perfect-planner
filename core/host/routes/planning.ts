@@ -110,7 +110,7 @@ function entryNumbers(entries: readonly LedgerEntry[]): Map<string, { asked?: st
   for (const e of entries) {
     if (e.type === "question.asked") at(e.subject).asked = e.n;
     else if (e.type === "question.answered") at(e.subject).answered = e.n;
-    else if (e.type === "decision.made" && typeof e.data?.question === "string") at(e.data.question).decided = e.n;
+    else if (e.type === "decision.made" && isAuthoritative(e) && typeof e.data?.question === "string") at(e.data.question).decided = e.n;
     else if (e.type === "task.created" && e.data?.spike && typeof (e.data.spike as { question?: unknown }).question === "string") at(String((e.data.spike as { question: string }).question)).spike = e.n;
   }
   return out;
@@ -232,7 +232,7 @@ function mindMapView(project: CoreProject) {
 function writtenTasks(entries: readonly LedgerEntry[]): Map<string, { task: string; entry: string }> {
   const out = new Map<string, { task: string; entry: string }>();
   for (const e of entries) {
-    if (e.type === "task.created" && e.data?.source === "planning" && typeof e.data.key === "string") out.set(e.data.key, { task: e.subject, entry: e.n });
+    if (e.type === "task.created" && e.data?.source === "planning" && isAuthoritative(e) && typeof e.data.key === "string") out.set(e.data.key, { task: e.subject, entry: e.n });
   }
   return out;
 }

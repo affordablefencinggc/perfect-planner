@@ -1,3 +1,4 @@
+import type { ChildProcess } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -6,7 +7,7 @@ import { Ledger, LedgerError, MemoryStore, type Actor } from "../ledger/index";
 import { git } from "../worktrees/git";
 import { realDir } from "../worktrees/platform";
 import { commitAll, makeRepo, memoryLedger, writeFiles } from "../worktrees/testing";
-import { TestGate, commandExists, deriveState, gateRule, isConclusiveFailure, nextAttemptId, runTestCommand, scrubbedEnv } from "./index";
+import { TestGate, commandExists, deriveState, gateRule, isConclusiveFailure, killTree, nextAttemptId, runTestCommand, scrubbedEnv } from "./index";
 
 const OWNER: Actor = { kind: "person", id: "owner" };
 const GATE: Actor = { kind: "system", id: "gate" };
@@ -351,7 +352,7 @@ describe("TestGate", () => {
     expect(gate.approve("T-1", OWNER, { cwd: repo.root }).ok).toBe(true);
     expect((await gate.confirmFailsFirst("T-1", repo.root)).ok).toBe(true);
     const worktree = path.join(path.dirname(repo.root), "wt-deps");
-    cleanups.push(() => rmSync(worktree, { recursive: true, force: true }));
+    cleanups.push(() => rmSync(worktree, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }));
     await git(repo.root, ["worktree", "add", "-q", "-b", "pp/T-1", worktree, "main"]);
     writeFiles(worktree, { "feature.txt": "enabled\n", "node_modules/pp-fake-dep/package.json": '{"name":"pp-fake-dep","type":"module","main":"index.js"}\n', "node_modules/pp-fake-dep/index.js": "export const ready = true;\n" });
     writeFileSync(path.join(worktree, ".gitignore"), "node_modules/\n");
@@ -374,7 +375,7 @@ describe("TestGate", () => {
     expect(gate.approve("T-1", OWNER, { cwd: repo.root }).ok).toBe(true);
     expect((await gate.confirmFailsFirst("T-1", repo.root)).ok).toBe(true);
     const worktree = path.join(path.dirname(repo.root), "wt-cheat");
-    cleanups.push(() => rmSync(worktree, { recursive: true, force: true }));
+    cleanups.push(() => rmSync(worktree, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }));
     await git(repo.root, ["worktree", "add", "-q", "-b", "pp/T-1", worktree, "main"]);
     // The worker leaves the feature off but rewrites its ignored copy of the dependency to always say yes.
     writeFiles(worktree, { ...dep("export const enabled = () => true;\n"), "notes.txt": "no real change\n" });
@@ -436,7 +437,7 @@ describe("TestGate", () => {
       expect(gate.approve("T-1", OWNER, { cwd: repo.root }).ok).toBe(true);
       expect((await gate.confirmFailsFirst("T-1", repo.root)).ok).toBe(true);
       const worktree = path.join(path.dirname(repo.root), `wt-${file.replace(/\W/g, "-")}`);
-      cleanups.push(() => rmSync(worktree, { recursive: true, force: true }));
+      cleanups.push(() => rmSync(worktree, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }));
       await git(repo.root, ["worktree", "add", "-q", "-b", "pp/T-1", worktree, "main"]);
       writeFiles(worktree, { [file]: content, "feature.txt": "enabled\n" });
       const tip = await commitAll(worktree, `touch ${file}`);
@@ -666,9 +667,9 @@ describe("TestGate", () => {
 });
 
 describe("runTestCommand", () => {
-  const scratch = () => {
+  const scratch = (maxRetries = 5) => {
     const dir = realDir(mkdtempSync(path.join(os.tmpdir(), "pp-gate-run-")));
-    cleanups.push(() => rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }));
+    cleanups.push(() => rmSync(dir, { recursive: true, force: true, maxRetries, retryDelay: 250 }));
     return dir;
   };
 
@@ -731,8 +732,24 @@ describe("runTestCommand", () => {
     expect(result.outputTail).not.toContain("line 0\n");
   });
 
+  it("still reports a timeout when killing the tree never finishes", async () => {
+    const dir = scratch(20);
+    writeFileSync(path.join(dir, "hang.mjs"), `setInterval(() => {}, 1000);\n`);
+    // A killer that stops the tree but never reports back, like a taskkill.exe that hangs.
+    const stuck = (child: ChildProcess) => {
+      void killTree(child);
+      return new Promise<void>(() => {});
+    };
+    const started = Date.now();
+    const result = await runTestCommand("node hang.mjs", dir, { timeoutMs: 500, killWaitMs: 300, killTree: stuck });
+    expect(result).toMatchObject({ passed: false, timedOut: true, exitCode: null });
+    expect(result.outputTail).toContain("process tree may still be running");
+    expect(Date.now() - started).toBeLessThan(5000);
+  }, SLOW);
+
   it("kills the whole process tree on timeout", async () => {
-    const dir = scratch();
+    // Windows can hold the folder open for a moment after a killed process exits.
+    const dir = scratch(20);
     const pidFile = path.join(dir, "grandchild.pid");
     writeFileSync(
       path.join(dir, "hang.mjs"),
@@ -762,17 +779,4 @@ setInterval(() => {}, 1000);
     for (let i = 0; i < 50 && alive(); i++) await new Promise((resolve) => setTimeout(resolve, 100));
     expect(alive()).toBe(false);
   }, SLOW);
-});
-
-describe("the desktop app's own Node for test commands", () => {
-  it("goes last on PATH, only when the app names an absolute Node, and only once", async () => {
-    const { withAppNode } = await import("./run");
-    const app = path.resolve("/apps/pp/desktop-host/node");
-    const own = path.resolve("/usr/local/bin");
-    expect(withAppNode({ PATH: own }, app).PATH).toBe([own, path.dirname(app)].join(path.delimiter));
-    expect(withAppNode({ Path: "" }, app)).toEqual({ Path: path.dirname(app) });
-    expect(withAppNode({ PATH: path.dirname(app) }, app).PATH).toBe(path.dirname(app));
-    expect(withAppNode({ PATH: own }, "node")).toEqual({ PATH: own });
-    expect(withAppNode({ PATH: own }, undefined)).toEqual({ PATH: own });
-  });
 });

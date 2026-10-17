@@ -9,9 +9,8 @@
 // cookie the app window holds, so a person's signed entry can only come from
 // this screen. Agents never reach these routes; they use the MCP tools.
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { deriveState, type GateState } from "../../gate/index";
+import { deriveState, sensitiveChanges, testSupportFiles, type GateState } from "../../gate/index";
 import type { Actor } from "../../ledger/index";
 import { attemptLabel, type TaskView } from "../../mcp/index";
 import { WorktreeError, WorktreeManager, git, runGit, WORKTREES_ACTOR, type WorktreeInfo } from "../../worktrees/index";
@@ -23,6 +22,10 @@ import { AGENT_SERVER_NAME, agentEntryPath, connectLine, nodeBinary, quoteFor, t
 export { quoteFor };
 import { localPerson, localPersonId } from "./people";
 import { protectRepository } from "../project";
+import { chosenRepoRoot, repoRefusal } from "../protectedRoots";
+
+// Kept here too for older imports; they live in ../protectedRoots so connect.mjs can use them without the routes.
+export { chosenRepoRoot, repoRefusal };
 
 const REPO_FILE = "repo.json";
 const MANAGER = "tasks.worktrees";
@@ -55,6 +58,8 @@ export interface RepoState {
   ok: boolean;
   root?: string;
   reason?: string;
+  /** The folder the person already imported (this project's own folder), offered as the starting answer. */
+  suggested?: string;
 }
 
 // ---------- the repository the worktrees branch from ----------
@@ -82,34 +87,25 @@ export async function repoState(project: CoreProject): Promise<RepoState> {
   }
   const candidate = typeof chosen === "string" && chosen ? chosen : project.root;
   const top = await gitTop(candidate);
-  if (top) return { ok: true, root: top };
+  // git found the repo by walking up from the folder: a whole drive or the home folder (a dotfiles repo)
+  // is never the project's repo, so it is neither used nor protected.
+  const refusal = top ? repoRefusal(top) : null;
+  if (top && !refusal) return { ok: true, root: top };
+  const suggested = repoRefusal(project.root) ? undefined : project.root;
+  if (refusal) return { ok: false, reason: refusal, suggested };
   return {
     ok: false,
+    suggested,
     reason: chosen
       ? `${chosen} is no longer a git repository with a commit. Choose your project's git folder again.`
       : "Workers need your project's git folder (with at least one commit) to branch from. Choose it below.",
   };
 }
 
-/** Folders that are never a project to hand to workers: a whole drive or the home folder itself. */
-export function repoRefusal(top: string, home = os.homedir()): string | null {
-  const real = (p: string) => {
-    try {
-      return fs.realpathSync.native(p);
-    } catch {
-      return path.resolve(p);
-    }
-  };
-  const same = (a: string, b: string) => (process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b);
-  const dir = real(top);
-  if (same(path.dirname(dir), dir)) return `${dir} is a whole drive. Choose your project's own git folder.`;
-  if (same(dir, real(home))) return `${dir} is your home folder. Choose your project's own git folder.`;
-  return null;
-}
-
 async function requireRepo(project: CoreProject): Promise<string> {
   const repo = await repoState(project);
   if (!repo.ok || !repo.root) throw new HttpError(409, "NO_REPO", repo.reason ?? "Choose your project's git folder first.");
+  project.protectRoots([repo.root]);
   return repo.root;
 }
 
@@ -118,6 +114,7 @@ function manager(project: CoreProject, root: string): WorktreeManager {
   if (!current || current.repoRoot !== fs.realpathSync(root)) {
     current = new WorktreeManager({ repoRoot: root, ledger: project.ledger });
     project.state.set(MANAGER, current);
+    project.protectRoots([current.repoRoot, current.worktreeRoot]);
   }
   return current;
 }
@@ -325,6 +322,56 @@ async function dispatch(project: CoreProject, host: CoreHost, id: string, body: 
   };
 }
 
+async function releaseClaim(project: CoreProject, id: string, body: Record<string, unknown>) {
+  const task = findTask(project, id);
+  const label = attemptLabel(task);
+  if (!task.owner || (task.status !== "claimed" && task.status !== "blocked")) {
+    throw new HttpError(409, "NOT_CLAIMED", `${label} is not held by a worker, so there is nothing to release.`);
+  }
+  // Bound to the worker the person saw: if another worker took it meanwhile, that one is not released.
+  if (typeof body.owner === "string" && body.owner !== task.owner) throw stale(`${label} is now held by ${task.owner}. Look again before releasing it.`);
+  const raw = body.reason;
+  if (raw !== undefined && raw !== null && typeof raw !== "string") throw new HttpError(400, "INVALID", "The reason must be text.");
+  const reason = typeof raw === "string" && raw.trim() ? raw.trim().slice(0, 500) : undefined;
+  const owner = task.owner;
+  // The person's own signed entry: the board frees the task (a blocked task stays blocked, without its owner).
+  const entry = project.ledger.append({
+    actor: localPerson(project),
+    type: task.status === "blocked" ? "task.blocked" : "task.progress",
+    subject: label,
+    summary: `Released ${label} from ${owner}`,
+    ...(reason ? { reason } : {}),
+    evidence: [],
+    refs: [],
+    data: { released: true, from: owner, by: "person", worktreeKept: true },
+  });
+  revokeWorker(project, label);
+  project.service.tokens.revokeTask(task.id);
+  if (label !== task.id) project.service.tokens.revokeTask(label);
+  dispatches(project).delete(label);
+  return { released: label, from: owner, entry: entry.n, ...(await overview(project)) };
+}
+
+/**
+ * What the worker changed from where the worktree branched to the tip, plus the files among them the gate
+ * itself treats as sensitive (core/gate sensitiveChanges: install scripts, lockfiles, git attributes and
+ * hooks, workflows, npm and build settings, and the approved test's own support files). The diff screen
+ * lists those in a block that needs its own confirmation, so the person reads them before approving.
+ */
+async function changedFiles(project: CoreProject, label: string, tree: { path: string; baseSha: string }, tip: string): Promise<{ files: string[]; sensitive: string[] }> {
+  const files = (await git(tree.path, ["-c", "core.quotePath=false", "diff", "--name-only", "--no-renames", tree.baseSha, tip])).split(/\r?\n/).filter(Boolean).sort();
+  const state = deriveState(project.entries(), label);
+  const pinned = Object.keys(state.approval?.pins ?? {});
+  const support = state.definition ? await testSupportFiles(tree.path, [tree.baseSha, tip], pinned, state.definition.command) : new Set<string>();
+  return { files, sensitive: sensitiveChanges(files, pinned, support).sort() };
+}
+
+/** A refusal plus the end of the test's own output, so the person sees why the test failed. */
+export function withOutputTail(reason: string, output?: string): string {
+  const tail = (output ?? "").split(/\r?\n/).filter((line) => line.trim()).slice(-20).join("\n").slice(-2000);
+  return tail ? `${reason}\n\nEnd of the test output:\n${tail}` : reason;
+}
+
 export function registerTaskRoutes(router: Router): void {
   router.get("/tasks", ({ project }) => overview(project));
 
@@ -415,9 +462,9 @@ export function registerTaskRoutes(router: Router): void {
     const task = findTask(project, params.id!);
     const tree = await worktreeFor(project, attemptLabel(task));
     const tip = await git(tree.path, ["rev-parse", "HEAD"]);
-    const files = (await git(tree.path, ["diff", "--name-only", "--no-renames", tree.baseSha, tip])).split(/\r?\n/).filter(Boolean).sort();
+    const { files, sensitive } = await changedFiles(project, attemptLabel(task), tree, tip);
     const text = await git(tree.path, ["diff", "--no-color", "--no-renames", tree.baseSha, tip]);
-    return { task: attemptLabel(task), base: tree.baseSha, commit: tip, files, text: text.length > MAX_DIFF ? `${text.slice(0, MAX_DIFF)}\n… diff cut at ${MAX_DIFF} characters` : text, truncated: text.length > MAX_DIFF };
+    return { task: attemptLabel(task), base: tree.baseSha, commit: tip, files, sensitive, text: text.length > MAX_DIFF ? `${text.slice(0, MAX_DIFF)}\n… diff cut at ${MAX_DIFF} characters` : text, truncated: text.length > MAX_DIFF };
   });
 
   /** POST /tasks/:id/approve-diff: the person approves the diff at the commit the test passed on. */
@@ -429,6 +476,13 @@ export function registerTaskRoutes(router: Router): void {
     // Bound to the commit the person reviewed, which must still be the tip the test passed on.
     if (!sameCommit(bodyOf(body).commit, tip) || !passed?.passed || !sameCommit(passed.commit, tip)) {
       throw stale("The work changed since you reviewed it. Check it again and read the new diff before approving.");
+    }
+    // Files that can run code on this machine need their own confirmation, naming exactly those files.
+    const tree = await worktreeFor(project, label);
+    const { sensitive } = await changedFiles(project, label, tree, tip);
+    const confirmed = bodyOf(body).confirmSensitive;
+    if (sensitive.length && !(Array.isArray(confirmed) && confirmed.length === sensitive.length && sensitive.every((file) => confirmed.includes(file)))) {
+      throw new HttpError(409, "CONFIRM_SENSITIVE", `This diff changes files that can run code on your computer (${sensitive.join(", ")}). Confirm you read them before approving.`);
     }
     refuse(project.service.gate.approveDiff(attemptLabel(task), localPerson(project)));
     return overview(project);
@@ -447,6 +501,13 @@ export function registerTaskRoutes(router: Router): void {
   });
 
   /**
+   * POST /tasks/:id/release { reason?, owner? }: the person frees a task held by a worker that is gone.
+   * Writes the person's signed release, ends the worker's token, and leaves the worktree, its branch and
+   * its commits exactly where they are, so the next worker dispatched on the task carries on from them.
+   */
+  router.post("/tasks/:id/release", ({ project, params, body }) => releaseClaim(project, params.id!, bodyOf(body)));
+
+  /**
    * POST /tasks/:id/merge: merge the worker's branch into the branch it started from. The gate merges
    * into a throwaway candidate, reruns the test there, and only on a pass moves the branch and writes done.
    */
@@ -462,7 +523,7 @@ export function registerTaskRoutes(router: Router): void {
     const state = deriveState(project.entries(), label);
     if (!state.mergeApproval || state.mergeApproval.commit !== approved) refuse(project.service.gate.approveMerge(label, localPerson(project), approved));
     const merged = await project.service.gate.mergeAndVerify(label, { repoRoot: root, branch: tree.branch, integrationBranch: tree.baseRef, actor: localPerson(project) });
-    if (!merged.ok) throw new HttpError(409, "REFUSED", merged.reason);
+    if (!merged.ok) throw new HttpError(409, "REFUSED", withOutputTail(merged.reason, merged.output));
     revokeWorker(project, label);
     dispatches(project).delete(label);
     const removed = await manager(project, root).remove(label, WORKTREES_ACTOR).catch((error: Error) => ({ error: error.message }));

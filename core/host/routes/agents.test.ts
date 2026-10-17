@@ -21,7 +21,7 @@ afterEach(async () => stop());
 const connect = async (body: unknown = {}) => {
   const res = await hostCall(base, "POST", "/agents/connect?project=demo", body);
   expect(res.status).toBe(200);
-  const result = res.body.result as { connection: string; person: string; bridgeUrl: string; tokenFile: string; claudeCode: string; json: string; agentPath: string };
+  const result = res.body.result as { connection: string; person: string; bridgeUrl: string; tokenFile: string; claudeCode: string; lines: Record<string, string>; json: string; agentPath: string };
   return { ...result, token: fs.readFileSync(result.tokenFile, "utf8") };
 };
 
@@ -38,8 +38,15 @@ describe("agents routes", () => {
     if (process.platform !== "win32") expect(fs.statSync(result.tokenFile).mode & 0o077).toBe(0);
     else expect(execFileSync(icaclsPath(), [result.tokenFile], { encoding: "utf8" })).not.toMatch(/Everyone|BUILTIN\\Users|Authenticated Users|\(I\)/i);
     const program = result.agentPath.replace(/agent\.mjs$/, "connect.mjs");
-    if (process.platform !== "win32") expect(result.claudeCode).toBe(`node '${program}' ${result.bridgeUrl} '${result.tokenFile}'`);
-    expect(result.claudeCode).not.toMatch(/pp_[cw]_/);
+    if (process.platform !== "win32") {
+      expect(result.claudeCode).toBe(`node '${program}' --agent claude ${result.bridgeUrl} '${result.tokenFile}'`);
+      expect(result.lines).toEqual({
+        claude: result.claudeCode,
+        gemini: `node '${program}' --agent gemini ${result.bridgeUrl} '${result.tokenFile}'`,
+        codex: `node '${program}' --agent codex ${result.bridgeUrl} '${result.tokenFile}'`,
+      });
+    }
+    for (const line of Object.values(result.lines)) expect(line).not.toMatch(/pp_[cw]_/);
     expect(result.agentPath.endsWith(path.join("dist", "core-host", "agent.mjs"))).toBe(true);
     const json = JSON.parse(result.json);
     expect(json.mcpServers["perfect-planner-core"]).toEqual({ command: "node", args: [result.agentPath], env: { PP_BRIDGE_URL: result.bridgeUrl, PP_AGENT_TOKEN_FILE: result.tokenFile } });
@@ -55,8 +62,13 @@ describe("agents routes", () => {
 
   it("disconnecting deletes the connection's token file", async () => {
     const { connection, tokenFile } = await connect();
+    const roots = tokenFile.replace(/\.token$/, ".roots.json");
+    // Beside the token: the folders connect.mjs must never start a program from, starting with the project folder.
+    const recorded = JSON.parse(fs.readFileSync(roots, "utf8")).roots as string[];
+    expect(recorded[0]).toBe(path.dirname(path.dirname(path.dirname(tokenFile))));
     expect((await hostCall(base, "POST", "/agents/revoke?project=demo", { connection })).status).toBe(200);
     expect(fs.existsSync(tokenFile)).toBe(false);
+    expect(fs.existsSync(roots)).toBe(false);
   });
 
   it("full loop: connect, hello through the bridge over MCP, then GET agents shows the main chat", async () => {
@@ -123,8 +135,8 @@ describe("agent entry path", () => {
   });
 
   it("quotes paths so the shell cannot run anything hidden in them", () => {
-    expect(setupFor("http://127.0.0.1:1", "/t/$(x)/c.token", "/a b/it's/agent.mjs", "linux").claudeCode).toBe("node '/a b/it'\\''s/connect.mjs' http://127.0.0.1:1 '/t/$(x)/c.token'");
-    expect(setupFor("http://127.0.0.1:1", "C:\\t\\c.token", "C:\\a b\\agent.mjs", "win32").claudeCode).toBe("node 'C:\\a b\\connect.mjs' http://127.0.0.1:1 'C:\\t\\c.token'");
+    expect(setupFor("http://127.0.0.1:1", "/t/$(x)/c.token", "/a b/it's/agent.mjs", "linux").claudeCode).toBe("node '/a b/it'\\''s/connect.mjs' --agent claude http://127.0.0.1:1 '/t/$(x)/c.token'");
+    expect(setupFor("http://127.0.0.1:1", "C:\\t\\c.token", "C:\\a b\\agent.mjs", "win32").claudeCode).toBe("node 'C:\\a b\\connect.mjs' --agent claude http://127.0.0.1:1 'C:\\t\\c.token'");
   });
 
   it("uses the desktop app's own Node when it ships one, so no Node install is needed", () => {

@@ -1,4 +1,5 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import type { PushProtectionResult } from "./pushProtection";
 import { checkIgnoreList, scanText } from "./secrets";
@@ -104,20 +105,48 @@ const shQuote = (value: string) => `'${value.replace(/\\/g, "/").replace(/'/g, `
 /**
  * A git hook shim that runs the pre-push scan. Git runs hooks through sh on
  * every platform (Git for Windows ships one), so the same text works on
- * Windows, macOS and Linux. The desktop app's own Node (PP_NODE_BINARY) runs
- * it when set, so a person without Node can still push.
+ * Windows, macOS and Linux. Node is named by absolute path, never a bare
+ * `node` that sh would look up on PATH (a PATH folder inside or linked into
+ * the repo could hold a planted one): the desktop app's own Node
+ * (PP_NODE_BINARY) when set, so a person without Node can still push, else
+ * the Node the host runs on. Both paths are single-quoted.
  */
-export function prePushShim(hookScriptPath: string, env: NodeJS.ProcessEnv = process.env): string {
-  const node = env.PP_NODE_BINARY ? shQuote(env.PP_NODE_BINARY) : "node";
-  return `#!/bin/sh\n${SHIM_MARK}\nexec ${node} ${shQuote(hookScriptPath)} "$@"\n`;
+export function prePushShim(hookScriptPath: string, env: NodeJS.ProcessEnv = process.env, execPath: string = process.execPath): string {
+  const node = env.PP_NODE_BINARY || execPath;
+  return `#!/bin/sh\n${SHIM_MARK}\nexec ${shQuote(node)} ${shQuote(hookScriptPath)} "$@"\n`;
 }
 
+/** The value of core.hooksPath in one config file (a path, ~ expanded), or undefined. */
+async function hooksPathIn(run: CommandRunner, cwd: string, where: string[]): Promise<string | undefined> {
+  const result = await run("git", ["config", ...where, "--includes", "--type=path", "--get", "core.hooksPath"], { cwd });
+  const value = result.code === 0 ? result.stdout.trim() : "";
+  return value || undefined;
+}
+
+/**
+ * The folder git will run this repo's hooks from. Read from the config files
+ * themselves, in git's order (worktree, repo, global, system), not from
+ * `rev-parse --git-path hooks`: the host runs git with core.hooksPath fixed to
+ * an empty folder on the command line (core/worktrees runGit), so that would
+ * name the app's folder, not the repo's. A relative core.hooksPath is relative
+ * to the worktree top, as when git runs a hook; none means <common git dir>/hooks.
+ */
 async function hooksDir(run: CommandRunner, cwd: string): Promise<string> {
-  // --git-path honours core.hooksPath, so this lands where git will look,
-  // including the per-worktree hooks folder core/worktrees sets up.
-  const result = await run("git", ["rev-parse", "--git-path", "hooks"], { cwd });
-  if (result.code !== 0) throw new Error(`Not a git repository: ${result.stderr.trim()}`);
-  return resolve(cwd, result.stdout.trim());
+  const dirs = await run("git", ["rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir"], { cwd });
+  const [gitDir, commonDir] = dirs.code === 0 ? dirs.stdout.split(/\r?\n/).map((line) => line.trim()) : [];
+  if (!gitDir || !commonDir) throw new Error(`Not a git repository: ${dirs.stderr.trim()}`);
+  const top = await run("git", ["rev-parse", "--show-toplevel"], { cwd });
+  const base = top.code === 0 && top.stdout.trim() ? top.stdout.trim() : gitDir;
+  const globals = process.env.GIT_CONFIG_GLOBAL
+    ? [process.env.GIT_CONFIG_GLOBAL]
+    : [join(homedir(), ".gitconfig"), join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "git", "config")];
+  const sources: string[][] = [["--worktree"], ["--local"], ...globals.filter((file) => existsSync(file)).map((file) => ["--file", file])];
+  if (!process.env.GIT_CONFIG_NOSYSTEM) sources.push(process.env.GIT_CONFIG_SYSTEM ? ["--file", process.env.GIT_CONFIG_SYSTEM] : ["--system"]);
+  for (const where of sources) {
+    const value = await hooksPathIn(run, cwd, where);
+    if (value) return resolve(base, value);
+  }
+  return join(commonDir, "hooks");
 }
 
 /** Whether the pre-push scan is installed as this repository's pre-push hook (layer 3). */
@@ -134,16 +163,22 @@ export async function prePushInstalled(run: CommandRunner, options: { cwd: strin
 export async function installPrePushHook(
   run: CommandRunner,
   options: { cwd: string; hookScript: string },
-): Promise<{ installed: boolean; path: string; reason?: string }> {
+): Promise<{ installed: boolean; path: string; reason?: string; updated?: boolean }> {
   const dir = await hooksDir(run, options.cwd);
   const file = join(dir, "pre-push");
   if (existsSync(file) && !readFileSync(file, "utf8").includes(SHIM_MARK)) {
     return { installed: false, path: file, reason: "This repository already has its own pre-push hook; add the Perfect Planner scan to it by hand" };
   }
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(file, prePushShim(options.hookScript), { mode: 0o755 });
+  // Ours is rewritten whenever its text changed (a new Node path after an app update, a moved
+  // hook script), so pushes never fail closed on a stale path; protectProject runs this on open.
+  const shim = prePushShim(options.hookScript);
+  const current = existsSync(file) ? readFileSync(file, "utf8") : undefined;
+  if (current !== shim) {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(file, shim, { mode: 0o755 });
+  }
   chmodSync(file, 0o755);
-  return { installed: true, path: file };
+  return { installed: true, path: file, ...(current !== undefined && current !== shim ? { updated: true } : {}) };
 }
 
 /** Removes the pre-push scan, but only when the hook is ours; someone else's hook is left alone. */

@@ -62,7 +62,7 @@ and marker, with repo-relative forward-slash paths on every OS. A declared file 
 | `renameStage(ledger, actor, stage, name)` | 1 to 40 characters, one line, unique |
 | `setJourney(ledger, actor, journey)` | replaces the done-when journey and pulls its features into the MVP |
 | `confirmMvp(ledger, actor)` | only a person can confirm (`NOT_A_PERSON`). Replay trusts only the entry's own author via the ledger's `isAuthoritative(entry, { personOnly: true })` (`confirmedByPerson`), never a payload field, so a confirm written by the system is ignored and the ledger refuses one from an agent; `installMvpRules(ledger)` also refuses one at write time |
-| `boardFromLedger(entries)` | replays the board |
+| `boardFromLedger(entries)` | replays the board from entries that pass `isAuthoritative` (person or system, signature checked by the ledger); a forged or copied entry changes nothing, and `mvpDoneWhen` counts only authoritative journey test results |
 | `missingDependencies(board, features)` | MVP features whose dependencies sit in a later stage, for a warning |
 | `mvpDoneWhen(board, entries, features)` | `{ done, journeyPassed, blocking }`: done when confirmed, every MVP feature is Done, and the latest `test.passed`/`test.failed` for the journey's test command is a pass |
 

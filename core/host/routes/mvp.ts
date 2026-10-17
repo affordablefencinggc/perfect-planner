@@ -4,7 +4,7 @@
 // scratch state is a cached code scan, which is re-read on demand.
 import fs from "node:fs";
 import path from "node:path";
-import type { Actor, LedgerEntry } from "../../ledger/index";
+import { isAuthoritative, type Actor, type LedgerEntry } from "../../ledger/index";
 import { appendNumbered } from "../../numbering/index";
 import {
   MockJev, MvpError, STAGE_IDS, boardFromLedger, confirmMvp, isOneLineReason, missingDependencies,
@@ -84,6 +84,11 @@ function guarded(handler: Handler): Handler {
   };
 }
 
+/** The ledger as the MVP board reads it: a board decision counts only when a person or the system signed it. */
+function mvpLedger(project: CoreProject): LedgerEntry[] {
+  return project.entries().filter((e) => e.type !== "decision.made" || isAuthoritative(e));
+}
+
 function mvpEntries(entries: readonly LedgerEntry[]): LedgerEntry[] {
   return entries.filter((e) => e.type === "decision.made" && (e.data?.mvp || e.data?.mvpStaging));
 }
@@ -142,7 +147,7 @@ function stageName(board: StageBoard, id: string): string {
 }
 
 function buildBoard(project: CoreProject, refresh = false) {
-  const entries = project.entries();
+  const entries = mvpLedger(project);
   const staged = latestStaging(entries);
   const board = boardFromLedger(entries);
   if (!staged || !board.proposalEntry) {
@@ -187,7 +192,7 @@ function buildBoard(project: CoreProject, refresh = false) {
     for (let i = entries.length - 1; i >= 0; i--) {
       const e = entries[i]!;
       const mvp = e.data?.mvp as { kind?: string; note?: string } | undefined;
-      if (e.type === "decision.made" && mvp?.kind === "confirm") {
+      if (e.type === "decision.made" && mvp?.kind === "confirm" && isAuthoritative(e, { personOnly: true })) {
         confirmation = { by: e.actor.id, name: personName(project, e.actor.id), at: e.at, entry: e.n, subject: e.subject, ...(mvp.note ? { note: mvp.note } : {}) };
         break;
       }
@@ -357,7 +362,7 @@ export function registerMvpRoutes(router: Router): void {
   router.post("/mvp/stage", guarded(({ project, ...req }) => stage(project, body(req))));
 
   router.post("/mvp/rescan", guarded(({ project }) => {
-    if (!latestStaging(project.entries())) throw new HttpError(422, "NO_PROPOSAL", FRIENDLY.NO_PROPOSAL!);
+    if (!latestStaging(mvpLedger(project))) throw new HttpError(422, "NO_PROPOSAL", FRIENDLY.NO_PROPOSAL!);
     return buildBoard(project, true);
   }));
 
@@ -368,7 +373,7 @@ export function registerMvpRoutes(router: Router): void {
     if (!(STAGE_IDS as readonly string[]).includes(String(to))) throw new HttpError(422, "UNKNOWN_STAGE", "Choose a stage to move the feature to.");
     const reason = typeof b.reason === "string" ? b.reason : "";
     if (to !== "mvp" && !isOneLineReason(reason)) throw new HttpError(422, "REASON_REQUIRED", FRIENDLY.REASON_REQUIRED!);
-    const board = boardFromLedger(project.entries());
+    const board = boardFromLedger(mvpLedger(project));
     const from = board.placements.find((p) => p.feature === feature)?.stage;
     if (from === to) return buildBoard(project);
     const entry = moveFeature(project.ledger, personActor(project), feature, to, reason);

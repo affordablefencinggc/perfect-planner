@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { createPrivateKey, createPublicKey } from "node:crypto";
+import { keyStoreTool, type KeyStoreTool } from "../exec";
 import { keyIdOf, newKeyPair, signWith, type KeyProvider, type KeyState, type TrustedKey } from "./signing";
 
 /**
@@ -7,7 +8,8 @@ import { keyIdOf, newKeyPair, signWith, type KeyProvider, type KeyState, type Tr
  * Credential Locker (PasswordVault, through Windows PowerShell), the macOS
  * login keychain (`security`) and the Linux Secret Service (`secret-tool`).
  * Secrets go to the tool on stdin, never on a command line, and are never
- * logged or written anywhere else.
+ * logged or written anywhere else. Each tool is started by its absolute path
+ * (core/exec keyStoreTool), never by bare name.
  */
 export interface SecretStore {
   readonly description: string;
@@ -19,10 +21,14 @@ export interface SecretStore {
 
 const TIMEOUT = 20_000;
 
-export function osSecretStore(service = "perfect-planner", platform: NodeJS.Platform = process.platform): SecretStore {
-  if (platform === "win32") return new WindowsVault(service);
-  if (platform === "darwin") return new MacKeychain(service);
-  if (platform === "linux") return new SecretTool(service);
+/** Finds a key-store helper's absolute path; null when it is not installed. */
+export type ToolLocator = (tool: KeyStoreTool) => string | null;
+
+export function osSecretStore(service = "perfect-planner", platform: NodeJS.Platform = process.platform, locate: ToolLocator = (tool) => keyStoreTool(tool, { platform })): SecretStore {
+  const tool = (name: KeyStoreTool) => (args: string[], options?: RunOptions) => run(name, locate(name), args, options);
+  if (platform === "win32") return new WindowsVault(service, tool("powershell"));
+  if (platform === "darwin") return new MacKeychain(service, tool("security"));
+  if (platform === "linux") return new SecretTool(service, tool("secret-tool"));
   return new Unavailable(`there is no supported keychain on ${platform}`);
 }
 
@@ -34,7 +40,12 @@ function account(name: string): string {
 const encode = (value: string) => Buffer.from(value, "utf8").toString("base64");
 const decode = (value: string) => Buffer.from(value.trim(), "base64").toString("utf8");
 
-function run(file: string, args: string[], options: { input?: string; env?: Record<string, string> } = {}): { status: number; stdout: string; stderr: string } {
+type RunOptions = { input?: string; env?: Record<string, string> };
+type RunResult = { status: number; stdout: string; stderr: string };
+type Tool = (args: string[], options?: RunOptions) => RunResult;
+
+function run(name: string, file: string | null, args: string[], options: RunOptions = {}): RunResult {
+  if (file === null) return { status: -1, stdout: "", stderr: `${name} is not installed` };
   try {
     const stdout = execFileSync(file, args, {
       input: options.input ?? "",
@@ -49,7 +60,7 @@ function run(file: string, args: string[], options: { input?: string; env?: Reco
     const e = error as { status?: number | null; stdout?: string; stderr?: string; code?: string; message: string };
     // No exit status means the tool did not run at all (not installed, timed out).
     if (e.status == null) {
-      return { status: -1, stdout: "", stderr: e.code === "ENOENT" ? `${file} is not installed` : `${file}: ${e.code ?? firstLine(e.message)}` };
+      return { status: -1, stdout: "", stderr: e.code === "ENOENT" ? `${name} is not installed` : `${name}: ${e.code ?? firstLine(e.message)}` };
     }
     return { status: e.status, stdout: e.stdout ?? "", stderr: e.stderr ?? "" };
   }
@@ -86,12 +97,15 @@ function firstLine(text: string): string {
 
 class MacKeychain extends ProbedStore {
   readonly description = "the macOS keychain";
-  constructor(private readonly service: string) {
+  constructor(
+    private readonly service: string,
+    private readonly run: Tool,
+  ) {
     super();
   }
 
   get(name: string): string | undefined {
-    const result = run("security", ["find-generic-password", "-s", this.service, "-a", account(name), "-w"]);
+    const result = this.run(["find-generic-password", "-s", this.service, "-a", account(name), "-w"]);
     if (result.status === 44) return undefined;
     if (result.status !== 0) throw new Error(firstLine(result.stderr));
     return decode(result.stdout);
@@ -99,25 +113,28 @@ class MacKeychain extends ProbedStore {
 
   set(name: string, value: string): void {
     // `security -i` reads the command from stdin, so the secret is not on a command line.
-    const result = run("security", ["-i"], { input: `add-generic-password -U -s ${this.service} -a ${account(name)} -w ${encode(value)}\n` });
+    const result = this.run(["-i"], { input: `add-generic-password -U -s ${this.service} -a ${account(name)} -w ${encode(value)}\n` });
     if (result.status !== 0 || /error|fail/i.test(result.stderr)) throw new Error(firstLine(result.stderr) || "security add-generic-password failed");
     if (this.get(name) !== value) throw new Error("the keychain did not keep the value");
   }
 
   remove(name: string): void {
-    const result = run("security", ["delete-generic-password", "-s", this.service, "-a", account(name)]);
+    const result = this.run(["delete-generic-password", "-s", this.service, "-a", account(name)]);
     if (result.status !== 0 && result.status !== 44) throw new Error(firstLine(result.stderr));
   }
 }
 
 class SecretTool extends ProbedStore {
   readonly description = "the Secret Service (secret-tool)";
-  constructor(private readonly service: string) {
+  constructor(
+    private readonly service: string,
+    private readonly run: Tool,
+  ) {
     super();
   }
 
   get(name: string): string | undefined {
-    const result = run("secret-tool", ["lookup", "service", this.service, "account", account(name)]);
+    const result = this.run(["lookup", "service", this.service, "account", account(name)]);
     if (result.status !== 0) {
       // Not found exits 1 with nothing on stderr; anything else is a real error.
       if (result.status === 1 && result.stderr.trim() === "") return undefined;
@@ -127,14 +144,14 @@ class SecretTool extends ProbedStore {
   }
 
   set(name: string, value: string): void {
-    const result = run("secret-tool", ["store", "--label", `Perfect Planner ${name}`, "service", this.service, "account", account(name)], {
+    const result = this.run(["store", "--label", `Perfect Planner ${name}`, "service", this.service, "account", account(name)], {
       input: encode(value),
     });
     if (result.status !== 0) throw new Error(firstLine(result.stderr) || "secret-tool store failed");
   }
 
   remove(name: string): void {
-    const result = run("secret-tool", ["clear", "service", this.service, "account", account(name)]);
+    const result = this.run(["clear", "service", this.service, "account", account(name)]);
     if (result.status !== 0 && result.stderr.trim() !== "") throw new Error(firstLine(result.stderr));
   }
 }
@@ -146,7 +163,10 @@ class SecretTool extends ProbedStore {
  */
 class WindowsVault extends ProbedStore {
   readonly description = "Windows Credential Locker";
-  constructor(private readonly service: string) {
+  constructor(
+    private readonly service: string,
+    private readonly run: Tool,
+  ) {
     super();
   }
 
@@ -159,7 +179,7 @@ class WindowsVault extends ProbedStore {
       body,
     ].join("\n");
     const encoded = Buffer.from(script, "utf16le").toString("base64");
-    const result = run("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encoded], {
+    const result = this.run(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encoded], {
       input,
       env: { PP_RESOURCE: this.service, PP_ACCOUNT: account(name) },
     });
@@ -230,6 +250,11 @@ export class KeychainKeyProvider implements KeyProvider {
   trustedKeys(): TrustedKey[] {
     if (!this.state().available) return [];
     return [...this.principals().flatMap((principal) => this.publicKeys(principal)), ...this.pins()];
+  }
+
+  signingKeys(): TrustedKey[] {
+    if (!this.state().available) return [];
+    return this.principals().flatMap((principal) => this.publicKeys(principal).filter((k) => !k.retired));
   }
 
   /**

@@ -1,6 +1,7 @@
 name: Perfect Planner Release
 
-# Builds the desktop installers for Windows, macOS and Linux.
+# Builds the desktop installers for Windows and Linux. macOS was dropped to keep
+# Actions spending down (macOS runner minutes cost far more than Linux).
 # - Push a tag R-<n> (e.g. R-2): builds everything and attaches it to a DRAFT
 #   GitHub Release for that tag. Nothing is published; a person does that.
 # - Run workflow (manual): builds everything as a dry run and keeps the
@@ -46,15 +47,6 @@ jobs:
             platform: windows-x64
             bundles: msi,nsis
             args: ""
-          # Two native DMGs: Tauri's universal bundler skips the planner-agent-helper sidecar.
-          - os: macos-latest
-            platform: macos-arm64
-            bundles: dmg
-            args: --target aarch64-apple-darwin
-          - os: macos-latest
-            platform: macos-x64
-            bundles: dmg
-            args: --target x86_64-apple-darwin
           - os: ubuntu-22.04
             platform: linux-x64
             bundles: deb,rpm,appimage
@@ -77,7 +69,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable branch, 2026-10-09
         with:
           toolchain: stable
-          targets: ${{ matrix.os == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
@@ -93,7 +84,7 @@ jobs:
       - run: npm ci
 
       # The truth report's proof runner refuses temp paths that are not canonical:
-      # Windows runners hand out 8.3 short names, macOS a /var -> /private/var symlink.
+      # Windows runners hand out 8.3 short names.
       - name: Use a canonical temp dir
         run: node scripts/prepare-native-ci-env.mjs
 

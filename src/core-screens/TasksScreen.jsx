@@ -66,7 +66,7 @@ function DispatchPanel({ dispatch, onClose }) {
 }
 
 function RepoPicker({ repo, onSave }) {
-  const [root, setRoot] = useState("");
+  const [root, setRoot] = useState(repo.suggested ?? "");
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
   const save = async (event) => {
@@ -102,6 +102,28 @@ function OwnTestForm({ onSave }) {
   );
 }
 
+/** Files in the diff that can run code on this computer: listed loudly, with their own confirmation. */
+function SensitiveBlock({ diff, confirmed, onConfirm, canConfirm }) {
+  const files = diff.sensitive ?? [];
+  if (!files.length) return null;
+  return (
+    <div className="core-tasks-sensitive" role="alert" aria-label={`Files that can run code in ${diff.task}`}>
+      <WarningCircleIcon weight="fill" aria-hidden="true" />
+      <div>
+        <strong>This diff changes {files.length === 1 ? "a file" : `${files.length} files`} that can run code on your computer.</strong>
+        <p>Install scripts, lockfiles, git settings and hooks, CI workflows and npm settings run or change programs when you install, push or merge. Test files are listed too, because a test can change what the approved test checks or run code when it is run, so the worker's own test file shows up on every task. Read each one in the diff below before approving.</p>
+        <ul>{files.map((file) => <li key={file}><code>{file}</code></li>)}</ul>
+        {canConfirm && (
+          <label className="core-tasks-sensitive-confirm">
+            <input type="checkbox" checked={confirmed} onChange={(e) => onConfirm(e.target.checked)} />
+            I read the changes to {files.length === 1 ? "this file" : `these ${files.length} files`} and they are safe to run on my computer
+          </label>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function DiffView({ diff }) {
   return (
     <div className="core-tasks-diff">
@@ -119,8 +141,11 @@ function TaskCard({ task, project, act, busy, notice, dispatchFor, onDispatched,
   const [model, setModel] = useState(task.dispatch?.model ?? DEFAULT_WORKER_MODEL);
   const [diff, setDiff] = useState(null);
   const [diffError, setDiffError] = useState(null);
+  const [sensitiveConfirmed, setSensitiveConfirmed] = useState(false);
   const [sendBack, setSendBack] = useState(false);
   const [notes, setNotes] = useState("");
+  const [releasing, setReleasing] = useState(false);
+  const [releaseReason, setReleaseReason] = useState("");
   const stage = STAGE[task.stage] ?? { label: task.stage, tone: "" };
   const id = task.id;
   const working = busy === id;
@@ -129,6 +154,7 @@ function TaskCard({ task, project, act, busy, notice, dispatchFor, onDispatched,
 
   const showDiff = async () => {
     setDiffError(null);
+    setSensitiveConfirmed(false);
     try { setDiff(await coreGet(`/tasks/${id}/diff`, project)); } catch (error) { setDiffError(error); }
   };
 
@@ -137,6 +163,8 @@ function TaskCard({ task, project, act, busy, notice, dispatchFor, onDispatched,
     if (result) onDispatched(result);
   };
 
+  // A worker holds the task (claimed, or blocked while still holding it): the person can free it.
+  const canRelease = Boolean(task.owner) && (task.status === "claimed" || task.status === "blocked");
   const canStart = !["done", "ready-to-merge", "review-diff"].includes(task.stage) && task.status !== "claimed";
 
   return (
@@ -194,7 +222,7 @@ function TaskCard({ task, project, act, busy, notice, dispatchFor, onDispatched,
           <>
             <button type="button" className="core-button" onClick={showDiff}>Show diff</button>
             {task.stage === "review-diff" && (
-              <button type="button" className="core-button primary" onClick={() => run("approve-diff", `/tasks/${id}/approve-diff`, { commit: diff.commit })} disabled={working || !diff} title={diff ? undefined : "Read the diff first"}>
+              <button type="button" className="core-button primary" onClick={() => run("approve-diff", `/tasks/${id}/approve-diff`, { commit: diff.commit, ...(diff.sensitive?.length ? { confirmSensitive: diff.sensitive } : {}) })} disabled={working || !diff || (diff.sensitive?.length > 0 && !sensitiveConfirmed)} title={!diff ? "Read the diff first" : diff.sensitive?.length > 0 && !sensitiveConfirmed ? "Confirm the files that can run code first" : undefined}>
                 Approve diff{diff ? ` at ${String(diff.commit).slice(0, 12)}` : ""}
               </button>
             )}
@@ -206,7 +234,19 @@ function TaskCard({ task, project, act, busy, notice, dispatchFor, onDispatched,
             )}
           </>
         )}
+        {canRelease && !releasing && (
+          <button type="button" className="core-button" onClick={() => setReleasing(true)} disabled={working}>Release claim</button>
+        )}
       </div>
+
+      {canRelease && releasing && (
+        <form className="core-tasks-sendback" aria-label={`Release ${task.label}`} onSubmit={async (e) => { e.preventDefault(); const ok = await run("release", `/tasks/${id}/release`, { owner: task.owner, ...(releaseReason.trim() ? { reason: releaseReason.trim() } : {}) }); if (ok) { setReleasing(false); setReleaseReason(""); } }}>
+          <p className="core-muted">Release this task so another worker can take it. Its worktree and commits are kept. {task.owner} can no longer work on it.</p>
+          <label>Why (optional)<input value={releaseReason} onChange={(e) => setReleaseReason(e.target.value)} autoComplete="off" /></label>
+          <button type="submit" className="core-button primary" disabled={working}>Release {task.label}</button>
+          <button type="button" className="core-button" onClick={() => setReleasing(false)}>Cancel</button>
+        </form>
+      )}
 
       {task.stage === "needs-test" && task.worktree && <OwnTestForm onSave={(body) => run("test", `/tasks/${id}/test`, body)} />}
 
@@ -219,6 +259,7 @@ function TaskCard({ task, project, act, busy, notice, dispatchFor, onDispatched,
       )}
 
       {diffError && <p className="core-tasks-warn" role="alert">{diffError.message}</p>}
+      {diff && <SensitiveBlock diff={diff} confirmed={sensitiveConfirmed} onConfirm={setSensitiveConfirmed} canConfirm={task.stage === "review-diff"} />}
       {diff && <DiffView diff={diff} />}
 
       {dispatchFor && <DispatchPanel dispatch={dispatchFor} onClose={onHideDispatch} />}
@@ -237,6 +278,7 @@ const NOTICE = {
     : { tone: "bad", text: `${r.reason ?? "The test failed."}${r.output ? ` Output: ${r.output.slice(-300)}` : ""}` }),
   "approve-diff": () => ({ tone: "good", text: "Diff approved. Merging reruns the test on the merged code first." }),
   reject: (r) => ({ tone: "warn", text: `Reopened as ${r.reopenedAs}. Start a worker on it when you are ready.` }),
+  release: (r) => ({ tone: "warn", text: `Released ${r.released} from ${r.from}. Its worktree and commits are kept; start a worker on it when you are ready.` }),
   merge: (r) => ({ tone: "good", text: `Merged into ${r.into} at ${String(r.commit ?? "").slice(0, 12)}. The test passed on the merge and the task is done.` }),
 };
 

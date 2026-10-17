@@ -66,6 +66,7 @@ describe("KeychainKeyProvider", () => {
     const second = keys.rotateKey("person:owner");
     expect(keys.trustedKeys()).toEqual([{ ...first, retired: true }, second]);
     expect(keys.sign("person:owner", Buffer.from("x")).keyId).toBe(second.keyId);
+    expect(keys.signingKeys()).toEqual([second]);
   });
 
   it("pins another person's public key on this device without being able to sign for them", () => {
@@ -73,6 +74,7 @@ describe("KeychainKeyProvider", () => {
     const other = new KeychainKeyProvider(new FakeSecrets()).ensureKey("person:owner");
     keys.pinKey(other);
     expect(keys.trustedKeys()).toEqual([other]);
+    expect(keys.signingKeys()).toEqual([]);
     expect(() => keys.sign("person:owner", Buffer.from("x"))).toThrow("no signing key");
   });
 
@@ -147,4 +149,28 @@ describe.runIf(process.env.PP_KEYCHAIN_TEST === "1")(`the real keychain on ${pro
       fs.rmSync(root, { recursive: true, force: true });
     }
   }, 120_000);
+});
+
+describe("keychain helpers are started by full path", () => {
+  it("is unavailable, and starts nothing, when the helper cannot be found", () => {
+    const asked: string[] = [];
+    const store = osSecretStore("perfect-planner-test", "linux", (tool) => (asked.push(tool), null));
+    expect(store.state()).toMatchObject({ available: false, reason: expect.stringContaining("secret-tool is not installed") });
+    expect(asked).toEqual(["secret-tool"]);
+  });
+
+  it.skipIf(process.platform === "win32")("runs exactly the path the locator gives", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pp-keytool-"));
+    try {
+      const marker = path.join(dir, "ran");
+      const tool = path.join(dir, "tool");
+      fs.writeFileSync(tool, `#!/bin/sh\necho "$1" >> '${marker}'\necho refused >&2\nexit 2\n`);
+      fs.chmodSync(tool, 0o755);
+      const store = osSecretStore("perfect-planner-test", "linux", () => tool);
+      expect(store.state()).toMatchObject({ available: false, reason: expect.stringContaining("refused") });
+      expect(fs.readFileSync(marker, "utf8")).toBe("store\n");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

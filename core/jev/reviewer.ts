@@ -140,7 +140,8 @@ export class JevReviewer implements SettledAnswerer {
     if (limit === null || limit <= 0) return;
     const month = this.now().toISOString().slice(0, 7);
     const spent = this.spentThisMonth();
-    const warned = new Set(this.ledger.entries().filter((e) => e.type === "budget.warning" && e.subject === `jev:${month}`).map((e) => e.data?.level));
+    // Only signed warnings count, so a forged one cannot silence the real warning.
+    const warned = new Set(this.ledger.entries().filter((e) => e.type === "budget.warning" && e.subject === `jev:${month}` && isAuthoritative(e)).map((e) => e.data?.level));
     for (const level of [80, 100]) {
       if (spent >= (limit * level) / 100 && !warned.has(level)) {
         this.ledger.append({
@@ -174,12 +175,12 @@ export class JevReviewer implements SettledAnswerer {
     const called = extra.called;
     const cost = called?.ok ? (called.cost ?? this.settings.estimatedCostPerCall) : 0;
     // The test gate reads Jev's test verdicts from evidence (core/gate deriveState). Only a real
-    // approve or reject is an opinion on the test; escalations and outages are not.
-    const testEvidence =
-      review === "test" && extra.definition && (result.verdict === "approve" || result.verdict === "reject")
-        ? ["scope:test", `verdict:${result.verdict === "approve" ? "approve" : "gaps"}`, `definition:${extra.definition}`, ...(result.notes as string[]).map((gap) => `gap:${String(gap).replace(/\s+/g, " ").trim()}`)]
-        : undefined;
-    const jev: Actor | undefined = called?.ok ? { kind: "jev", id: "jev", model: called.model } : undefined;
+    // approve or reject is an opinion on the test; escalations and outages carry no definition,
+    // so the gate never counts them.
+    const testOpinion = review === "test" && extra.definition !== undefined && (result.verdict === "approve" || result.verdict === "reject");
+    const evidence = testOpinion
+      ? ["scope:test", `verdict:${result.verdict === "approve" ? "approve" : "gaps"}`, `definition:${extra.definition}`, ...(result.notes as string[]).map((gap) => `gap:${String(gap).replace(/\s+/g, " ").trim()}`)]
+      : [`scope:${review}`, `verdict:${result.verdict}`, ...(extra.commit ? [`commit:${extra.commit}`] : [])];
     // Written as the system, so the ledger signs it with the app's key; Jev itself
     // holds no signing key, and an entry that merely names Jev as actor never counts.
     return this.ledger.append({
@@ -189,9 +190,9 @@ export class JevReviewer implements SettledAnswerer {
       summary: extra.summary,
       reason: result.reason,
       refs: extra.refs,
-      evidence: testEvidence ?? [`scope:${review}`, `verdict:${result.verdict}`, ...(extra.commit ? [`commit:${extra.commit}`] : [])],
+      evidence,
       data: {
-        ...(jev ? { reviewer: jev } : {}),
+        ...(called?.ok ? { reviewer: { kind: "jev", id: "jev", model: called.model } } : {}),
         ...(extra.commit ? { commit: extra.commit } : {}),
         review,
         verdict: result.verdict,

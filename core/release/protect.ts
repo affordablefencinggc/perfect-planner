@@ -4,7 +4,7 @@ import { nextNumber } from "../numbering/index";
 import { installPrePushHook, removePrePushHook } from "./layers";
 import { installReleaseRules } from "./pipeline";
 import { RELEASE_SAFETY_TOPIC } from "./presets";
-import { safeRunner } from "./run";
+import { createSafeRunner } from "./run";
 import type { CommandRunner } from "./types";
 
 // Shipping safety on by default. The host calls protectProject when it opens a
@@ -12,6 +12,13 @@ import type { CommandRunner } from "./types";
 // before the first review, and the whole-branch secret scan runs before every
 // push. The rules cannot be switched off; the local pre-push scan can, but only
 // by a person's signed decision in the ledger (setPrePushScan).
+
+/**
+ * Every file the pre-push hook needs beside it in core/release/hooks/. A build that copies the hook
+ * elsewhere must copy all of these; the hook imports the other two. protect.test.ts checks this list
+ * against the hook's own imports.
+ */
+export const PRE_PUSH_HOOK_FILES: readonly string[] = ["pre-push.mjs", "secrets-detector.mjs", "git-runner.mjs", "git-exec.mjs"];
 
 /** The dependency-free pre-push scan this module ships; the hook shim runs it with node. */
 export const DEFAULT_PRE_PUSH_SCRIPT = fileURLToPath(new URL("./hooks/pre-push.mjs", import.meta.url));
@@ -60,12 +67,12 @@ export interface ProtectionReport {
  */
 export async function protectProject(
   ledger: Ledger,
-  options: { run?: CommandRunner; cwd: string; hookScript?: string; now?: () => Date },
+  options: { run?: CommandRunner; cwd: string; hookScript?: string; now?: () => Date; protect?: readonly string[] },
 ): Promise<ProtectionReport> {
   installReleaseRules(ledger, options.now ? { now: options.now } : {});
   const wanted = prePushScanWanted(ledger.entries());
-  // Default: git by absolute path, never one planted in the repo (core/exec).
-  const run = options.run ?? safeRunner;
+  // Default: git by absolute path, never one planted in the repo or a protected root (core/exec).
+  const run = options.run ?? createSafeRunner({ protect: options.protect ?? [] });
   try {
     if (!wanted) {
       const removed = await removePrePushHook(run, { cwd: options.cwd });

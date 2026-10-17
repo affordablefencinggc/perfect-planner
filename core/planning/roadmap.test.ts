@@ -1,9 +1,9 @@
 import { describe, it, expect } from "vitest";
 import { Ledger, MemoryStore } from "../ledger/index";
-import type { Actor } from "../ledger/index";
-import { installNumberingRules } from "../numbering/index";
+import type { Actor, LedgerEntry } from "../ledger/index";
+import { appendNumbered, installNumberingRules } from "../numbering/index";
 import { buildMindMap, linkNodes } from "./mindmap";
-import { FINAL_TASK_KEY, buildRoadmap, roadmapTasks, writeRoadmap } from "./roadmap";
+import { FINAL_TASK_KEY, OWN_TASK_SOURCE, buildRoadmap, droppedRoadmapTasks, ownTasks, roadmapTasks, writeRoadmap } from "./roadmap";
 import type { Area, PlanningAnswer, Roadmap } from "./types";
 
 const ans = (area: Area, slug: string, text: string, extra: Partial<PlanningAnswer> = {}): PlanningAnswer => ({
@@ -141,5 +141,35 @@ describe("writeRoadmap", () => {
     const bad: Roadmap = { phases: [{ id: "core", title: "Core", tasks: [task("K-c", ["K-missing"])] }] };
     expect(() => writeRoadmap(ledger, actor, bad)).toThrow(/unknown/);
     expect(ledger.entries()).toHaveLength(2);
+  });
+});
+
+describe("roadmap readers trust only a verified person entry", () => {
+  const forged = (n: number, partial: Partial<LedgerEntry>): LedgerEntry =>
+    ({ n: `L-${String(n).padStart(6, "0")}`, at: "2026-10-09T12:00:00Z", evidence: [], refs: [], prev: "", hash: "", summary: "x", subject: "", ...partial }) as LedgerEntry;
+
+  it("ignores an unsigned person entry or an agent entry when listing the person's own tasks", () => {
+    const entries = [
+      forged(1, { type: "task.created", subject: "T-1", actor: { kind: "person", id: "looplet-spare" }, data: { source: OWN_TASK_SOURCE, title: "Forged", phase: "core" } }),
+      forged(2, { type: "task.created", subject: "T-2", actor: { kind: "agent", id: "claude-code", model: "m" }, data: { source: OWN_TASK_SOURCE, title: "Agent", phase: "core" } }),
+    ];
+    expect(ownTasks(entries)).toEqual([]);
+  });
+
+  it("ignores an unsigned person or agent decision that drops a roadmap task", () => {
+    const entries = [
+      forged(1, { type: "decision.made", subject: "D-1", actor: { kind: "person", id: "looplet-spare" }, data: { roadmap: { drop: "K-a" } } }),
+      forged(2, { type: "decision.made", subject: "D-2", actor: { kind: "agent", id: "claude-code", model: "m" }, data: { roadmap: { drop: "K-b" } } }),
+    ];
+    expect(droppedRoadmapTasks(entries).size).toBe(0);
+  });
+
+  it("takes a person's signed entries written through the ledger", async () => {
+    const ledger = await Ledger.open(new MemoryStore());
+    const person: Actor = { kind: "person", id: "looplet-spare" };
+    appendNumbered(ledger, { actor: person, type: "task.created", summary: "Mine", data: { source: OWN_TASK_SOURCE, title: "Mine", phase: "core", change: "feature" } });
+    appendNumbered(ledger, { actor: person, type: "decision.made", summary: "Drop K-a", reason: "Not needed", data: { roadmap: { drop: "K-a", title: "A" } } });
+    expect(ownTasks(ledger.entries()).map((t) => t.title)).toEqual(["Mine"]);
+    expect([...droppedRoadmapTasks(ledger.entries()).keys()]).toEqual(["K-a"]);
   });
 });

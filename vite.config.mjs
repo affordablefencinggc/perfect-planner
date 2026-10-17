@@ -29,8 +29,12 @@ const agentSetupDefines = (command) => {
   return { "import.meta.env.VITE_PP_MCP_SERVER_PATH": JSON.stringify(serverPath), "import.meta.env.VITE_PP_MCP_REGISTRY_ROOT": JSON.stringify(registryRoot) };
 };
 
+// Scripted folder intake (src/browser/scriptedIntake.js) lets automation answer the folder picker.
+// It exists on the dev server, or in a build made with PP_TEST_INTAKE=1; release builds never include it.
+export const scriptedIntakeEnabled = (command, env = process.env) => command === "serve" || env.PP_TEST_INTAKE === "1";
+
 export default defineConfig(({ command }) => ({
-  define: agentSetupDefines(command),
+  define: { ...agentSetupDefines(command), __PP_SCRIPTED_INTAKE__: JSON.stringify(scriptedIntakeEnabled(command)) },
   build: {
     outDir: "dist/client",
     rollupOptions: {

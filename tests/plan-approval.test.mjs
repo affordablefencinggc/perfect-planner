@@ -129,7 +129,22 @@ test("Home reaches promotion, then Ready only after an explicit confirmation", a
   assert.equal(none.nextAction.workspace, "plan");
 
   await recordPlanApproval(session.projectId, { tasks: TASKS, censusDigest: session.census.digest }, { storage, now });
-  const promotion = deriveProjectHomeModel(session, readWorkRecords(session.projectId, storage));
+  // Overlaps and owners are planning steps too: Home never offers readiness while they are open.
+  const home = () => deriveProjectHomeModel(session, readWorkRecords(session.projectId, storage));
+  assert.equal(home().nextAction.id, "collision-check-missing");
+  assert.equal(home().nextAction.workspace, "collision");
+  assert.ok(home().blockers.some((item) => item.id === "owners-missing"));
+  const pair = { key: "T0001|T0002", tasks: ["T0001", "T0002"], severity: "ordered", files: [], signature: "sig" };
+  writeSection(session.projectId, "collisions", { checkedTaskIds: ["T0001", "T0002"], uncheckedTaskIds: [], invalid: [], collisions: [pair], resolutions: {} }, { storage, now });
+  assert.equal(home().nextAction.id, "collision-undecided", "an undecided 'needs an order' pair blocks readiness");
+  assert.match(home().nextAction.reason, /1 of 1 overlap still needs a decision/);
+  writeSection(session.projectId, "collisions", { checkedTaskIds: ["T0001", "T0002"], uncheckedTaskIds: [], invalid: [], collisions: [pair], resolutions: { [pair.key]: { choice: "order", first: "T0001", signature: "sig" } } }, { storage, now });
+  assert.equal(home().nextAction.id, "owners-missing");
+  writeSection(session.projectId, "allocation", { taskIds: ["T0001", "T0002"], assignments: { T0001: { owner: "Ana", wave: 1 }, T0002: { owner: "agent:", wave: 2 } } }, { storage, now });
+  assert.equal(home().nextAction.id, "owners-incomplete", "a bare 'agent:' is not an owner");
+  assert.equal(home().nextAction.workspace, "allocation");
+  writeSection(session.projectId, "allocation", { taskIds: ["T0001", "T0002"], assignments: { T0001: { owner: "Ana", wave: 1 }, T0002: { owner: "agent: builder", wave: 2 } } }, { storage, now });
+  const promotion = home();
   assert.equal(promotion.stage.id, "promotion");
   assert.equal(promotion.nextAction.id, "confirm-project-ready");
   assert.equal(promotion.nextAction.label, "Confirm project is ready");
@@ -208,4 +223,33 @@ test("the core ledger's plan approval is the plan approval everywhere, and readi
   // Core with no approval (or not reachable) leaves the local record as it was.
   assert.equal(withCorePlanApproval(records, null), records);
   assert.equal(planApprovalStatus(session, withCorePlanApproval(readWorkRecords(session.projectId, storage), { approved: false, latest: null, count: 0, tasks: [] })).state, "review");
+});
+
+test("the person's plan approval and the ledger-bound saved-plan check have distinct, consistent wording (gap 17)", async () => {
+  const { savedPlanCheckText, SAVED_PLAN_CHECK_ACTION } = await import("../src/project/planApproval.js");
+  const storage = memoryStorage(), session = project();
+  assert.equal(SAVED_PLAN_CHECK_ACTION, "Run saved-plan check");
+  // Nothing approved: never "not checked" as if a check were the missing piece.
+  const none = savedPlanCheckText({ check: null, approval: planApprovalStatus(session, readWorkRecords(session.projectId, storage)) });
+  assert.equal(none.text, "No plan approved yet. Approve the plan on the Plan page first.");
+  // Approved by the person, check not run: says so plainly.
+  await recordPlanApproval(session.projectId, { tasks: TASKS, censusDigest: session.census.digest }, { storage, now });
+  const approval = planApprovalStatus(session, readWorkRecords(session.projectId, storage));
+  for (const check of [null, { state: "stale", projectId: session.projectId, reason: "ledger-context-changed" }]) {
+    const copy = savedPlanCheckText({ check, approval });
+    assert.equal(copy.text, "Plan approved. Run the saved-plan check to lock it to this exact Ledger.");
+    assert.equal(copy.approvedByYou, true);
+    assert.doesNotMatch(copy.text, /not checked/i);
+  }
+  assert.match(savedPlanCheckText({ check: null, approval }).explainer, /^Saved-plan check:/);
+  assert.match(savedPlanCheckText({ check: null, approval }).explainer, /never runs/);
+  // A passed check is named the same way everywhere.
+  const passed = savedPlanCheckText({ check: { state: "observed", revision: 3, ledgerRevision: 7 }, approval, checked: true });
+  assert.equal(passed.text, "Saved-plan check passed: planning approval revision 3 matches this exact saved Ledger (revision 7). Planning only; nothing was run.");
+  // A check that ran but could not match the current records keeps the approval and says what is missing.
+  const notMatched = savedPlanCheckText({ check: { state: "stale", projectId: session.projectId, rootIdentity: session.registration.rootIdentity }, approval });
+  assert.match(notMatched.text, /^Plan approved\. The saved-plan check could not lock it/);
+  const noLedgerApproval = savedPlanCheckText({ check: { state: "missing" }, approval });
+  assert.match(noLedgerApproval.text, /^Plan approved\./);
+  assert.match(savedPlanCheckText({ check: { state: "refreshing" }, approval }).text, /Running the saved-plan check/);
 });

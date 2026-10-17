@@ -28,8 +28,10 @@ export interface RepoStack {
 
 type Deps = Record<string, string>;
 
+/** Parses a regular file inside root; a symlink (which could point outside the repo) is ignored. */
 function readJson(file: string): Record<string, unknown> | null {
   try {
+    if (!fs.lstatSync(file).isFile()) return null;
     return JSON.parse(fs.readFileSync(file, "utf8")) as Record<string, unknown>;
   } catch {
     return null;
