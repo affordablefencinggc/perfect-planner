@@ -297,7 +297,7 @@ describe("one folder, one ledger writer", () => {
     trackStop(() => ctx.stop());
     await hostCall(ctx.base, "POST", "/planning/start?project=alpha", { idea: "A notes app that syncs" });
     const second = createCoreHost({ root: ctx.dir, bridge: false, keys: ctx.host.keys });
-    track(() => second.close());
+    trackStop(() => second.close());
     const project = second.project("alpha");
     expect(project.ledger.status.writable).toBe(false);
     expect(() => asPersonRequest(() => project.ledger.append({ actor: person, type: "task.created", subject: "T-9", summary: "Planted", data: { title: "Planted" } }))).toThrow(/read-only/);
@@ -518,7 +518,7 @@ describe("ledgers, owner pins and the files on disk", () => {
   async function restarted(ctx: Ctx) {
     await ctx.host.close();
     const host = createCoreHost({ root: ctx.dir, bridge: false, keys: ctx.host.keys });
-    track(() => host.close());
+    trackStop(() => host.close());
     return host;
   }
 
@@ -579,7 +579,7 @@ describe("ledgers, owner pins and the files on disk", () => {
     await host2.close();
     fs.copyFileSync(pinA, pinB);
     const host3 = createCoreHost({ root: ctx.dir, bridge: false, keys: ctx.host.keys });
-    track(() => host3.close());
+    trackStop(() => host3.close());
     const beta3 = await host3.openProject("beta");
     expect(beta3.owner.state).toBe("tampered");
     expect(beta3.owner.ownerKey).toBeUndefined();
@@ -595,7 +595,7 @@ describe("ledgers, owner pins and the files on disk", () => {
     fs.cpSync(ledgerOf("alpha"), ledgerOf("beta"), { recursive: true });
     fs.rmSync(path.join(ledgerOf("beta"), ".writer.lock"), { force: true });
     const host3 = createCoreHost({ root: ctx.dir, bridge: false, keys: ctx.host.keys });
-    track(() => host3.close());
+    trackStop(() => host3.close());
     const beta3 = await host3.openProject("beta");
     expect(beta3.owner.state).toBe("replaced");
   }, 120_000);
