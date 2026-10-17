@@ -74,6 +74,10 @@ export class CoreHost {
     }));
   }
 
+  /** For the local service's other person-only routes (the typed folder): the same session checks as /api/core. */
+  sessionId = (req: IncomingMessage): string | null => this.sessions.sessionId(req);
+  isPerson = (req: IncomingMessage): boolean => this.sessions.isPerson(req);
+
   /** A one-time launch secret for the app window about to be opened (see session.ts). */
   issueLaunch(): string {
     return this.sessions.issueLaunch();
@@ -177,7 +181,7 @@ export class CoreHost {
       try { body = await readJson(req); } catch { body = {}; }
       const claimed = sameOriginRequest(req) ? this.sessions.claim((body as { launch?: unknown })?.launch) : null;
       if (!claimed) return send(401, { ok: false, code: "LAUNCH_REQUIRED", message: "Open Perfect Planner from a one-time link. This window cannot show or change anything until then." });
-      res.setHeader("set-cookie", this.sessions.setCookieHeader(claimed.cookie, CORE_PREFIX));
+      res.setHeader("set-cookie", this.sessions.setCookieHeader(claimed.cookie, "/api"));
       return send(200, { ok: true, result: { csrf: claimed.csrf } });
     }
     const match = this.router.match(method, path);

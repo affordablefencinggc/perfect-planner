@@ -80,9 +80,15 @@ export async function describeLaunchFolder({ fetchImpl = globalThis.fetch?.bind(
 export async function chooseTypedFolder(path, { fetchImpl = globalThis.fetch?.bind(globalThis) } = {}) {
   if (typeof fetchImpl !== "function") return { error: "This window cannot reach the local service." };
   try {
+    // Choosing a folder is the person's own act: it needs this window's login, like every other change.
+    // Loaded here: the login code belongs to the app's screens, not to the folder-reading code Node tests load.
+    const { CSRF_HEADER, claimPersonSession, personCsrfToken } = await import("../core-screens/coreApi.js");
+    await claimPersonSession().catch(() => false);
+    const csrf = personCsrfToken();
+    if (!csrf) return { error: "This window was not opened from Perfect Planner's own launcher, so it cannot choose a folder." };
     const response = await fetchImpl(`${BASE}/choose`, {
       method: "POST",
-      headers: { ...HEADERS, "content-type": "application/json" },
+      headers: { ...HEADERS, [CSRF_HEADER]: csrf, "content-type": "application/json" },
       credentials: "same-origin",
       body: JSON.stringify({ path }),
     });
