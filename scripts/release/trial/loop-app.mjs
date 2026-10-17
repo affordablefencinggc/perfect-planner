@@ -1,6 +1,6 @@
 // Runs the whole loop THROUGH THE INSTALLED WINDOW of a Perfect Planner build, the way a person does:
 // open a git folder, start its history, plan and approve, connect an agent, start a worker, then the
-// worker (a real MCP session on the app's own Node, from the app's own set-up command) proposes a
+// worker (a SCRIPTED STAND-IN, not an AI agent: a real MCP session on the app's own Node, started from the app's own set-up command) proposes a
 // test and builds, and the person approves the test, checks, reads and approves the diff, and merges.
 //
 //   node scripts/release/trial/loop-app.mjs --app <installed binary> --repo <git folder, one commit>
@@ -102,7 +102,8 @@ async function step(name, fn) {
     await shot(name.replace(/\W+/g, "-").toLowerCase());
     return true;
   } catch (error) {
-    record(name, false, error.message.slice(0, 400));
+    const alerts = await run(`return [...document.querySelectorAll("[role=alert], [class*=error], [class*=warn]")].filter((e) => e.offsetParent !== null).map((e) => (e.innerText || "").trim()).filter(Boolean).slice(0, 3).join(" | ")`).catch(() => "");
+    record(name, false, `${error.message}${alerts ? ` Window says: ${alerts}` : ""}`.slice(0, 600));
     await shot(`failed-${name.replace(/\W+/g, "-").toLowerCase()}`);
     return false;
   }
@@ -203,7 +204,7 @@ async function main() {
     return `checked in as ${result.checkedInAs}; line on the app's own Node`;
   });
 
-  if (ok) ok = await step("start worker on T-1", async () => {
+  if (ok) ok = await step("start worker on T-1 (window gives the set-up command)", async () => {
     await click("03Build"); await click("Tasks");
     if (!(await waitFor(async () => (await run(`return document.querySelector(${JSON.stringify(task(task1))}) !== null`)), 20_000))) throw new Error("T-1 is not on the board.");
     await setValue("Worker model", "claude-trial", task(task1));
@@ -214,7 +215,7 @@ async function main() {
     return `set-up command shown (${setup.length} chars, private key not logged)`;
   });
 
-  if (ok) ok = await step("worker checks in over MCP and proposes a test", async () => {
+  if (ok) ok = await step("stand-in worker checks in over MCP and proposes a test", async () => {
     const worktree = path.join(folder, ".perfect-planner", "worktrees", task1);
     if (!existsSync(worktree)) throw new Error(`The window started a worker but its folder does not exist: ${worktree}. Worktrees now: ${git(folder, "worktree", "list").replace(/\n/g, "; ")}`);
     const server = registerWorker(world.setup);
@@ -239,7 +240,7 @@ async function main() {
     return (await run(`return (document.querySelector(${JSON.stringify(task(task1))})?.innerText || "").split("\\n").slice(0, 6).join(" | ")`));
   });
 
-  if (ok) ok = await step("worker builds, commits, attaches proof", async () => {
+  if (ok) ok = await step("stand-in worker builds, commits, attaches proof", async () => {
     await worker.tool("claim_task", { task: task1, agent: world.agent });
     mkdirSync(path.join(world.worktree, "src"), { recursive: true });
     writeFileSync(path.join(world.worktree, "src", "notes.mjs"), 'import { writeFileSync } from "node:fs";\n\nexport const saveNotes = (file, notes) => writeFileSync(file, JSON.stringify(notes));\n');
