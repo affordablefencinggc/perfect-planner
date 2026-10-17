@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { PublicAccountCache } from "./keychain";
 import { FileStore, KeychainKeyProvider, Ledger, LedgerError, isAuthoritative, osSecretStore, type SecretStore } from "./index";
 
 /** A SecretStore in memory, so the provider's own logic is tested on every machine. */
@@ -20,6 +21,15 @@ class FakeSecrets implements SecretStore {
   }
   remove(account: string) {
     this.values.delete(account);
+  }
+}
+
+/** Counts reads, because each real read starts a keychain tool (a ~2 s PowerShell on Windows). */
+class CountingSecrets extends FakeSecrets {
+  reads: string[] = [];
+  get(account: string) {
+    this.reads.push(account);
+    return super.get(account);
   }
 }
 
@@ -172,5 +182,78 @@ describe("keychain helpers are started by full path", () => {
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("PublicAccountCache", () => {
+  it("keeps keychain reads per signed write constant: one private-key read, no public reads", () => {
+    const secrets = new CountingSecrets();
+    const keys = new KeychainKeyProvider(secrets);
+    keys.ensureKey("person:owner");
+    keys.ensureKey("system");
+    const root = tempRoot();
+    const ledger = Ledger.openSync(new FileStore(root), { keys });
+    ledger.append({ actor: owner, type: "task.created", subject: "T-1", summary: "Warm up" });
+    secrets.reads = [];
+    for (let i = 2; i <= 11; i++) ledger.append({ actor: owner, type: "task.created", subject: `T-${i}`, summary: "Task" });
+    ledger.close();
+    expect(secrets.reads.filter((a) => a.startsWith("private."))).toHaveLength(10);
+    expect(secrets.reads.filter((a) => !a.startsWith("private."))).toEqual([]);
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it("never remembers a private key", () => {
+    const secrets = new CountingSecrets();
+    const cache = new PublicAccountCache(secrets);
+    secrets.set("private.system", "k");
+    cache.get("private.system");
+    cache.get("private.system");
+    expect(secrets.reads).toEqual(["private.system", "private.system"]);
+  });
+
+  it("drops an entry on its own write or remove, and after the TTL", () => {
+    const secrets = new CountingSecrets();
+    let now = 0;
+    const cache = new PublicAccountCache(secrets, 1000, () => now);
+    expect(cache.get("pins")).toBeUndefined();
+    expect(cache.get("pins")).toBeUndefined();
+    expect(secrets.reads).toEqual(["pins"]);
+    cache.set("pins", "[]");
+    expect(cache.get("pins")).toBe("[]");
+    cache.remove("pins");
+    expect(cache.get("pins")).toBeUndefined();
+    secrets.values.set("pins", "changed elsewhere");
+    expect(cache.get("pins")).toBeUndefined();
+    now = 1000;
+    expect(cache.get("pins")).toBe("changed elsewhere");
+  });
+
+  it("two instances over one keychain: after one rotates, the other still signs with a matching key id", () => {
+    const secrets = new FakeSecrets();
+    const a = new KeychainKeyProvider(secrets);
+    const b = new KeychainKeyProvider(secrets);
+    a.ensureKey("person:owner");
+    b.trustedKeys(); // b has now remembered the old public record
+    const rotated = a.rotateKey("person:owner");
+    const signed = b.sign("person:owner", Buffer.from("x"));
+    expect(signed.keyId).toBe(rotated.keyId);
+  });
+
+  it("does not remember a failed read as missing", () => {
+    let fail = true;
+    const store: SecretStore = {
+      description: "flaky",
+      state: () => ({ available: true }),
+      get: () => {
+        if (fail) throw new Error("PowerShell failed");
+        return "[]";
+      },
+      set: () => {},
+      remove: () => {},
+    };
+    const cache = new PublicAccountCache(store);
+    expect(() => cache.get("pins")).toThrow("PowerShell failed");
+    fail = false;
+    expect(cache.get("pins")).toBe("[]");
   });
 });
