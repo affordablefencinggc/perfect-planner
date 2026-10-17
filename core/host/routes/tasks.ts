@@ -13,7 +13,7 @@ import path from "node:path";
 import { deriveState, sensitiveChanges, testSupportFiles, type GateState } from "../../gate/index";
 import type { Actor } from "../../ledger/index";
 import { attemptLabel, type TaskView } from "../../mcp/index";
-import { WorktreeError, WorktreeManager, git, runGit, WORKTREES_ACTOR, type WorktreeInfo } from "../../worktrees/index";
+import { WorktreeError, WorktreeManager, git, refreshCarriedSettings, runGit, WORKTREES_ACTOR, type WorktreeInfo } from "../../worktrees/index";
 import type { CoreHost } from "../host";
 import type { CoreProject } from "../project";
 import { HttpError, type Router } from "../router";
@@ -196,12 +196,18 @@ function findTask(project: CoreProject, id: string): TaskView {
 }
 
 /**
- * Plain text for a computer whose git has no name and email (null when it has them). The app only shows the
- * two commands; it never sets the person's git config, and the merge never runs with an invented identity.
+ * Plain text when git cannot name a committer (null when it can). A missing name and email gets the two
+ * commands to run; any other git failure gets a generic message so it is not blamed on the identity.
+ * The app only shows the commands; it never sets the person's git config or invents an identity.
+ * The copy of the person's git settings is refreshed first, so a name set a minute ago counts without a restart.
  */
 export async function gitIdentityRefusal(root: string): Promise<string | null> {
-  const ident = await runGit(root, ["var", "GIT_COMMITTER_IDENT"]).catch(() => null);
-  if (!ident || ident.code === 0) return null;
+  refreshCarriedSettings();
+  const ident = await runGit(root, ["var", "GIT_COMMITTER_IDENT"]).catch((error: Error) => ({ code: -1, stdout: "", stderr: error.message }));
+  if (ident.code === 0) return null;
+  if (!/identity unknown|unable to auto-detect|no email was given|no name was given|empty ident/i.test(`${ident.stderr}${ident.stdout}`)) {
+    return "Git did not answer when the app asked it who you are, so nothing was merged and your work is safe. Press Merge again; if it keeps happening, check that Git still opens from a terminal.";
+  }
   return [
     "Git on this computer does not know your name and email yet, so it cannot record the merge. Nothing was merged and your work is safe.",
     "Run these two commands once in a terminal (use your own name and email), then press Merge again:",

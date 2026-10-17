@@ -389,7 +389,8 @@ describe("a computer whose git has no name and email", () => {
     try {
       execFileSync("git", ["init", "-q", "-b", "main", bare]);
       Object.assign(process.env, { HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: path.join(home, "xdg"), GIT_CONFIG_NOSYSTEM: "1" });
-      process.env.GIT_CONFIG_GLOBAL = path.join(home, "none");
+      const personal = path.join(home, "gitconfig");
+      process.env.GIT_CONFIG_GLOBAL = personal;
       // Git may guess an email from the host name; refuse the guess so this matches a beginner's machine.
       execFileSync("git", ["config", "user.useConfigOnly", "true"], { cwd: bare });
       // The app copies the person's git settings once per process; load it fresh, as on a computer with none.
@@ -399,12 +400,22 @@ describe("a computer whose git has no name and email", () => {
       expect(text).toContain('git config --global user.name "Your Name"');
       expect(text).toContain('git config --global user.email "you@example.com"');
       expect(text).not.toMatch(/Committer identity unknown|conflict/i);
+      // The person runs the two commands while the app stays open: the next try passes, no restart.
+      execFileSync("git", ["config", "--file", personal, "user.name", "Pat"]);
+      execFileSync("git", ["config", "--file", personal, "user.email", "pat@example.invalid"]);
+      expect(await fresh.gitIdentityRefusal(bare)).toBeNull();
       expect(fs.existsSync(path.join(home, ".gitconfig"))).toBe(false);
       expect(execFileSync("git", ["config", "--local", "--list"], { cwd: bare, encoding: "utf8" })).not.toMatch(/user\.(name|email)/);
     } finally {
       fs.rmSync(home, { recursive: true, force: true });
       fs.rmSync(bare, { recursive: true, force: true });
     }
+  });
+
+  it("does not blame the identity when git itself fails", async () => {
+    const text = await gitIdentityRefusal(path.join(os.tmpdir(), "pp-no-such-folder-for-git"));
+    expect(text).toContain("Git did not answer");
+    expect(text).not.toContain("user.name");
   });
 
   it("is not in the way when git has an identity", async () => {
