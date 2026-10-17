@@ -5,17 +5,19 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { buildCoreHost } from "../../scripts/build-core-host.mjs";
 import { FileStore, Ledger, verifyChain } from "../ledger/index";
 import { addTask, buildCheckApprove, cleanTemp, connectWindow, dispatchAndApproveTest, git, hostKeysOn, makeRepo, sleep, startWindow, tempDir } from "./helpers";
 
 // NOT RUN on Windows: the host is started as its own process group and killed with SIGKILL (detached + process.kill(-pid)),
 // which Windows does not have. A Windows version would kill the tree with taskkill /F /T; it is not written. The first
-// Windows run (windows-latest run 39034910848) failed this file to load with "SyntaxError: Invalid or unexpected token".
+// Windows run (windows-latest run 39034910848) failed this file to load with "SyntaxError: Invalid or unexpected token":
+// Git for Windows checks scripts/build-core-host.mjs out with CRLF line endings, and its "#!" first line then does not load under
+// Vitest. So the bundler is imported inside beforeAll, after the Windows return, not at the top of the file.
 const WINDOWS = process.platform === "win32";
 let bundle = "";
 beforeAll(async () => {
   if (WINDOWS) return;
+  const { buildCoreHost } = await import("../../scripts/build-core-host.mjs");
   const out = tempDir("pp-attack-bundle-");
   await buildCoreHost({ outDir: out, standalone: true, entries: { crashHost: path.resolve("core/attack/crashHost.ts") } });
   bundle = path.join(out, "crashHost.mjs");

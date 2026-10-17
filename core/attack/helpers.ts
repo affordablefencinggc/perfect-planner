@@ -86,6 +86,9 @@ export function makeRepo(files: Record<string, string> = { "README.md": "# Notes
   git(repo, "config", "commit.gpgsign", "false");
   git(repo, "config", "user.name", "Owner");
   git(repo, "config", "user.email", "owner@example.invalid");
+  // Like the worktree tests: the app carries the machine's autocrlf into its own git, so on Windows the merge writes CRLF into
+  // the main checkout while these helpers (which ignore system config) read it as a change. Pin it for the repo.
+  git(repo, "config", "core.autocrlf", "false");
   for (const [name, text] of Object.entries(files)) write(repo, name, text);
   if (commit) {
     git(repo, "add", "-A");
