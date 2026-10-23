@@ -167,7 +167,7 @@ function codeFolder(code: readonly string[]): string {
 
 /** What kind of task a contract is for; it picks the clause sentences. */
 export interface ContractSpec {
-  kind: "component" | "screen" | "data" | "integration" | "risk" | "release";
+  kind: "component" | "screen" | "data" | "integration" | "risk" | "release" | "verify";
   label: string;
   /** The labels of its sub-parts, when the mind map has any. */
   parts: string[];
@@ -195,6 +195,10 @@ function clausesFor(spec: ContractSpec): string[] {
     case "risk":
       out.push(`Reduce this risk: ${label}${note ? ` (${note})` : ""}. Prove with a test that the mitigation holds.`);
       break;
+    case "verify":
+      out.push(`Run the existing tests for ${label} and report whether they pass. ${label} is already in the repo.`);
+      out.push("Change no files; if a test fails, report it to the owner instead of fixing it.");
+      return out.map((c) => oneLine(c, MAX_CLAUSE_LENGTH));
     case "release":
       out.push("Cut the first release once every other task is done and the tests pass on a clean checkout.");
       break;
@@ -216,6 +220,11 @@ export function draftContract(spec: ContractSpec, repo?: RepoIndex, cap: SizeCap
     const contract: TaskContract = { clauses, allowedFiles: [...new Set(allowedFiles.map(normalizePattern))].sort(), doneWhen: oneLine(spec.doneWhen, MAX_DONE_WHEN), sizeCap: { ...cap } };
     return { contract, flags: contractFlags(contract, repo, related) };
   };
+  if (spec.kind === "verify") {
+    const verify = make([]);
+    // A check that changes nothing is not "a task with no files to change".
+    return { contract: verify.contract, flags: verify.flags.filter((f) => f.code !== "NO_FILES") };
+  }
   if (spec.kind === "release") return make(["CHANGELOG.md", "docs/release/**"]);
 
   const code = (repo?.files ?? []).filter((file) => CODE_EXTENSIONS.has(extensionOf(file)) && !isTestLike(file) && !isDependencyPath(file) && !isProtectedPath(file));
@@ -263,6 +272,21 @@ export function repoAwareDoneWhen(allowedFiles: readonly string[], repo: RepoInd
   const command = testCommand(repo.tests, newTest);
   const run = command ? ` Run \`${command}\`.` : suite ? ` Run \`${suite}\`.` : "";
   return oneLine(`${lead}; no test covers these files yet, so add one such as \`${newTest}\`.${run}`, MAX_DONE_WHEN);
+}
+
+/**
+ * For a part the repo already has: the existing tests that cover it and the command that runs them, as a
+ * done-when for a verify-only task. Null when the files that match the part have no test (nothing to verify).
+ */
+export function verifyDoneWhen(label: string, repo: RepoIndex | undefined): string | null {
+  if (!repo?.tests) return null;
+  const drafted = draftContract({ kind: "component", label, parts: [], doneWhen: "x" }, repo).contract.allowedFiles;
+  const code = repo.files.filter((f) => drafted.some((p) => pathCovered(p, f)) && !isTestLike(f));
+  const tests = existingTestsFor(repo.files, code).slice(0, 3);
+  if (!tests.length) return null;
+  const commands = [...new Set(tests.map((t) => testCommand(repo.tests, t)).filter((c): c is string => !!c))];
+  const run = commands.length ? commands : repo.tests.suite ? [repo.tests.suite] : [];
+  return oneLine(`${tests.map((t) => `\`${t}\``).join(", ")} pass unchanged for ${label}.${run.length ? ` Run \`${run.join("`, `")}\`.` : ""}`, MAX_DONE_WHEN);
 }
 
 // ---------- what the ledger says ----------

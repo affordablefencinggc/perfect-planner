@@ -2,7 +2,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { repoAwareDoneWhen } from "./contract";
+import { draftContract, repoAwareDoneWhen, verifyDoneWhen } from "./contract";
+import { buildMindMap } from "./mindmap";
+import { buildRoadmap } from "./roadmap";
 import { listRepoFiles, readRepoStack } from "./repo";
 import { existingTestsFor, readTestSetup, testCommand } from "./tests";
 
@@ -82,5 +84,54 @@ describe("readRepoStack testing", () => {
     const stack = readRepoStack(repo({ "package.json": pkg, ".github/workflows/release.yml": "name: r" }));
     expect(stack.facts.find((f) => f.id === "testing.strategy")?.text).toContain("npm test");
     expect(stack.facts.find((f) => f.id === "testing.deploy")?.evidence).toEqual([".github/workflows/release.yml"]);
+  });
+});
+
+describe("verify-only tasks and more repo facts", () => {
+  it("reads Firebase, MongoDB and Netlify so those questions are not asked", () => {
+    const stack = readRepoStack(repo({ "package.json": JSON.stringify({ dependencies: { firebase: "1", mongoose: "1" } }), "netlify.toml": "" }));
+    const text = (id: string) => stack.facts.find((f) => f.id === id)?.text;
+    expect(text("auth.provider")).toBe("Firebase Auth");
+    expect(text("data.store")).toBe("MongoDB");
+    expect(text("stack.hosting")).toBe("Netlify");
+  });
+
+  const root = repo({
+    "package.json": pkg,
+    "vitest.core.config.mjs": 'export default { test: { include: ["core/**/*.test.ts"] } }',
+    "core/billing/invoice.ts": "",
+    "core/billing/invoice.test.ts": "",
+    "core/search/index.ts": "",
+  });
+  const index = listRepoFiles(root);
+
+  it("gives a verify done-when only for a part that has a test", () => {
+    expect(verifyDoneWhen("Invoice", index)).toContain("npm run test:core -- core/billing/invoice.test.ts");
+    expect(verifyDoneWhen("Search", index)).toBeNull();
+    expect(verifyDoneWhen("Invoice", { files: [], truncated: false })).toBeNull();
+  });
+
+  it("draws a verify contract that changes nothing and is not flagged", () => {
+    const { contract, flags } = draftContract({ kind: "verify", label: "Invoice", parts: [], doneWhen: "x" }, index);
+    expect(contract.allowedFiles).toEqual([]);
+    expect(flags).toEqual([]);
+    expect(contract.clauses.join(" ")).toMatch(/Change no files/);
+  });
+
+  it("adds a Verify task to the roadmap for an existing, tested part and makes the release depend on it", () => {
+    const suiteRepo = listRepoFiles(
+      repo({
+        "package.json": pkg,
+        "vitest.core.config.mjs": 'export default { test: { include: ["core/**/*.test.ts"] } }',
+        "core/harness/test-suite.ts": "",
+        "core/harness/test-suite.test.ts": "",
+      }),
+    );
+    const map = buildMindMap("An app", [{ questionId: "testing.strategy", area: "testing", q: "q", choice: "unit-integration", text: "Automated tests", fromRepo: true }]);
+    const tasks = buildRoadmap(map, { repo: suiteRepo }).phases.flatMap((p) => p.tasks);
+    const verify = tasks.find((t) => t.title === "Verify Test suite still works");
+    expect(verify?.doneWhen).toContain("core/harness/test-suite.test.ts");
+    expect(tasks.some((t) => t.title === "Build Test suite")).toBe(false);
+    expect(tasks.find((t) => t.key === "K-first-release")?.dependsOn).toContain(verify!.key);
   });
 });

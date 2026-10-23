@@ -3,7 +3,7 @@
 
 import { isAuthoritative, type Actor, type Ledger, type LedgerEntry } from "../ledger/index";
 import { appendNumbered } from "../numbering/index";
-import { contractDigest, draftContract, normalizeContract, repoAwareDoneWhen } from "./contract";
+import { contractDigest, draftContract, normalizeContract, repoAwareDoneWhen, verifyDoneWhen } from "./contract";
 import { nodeArea } from "./mindmap";
 import type { RepoIndex } from "./repo";
 import type { MindMap, MindNode, PhaseId, Roadmap, RoadmapPhase, RoadmapTask, TaskContract } from "./types";
@@ -31,6 +31,13 @@ export function phaseOf(node: MindNode): PhaseId {
   if (area === "stack" || area === "data" || area === "auth") return "foundation";
   if (node.kind === "integration") return "integrations";
   return "core";
+}
+
+/** At most this many parts get a verify task, so a big existing repo does not bury the plan. */
+export const MAX_VERIFY_TASKS = 8;
+
+export function verifyKey(nodeId: string): string {
+  return `V-${nodeId}`;
 }
 
 export function taskKey(nodeId: string): string {
@@ -157,6 +164,25 @@ export function buildRoadmap(map: MindMap, opts: { owner?: string; repo?: RepoIn
       contractFlags: drafted.flags,
     };
   });
+
+  // What the repo already has and tests: a verify-only task runs those tests, so "already built" is proven, not assumed.
+  for (const node of all.filter((n) => n.existing && n.kind !== "risk").slice(0, MAX_VERIFY_TASKS)) {
+    const doneWhen = verifyDoneWhen(node.label, opts.repo);
+    if (!doneWhen) continue;
+    const drafted = draftContract({ kind: "verify", label: node.label, parts: [], doneWhen }, opts.repo);
+    tasks.push({
+      key: verifyKey(node.id),
+      title: `Verify ${node.label} still works`,
+      phase: "release",
+      owner,
+      doneWhen,
+      node: node.id,
+      change: "fix",
+      dependsOn: [],
+      contract: drafted.contract,
+      contractFlags: drafted.flags,
+    });
+  }
 
   const suite = opts.repo?.tests?.suite ?? "npm test";
   const releaseDone = `\`${suite}\` passes on a clean checkout and a test proves the release entry (R-1, v1.0.0) is in the ledger with its stamp.`;

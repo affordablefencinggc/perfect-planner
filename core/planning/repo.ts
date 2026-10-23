@@ -90,7 +90,11 @@ export function readRepoStack(root: string): RepoStack {
   if (wrangler) hosts.push({ choice: "cloudflare", label: "Cloudflare Workers", file: wrangler });
   const fly = firstExisting(root, ["fly.toml"]);
   if (fly) hosts.push({ choice: "fly-io", label: "Fly.io", file: fly });
-  if (hosts.length === 1) add({ id: "stack.hosting", choice: hosts[0].choice, text: hosts[0].label, evidence: [hosts[0].file] });
+  const netlify = firstExisting(root, ["netlify.toml"]);
+  if (netlify) hosts.push({ choice: "netlify", label: "Netlify", file: netlify });
+  const docker = firstExisting(root, ["Dockerfile"]);
+  if (docker && hosts.length === 0) hosts.push({ choice: "", label: "Docker container", file: docker });
+  if (hosts.length === 1) add({ id: "stack.hosting", ...(hosts[0].choice ? { choice: hosts[0].choice } : {}), text: hosts[0].label, evidence: [hosts[0].file] });
   else if (hosts.length > 1) add({ id: "stack.hosting", text: hosts.map((h) => h.label).join(" and "), evidence: hosts.map((h) => h.file) });
 
   // data
@@ -99,6 +103,10 @@ export function readRepoStack(root: string): RepoStack {
   const supabaseEvidence = [has("@supabase/supabase-js") ? PKG : undefined, supabaseDir].filter((x): x is string => Boolean(x));
   if (supabase || has("pg") || has("postgres")) {
     add({ id: "data.store", choice: "postgres", text: supabase ? "Supabase (Postgres)" : "Postgres", evidence: supabase ? supabaseEvidence : [PKG] });
+  } else if (has("mongodb") || has("mongoose")) {
+    add({ id: "data.store", text: "MongoDB", evidence: [PKG] });
+  } else if (has("firebase") || has("firebase-admin")) {
+    add({ id: "data.store", text: "Firebase (Firestore)", evidence: [PKG] });
   } else if (has("better-sqlite3") || has("sqlite3")) {
     add({ id: "data.store", choice: "sqlite-local", text: "SQLite", evidence: [PKG] });
   }
@@ -110,6 +118,10 @@ export function readRepoStack(root: string): RepoStack {
   if (supabase) add({ id: "auth.provider", choice: "supabase-auth", text: "Supabase Auth", evidence: supabaseEvidence });
   else if (has("next-auth") || has("@auth/core")) add({ id: "auth.provider", choice: "authjs", text: "Auth.js", evidence: [PKG] });
   else if (hasPrefix("@clerk/")) add({ id: "auth.provider", choice: "clerk", text: "Clerk", evidence: [PKG] });
+
+  else if (has("firebase") || has("firebase-admin")) add({ id: "auth.provider", text: "Firebase Auth", evidence: [PKG] });
+  else if (has("@auth0/auth0-react") || has("auth0")) add({ id: "auth.provider", text: "Auth0", evidence: [PKG] });
+  else if (has("lucia") || has("better-auth")) add({ id: "auth.provider", text: has("lucia") ? "Lucia" : "Better Auth", evidence: [PKG] });
 
   // money
   if (has("stripe") || has("@stripe/stripe-js")) {
