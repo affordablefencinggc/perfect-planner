@@ -365,7 +365,7 @@ describe.skipIf(WINDOWS).each([
   // REAL DEFECT (found by this attack): the gate moves main with update-ref and only then writes test.passed,
   // merge.done and task.done. A kill in between leaves the work merged in git and the task unfinished in the ledger,
   // and the Merge button then refuses with "main was left untouched" although main holds the merge.
-  it.fails("after the restart the person can still finish the task (the app notices main already holds the approved merge)", () => {
+  it("after the restart the person can still finish the task (the app notices main already holds the approved merge)", () => {
     expect(run.retry.status, run.retry.message).toBe(200);
   });
 });
@@ -459,7 +459,7 @@ describe.skipIf(WINDOWS).each([
   // The kill leaves all of that, the branch pp/T-1 stays, nothing in the app's registry or ledger knows the
   // worktree, and Start worker is refused for good: "Branch pp/T-1 already exists. Use the next attempt id
   // instead of reusing it." (core/worktrees/manager.ts createNow; reconcile on start is lane L10's).
-  it.fails("after the restart git still works, no lock is left behind and the task can be started again", () => {
+  it("after the restart git still works, no lock is left behind and the task can be started again", () => {
     expect(run.after.gitErrors).toEqual([]);
     expect(run.after.locks).toEqual([]);
     expect(run.retry.status, run.retry.message).toBe(200);
