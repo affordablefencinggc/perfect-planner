@@ -112,7 +112,7 @@ const GitInventoryPanel = lazy(() => import("./components/GitInventoryPanel.jsx"
   default: BranchToolsUnavailable,
 })));
 import "./components/GitInventoryPanel.css";
-import { PersonProfile } from "./people/PersonProfile.jsx";
+const PersonProfile = lazy(() => import("./people/PersonProfile.jsx").then((m) => ({ default: m.PersonProfile })));
 import {
   readCurrentTruthGeneration,
   TruthGenerationReadError,
@@ -858,7 +858,7 @@ function TopBar({
             if (!person || !demo) return null;
             const meta = ownerMeta[profileName];
             return (
-              <PersonProfile
+              <Suspense fallback={null}><PersonProfile
                 onClose={() => setProfileName(null)}
                 profile={{
                   person: profileName.toLowerCase(), name: profileName, role: person.role, state: person.state,
@@ -867,7 +867,7 @@ function TopBar({
                   trends: demo.trends, timeline: demo.timeline, current: demo.current, reviewHours: demo.reviewHours, capacity: demo.capacity,
                   stats: { finished: demo.finished, open: demo.open, errors: demo.errors, linesDone: demo.linesDone, total: demo.finished + demo.open, openTasks: [] },
                 }}
-              />
+              /></Suspense>
             );
           })()}
           <button

@@ -19,7 +19,8 @@ export const PERFORMANCE_BUDGETS = Object.freeze({
   maxIndividualStylesheetGzipBytes: 45 * 1024,
   // UI polish (Oct 2026): total raised for the page frame and per-screen polish layers; the per-file limit is unchanged.
   // Core loop screens (Oct 2026): raised for their on-demand stylesheets.
-  maxTotalStylesheetGzipBytes: 80 * 1024,
+  // People profile (Oct 2026): total raised 80 -> 82 KiB (user-approved); its stylesheet loads on demand with the panel.
+  maxTotalStylesheetGzipBytes: 82 * 1024,
   maxClientBytes: 14 * 1024 * 1024,
   maxClientFiles: 200, // raised from 160 when v1 feature panels moved to on-demand chunks
 });

@@ -3,13 +3,10 @@ import { createPortal } from "react-dom";
 import "./PersonProfile.css";
 import { MD_MAX_BYTES, isHttpsLink, isMarkdownName, move, nextFreeSlot, weekdays } from "./profileStats.js";
 
-const contextKey = (person) => `pp.profile.context.${person}`;
-function loadContext(person) {
-  try { return JSON.parse(localStorage.getItem(contextKey(person)) ?? "null") ?? { files: [], links: [] }; } catch { return { files: [], links: [] }; }
-}
-function saveContext(person, value) {
-  try { localStorage.setItem(contextKey(person), JSON.stringify(value)); } catch { /* storage may be blocked */ }
-}
+// Dropped files and links live in memory for this app session only; nothing is written to browser storage.
+const contexts = new Map();
+const loadContext = (person) => contexts.get(person) ?? { files: [], links: [] };
+const saveContext = (person, value) => contexts.set(person, value);
 
 function Spark({ values, bad }) {
   if (!values?.length) return null;
@@ -222,7 +219,7 @@ export function PersonProfile({ profile, onClose, onAssign, onShareLink }) {
             <button type="submit" disabled={!link.trim()}>Add link</button>
           </form>
           {ctx.links.length > 0 && <ul className="pprofile-cards">{ctx.links.map((l) => <li key={l}><a href={l} target="_blank" rel="noopener noreferrer">{l}</a></li>)}</ul>}
-          <p className="pprofile-muted">Files are kept in this browser only. Links are shared with the project when it is connected.</p>
+          <p className="pprofile-muted">Files are kept until you close the app. Links are shared with the project when it is connected.</p>
         </section>
         {error && <p className="pprofile-error" role="alert">{error}</p>}
       </aside>
