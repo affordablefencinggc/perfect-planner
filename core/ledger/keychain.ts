@@ -227,6 +227,48 @@ class Unavailable implements SecretStore {
   }
 }
 
+/**
+ * Keeps each private signing key in this process's memory after its first read, so signing does not
+ * start a keychain tool (a ~2 s PowerShell on Windows) for every entry. Memory only: never written,
+ * logged or returned, and gone when the process ends. Own writes and removes drop the entry, and
+ * `forget` drops it on demand (the provider does when the public record shows another instance rotated the key).
+ */
+export class PrivateKeyMemory implements SecretStore {
+  private readonly keys = new Map<string, string>();
+  readonly description: string;
+
+  constructor(private readonly inner: SecretStore) {
+    this.description = inner.description;
+  }
+
+  state(): KeyState {
+    return this.inner.state();
+  }
+
+  get(name: string): string | undefined {
+    if (!name.startsWith("private.")) return this.inner.get(name);
+    const kept = this.keys.get(name);
+    if (kept !== undefined) return kept;
+    const value = this.inner.get(name);
+    if (value !== undefined) this.keys.set(name, value);
+    return value;
+  }
+
+  set(name: string, value: string): void {
+    this.keys.delete(name);
+    this.inner.set(name, value);
+  }
+
+  remove(name: string): void {
+    this.keys.delete(name);
+    this.inner.remove(name);
+  }
+
+  forget(name: string): void {
+    this.keys.delete(name);
+  }
+}
+
 /** Accounts that hold only public data: the principal list, pinned public keys and each principal's public keys. */
 const isPublicAccount = (name: string) => name === "principals" || name === "pins" || name.startsWith("public.");
 
@@ -282,9 +324,11 @@ export class PublicAccountCache implements SecretStore {
 export class KeychainKeyProvider implements KeyProvider {
   readonly description: string;
   private readonly store: SecretStore;
+  private readonly memory: PrivateKeyMemory;
 
   constructor(store: SecretStore = osSecretStore()) {
-    this.store = new PublicAccountCache(store);
+    this.memory = new PrivateKeyMemory(store);
+    this.store = new PublicAccountCache(this.memory);
     this.description = store.description;
   }
 
@@ -358,13 +402,25 @@ export class KeychainKeyProvider implements KeyProvider {
 
   sign(principal: string, message: Buffer): { keyId: string; signature: string } {
     this.requireAvailable();
-    const privateKey = this.store.get(`private.${principal}`);
+    const account = `private.${principal}`;
+    let signer = this.signer(account, principal);
+    // Another instance may have rotated the key since this one remembered it: the public record names the active key.
+    const active = this.publicKeys(principal).find((k) => !k.retired);
+    if (active && active.keyId !== signer.keyId) {
+      this.memory.forget(account);
+      signer = this.signer(account, principal);
+    }
+    return { keyId: signer.keyId, signature: signWith(signer.privateKey, message) };
+  }
+
+  /** The key id comes from the private key that signs, so a rotation can never pair a new signature with an old id. */
+  private signer(account: string, principal: string): { privateKey: string; keyId: string } {
+    const privateKey = this.store.get(account);
     if (!privateKey) throw new Error(`there is no signing key for ${principal} on this device; set one up in Settings`);
-    // The key id comes from the private key that signs, so another instance's rotation can never pair a new signature with an old id.
     const publicKey = createPublicKey(createPrivateKey({ key: Buffer.from(privateKey, "base64"), format: "der", type: "pkcs8" }))
       .export({ format: "der", type: "spki" })
       .toString("base64");
-    return { keyId: keyIdOf(publicKey), signature: signWith(privateKey, message) };
+    return { privateKey, keyId: keyIdOf(publicKey) };
   }
 
   /** Removes every key this provider stored; for tests and for an explicit reset by the person. */
