@@ -128,10 +128,16 @@ async function requireRepo(project: CoreProject): Promise<string> {
   return repo.root;
 }
 
+/** Parallel worktrees per project: 10 unless PP_MAX_PARALLEL says otherwise. */
+function parallelCap(): number {
+  const wanted = Number(process.env.PP_MAX_PARALLEL);
+  return Number.isInteger(wanted) && wanted >= 1 && wanted <= 50 ? wanted : 10;
+}
+
 function manager(project: CoreProject, root: string): WorktreeManager {
   let current = project.state.get(MANAGER) as WorktreeManager | undefined;
   if (!current || current.repoRoot !== fs.realpathSync(root)) {
-    current = new WorktreeManager({ repoRoot: root, ledger: project.ledger });
+    current = new WorktreeManager({ repoRoot: root, ledger: project.ledger, maxParallel: parallelCap() });
     project.state.set(MANAGER, current);
     project.protectRoots([current.repoRoot, current.worktreeRoot]);
   }
