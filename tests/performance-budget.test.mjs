@@ -8,6 +8,8 @@ import test from "node:test";
 import { prepareSitesBuild } from "../scripts/prepare-sites-build.mjs";
 import {
   PERFORMANCE_BUDGETS,
+  describeAssetCosts,
+  formatAssetCosts,
   verifyPerformanceBudget,
 } from "../scripts/verify-performance-budget.mjs";
 
@@ -139,4 +141,22 @@ test("performance verifier fails closed when the package diverges from its relea
     await readFile(path.join(root, "dist", "release-manifest.json"), "utf8"),
   );
   assert.equal(manifest.schemaVersion, 2);
+});
+
+test("per-screen cost counts first load once and charges each screen only for what it adds", () => {
+  const record = (file, gzipBytes) => ({ path: file, gzipBytes });
+  const costs = describeAssetCosts({
+    indexHtml: '<script src="/assets/index-AAAAAAAA.js"></script><link href="/assets/framework-BBBBBBBB.js"><link href="/assets/index-CCCCCCCC.css">',
+    javascript: [record("assets/index-AAAAAAAA.js", 1000), record("assets/framework-BBBBBBBB.js", 4000), record("assets/Plan-DDDDDDDD.js", 300), record("assets/shared-EEEEEEEE.js", 50)],
+    stylesheets: [record("assets/index-CCCCCCCC.css", 500), record("assets/Plan-FFFFFFFF.css", 20)],
+    sources: new Map([
+      ["assets/index-AAAAAAAA.js", 'import{r}from"./framework-BBBBBBBB.js";'],
+      ["assets/framework-BBBBBBBB.js", ""],
+      ["assets/Plan-DDDDDDDD.js", 'import{r}from"./framework-BBBBBBBB.js";import"./shared-EEEEEEEE.js";'],
+      ["assets/shared-EEEEEEEE.js", ""],
+    ]),
+  });
+  assert.equal(costs.firstLoadBytes, 5500);
+  assert.deepEqual(costs.onDemand, [{ chunk: "Plan.js", gzipBytes: 370 }, { chunk: "shared.js", gzipBytes: 50 }]);
+  assert.match(formatAssetCosts(costs, { jsTotal: 5350, cssTotal: 520 }), /First load \(3 files\) \| 5\.4/);
 });

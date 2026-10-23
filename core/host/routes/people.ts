@@ -9,6 +9,7 @@ import {
   PHOTO_MAX_BYTES,
   ROLES,
   addMember,
+  assignTask,
   buildPeopleView,
   changeMember,
   claimOwnership,
@@ -193,6 +194,16 @@ export function registerPeopleRoutes(router: Router): void {
     const b = body(raw);
     const reason = b.reason === undefined ? undefined : text(b.reason, "a reason", 500);
     const entry = removeMember(project.ledger, localPerson(project), person(params.person), reason);
+    return { entry: entry.n, ...peopleResult(project) };
+  });
+
+  /** POST /people/assign { task, person }: the owner gives a task to a member; its worker is then started for them. */
+  router.post("/people/assign", ({ project, body: raw }) => {
+    const b = body(raw);
+    const task = text(b.task, "a task", 40);
+    if (!/^T-\d+$/.test(task)) throw new HttpError(400, "INVALID", "Name the task by its number, like T-3.");
+    if (!project.service.board().has(task)) throw new HttpError(404, "NOT_FOUND", `${task} is not on the board.`);
+    const entry = assignTask(project.ledger, localPerson(project), task, person(b.person));
     return { entry: entry.n, ...peopleResult(project) };
   });
 
