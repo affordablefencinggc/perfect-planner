@@ -2,7 +2,7 @@ import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync 
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { keyStoreTool } from "./systemTools";
+import { keyStoreTool, system32Tool, systemRoot } from "./systemTools";
 
 const isWindows = process.platform === "win32";
 const cleanups: (() => void)[] = [];
@@ -23,6 +23,21 @@ function plant(dir: string, name: string): string {
   chmodSync(file, 0o755);
   return file;
 }
+
+describe("systemRoot", () => {
+  it("takes SystemRoot in any spelling of the name, and only when it is a local drive-letter path", () => {
+    expect(systemRoot({ SystemRoot: "D:\\Win" })).toBe("D:\\Win");
+    expect(systemRoot({ systemroot: "E:/Windows" })).toBe("E:/Windows");
+    for (const bad of [undefined, "", "Windows", "C:", ".\\", "\\\\evil\\share", "//evil/share", "\\\\?\\UNC\\evil\\s", "\\\\?\\C:\\Windows", "\\??\\C:\\Windows", "\\Windows"]) {
+      expect(systemRoot(bad === undefined ? {} : { SystemRoot: bad }), String(bad)).toBe("C:\\Windows");
+    }
+  });
+
+  it("builds a System32 program path from it, so taskkill, icacls and cmd share one rule", () => {
+    expect(system32Tool("taskkill.exe", { SystemRoot: "D:\\Win" })).toBe("D:\\Win\\System32\\taskkill.exe");
+    expect(system32Tool("icacls.exe", { SystemRoot: "\\\\evil\\share" })).toBe("C:\\Windows\\System32\\icacls.exe");
+  });
+});
 
 describe("keyStoreTool", () => {
   it("gives Windows PowerShell's full system path, never a bare name", () => {

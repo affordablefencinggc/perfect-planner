@@ -8,6 +8,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import type { AddressInfo } from "node:net";
+import { system32Tool } from "../exec/index";
 import { KeychainKeyProvider, type KeyState, type SecretStore } from "../ledger/index";
 import { bridgeCall } from "../mcp/index";
 import { CSRF_HEADER, createCoreHost, type CoreHost } from "../host/index";
@@ -237,3 +238,12 @@ export function listTree(dir: string): string[] {
 }
 
 export const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/**
+ * How a host started as its own process tree is killed with no cleanup: SIGKILL to the whole process group on
+ * POSIX, `taskkill /pid N /T /F` (the full System32 path, never a bare name) on Windows, which has no process groups.
+ */
+export type HostKill = { kind: "signal"; group: number } | { kind: "taskkill"; file: string; args: string[] };
+export function hostKillPlan(pid: number, platform: NodeJS.Platform = process.platform, env: NodeJS.ProcessEnv = process.env): HostKill {
+  return platform === "win32" ? { kind: "taskkill", file: system32Tool("taskkill.exe", env), args: ["/pid", String(pid), "/T", "/F"] } : { kind: "signal", group: -pid };
+}

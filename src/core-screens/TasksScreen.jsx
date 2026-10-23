@@ -2,7 +2,8 @@ import { useEffect, useState } from "react";
 import { CheckCircleIcon, CopyIcon, GitMergeIcon, PlayIcon, SpinnerGapIcon, WarningCircleIcon } from "@phosphor-icons/react";
 import { copyText } from "../project/connectAgentSetup.js";
 import { describeLaunchFolder } from "../browser/launchFolder.js";
-import { AdvancedOnly, CoreScreen } from "./CoreScreen.jsx";
+import { WorkHeader } from "./WorkHeader.jsx";
+import { CoreScreen } from "./CoreScreen.jsx";
 import { coreGet, useCoreResource } from "./coreApi.js";
 import { CostPanel, GroupBar, RepoBar } from "./TasksRepos.jsx";
 import "./TasksScreen.css";
@@ -170,7 +171,7 @@ function DiffView({ diff }) {
   );
 }
 
-function TaskCard({ task, project, act, busy, notice, dispatchFor, onDispatched, onHideDispatch, showRepo }) {
+function TaskCard({ task, repoRoot, project, act, busy, notice, dispatchFor, onDispatched, onHideDispatch, showRepo }) {
   const [model, setModel] = useState(task.dispatch?.model ?? DEFAULT_WORKER_MODEL);
   const [diff, setDiff] = useState(null);
   const [diffError, setDiffError] = useState(null);
@@ -235,7 +236,19 @@ function TaskCard({ task, project, act, busy, notice, dispatchFor, onDispatched,
         <p className="core-tasks-line"><span className="core-muted">Last check</span> {task.check.passed ? "passed" : "failed"}{task.check.commit ? ` at ${task.check.commit.slice(0, 12)}` : ""}</p>
       )}
       {task.merged && <p className="core-tasks-line"><span className="core-muted">Merged</span> {task.merged.commit?.slice(0, 12)}</p>}
-      <AdvancedOnly as="p">{task.worktree ? `${task.worktree.branch} · ${task.worktree.path} · port ${task.worktree.port}` : "No worktree"}</AdvancedOnly>
+      <WorkHeader
+        facts={[
+          ["Repository", repoRoot, true],
+          ["Branch", task.worktree?.branch],
+          ["Base", task.worktree ? base : null],
+          ["Worker", task.owner],
+          ["Model", task.dispatch?.model],
+          ["Started", task.dispatch?.issuedAt?.replace("T", " ").slice(0, 16)],
+          ["Worktree", task.worktree ? `${task.worktree.path} · port ${task.worktree.port}` : null, true],
+          ["Contract", task.test ? (task.approval ? "Test approved" : "Test proposed") : "No test yet"],
+          ["File scope", task.claims?.length ? `${task.claims.length} claimed` : null],
+        ]}
+      />
 
       {task.waitingFor && task.stage !== "done" && <p className="core-tasks-warn">{task.waitingFor.message}</p>}
       {task.claims?.length > 0 && <p className="core-tasks-line"><span className="core-muted">File claims</span> {task.claims.join(", ")}{task.staleClaims ? ` (${task.staleClaims}, so these can be released)` : ""}</p>}
@@ -494,6 +507,7 @@ export default function TasksScreen() {
               key={task.id}
               task={task}
               showRepo={manyRepos}
+              repoRoot={(data.repos?.find((r) => r.name === (task.repo ?? "main")) ?? data.repo)?.root}
               project={resource.project}
               act={act}
               busy={busy}
