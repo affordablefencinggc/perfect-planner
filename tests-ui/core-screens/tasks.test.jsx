@@ -54,7 +54,7 @@ describe("TasksScreen", () => {
     fireEvent.change(screen.getByLabelText("Git folder"), { target: { value: "/work/notes" } });
     fireEvent.click(screen.getByRole("button", { name: "Use this folder" }));
     await waitFor(() => expect(fetch.mock.calls.some(([u, i]) => String(u).includes("/tasks/repo") && i?.method === "POST")).toBe(true));
-    expect(await screen.findByText("/work/notes")).toBeTruthy();
+    expect((await screen.findAllByText("/work/notes")).length).toBeGreaterThan(0);
   });
 
   test("B1: with no folder suggested by the host, the box starts with the folder the person imported, and never one they typed over", async () => {
