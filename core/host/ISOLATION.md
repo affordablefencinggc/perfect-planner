@@ -163,9 +163,40 @@ channels (the checks above) and not against a test command that goes looking on 
 - The merge candidate's clean install can run package install scripts when a person turns that on
   (`allowInstallScripts`); those would also run uncontained. Off by default; not attacked here.
 
+## Built: opt-in containment on Linux (step B, first cut)
+
+Set `PP_CONTAIN_TESTS=1` before the host starts and every gate test command (approve-test, the pre-merge and
+post-merge runs) runs inside bubblewrap (`core/exec/sandbox.ts`, wired in `testRunnerFor` in `core/host/project.ts`;
+`core/gate` is unchanged). Off by default; there is no Settings toggle yet (the JS size budget has no room).
+
+What it does: the command sees only the OS runtime, the toolchain on its PATH, the worktree (writable), the git
+folder (read-only) and a private scratch folder. No network (its own empty loopback still works). The root is
+read-only. All processes die when the run ends. The first output line says `[contained: bubblewrap, no network,
+writes only in the worktree]`. If the sandbox cannot start, nothing runs and the result is `exitCode: null`
+("Not run: ..."); a bubblewrap error is never reported as a failing test.
+
+Tests: `isolation-exec.test.ts` runs the same hostile test a second time with containment on. Items 4 to 11 and
+13 pass as `it`; item 12 (a different OS user) stays an `it.fails` there, because unprivileged bubblewrap maps the
+test to the same user id (it has no capabilities and no view of the computer, but the id is equal). With
+containment off, the original ten `it.fails` still stand: the default is unchanged. `sandbox.test.ts` covers the
+fail-closed cases, the argument builder and a real contained run (skipped where bubblewrap cannot start).
+
+Limits, said plainly:
+
+- Linux only. On Windows the runner fails closed ("not available on Windows yet"); the AppContainer helper below
+  is still a design. macOS is dropped.
+- The git folder is bound read-only, so `.git/config` (remote URLs, any credentials written there) and every
+  branch's objects are readable by the test. `git add` and `git commit` fail inside it (workers are not contained).
+- No network means `npm install` inside a test fails. An allow-list proxy is later work.
+- Needs `bwrap` and unprivileged user namespaces. Ubuntu 24.04 blocks them by default
+  (`kernel.apparmor_restrict_unprivileged_userns`), so GitHub's ubuntu runners skip the contained tests until CI
+  sets that sysctl (a CI config change, not made here).
+- Memory, process-count and file-size limits are not set.
+- AI workers (Claude Code, Gemini, Codex) are started by the person outside the app and are not contained.
+
 ## Design for step B: an opt-in local sandbox
 
-Design only. Nothing in this section is built.
+Original design, kept for the Windows part. The Linux part above is built; `sandboxedRunner` there became `containedRunner`, which wraps a base runner instead of replacing it.
 
 **Goal.** A test command, and later a worker, can read only its worktree and the read-only toolchain, can write
 only its worktree (and a private scratch folder), and has no network unless a person allows it. Items 4 to 13
