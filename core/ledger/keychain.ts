@@ -175,7 +175,7 @@ class WindowsVault extends ProbedStore {
       "$ErrorActionPreference = 'Stop'",
       "[void][Windows.Security.Credentials.PasswordVault, Windows.Security.Credentials, ContentType = WindowsRuntime]",
       "$vault = New-Object Windows.Security.Credentials.PasswordVault",
-      "function Find-Item { try { @($vault.FindAllByResource($env:PP_RESOURCE)) | Where-Object { $_.UserName -eq $env:PP_ACCOUNT } | Select-Object -First 1 } catch { $null } }",
+      "function Find-Item { try { @($vault.FindAllByResource($env:PP_RESOURCE)) | Where-Object { $_.UserName -eq $env:PP_ACCOUNT } | Select-Object -First 1 } catch { if ($_.Exception.HResult -eq -2147023728) { $null } else { throw } } }",
       body,
     ].join("\n");
     const encoded = Buffer.from(script, "utf16le").toString("base64");

@@ -71,7 +71,13 @@ export function createJevTransport(options: TransportOptions): (request: JevRequ
   const sleep = options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
 
   return async (request) => {
-    const key = await options.keys.read().catch(() => null);
+    let key: Awaited<ReturnType<typeof options.keys.read>>;
+    try {
+      key = await options.keys.read();
+    } catch (error) {
+      // A key store that errors is not a key that was never saved: say so, and send nothing (the review fails closed).
+      return { ok: false, problem: "request_failed", detail: `The key store could not be read, so Jev was not called. ${String((error as Error)?.message ?? error).slice(0, 200)}` };
+    }
     if (!key) return { ok: false, problem: "no_key", detail: "No Jev key is saved. Add your TypeSafe key in Settings." };
     const names = Object.keys(request.questions);
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
