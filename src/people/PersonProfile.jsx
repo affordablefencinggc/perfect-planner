@@ -155,7 +155,7 @@ export function PersonProfile({ profile, onClose, onAssign, onShareLink }) {
   return createPortal(
     <div className="pprofile-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <aside className="pprofile" role="dialog" aria-modal="true" aria-label={`${name} profile`}>
-        <header className="pprofile-hero" style={profile.color ? { "--accent": profile.color } : undefined}>
+        <header className="pprofile-hero">
           <span className="pprofile-avatar">
             <Face profile={profile} />
             {profile.state && <i className={`pprofile-dot is-${profile.state}`} title={profile.state} />}
