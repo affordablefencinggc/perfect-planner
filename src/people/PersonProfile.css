@@ -1,0 +1,33 @@
+.pprofile-backdrop { position: fixed; inset: 0; background: rgba(30, 34, 32, 0.35); z-index: 60; display: flex; justify-content: flex-end; }
+.pprofile { width: min(420px, 100%); height: 100%; overflow-y: auto; background: var(--paper, #faf8f1); border-left: 1px solid var(--line, #d0cdc3); padding: 16px; display: grid; align-content: start; gap: 14px; color: var(--ink, #27302b); font-size: 14px; }
+.pprofile h2 { margin: 0; font-size: 18px; }
+.pprofile h3 { margin: 0 0 6px; font-size: 13px; color: var(--muted, #5f6762); }
+.pprofile p { margin: 0; }
+.pprofile ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.pprofile-head { display: flex; gap: 12px; align-items: center; }
+.pprofile-head > div { flex: 1; min-width: 0; }
+.pprofile-head p, .pprofile-muted, .pprofile small { color: var(--muted, #5f6762); font-size: 12px; }
+.pprofile-avatar { width: 44px; height: 44px; border-radius: 50%; border: 2px solid var(--line-strong, #9aa5ae); display: inline-flex; align-items: center; justify-content: center; font-weight: 700; overflow: hidden; flex: none; background: var(--paper-strong, #fff); }
+.pprofile-avatar img { width: 100%; height: 100%; object-fit: cover; }
+.pprofile-sample { background: var(--amber-soft, #fbefd7); color: var(--amber-text, #8a5a0c); border-radius: 6px; padding: 6px 10px; font-size: 12px; }
+.pprofile-stats { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin: 0; }
+.pprofile-stats div { border: 1px solid var(--line, #d0cdc3); border-radius: 8px; padding: 8px 10px; background: var(--paper-strong, #fff); }
+.pprofile-stats dt { font-size: 12px; color: var(--muted, #5f6762); }
+.pprofile-stats dd { margin: 0; font-size: 22px; font-weight: 700; }
+.pprofile-stats dd.is-bad { color: var(--red, #bd4b45); }
+.pprofile form { display: grid; gap: 8px; }
+.pprofile label { display: grid; gap: 2px; font-size: 12px; color: var(--muted, #5f6762); }
+.pprofile fieldset { border: 0; padding: 0; margin: 0; display: grid; gap: 4px; }
+.pprofile fieldset label { display: flex; gap: 6px; align-items: center; color: var(--ink, #27302b); font-size: 13px; }
+.pprofile input[type="text"], .pprofile input:not([type]) { font: inherit; padding: 5px 8px; border: 1px solid var(--line-strong, #9aa5ae); border-radius: 6px; background: var(--paper-strong, #fff); color: var(--ink, #27302b); }
+.pprofile button { font: inherit; padding: 5px 12px; border-radius: 6px; border: 1px solid var(--line-strong, #9aa5ae); background: var(--paper-strong, #fff); color: var(--ink, #27302b); cursor: pointer; }
+.pprofile button:disabled { opacity: 0.5; cursor: not-allowed; }
+.pprofile-close { margin-left: auto; }
+.pprofile-drop { border: 1.5px dashed var(--line-strong, #9aa5ae); border-radius: 8px; padding: 14px; text-align: center; font-size: 13px; color: var(--muted, #5f6762); }
+.pprofile-drop.is-over { background: var(--green-soft, #dcecdf); }
+.pprofile-pick { display: inline; margin-left: 4px; text-decoration: underline; cursor: pointer; }
+.pprofile-pick input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.pprofile-pick:focus-within { outline: 2px solid var(--blue-focus, #3c6ee8); }
+.pprofile-linkform { grid-template-columns: 1fr auto; }
+.pprofile-error { color: var(--red, #bd4b45); font-size: 12px; }
+.pprofile button:focus-visible, .pprofile input:focus-visible { outline: 2px solid var(--blue-focus, #3c6ee8); outline-offset: 2px; }

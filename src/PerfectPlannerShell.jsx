@@ -112,6 +112,7 @@ const GitInventoryPanel = lazy(() => import("./components/GitInventoryPanel.jsx"
   default: BranchToolsUnavailable,
 })));
 import "./components/GitInventoryPanel.css";
+import { PersonProfile } from "./people/PersonProfile.jsx";
 import {
   readCurrentTruthGeneration,
   TruthGenerationReadError,
@@ -307,6 +308,12 @@ function runtimeEventSeveritiesForShell(level) {
     : "info";
 }
 
+const DEMO_PROFILE_STATS = {
+  Danie: { finished: 14, open: 2, errors: 1, linesDone: 3120, upNext: ["Approve plan P3"], busy: ["2026-10-26", "2026-10-27"] },
+  Mira: { finished: 22, open: 3, errors: 4, linesDone: 6480, upNext: ["Ledger export API"], busy: ["2026-10-26"] },
+  Jon: { finished: 17, open: 1, errors: 2, linesDone: 4210, upNext: ["Review the People tab"], busy: [] },
+};
+
 const ownerMeta = {
   Danie: {
     color: "#4f7d60",
@@ -473,6 +480,7 @@ function TopBar({
   const activeProject = projectContext.activeProject;
   const demoMode = isDemoProject(activeProject);
   const [openMenu, setOpenMenu] = useState(null);
+  const [profileName, setProfileName] = useState(null);
   const agentObservations=useAgentSessionObservations(activeProject);
   const browserInput=useBrowserInputMarkerControl(activeProject);
   const [actionView, setActionView] = useState("menu");
@@ -804,8 +812,7 @@ function TopBar({
                     <button
                       key={person.name}
                       className="demo-sample-row"
-                      disabled
-                      title={`${DEMO_ONLY_REASON}: sample people have no profile pages.`}
+                      onClick={() => { setProfileName(person.name); setOpenMenu(null); }}
                     >
                       <span
                         className="popover-avatar"
@@ -830,6 +837,23 @@ function TopBar({
               </div>
             )}
           </div>
+          {profileName && (() => {
+            const person = people.find((x) => x.name === profileName);
+            const demo = DEMO_PROFILE_STATS[profileName];
+            if (!person || !demo) return null;
+            const meta = ownerMeta[profileName];
+            return (
+              <PersonProfile
+                onClose={() => setProfileName(null)}
+                profile={{
+                  person: profileName.toLowerCase(), name: profileName, role: person.role, state: person.state,
+                  avatar: meta?.profileSrc, color: meta?.color, sample: true, today: "2026-10-26",
+                  busy: demo.busy, upNext: demo.upNext.map((title) => ({ title })),
+                  stats: { finished: demo.finished, open: demo.open, errors: demo.errors, linesDone: demo.linesDone, total: demo.finished + demo.open, openTasks: [] },
+                }}
+              />
+            );
+          })()}
           <button
             className="top-metric-button"
             aria-haspopup="dialog"
@@ -1126,13 +1150,12 @@ function TopBar({
                       </p>
                     ) : (
                       <div className="more-actions-list">
-                        <DemoOnlyReason>sample people have no profile pages.</DemoOnlyReason>
+                        <DemoOnlyReason>sample people show example stats on their profile.</DemoOnlyReason>
                         {people.map((person) => (
                           <button
                             key={person.name}
                             className="demo-sample-row"
-                            disabled
-                            title={`${DEMO_ONLY_REASON}: sample people have no profile pages.`}
+                            onClick={() => { setProfileName(person.name); setOpenMenu(null); }}
                           >
                             <UsersThreeIcon />
                             <span>

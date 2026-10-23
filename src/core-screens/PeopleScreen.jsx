@@ -65,6 +65,7 @@ function PeopleDetails({ data }) {
 
 export default function PeopleScreen() {
   const resource = useCoreResource("/people", { isEmpty: (data) => !data || !data.view });
+  const tasksResource = useCoreResource("/tasks", { isEmpty: () => false });
   const advanced = useAdvanced();
   const [notice, setNotice] = useState(null);
   const data = resource.data;
@@ -129,7 +130,7 @@ export default function PeopleScreen() {
       {notice && (
         <p className={`people-screen-notice is-${notice.kind}`} role={notice.kind === "bad" ? "alert" : "status"}>{notice.text}</p>
       )}
-      {data && <PeoplePanel view={data.view} photos={data.photos ?? {}} me={data.me} starter={data.starter} {...handlers} {...(data.ownerMissing ? { onAddMember: undefined, onShareDoc: undefined } : {})} />}
+      {data && <PeoplePanel view={data.view} photos={data.photos ?? {}} tasks={tasksResource.data?.tasks ?? []} me={data.me} starter={data.starter} {...handlers} {...(data.ownerMissing ? { onAddMember: undefined, onShareDoc: undefined } : {})} />}
       {data && <PeopleDetails data={data} />}
     </CoreScreen>
   );
