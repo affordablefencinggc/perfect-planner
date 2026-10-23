@@ -34,6 +34,9 @@ beforeAll(async () => {
     const repo = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), `pp-${key}-`)));
     git(repo, "init", "-q", "-b", "main");
     git(repo, "config", "commit.gpgsign", "false");
+    // The app records merges under the repo's own identity, and a CI machine has none.
+    git(repo, "config", "user.name", "Scale Test");
+    git(repo, "config", "user.email", "scale@test.invalid");
     write(repo, "README.md", `# ${key}\n`);
     write(repo, ".gitignore", ".perfect-planner/\n");
     git(repo, "add", "-A");
