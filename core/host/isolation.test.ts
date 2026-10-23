@@ -473,11 +473,10 @@ describe("a git folder is used by one project", () => {
     expect(chosenRepoRoot(dir)).toBe(repo);
   });
 
-  // Dev-server ports are handed out per git folder (the registry lives in the repo), so two projects each get
-  // 5200 for their first worker. Whichever dev server starts second cannot have it, and a worker that reaches
-  // for its own port can reach the other project's server. Fixing it needs a host-wide reservation that
-  // survives restarts (a port table in the app's data folder), which touches core/worktrees: left for step B.
-  it.fails("known gap: two projects' workers are given different dev-server ports", async () => {
+  // Ports are leased process-wide, so two open projects never share one. A port a project's registry holds is
+  // leased the first time that project's worktrees are read after a restart; until then another project could be
+  // handed it (the registry lives in each repo, not in a host-wide table).
+  it("two projects' workers are given different dev-server ports", async () => {
     const { ctx, alpha, beta } = await twoProjects();
     const a = await hostCall(ctx.base, "POST", `/tasks/T-1/dispatch?project=${alpha.key}`, {});
     const b = await hostCall(ctx.base, "POST", `/tasks/T-1/dispatch?project=${beta.key}`, {});

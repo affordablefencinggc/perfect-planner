@@ -76,7 +76,7 @@ describe("Jev transport", () => {
     expect(never).not.toHaveBeenCalled();
 
     const status = (code: number) => (async () => new Response("busy", { status: code })) as unknown as typeof fetch;
-    expect(await createJevTransport({ keys: new MemoryKeyProvider(KEY), fetchImpl: status(500) })(q)).toMatchObject({ ok: false, problem: "request_failed", status: 500 });
+    expect(await createJevTransport({ keys: new MemoryKeyProvider(KEY), fetchImpl: status(500), sleep: async () => {} })(q)).toMatchObject({ ok: false, problem: "request_failed", status: 500 });
     const busy = vi.fn(status(429));
     expect(await createJevTransport({ keys: new MemoryKeyProvider(KEY), fetchImpl: busy as unknown as typeof fetch, sleep: async () => {} })(q)).toMatchObject({ ok: false, problem: "request_failed", status: 429 });
     expect(busy).toHaveBeenCalledTimes(2);
@@ -87,7 +87,7 @@ describe("Jev transport", () => {
     const leaky = (async () => {
       throw new Error(`socket closed while sending ${KEY}`);
     }) as unknown as typeof fetch;
-    const failed = await createJevTransport({ keys: new MemoryKeyProvider(KEY), fetchImpl: leaky })(q);
+    const failed = await createJevTransport({ keys: new MemoryKeyProvider(KEY), fetchImpl: leaky, sleep: async () => {} })(q);
     expect(failed).toMatchObject({ ok: false, problem: "request_failed" });
     expect(JSON.stringify(failed)).not.toContain(KEY);
   });
@@ -97,6 +97,79 @@ describe("Jev transport", () => {
     const fetchImpl = (async () => (n++ === 0 ? new Response("", { status: 429 }) : reply({ q: { choice: "a", confidence: 1 } }))) as unknown as typeof fetch;
     const result = await createJevTransport({ keys: new MemoryKeyProvider(KEY), fetchImpl, sleep: async () => {} })({ model: "m", state: {}, questions: { q: { type: "choice", instructions: "", criteria: { a: "" } } } });
     expect(result.ok).toBe(true);
+  });
+});
+
+describe("Jev transport under failure (ledger 02, L5)", () => {
+  const q = { model: "jev-latest", state: {}, questions: { q: { type: "choice" as const, instructions: "?", criteria: { a: "a" } } } };
+  const good = () => reply({ q: { choice: "a", confidence: 1 } });
+  const make = (fetchImpl: unknown, sleeps: number[] = [], maxAttempts = 3) => createJevTransport({ keys: new MemoryKeyProvider(KEY), fetchImpl: fetchImpl as typeof fetch, maxAttempts, sleep: async (ms) => void sleeps.push(ms) });
+
+  it("retries a 503 and a reset connection, then succeeds", async () => {
+    let n = 0;
+    const result = await make(async () => {
+      n++;
+      if (n === 1) return new Response("", { status: 503 });
+      if (n === 2) throw new Error("read ECONNRESET");
+      return good();
+    })(q);
+    expect(result.ok).toBe(true);
+    expect(n).toBe(3);
+  });
+
+  it("stops at the attempt limit on a 503 that never clears, with a plain reason and the status", async () => {
+    const fetchImpl = vi.fn(async () => new Response("boom", { status: 503 }));
+    const result = await make(fetchImpl)(q);
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+    expect(result).toMatchObject({ ok: false, problem: "request_failed", status: 503 });
+    expect((result as { detail: string }).detail).toMatch(/problem \(503\)/);
+  });
+
+  it("does not retry a 500 (the same answer again) and the default is one retry in total", async () => {
+    const five = vi.fn(async () => new Response("boom", { status: 500 }));
+    expect(await make(five)(q)).toMatchObject({ ok: false, status: 500 });
+    expect(five).toHaveBeenCalledTimes(1);
+    const bad = vi.fn(async () => new Response("", { status: 502 }));
+    await createJevTransport({ keys: new MemoryKeyProvider(KEY), fetchImpl: bad as unknown as typeof fetch, sleep: async () => {} })(q);
+    expect(bad).toHaveBeenCalledTimes(2);
+  });
+
+  it("honors Retry-After but caps it", async () => {
+    const sleeps: number[] = [];
+    let n = 0;
+    await make(async () => (n++ < 2 ? new Response("", { status: 429, headers: { "retry-after": n === 1 ? "2" : "3600" } }) : good()), sleeps)(q);
+    expect(sleeps).toEqual([2000, 10_000]);
+  });
+
+  it("says the key was rejected on 401 and 403 and never retries", async () => {
+    for (const code of [401, 403]) {
+      const fetchImpl = vi.fn(async () => new Response("no", { status: code }));
+      const result = await make(fetchImpl)(q);
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+      expect(result).toMatchObject({ ok: false, status: code, detail: `Jev rejected the key (${code}). Check it in Settings.` });
+    }
+  });
+
+  it("does not retry a timeout, and names the wait", async () => {
+    const fetchImpl = vi.fn(async () => {
+      throw Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" });
+    });
+    const result = await createJevTransport({ keys: new MemoryKeyProvider(KEY), fetchImpl: fetchImpl as unknown as typeof fetch, timeoutMs: 5000, sleep: async () => {} })(q);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ ok: false, detail: "Jev did not answer in 5 s." });
+  });
+
+  it("never lets the key into a failure, whatever the server or network echoes", async () => {
+    const result = await make(async () => {
+      throw new Error(`proxy said Bearer ${KEY} is bad`);
+    })(q);
+    expect(JSON.stringify(result)).not.toContain(KEY);
+  });
+
+  it("a malformed 200 is not retried and not an answer", async () => {
+    const fetchImpl = vi.fn(async () => reply({ wrong: { choice: "a", confidence: 1 } }));
+    expect(await make(fetchImpl)(q)).toMatchObject({ ok: false, problem: "malformed" });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 });
 

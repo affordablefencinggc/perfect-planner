@@ -131,7 +131,7 @@ describe("attack 1: replay after the app restarts", () => {
       for (const [name, token] of [["connect", old.connectToken], ["worker", old.workerToken]] as const) {
         for (const url of [bridge, old.connectBridge, old.workerBridge]) {
           const outcome = await code(bridgeCall(url, token)({ tool: "hello", args: { name: "Replayed agent" } }));
-          expect(["UNAUTHORIZED", "UNREACHABLE"], `${name} token at ${url}`).toContain(outcome);
+          expect(["UNAUTHORIZED", "UNAVAILABLE"], `${name} token at ${url}`).toContain(outcome);
         }
       }
       // A worker that had claimed T-1 before the restart cannot touch it now.
