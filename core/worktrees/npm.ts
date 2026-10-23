@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { findExecutable, gitExecutable, isWithin, NO_CWD_SEARCH_ENV, registeredRoots } from "../exec/index";
+import { findExecutable, gitExecutable, isWithin, NO_CWD_SEARCH_ENV, registeredRoots, system32Tool } from "../exec/index";
 
 export class NpmNotFoundError extends Error {}
 
@@ -79,7 +79,7 @@ export function runNpm(args: readonly string[], options: NpmRunOptions): Promise
   const globalConfig = path.join(configDir, "global.npmrc");
   writeFileSync(userConfig, "");
   writeFileSync(globalConfig, "");
-  const shell = process.platform === "win32" ? path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "cmd.exe") : "/bin/sh";
+  const shell = process.platform === "win32" ? system32Tool("cmd.exe") : "/bin/sh";
   let git: string;
   try {
     git = gitExecutable(options.cwd, protect);

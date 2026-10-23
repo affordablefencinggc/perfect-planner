@@ -19,8 +19,10 @@ import { hostKeysOn } from "./helpers";
 
 const env = process.env;
 const die = (): never => {
-  // A negative pid is the whole group: this process and every git or test it started.
-  process.kill(-process.pid, "SIGKILL");
+  // A negative pid is the whole group: this process and every git or test it started. Windows has no process groups
+  // (process.kill(-pid) throws there, and the host would then survive its own crash point), so it dies alone; the
+  // test then ends anything left with taskkill /T /F (helpers.hostKillPlan). Found by the first Windows run of attack 5a.
+  if (process.platform !== "win32") process.kill(-process.pid, "SIGKILL");
   process.kill(process.pid, "SIGKILL");
   return undefined as never;
 };

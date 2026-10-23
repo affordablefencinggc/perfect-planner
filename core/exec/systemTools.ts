@@ -20,6 +20,21 @@ export interface KeyStoreToolOptions {
 const SECRET_TOOL_PATHS = ["/usr/bin/secret-tool", "/bin/secret-tool"];
 
 /**
+ * The Windows system folder. SystemRoot is set by Windows itself, so anything but a local drive-letter
+ * path (empty, relative, network, device) is ignored and C:\\Windows is used. Every system program the
+ * core starts by full path (taskkill, icacls, cmd, PowerShell) takes its folder from here.
+ */
+export function systemRoot(env: NodeJS.ProcessEnv = process.env): string {
+  const value = Object.entries(env).find(([key]) => key.toUpperCase() === "SYSTEMROOT")?.[1];
+  return value && isLocalWindowsPath(value) ? value : "C:\\Windows";
+}
+
+/** Full path of a program in the Windows System32 folder, e.g. system32Tool("taskkill.exe"). */
+export function system32Tool(name: string, env: NodeJS.ProcessEnv = process.env): string {
+  return path.win32.join(systemRoot(env), "System32", name);
+}
+
+/**
  * Absolute path of a key-store helper, never a bare name, so a program called powershell.exe,
  * security or secret-tool in the current folder (Windows searches it first) or early on PATH can
  * never see or swap a key. Windows PowerShell 5.1 and macOS `security` ship at fixed system paths;
@@ -32,10 +47,7 @@ export function keyStoreTool(tool: KeyStoreTool, options: KeyStoreToolOptions = 
   const isFile = options.isFile ?? fileExists;
   if (tool === "powershell") {
     if (platform !== "win32") return null;
-    // SystemRoot is set by Windows itself; anything but a local drive-letter path is ignored.
-    const systemRoot = Object.entries(env).find(([key]) => key.toUpperCase() === "SYSTEMROOT")?.[1];
-    const root = systemRoot && isLocalWindowsPath(systemRoot) ? systemRoot : "C:\\Windows";
-    return path.win32.join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+    return path.win32.join(systemRoot(env), "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
   }
   if (tool === "security") return platform === "darwin" ? "/usr/bin/security" : null;
   if (platform !== "linux") return null;
