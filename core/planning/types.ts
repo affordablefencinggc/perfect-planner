@@ -150,6 +150,8 @@ export interface RoadmapTask {
   node: string;
   change: "fix" | "feature" | "breaking";
   dependsOn: string[];
+  /** Repos this task touches (names from the project's repos). Several make one task per repo, linked as a group. */
+  repos?: string[];
   /** Set on a task a plan template suggested (see templates.ts). Its own block: the contract fields live elsewhere. */
   template?: TemplateTask;
 }

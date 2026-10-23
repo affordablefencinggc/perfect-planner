@@ -15,6 +15,7 @@ import { runGit } from "../worktrees/index";
 import { folderIdentity } from "./folderIdentity";
 import type { CoreProject } from "./project";
 import { chosenRepoRoot } from "./protectedRoots";
+import { extraRepoRoots } from "../repos/index";
 
 const CLAIM_FILE = "project.json";
 const REGISTRY_FILE = "worktrees.json";
@@ -33,7 +34,7 @@ const COMMON_DIR_TTL_MS = 10_000;
 const commonDirs = new Map<string, { dir: string; at: number }>();
 
 /** The git folder shared by every checkout of the repo that contains `from` (the main one and each worktree). */
-async function commonDirOf(from: string): Promise<string | null> {
+export async function commonDirOf(from: string): Promise<string | null> {
   const known = commonDirs.get(from);
   if (known && Date.now() - known.at < COMMON_DIR_TTL_MS) return known.dir;
   const result = await runGit(from, ["rev-parse", "--git-common-dir"]).catch(() => null);
@@ -66,10 +67,14 @@ function readClaim(file: string): Read {
  */
 async function ownerStillUses(ownerFolder: string, dir: string): Promise<boolean> {
   if (!fs.existsSync(ownerFolder)) return false;
-  const probe = chosenRepoRoot(ownerFolder) ?? ownerFolder;
-  if (!fs.existsSync(probe)) return false;
-  const theirs = await commonDirOf(probe);
-  return theirs !== null && folderIdentity(theirs) === folderIdentity(dir);
+  // Every repo the other project works in counts: its first one and the extra ones it registered.
+  const probes = [chosenRepoRoot(ownerFolder) ?? ownerFolder, ...extraRepoRoots(ownerFolder)];
+  for (const probe of probes) {
+    if (!fs.existsSync(probe)) continue;
+    const theirs = await commonDirOf(probe);
+    if (theirs !== null && folderIdentity(theirs) === folderIdentity(dir)) return true;
+  }
+  return false;
 }
 
 /** Task ids registered in the repo (by whichever project started them). */

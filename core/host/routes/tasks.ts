@@ -22,6 +22,7 @@ import { AGENT_SERVER_NAME, agentEntryPath, connectLine, nodeBinary, quoteFor, t
 export { quoteFor };
 import { localPerson, localPersonId } from "./people";
 import { replayRoster } from "../../people/index";
+import { PRIMARY_REPO, readRepos } from "../../repos/index";
 import { protectRepository } from "../project";
 import { chosenRepoRoot, repoRefusal } from "../protectedRoots";
 import { syncJevPolicy } from "./decisions";
@@ -34,6 +35,8 @@ export { chosenRepoRoot, repoRefusal };
 
 const REPO_FILE = "repo.json";
 const MANAGER = "tasks.worktrees";
+const MANAGERS = "tasks.worktrees.all";
+const GROUP_MERGES = "tasks.groupMerges";
 const DISPATCHES = "tasks.dispatches";
 const MODEL = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,79}$/;
 const MAX_DIFF = 200_000;
@@ -63,6 +66,8 @@ interface Dispatch {
 }
 
 export interface RepoState {
+  /** The repo's name in this project: "main" for the first one. */
+  name: string;
   ok: boolean;
   root?: string;
   reason?: string;
@@ -76,7 +81,7 @@ function repoFile(project: CoreProject): string {
   return path.join(project.root, ".perfect-planner", REPO_FILE);
 }
 
-async function gitTop(dir: string): Promise<string | null> {
+export async function gitTop(dir: string): Promise<string | null> {
   // A network path (\\host\share, //host/share) is never a project's git folder, and even looking at it makes Windows
   // talk to that machine (and offer this user's credentials). Refused before anything touches it.
   if (isNetworkPath(dir)) return null;
@@ -88,13 +93,20 @@ async function gitTop(dir: string): Promise<string | null> {
   return fs.realpathSync(top.stdout.trim());
 }
 
-/** The person's chosen repo, else the project folder when it is a git checkout with a commit. */
-export async function repoState(project: CoreProject): Promise<RepoState> {
-  let chosen: string | undefined;
-  try {
-    chosen = (JSON.parse(fs.readFileSync(repoFile(project), "utf8")) as { root?: unknown }).root as string | undefined;
-  } catch {
-    chosen = undefined;
+/** The git folder of a repo of this project: the person's chosen one (else the project folder) for "main", the registered folder for the others. */
+export async function repoState(project: CoreProject, name: string | null = null): Promise<RepoState> {
+  const repoName = name ?? PRIMARY_REPO;
+  const extra = repoName === PRIMARY_REPO ? undefined : readRepos(project.root).repos.find((repo) => repo.name === repoName);
+  if (repoName !== PRIMARY_REPO && !extra) {
+    return { name: repoName, ok: false, reason: `This project has no repo named "${repoName.slice(0, 40)}". Add it in Tasks, or send the task back to the plan.` };
+  }
+  let chosen: string | undefined = extra?.root;
+  if (!extra) {
+    try {
+      chosen = (JSON.parse(fs.readFileSync(repoFile(project), "utf8")) as { root?: unknown }).root as string | undefined;
+    } catch {
+      chosen = undefined;
+    }
   }
   const candidate = typeof chosen === "string" && chosen ? chosen : project.root;
   const top = await gitTop(candidate);
@@ -104,25 +116,28 @@ export async function repoState(project: CoreProject): Promise<RepoState> {
   if (top && !refusal) {
     // One git folder, one project: another project's worktrees must never be handed to this one (core/host/repoClaim.ts).
     const taken = await repoClaimRefusal(project, top, { write: false });
-    return taken ? { ok: false, reason: taken } : { ok: true, root: top };
+    return taken ? { name: repoName, ok: false, reason: taken } : { name: repoName, ok: true, root: top };
   }
   // The host's own folder for this project (<app data>/projects/<key>) is never a suggestion: the person's
   // imported folder is offered by the screen instead.
   const ownData = path.basename(path.dirname(project.root)) === "projects";
-  const suggested = ownData || repoRefusal(project.root) ? undefined : project.root;
-  if (refusal) return { ok: false, reason: refusal, suggested };
+  const suggested = ownData || extra || repoRefusal(project.root) ? undefined : project.root;
+  if (refusal) return { name: repoName, ok: false, reason: refusal, suggested };
   return {
+    name: repoName,
     ok: false,
     suggested,
-    reason: chosen
-      ? `${chosen} is no longer a git repository with a commit. Choose your project's git folder again.`
-      : "Workers need your project's git folder (with at least one commit) to branch from. Choose it below.",
+    reason: extra
+      ? `The folder of repo "${repoName}" (${extra.root}) is no longer a git repository with a commit. Tasks in the other repos are not affected.`
+      : chosen
+        ? `${chosen} is no longer a git repository with a commit. Choose your project's git folder again.`
+        : "Workers need your project's git folder (with at least one commit) to branch from. Choose it below.",
   };
 }
 
-async function requireRepo(project: CoreProject): Promise<string> {
-  const repo = await repoState(project);
-  if (!repo.ok || !repo.root) throw new HttpError(409, "NO_REPO", repo.reason ?? "Choose your project's git folder first.");
+async function requireRepo(project: CoreProject, name: string | null = null): Promise<string> {
+  const repo = await repoState(project, name);
+  if (!repo.ok || !repo.root) throw new HttpError(409, repo.name === PRIMARY_REPO ? "NO_REPO" : "REPO_MISSING", repo.reason ?? "Choose your project's git folder first.");
   const taken = await repoClaimRefusal(project, repo.root, { write: true });
   if (taken) throw new HttpError(409, "REPO_IN_USE", taken);
   project.protectRoots([repo.root]);
@@ -135,13 +150,26 @@ function parallelCap(): number {
   return Number.isInteger(wanted) && wanted >= 1 && wanted <= 50 ? wanted : 10;
 }
 
-function manager(project: CoreProject, root: string): WorktreeManager {
-  let current = project.state.get(MANAGER) as WorktreeManager | undefined;
-  if (!current || current.repoRoot !== fs.realpathSync(root)) {
+/** The repo a task belongs to, from its signed task.created (null: the project's first repo). */
+function repoOfLabel(project: CoreProject, label: string): string | null {
+  return project.service.board().get(label.replace(/\.a\d+$/, ""))?.repo ?? null;
+}
+
+function manager(project: CoreProject, root: string, name: string | null = null): WorktreeManager {
+  const real = fs.realpathSync(root);
+  let all = project.state.get(MANAGERS) as Map<string, WorktreeManager> | undefined;
+  if (!all) {
+    all = new Map();
+    project.state.set(MANAGERS, all);
+  }
+  let current = all.get(real);
+  if (!current) {
     current = new WorktreeManager({ repoRoot: root, ledger: project.ledger, maxParallel: parallelCap() });
-    project.state.set(MANAGER, current);
+    all.set(real, current);
     project.protectRoots([current.repoRoot, current.worktreeRoot]);
   }
+  // The first repo's manager stays where older readers (the connect roots, tests) look for it.
+  if (!name || name === PRIMARY_REPO) project.state.set(MANAGER, current);
   return current;
 }
 
@@ -156,12 +184,11 @@ function dispatches(project: CoreProject): Map<string, Dispatch> {
 
 /** The worktrees the git watcher should read, or the plain reason it cannot see any. Errors are not swallowed: an unreadable list is not an empty one. */
 export async function worktreesForWatcher(project: CoreProject): Promise<{ repo: RepoState; list: WorktreeInfo[] }> {
-  const repo = await repoState(project);
-  if (!repo.ok || !repo.root) return { repo, list: [] };
+  const { repos, worktrees } = await allRepos(project);
+  const repo = repos[0]!;
   // A done task's folder is about to be removed (or waits for its clean-up): a git process of ours inside it would keep Windows from removing it.
   const board = project.service.board();
-  const list = (await manager(project, repo.root).list()).filter((tree) => board.get(tree.taskId.replace(/\.a\d+$/, ""))?.status !== "done");
-  return { repo, list };
+  return { repo, list: worktrees.filter((tree) => board.get(tree.taskId.replace(/\.a\d+$/, ""))?.status !== "done") };
 }
 
 /**
@@ -219,6 +246,8 @@ function viewTask(project: CoreProject, task: TaskView, worktrees: WorktreeInfo[
   return {
     id: task.id,
     label,
+    repo: task.repo ?? PRIMARY_REPO,
+    group: task.group,
     title: task.title,
     status: task.status,
     owner: task.owner,
@@ -251,16 +280,32 @@ function viewTask(project: CoreProject, task: TaskView, worktrees: WorktreeInfo[
 
 async function listWorktrees(project: CoreProject, repo: RepoState): Promise<WorktreeInfo[]> {
   if (!repo.ok || !repo.root) return [];
-  return manager(project, repo.root).list().catch(() => []);
+  const list = await manager(project, repo.root, repo.name).list().catch(() => []);
+  // Only other repos are tagged: the first repo's worktrees look exactly as they always did.
+  return repo.name === PRIMARY_REPO ? list : list.map((info) => ({ ...info, repo: repo.name }));
 }
 
-async function overview(project: CoreProject) {
-  const repo = await repoState(project);
-  const worktrees = await listWorktrees(project, repo);
+/** Every repo of the project (the first one, then the extra ones) with the worktrees in each. A repo that cannot be read has its reason and no worktrees. */
+async function allRepos(project: CoreProject): Promise<{ repos: RepoState[]; worktrees: WorktreeInfo[] }> {
+  const names = [PRIMARY_REPO, ...readRepos(project.root).repos.map((repo) => repo.name)];
+  const repos = await Promise.all(names.map((name) => repoState(project, name)));
+  const lists = await Promise.all(repos.map((repo) => listWorktrees(project, repo)));
+  return { repos, worktrees: lists.flat() };
+}
+
+export async function overview(project: CoreProject) {
+  const { repos, worktrees } = await allRepos(project);
   const board = project.service.board();
   const assignments = replayRoster(project.entries(), project.ledger.owner).assignments;
   const tasks = [...board.values()].map((task) => viewTask(project, task, worktrees, board, assignments));
-  return { repo, tasks };
+  return { repo: repos[0]!, repos: repos.map((repo) => ({ ...repo, worktrees: worktrees.filter((w) => (w.repo ?? PRIMARY_REPO) === repo.name).length })), tasks, groups: taskGroups(tasks) };
+}
+
+/** Tasks split from one plan task over several repos, in task order, with whether every part is ready to merge. */
+function taskGroups(tasks: { id: string; group: string | null; stage: TaskStage; repo: string }[]) {
+  const groups = new Map<string, typeof tasks>();
+  for (const task of tasks) if (task.group) groups.set(task.group, [...(groups.get(task.group) ?? []), task]);
+  return [...groups].filter(([, members]) => members.length > 1).map(([group, members]) => ({ group, tasks: members.map((m) => m.id), ready: members.every((m) => m.stage === "ready-to-merge"), done: members.every((m) => m.stage === "done") }));
 }
 
 function findTask(project: CoreProject, id: string): TaskView {
@@ -303,8 +348,9 @@ function refuse(result: { ok: boolean; reason?: string }): void {
 }
 
 async function worktreeFor(project: CoreProject, label: string): Promise<WorktreeInfo> {
-  const root = await requireRepo(project);
-  const tree = await manager(project, root).get(label);
+  const name = repoOfLabel(project, label);
+  const root = await requireRepo(project, name);
+  const tree = await manager(project, root, name).get(label);
   if (!tree) throw new HttpError(409, "NO_WORKTREE", `${label} has no worktree yet. Start a worker on it first.`);
   return tree;
 }
@@ -366,7 +412,8 @@ function bodyOf(raw: unknown): Record<string, unknown> {
 
 async function dispatch(project: CoreProject, host: CoreHost, id: string, body: Record<string, unknown>) {
   if (!host.bridgeEnabled) throw new HttpError(503, "BRIDGE_OFF", "Agent connections are turned off for this app, so a worker has nothing to connect to.");
-  const root = await requireRepo(project);
+  const repoName = repoOfLabel(project, id);
+  const root = await requireRepo(project, repoName);
   const task = findTask(project, id);
   if (task.status === "done") throw new HttpError(409, "DONE", `${id} is already done.`);
   // A task whose dependencies are not done yet does not start: say which ones, in plain words.
@@ -375,7 +422,7 @@ async function dispatch(project: CoreProject, host: CoreHost, id: string, body: 
   const model = typeof body.model === "string" && body.model.trim() ? body.model.trim() : undefined;
   if (model !== undefined && !MODEL.test(model)) throw new HttpError(400, "INVALID", "Name the worker's model in letters, digits and . _ : / - (for example claude-sonnet-4).");
   const label = attemptLabel(task);
-  const worktrees = manager(project, root);
+  const worktrees = manager(project, root, repoName);
   let tree = await worktrees.get(label);
   if (!tree) {
     try {
@@ -429,14 +476,15 @@ const UPDATE_CODES: Record<string, string> = { dirty: "DIRTY_WORKTREE", conflict
  * is the person's signed entry on the ledger.
  */
 async function updateFromMain(project: CoreProject, id: string) {
-  const root = await requireRepo(project);
+  const repoName = repoOfLabel(project, id);
+  const root = await requireRepo(project, repoName);
   const task = findTask(project, id);
   const label = attemptLabel(task);
   if (task.status === "done") throw new HttpError(409, "DONE", `${label} is already done.`);
   await worktreeFor(project, label);
   let result;
   try {
-    result = await manager(project, root).updateFromMain(label);
+    result = await manager(project, root, repoName).updateFromMain(label);
   } catch (error) {
     if (error instanceof WorktreeError) throw new HttpError(409, "NO_WORKTREE", error.message);
     throw error;
@@ -479,8 +527,9 @@ async function updateFromMain(project: CoreProject, id: string) {
  */
 async function releaseFileClaims(project: CoreProject, id: string, body: Record<string, unknown>) {
   if (!/^T-\d+(?:\.a\d+)?$/.test(id)) throw new HttpError(400, "INVALID", `"${id}" is not a task number like T-14.`);
-  const root = await requireRepo(project);
-  const tree = await manager(project, root).get(id);
+  const repoName = repoOfLabel(project, id);
+  const root = await requireRepo(project, repoName);
+  const tree = await manager(project, root, repoName).get(id);
   if (!tree) throw new HttpError(409, "NO_WORKTREE", `${id} has no worktree, so it holds no file claims.`);
   if (!tree.claims.length) return { released: [], message: `${id} holds no file claims.`, ...(await overview(project)) };
   const stale = staleClaimReason(project, tree, project.service.board());
@@ -504,7 +553,7 @@ async function releaseFileClaims(project: CoreProject, id: string, body: Record<
     refs: [],
     data: { claimsReleased: files, stale, by: "person" },
   });
-  const done = await manager(project, root).releaseClaims(id, files);
+  const done = await manager(project, root, repoName).releaseClaims(id, files);
   return { released: done.released, remaining: done.remaining, stale, message: `Released ${done.released.join(", ")}. Other tasks can claim ${done.released.length === 1 ? "it" : "them"} now.`, ...(await overview(project)) };
 }
 
@@ -762,31 +811,82 @@ export function registerTaskRoutes(router: Router): void {
    * into a throwaway candidate, reruns the test there, and only on a pass moves the branch and writes done.
    */
   router.post("/tasks/:id/merge", async ({ project, params, body }) => {
-    const task = findTask(project, params.id!);
-    const label = attemptLabel(task);
-    const root = await requireRepo(project);
-    const tree = await worktreeFor(project, label);
-    const approved = deriveState(project.entries(), label).diffApproval?.commit;
-    if (!approved || !sameCommit(bodyOf(body).commit, approved)) throw stale("Merge the commit whose diff you approved; this screen is out of date.");
-    // The diff approval that counts here is the person's own, and with a Jev key saved Jev read this exact commit too.
-    if (!deriveState(project.entries(), label).diffApproval?.byPerson) throw stale("You have not approved this diff yourself yet. Press Approve diff first.");
-    if ((await syncJevPolicy(project, { fresh: true })).connected && !jevApprovedDiff(project.entries(), label, approved)) {
-      throw new HttpError(409, "JEV_NOT_REVIEWED", "Jev has not read this change yet. Press Approve diff so Jev reads it, then merge.");
-    }
-    // Git cannot write the merge commit without a name and email; say so plainly, before anything is signed.
-    const missingIdentity = await gitIdentityRefusal(root);
-    if (missingIdentity) throw new HttpError(409, "GIT_IDENTITY_MISSING", missingIdentity);
-    // The click is the person's merge approval: signed with their key, in their own window's request,
-    // for exactly this commit. The gate refuses to merge without it (never reachable from an agent).
-    const state = deriveState(project.entries(), label);
-    if (!state.mergeApproval || state.mergeApproval.commit !== approved) refuse(project.service.gate.approveMerge(label, localPerson(project), approved));
-    const merged = await project.service.gate.mergeAndVerify(label, { repoRoot: root, branch: tree.branch, integrationBranch: tree.baseRef, actor: localPerson(project) });
-    if (!merged.ok) throw new HttpError(409, "REFUSED", withOutputTail(merged.reason, merged.output));
-    revokeWorker(project, label);
-    dispatches(project).delete(label);
-    // A watcher pass that began before the task was done may still have git running in its folder, which Windows will not remove.
-    await project.watch?.tick();
-    const removed = await manager(project, root).remove(label, WORKTREES_ACTOR).catch((error: Error) => ({ error: error.message }));
-    return { merged: true, commit: merged.mergeCommit, into: tree.baseRef, removed, ...(await overview(project)) };
+    const merged = await mergeTask(project, params.id!, bodyOf(body).commit);
+    return { ...merged, ...(await overview(project)) };
   });
+
+  /**
+   * POST /tasks/groups/:group/merge { commits: { "T-5": sha, ... } }: merges the tasks one plan task was split
+   * into over several repos, in task order. Nothing is merged unless every part is ready on the commit the
+   * person approved. Git cannot make two repos atomic: if a later part is refused, the earlier ones stay
+   * merged and the answer says which.
+   */
+  router.post("/tasks/groups/:group/merge", async ({ project, params, body }) => {
+    const group = params.group!;
+    const board = project.service.board();
+    const members = [...board.values()].filter((task) => task.group === group).sort((a, b) => Number(a.id.slice(2)) - Number(b.id.slice(2)));
+    if (members.length < 2) throw new HttpError(404, "NOT_FOUND", "That is not a group of tasks over several repos.");
+    const running = (project.state.get(GROUP_MERGES) as Set<string> | undefined) ?? new Set<string>();
+    project.state.set(GROUP_MERGES, running);
+    if (running.has(group)) throw new HttpError(409, "BUSY", "This group is being merged right now. Wait for it to finish.");
+    const commits = bodyOf(body).commits;
+    const given = commits && typeof commits === "object" && !Array.isArray(commits) ? (commits as Record<string, unknown>) : {};
+    running.add(group);
+    try {
+      const left = members.filter((task) => task.status !== "done");
+      if (!left.length) return { merged: [], message: "Every part of this group is already merged.", ...(await overview(project)) };
+      // All or nothing to start: one part that is not ready means no part is merged.
+      for (const task of left) {
+        const label = attemptLabel(task);
+        const gate = deriveState(project.entries(), label);
+        if (stageOf(task, gate) !== "ready-to-merge" || !sameCommit(given[task.id], gate.diffApproval?.commit)) {
+          throw new HttpError(409, "GROUP_NOT_READY", `${label} (repo ${task.repo ?? PRIMARY_REPO}) is not ready to merge on the commit you approved, so nothing in this group was merged. Finish it, then merge the group again.`);
+        }
+      }
+      const done: { task: string; repo: string; commit: string }[] = [];
+      for (const task of left) {
+        try {
+          const merged = await mergeTask(project, task.id, given[task.id]);
+          done.push({ task: task.id, repo: task.repo ?? PRIMARY_REPO, commit: merged.commit });
+        } catch (error) {
+          const why = error instanceof HttpError ? error.message : (error as Error).message;
+          const rest = left.slice(done.length).map((t) => t.id);
+          throw new HttpError(409, "GROUP_PARTLY_MERGED", `${done.length ? `Merged ${done.map((d) => `${d.task} (${d.repo})`).join(", ")}. ` : "Nothing was merged. "}${rest[0]} (repo ${task.repo ?? PRIMARY_REPO}) was refused: ${why}${rest.length > 1 ? ` ${rest.slice(1).join(", ")} were not tried.` : ""} Git cannot undo a merge in another repo, so fix ${rest[0]} and merge the rest on its own.`);
+        }
+      }
+      return { merged: done, ...(await overview(project)) };
+    } finally {
+      running.delete(group);
+    }
+  });
+}
+
+async function mergeTask(project: CoreProject, id: string, commit: unknown) {
+  const task = findTask(project, id);
+  const label = attemptLabel(task);
+  const repoName = task.repo;
+  const root = await requireRepo(project, repoName);
+  const tree = await worktreeFor(project, label);
+  const approved = deriveState(project.entries(), label).diffApproval?.commit;
+  if (!approved || !sameCommit(commit, approved)) throw stale("Merge the commit whose diff you approved; this screen is out of date.");
+  // The diff approval that counts here is the person's own, and with a Jev key saved Jev read this exact commit too.
+  if (!deriveState(project.entries(), label).diffApproval?.byPerson) throw stale("You have not approved this diff yourself yet. Press Approve diff first.");
+  if ((await syncJevPolicy(project, { fresh: true })).connected && !jevApprovedDiff(project.entries(), label, approved)) {
+    throw new HttpError(409, "JEV_NOT_REVIEWED", "Jev has not read this change yet. Press Approve diff so Jev reads it, then merge.");
+  }
+  // Git cannot write the merge commit without a name and email; say so plainly, before anything is signed.
+  const missingIdentity = await gitIdentityRefusal(root);
+  if (missingIdentity) throw new HttpError(409, "GIT_IDENTITY_MISSING", missingIdentity);
+  // The click is the person's merge approval: signed with their key, in their own window's request,
+  // for exactly this commit. The gate refuses to merge without it (never reachable from an agent).
+  const state = deriveState(project.entries(), label);
+  if (!state.mergeApproval || state.mergeApproval.commit !== approved) refuse(project.service.gate.approveMerge(label, localPerson(project), approved));
+  const merged = await project.service.gate.mergeAndVerify(label, { repoRoot: root, branch: tree.branch, integrationBranch: tree.baseRef, actor: localPerson(project) });
+  if (!merged.ok) throw new HttpError(409, "REFUSED", withOutputTail(merged.reason, merged.output));
+  revokeWorker(project, label);
+  dispatches(project).delete(label);
+  // A watcher pass that began before the task was done may still have git running in its folder, which Windows will not remove.
+  await project.watch?.tick();
+  const removed = await manager(project, root, repoName).remove(label, WORKTREES_ACTOR).catch((error: Error) => ({ error: error.message }));
+  return { merged: true as const, commit: merged.mergeCommit as string, into: tree.baseRef, removed };
 }
