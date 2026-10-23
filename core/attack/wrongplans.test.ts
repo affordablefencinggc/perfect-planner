@@ -54,7 +54,7 @@ describe("8. wrong plans", () => {
   });
 
   // FOUND (F4): exit codes other than 126/127 count as "the test ran and failed", so npm's ENOENT (254) is a fails-first proof.
-  it.fails("a test command that fails because the tooling is missing is not a fails-first proof (KNOWN HOLE, F4)", async () => {
+  it("a test command that fails because the tooling is missing is not a fails-first proof (F4, fixed in core/gate/run.ts)", async () => {
     const w = await worker("No tooling");
     write(w.d.worktree, "tests/real.mjs", "process.exit(1);\n");
     git(w.d.worktree, "add", "-A");
@@ -68,7 +68,7 @@ describe("8. wrong plans", () => {
     expect(failsFirst, "'npm test' failing for lack of a package.json counted as fails-first").toBe(false);
   }, 60_000);
 
-  it.fails("...and the worker then makes it pass by adding a package.json whose test script is `exit 0` (KNOWN HOLE, F4)", async () => {
+  it("...so the worker cannot then pass it by adding a package.json whose test script is `exit 0` (F4)", async () => {
     const w = await worker("Tooling trick");
     write(w.d.worktree, "tests/real.mjs", "process.exit(1);\n");
     git(w.d.worktree, "add", "-A");
@@ -76,13 +76,14 @@ describe("8. wrong plans", () => {
     await w.call({ tool: "propose_test", args: { task: w.id, command: "npm test", files: ["tests/real.mjs"] }, agent: w.agent });
     const entry = ((await win.call("GET", `/tasks${q}`)).body.result.tasks as any[]).find((t) => t.id === w.id).test.entry;
     await win.call("POST", `/tasks/${w.id}/approve-test${q}`, { test: entry });
-    await w.call({ tool: "claim_task", args: { task: w.id }, agent: w.agent });
-    write(w.d.worktree, "package.json", '{"name":"x","scripts":{"test":"exit 0"}}\n');
-    git(w.d.worktree, "add", "-A");
-    git(w.d.worktree, "commit", "-q", "-m", "nothing to see");
-    const checked = await win.call("POST", `/tasks/${w.id}/check${q}`);
-    console.log(`wrongplans tooling trick: check passed=${checked.body.result?.passed} ${String(checked.body.result?.output ?? checked.body.message ?? "").slice(0, 120)}`);
-    expect(checked.body.result?.passed, "an empty test script passed the check").not.toBe(true);
+    // The missing package.json is inconclusive, not a failure on today's code, so the worker cannot claim and build the empty script.
+    let claimed = true;
+    try {
+      await w.call({ tool: "claim_task", args: { task: w.id }, agent: w.agent });
+    } catch {
+      claimed = false;
+    }
+    expect(claimed, "a worker claimed a task whose test never ran").toBe(false);
   }, 60_000);
 
   it("a test that passes the moment any file appears (checks nothing) is accepted only if it failed first, and only the pinned file is protected", async () => {
