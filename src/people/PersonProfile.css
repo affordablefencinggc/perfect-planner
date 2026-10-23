@@ -1,31 +1,38 @@
-.pprofile-backdrop{position:fixed;inset:0;background:#1e222061;z-index:200;display:flex;justify-content:flex-end}
-.pprofile{--accent:var(--green,#397a52);width:min(760px,100%);height:100%;overflow-y:auto;background:var(--paper,#faf8f1);border-left:1px solid var(--line,#d0cdc3);padding:0 18px 80px;display:grid;align-content:start;gap:14px;color:var(--ink,#27302b);font-size:14px}
+.pprofile-backdrop{position:fixed;inset:0;background:#1e222061;z-index:200;display:flex;justify-content:flex-end;animation:pp-fade .25s both}
+.pprofile{--accent:var(--green,#397a52);width:min(760px,100%);height:100%;overflow-y:auto;background:var(--paper,#faf8f1);border-left:1px solid var(--line,#d0cdc3);padding:0 18px 80px;display:grid;align-content:start;gap:14px;color:var(--ink,#27302b);font-size:14px;animation:pp-slide .45s cubic-bezier(.2,.8,.2,1) both}
 .pprofile h2{margin:0;font-size:22px}
 .pprofile h3{margin:0 0 8px;font-size:12px;text-transform:uppercase;color:var(--muted,#5f6762)}
 .pprofile h3 small{text-transform:none;margin-left:6px}
 .pprofile p{margin:0}
 .pprofile ul,.pprofile ol{list-style:none;margin:0;padding:0;display:grid;gap:6px}
 .pprofile small,.pprofile-muted{color:var(--muted,#5f6762);font-size:12px}
-.pprofile-hero{position:sticky;top:0;z-index:2;margin:0 -18px;padding:16px 18px;display:flex;gap:16px;align-items:flex-start;background:linear-gradient(135deg,color-mix(in srgb,var(--accent) 16%,var(--paper,#faf8f1)),var(--paper,#faf8f1) 70%);border-bottom:1px solid var(--line,#d0cdc3)}
+.pprofile-hero{position:sticky;top:0;z-index:2;margin:0 -18px;padding:18px;display:flex;gap:18px;align-items:center;background:linear-gradient(rgba(58,64,66,.94),rgba(43,49,51,.91));border-bottom:1px solid #1f2527;color:#f4f6f5;box-shadow:0 6px 16px #0003}
+.pprofile-hero h2{color:#f4f6f5}
 .pprofile-who{flex:1;min-width:0;display:grid;gap:4px}
-.pprofile-who p{color:var(--muted,#5f6762)}
-.pprofile-who .pprofile-current{color:var(--ink,#27302b)}
-.pprofile-current b{font-size:11px;text-transform:uppercase;margin-right:6px;color:var(--accent)}
-.pprofile-avatar{position:relative;width:76px;height:76px;border-radius:50%;border:3px solid var(--accent);display:inline-flex;align-items:center;justify-content:center;font-size:30px;font-weight:700;background:#fff;flex:none}
-.pprofile-avatar img{width:100%;height:100%;object-fit:cover;border-radius:50%}
-.pprofile-dot{position:absolute;right:2px;bottom:2px;width:14px;height:14px;border-radius:50%;border:2px solid var(--paper,#faf8f1);background:#8a918c}
+.pprofile-hero .pprofile-who p,.pprofile-hero small{color:#c4cbc8}
+.pprofile-hero .pprofile-who .pprofile-current{color:#f4f6f5}
+.pprofile-current b{font-size:11px;text-transform:uppercase;margin-right:6px;color:#8fd0a5}
+.pprofile-avatar{position:relative;width:92px;height:92px;border-radius:50%;border:3px solid var(--accent);box-shadow:0 0 0 4px #ffffff1f,0 8px 20px #0006;display:inline-flex;align-items:flex-end;justify-content:center;color:#fff;background:linear-gradient(160deg,var(--accent),#2b3133);flex:none;overflow:hidden;animation:pp-pop .6s .15s cubic-bezier(.3,1.5,.5,1) both}
+.pprofile-avatar img{width:100%;height:100%;object-fit:cover}
+.pprofile-avatar svg{width:100%;height:100%}
+.pprofile-dot{position:absolute;right:9px;bottom:9px;width:16px;height:16px;border-radius:50%;border:2px solid #2b3133;background:#8a918c}
 .pprofile-dot.is-online,.pprofile-dot.is-working{background:#3f9a5f}
 .pprofile-dot.is-reviewing{background:#d29a2a}
-.pprofile-load{height:8px;border-radius:9px;background:color-mix(in srgb,var(--accent) 15%,#fff);overflow:hidden;margin-top:4px}
-.pprofile-load span{display:block;height:100%;background:var(--accent)}
+.pprofile-load{height:8px;border-radius:9px;background:#ffffff26;overflow:hidden;margin-top:4px}
+.pprofile-load span{display:block;height:100%;background:linear-gradient(90deg,var(--accent),#8fd0a5);transform-origin:left;animation:pp-grow .9s .35s cubic-bezier(.2,.8,.2,1) both}
+.pprofile-hero .pprofile-close{background:#ffffff14;color:#f4f6f5;border-color:#ffffff40;align-self:flex-start}
 .pprofile-sample{background:var(--amber-soft,#fbefd7);color:var(--amber-text,#8a5a0c);border-radius:6px;padding:6px 10px;font-size:12px}
 .pprofile-tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:0}
 .pprofile-tile{border:1px solid var(--line,#d0cdc3);border-radius:10px;padding:10px;background:#fff;display:grid;gap:2px}
 .pprofile-tile dt{font-size:11px;color:var(--muted,#5f6762)}
 .pprofile-tile dd{margin:0;font-size:24px;font-weight:700}
 .pprofile-tile dd.is-bad,.pprofile-error{color:var(--red,#bd4b45)}
-.pprofile-spark{width:100%;height:26px;stroke:var(--accent)}
+.pprofile-spark{width:100%;height:30px;stroke:var(--accent);overflow:visible}
 .pprofile-spark.is-bad{stroke:var(--red,#bd4b45)}
+.pprofile-line{stroke-dasharray:1;animation:pp-draw 1.3s calc(.4s + var(--i)*.12s) cubic-bezier(.4,0,.2,1) both}
+.pprofile-area{fill:currentColor;stroke:none;opacity:0;color:var(--accent);animation:pp-fade .8s calc(1s + var(--i)*.12s) forwards}
+.pprofile-spark.is-bad .pprofile-area{color:var(--red,#bd4b45)}
+.pprofile-area{fill-opacity:.12}
 .pprofile-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
 .pprofile-grid>section:only-child{grid-column:1/-1}
 .pprofile-cards li{display:flex;gap:8px;align-items:center;justify-content:space-between;border:1px solid var(--line,#d0cdc3);border-left:3px solid var(--accent);border-radius:8px;padding:7px 10px;background:#fff;overflow-wrap:anywhere}
@@ -55,4 +62,13 @@
 .pprofile-pick input{position:absolute;width:1px;height:1px;opacity:0}
 .pprofile .pprofile-linkform{grid-template-columns:1fr auto;margin:8px 0}
 .pprofile :focus-visible,.pprofile-pick:focus-within{outline:2px solid var(--blue-focus,#3c6ee8);outline-offset:2px}
+.pprofile>section,.pprofile>.pprofile-grid,.pprofile>.pprofile-sample,.pprofile-tile{animation:pp-up .5s calc(.2s + var(--i,0)*.07s) cubic-bezier(.2,.8,.2,1) both}
+.pprofile-cal .pprofile-day{animation:pp-pop .4s calc(.7s + var(--d,0)*.03s) both}
+@keyframes pp-slide{from{transform:translateX(100%)}}
+@keyframes pp-fade{from{opacity:0}to{opacity:1}}
+@keyframes pp-up{from{opacity:0;transform:translateY(14px)}}
+@keyframes pp-pop{from{opacity:0;transform:scale(.8)}}
+@keyframes pp-grow{from{transform:scaleX(0)}}
+@keyframes pp-draw{from{stroke-dashoffset:1}to{stroke-dashoffset:0}}
+@media(prefers-reduced-motion:reduce){.pprofile,.pprofile *,.pprofile-backdrop{animation:none!important}}
 @media(max-width:640px){.pprofile-tiles,.pprofile-grid{grid-template-columns:1fr 1fr}.pprofile-cal{grid-template-columns:repeat(5,1fr)}}

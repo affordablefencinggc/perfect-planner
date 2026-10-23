@@ -8,20 +8,49 @@ const contexts = new Map();
 const loadContext = (person) => contexts.get(person) ?? { files: [], links: [] };
 const saveContext = (person, value) => contexts.set(person, value);
 
-function Spark({ values, bad }) {
-  if (!values?.length) return null;
-  const max = Math.max(...values, 1);
-  const pts = values.map((v, i) => `${(i / Math.max(values.length - 1, 1)) * 100},${28 - (v / max) * 24}`).join(" ");
-  return <svg className={`pprofile-spark${bad ? " is-bad" : ""}`} viewBox="0 0 100 30" preserveAspectRatio="none" aria-hidden="true"><polyline points={pts} fill="none" strokeWidth="2" vectorEffect="non-scaling-stroke" /></svg>;
+function useCountUp(target) {
+  const n = typeof target === "number" ? target : Number.NaN;
+  const [v, setV] = useState(Number.isNaN(n) ? 0 : 0);
+  useEffect(() => {
+    if (Number.isNaN(n)) return undefined;
+    if (globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches) { setV(n); return undefined; }
+    let raf = 0; const t0 = performance.now();
+    const tick = (t) => { const k = Math.min(1, (t - t0 - 250) / 800); setV(Math.round(n * (1 - (1 - Math.max(0, k)) ** 3))); if (k < 1) raf = requestAnimationFrame(tick); };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [n]);
+  return Number.isNaN(n) ? target : v;
 }
 
-function Tile({ label, value, trend, bad }) {
+function Spark({ values, bad, i }) {
+  if (!values?.length) return null;
+  const max = Math.max(...values, 1);
+  const pts = values.map((v, k) => [(k / Math.max(values.length - 1, 1)) * 100, 28 - (v / max) * 24]);
+  const line = pts.map(([x, y], k) => `${k ? "L" : "M"}${x.toFixed(1)} ${y.toFixed(1)}`).join("");
   return (
-    <div className="pprofile-tile">
+    <svg className={`pprofile-spark${bad ? " is-bad" : ""}`} style={{ "--i": i }} viewBox="0 0 100 30" preserveAspectRatio="none" aria-hidden="true">
+      <path className="pprofile-area" d={`${line}L100 30L0 30Z`} />
+      <path className="pprofile-line" d={line} pathLength="1" fill="none" strokeWidth="2" vectorEffect="non-scaling-stroke" />
+    </svg>
+  );
+}
+
+function Tile({ label, value, trend, bad, i }) {
+  const shown = useCountUp(typeof value === "number" ? value : Number.NaN);
+  const text = typeof value === "number" ? shown.toLocaleString("en-AU") : value;
+  return (
+    <div className="pprofile-tile" style={{ "--i": i }}>
       <dt>{label}</dt>
-      <dd className={bad && value ? "is-bad" : ""}>{value}</dd>
-      <Spark values={trend} bad={bad} />
+      <dd className={bad && value ? "is-bad" : ""}>{text}</dd>
+      <Spark values={trend} bad={bad} i={i} />
     </div>
+  );
+}
+
+function Face({ profile }) {
+  if (profile.avatar) return <img src={profile.avatar} alt="" />;
+  return (
+    <svg viewBox="0 0 64 64" aria-hidden="true"><circle cx="32" cy="24" r="12" fill="currentColor" opacity=".9" /><path d="M8 64c2-16 12-24 24-24s22 8 24 24z" fill="currentColor" opacity=".9" /></svg>
   );
 }
 
@@ -104,7 +133,7 @@ export function PersonProfile({ profile, onClose, onAssign, onShareLink }) {
       <aside className="pprofile" role="dialog" aria-modal="true" aria-label={`${name} profile`}>
         <header className="pprofile-hero" style={profile.color ? { "--accent": profile.color } : undefined}>
           <span className="pprofile-avatar">
-            {profile.avatar ? <img src={profile.avatar} alt="" /> : name.slice(0, 1)}
+            <Face profile={profile} />
             {profile.state && <i className={`pprofile-dot is-${profile.state}`} title={profile.state} />}
           </span>
           <div className="pprofile-who">
@@ -119,15 +148,15 @@ export function PersonProfile({ profile, onClose, onAssign, onShareLink }) {
         {sample && <p className="pprofile-sample" role="note">Sample data. These numbers, charts and the calendar are examples, not this project's ledger.</p>}
 
         <dl className="pprofile-tiles" aria-label="Stats">
-          <Tile label="Tasks finished" value={stats.finished} trend={profile.trends?.done} />
-          <Tile label="Failed checks" value={stats.errors} trend={profile.trends?.errors} bad />
-          {stats.linesDone != null && <Tile label="Lines changed" value={stats.linesDone.toLocaleString("en-AU")} trend={profile.trends?.lines} />}
-          {profile.reviewHours != null ? <Tile label="Review turnaround" value={`${profile.reviewHours} h`} trend={profile.trends?.review} /> : <Tile label="Open work" value={stats.open} />}
+          <Tile i={1} label="Tasks finished" value={stats.finished} trend={profile.trends?.done} />
+          <Tile i={2} label="Failed checks" value={stats.errors} trend={profile.trends?.errors} bad />
+          {stats.linesDone != null && <Tile i={3} label="Lines changed" value={stats.linesDone} trend={profile.trends?.lines} />}
+          {profile.reviewHours != null ? <Tile i={4} label="Review turnaround" value={`${profile.reviewHours} h`} trend={profile.trends?.review} /> : <Tile i={4} label="Open work" value={stats.open} />}
         </dl>
         {!sample && stats.total === 0 && <p className="pprofile-muted">No tasks are on this person's name yet.</p>}
 
-        <div className="pprofile-grid">
-          <section aria-label="Up next">
+        <div className="pprofile-grid" style={{ "--i": 5 }}>
+          <section aria-label="Up next" style={{ "--i": 5 }}>
             <h3>Up next</h3>
             {openRows.length > 0 && <ul className="pprofile-cards">{openRows.map((t) => <li key={t.id}><b>{t.label}</b><small>{t.status}</small></li>)}</ul>}
             {queue.length > 0 && (
@@ -148,7 +177,7 @@ export function PersonProfile({ profile, onClose, onAssign, onShareLink }) {
           </section>
 
           {profile.timeline?.length > 0 && (
-            <section aria-label="Recent work">
+            <section aria-label="Recent work" style={{ "--i": 6 }}>
               <h3>Recent work</h3>
               <ol className="pprofile-timeline">
                 {profile.timeline.map((t, i) => <li key={i} className={`is-${t.kind}`}><small>{t.when}</small> {t.text}</li>)}
@@ -158,14 +187,14 @@ export function PersonProfile({ profile, onClose, onAssign, onShareLink }) {
         </div>
 
         {sample && (
-          <section aria-label="Calendar">
+          <section aria-label="Calendar" style={{ "--i": 7 }}>
             <h3>Calendar <small>click a free day to book it</small></h3>
             <div className="pprofile-cal" role="group" aria-label="Next ten working days">
               {days.map((d) => {
                 const booked = busyDates.includes(d.date);
                 const free = !booked;
                 return (
-                  <button key={d.date} type="button" disabled={booked} aria-pressed={pick === d.date}
+                  <button key={d.date} type="button" style={{ "--d": days.indexOf(d) }} disabled={booked} aria-pressed={pick === d.date}
                     className={`pprofile-day${booked ? " is-booked" : ""}${d.date === slot ? " is-next" : ""}${pick === d.date ? " is-picked" : ""}`}
                     title={booked ? "Booked" : d.date === slot ? "Next free slot" : "Free"}
                     onClick={() => free && setPick(pick === d.date ? null : d.date)}>
@@ -177,7 +206,7 @@ export function PersonProfile({ profile, onClose, onAssign, onShareLink }) {
           </section>
         )}
 
-        <section aria-label="Allocate work">
+        <section aria-label="Allocate work" style={{ "--i": 8 }}>
           <h3>Allocate work</h3>
           {canAssign ? (
             <form onSubmit={assign}>
@@ -205,7 +234,7 @@ export function PersonProfile({ profile, onClose, onAssign, onShareLink }) {
           ) : <p className="pprofile-muted">Assigning work to people from here is not connected on this project yet.</p>}
         </section>
 
-        <section aria-label="Context">
+        <section aria-label="Context" style={{ "--i": 9 }}>
           <h3>Context</h3>
           <div className={`pprofile-drop${drag ? " is-over" : ""}`}
             onDragOver={(e) => { e.preventDefault(); setDrag(true); }} onDragLeave={() => setDrag(false)}
