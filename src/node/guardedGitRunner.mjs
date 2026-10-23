@@ -241,7 +241,8 @@ export async function runGuardedGit(cwd, args, options = {}) {
     const drivers = ["status", "diff", "worktree", "merge"].includes(args[0])
       ? await run(["config", "--name-only", "--get-regexp", "^(filter\\..*\\.(clean|smudge|process)|merge\\..*\\.driver)$"])
       : { exit: 1, reason: null, stdout: "" };
-    if (drivers.reason || ![0, 1].includes(drivers.exit)) refuse("git-driver-config-unverified");
+    // Say why: on a starved Windows runner this refusal is the 10 s budget running out (git-time-limit), not a bad config.
+    if (drivers.reason || ![0, 1].includes(drivers.exit)) refuse(`git-driver-config-unverified (${drivers.reason ?? `git exited ${drivers.exit}`})`);
     const configured = [...new Set(drivers.stdout.trim().split(/\r?\n/).filter(Boolean))];
     const disabledFilters = new Set();
     for (const key of configured) {

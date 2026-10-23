@@ -163,3 +163,23 @@ test("uncertain preflight process termination propagates a typed cleanup failure
     child.stdin.destroy(); child.stdout.destroy(); child.stderr.destroy();
   }
 });
+
+// The Windows flake (git-driver-config-unverified / MCP_GIT_COMMAND_FAILED): when git is too slow to answer the
+// driver-config question inside the time budget, the call must still refuse, and the refusal must say it was the clock.
+test("a git that is too slow to answer the driver-config question refuses, and names the time limit", async (t) => {
+  const root = await repository(t);
+  const bin = await fixture(t);
+  const slow = path.join(bin, "git");
+  await writeFile(slow, `#!/bin/sh\ncase "$*" in *--get-regexp*) sleep 5;; esac\nexit 0\n`);
+  await chmod(slow, 0o755);
+  await assert.rejects(runGuardedGit(root, ["status", "--porcelain"], { gitExecutable: slow, timeoutMs: 400 }), /git-driver-config-unverified \(git-time-limit\)/);
+});
+
+test("a git that fails the driver-config question outright refuses and names the exit code", async (t) => {
+  const root = await repository(t);
+  const bin = await fixture(t);
+  const broken = path.join(bin, "git");
+  await writeFile(broken, `#!/bin/sh\ncase "$*" in *--get-regexp*) exit 2;; esac\nexit 0\n`);
+  await chmod(broken, 0o755);
+  await assert.rejects(runGuardedGit(root, ["status", "--porcelain"], { gitExecutable: broken }), /git-driver-config-unverified \(git exited 2\)/);
+});

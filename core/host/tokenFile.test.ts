@@ -3,7 +3,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { icaclsPath, isNetworkPath, writeOwnerOnlyFile } from "./tokenFile";
+import { connectArgsProblem, connectLineProblem } from "./agentConnect";
+import { icaclsPath, isNetworkPath, writeOwnerOnlyFile, type RunSystemTool } from "./tokenFile";
 
 let dir: string;
 beforeEach(() => {
@@ -65,5 +66,49 @@ describe("owner-only token file", () => {
       expect(acl).not.toMatch(/Everyone|BUILTIN\\Users|Authenticated Users|\(I\)/i);
     }
     expect(fs.readFileSync(file, "utf8")).toBe("secret");
+  });
+});
+
+const SPELLINGS = ["\\\\host\\share\\x.token", "//host/share/x.token", "\\/host/s/x.token", "/\\host\\s\\x.token", "\\\\?\\UNC\\host\\s\\x.token", "\\\\.\\pipe\\x.token", "\\??\\UNC\\host\\s\\x.token", "\\Users\\me\\x.token", "C:x.token"];
+
+describe("a token file on a network share is refused by every caller, whatever the slashes", () => {
+  it("the connect arguments and the pasted connect line both say 'network share', and nothing is created", () => {
+    for (const bad of SPELLINGS) {
+      expect(connectArgsProblem(["http://127.0.0.1:4000", bad], "win32"), bad).toMatch(/network share/);
+      const line = `node 'C:\\app\\connect.mjs' http://127.0.0.1:4000 '${bad}'`;
+      const problem = connectLineProblem(line, "C:\\app", "win32");
+      expect(problem, line).not.toBeNull();
+    }
+    expect(fs.readdirSync(dir)).toEqual([]);
+  });
+});
+
+describe("the owner-only ACL on Windows (icacls stood in for)", () => {
+  const SID = "S-1-5-21-111-222-333-1001";
+  const fake = (calls: string[][], failIcaclsAt?: number): RunSystemTool => (file, args) => {
+    calls.push([path.win32.basename(file).toLowerCase(), ...args]);
+    if (/whoami/i.test(file)) return `"HOST\\me","${SID}"\r\n`;
+    if (failIcaclsAt !== undefined && calls.filter((c) => c[0] === "icacls.exe").length >= failIcaclsAt) throw new Error("icacls: Access is denied");
+    return "";
+  };
+
+  it("grants the user by SID, not by a domain and name that may be missing or renamed", () => {
+    const calls: string[][] = [];
+    writeOwnerOnlyFile(path.join(dir, "t", "C-1.token"), "secret", "win32", fake(calls));
+    const grants = calls.filter((c) => c[0] === "icacls.exe");
+    expect(grants).toHaveLength(2);
+    for (const g of grants) expect(g.slice(2)).toEqual(["/inheritance:r", "/grant:r", `*${SID}:F`]);
+  });
+
+  it("deletes the token file and throws when icacls fails, so a secret never stays behind with the wrong access", () => {
+    const file = path.join(dir, "t", "C-1.token");
+    expect(() => writeOwnerOnlyFile(file, "secret", "win32", fake([], 2))).toThrow(/Access is denied/);
+    expect(fs.existsSync(file)).toBe(false);
+  });
+
+  it("writes nothing when the user cannot be identified", () => {
+    const file = path.join(dir, "t", "C-1.token");
+    expect(() => writeOwnerOnlyFile(file, "secret", "win32", () => "garbage")).toThrow(/which Windows user/);
+    expect(fs.existsSync(file)).toBe(false);
   });
 });
