@@ -69,6 +69,17 @@ describe("WorktreeManager", () => {
     }
   }, SLOW);
 
+  it("never gives two projects open at once the same dev-server port", async () => {
+    const other = await makeRepo({ "README.md": "other\n" });
+    try {
+      const second = new WorktreeManager({ repoRoot: other.root, ledger: await memoryLedger(), install: false, maxParallel: 3, ports: [43100, 43199] });
+      const made = await Promise.all([manager.create({ taskId: "T-1", actor: person }), second.create({ taskId: "T-1", actor: person }), manager.create({ taskId: "T-2", actor: person }), second.create({ taskId: "T-2", actor: person })]);
+      expect(new Set(made.map((info) => info.port)).size).toBe(4);
+    } finally {
+      other.cleanup();
+    }
+  }, SLOW);
+
   it("keeps file claims apart, matching folders and case the way the collision engine does", async () => {
     await manager.create({ taskId: "T-1", actor: person, claims: ["src/invoice/**"] });
     await expect(manager.create({ taskId: "T-2", actor: person, claims: ["SRC/Invoice/send.ts"] })).rejects.toThrow(/already claimed/);
