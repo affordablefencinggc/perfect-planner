@@ -39,3 +39,23 @@ export function nextFreeSlot(busy = [], from) {
 export const MD_MAX_BYTES = 64 * 1024;
 export const isMarkdownName = (name) => /\.(md|markdown|txt)$/i.test(String(name ?? ""));
 export const isHttpsLink = (text) => /^https:\/\/[^\s]+$/i.test(String(text ?? "").trim());
+
+/** The next `count` weekdays from `from` (ISO date), as { date, dow, day }. */
+export function weekdays(from, count = 10) {
+  const out = [];
+  const d = new Date(`${from}T00:00:00Z`);
+  while (out.length < count) {
+    if (!isWeekend(d)) out.push({ date: iso(d), dow: ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][d.getUTCDay()], day: d.getUTCDate() });
+    d.setUTCDate(d.getUTCDate() + 1);
+  }
+  return out;
+}
+
+/** Moves item `i` by `delta` places in a copy of `list`; out-of-range moves return it unchanged. */
+export function move(list, i, delta) {
+  const j = i + delta;
+  if (j < 0 || j >= list.length) return list;
+  const next = list.slice();
+  [next[i], next[j]] = [next[j], next[i]];
+  return next;
+}

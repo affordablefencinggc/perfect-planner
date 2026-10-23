@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import "./PersonProfile.css";
-import { MD_MAX_BYTES, isHttpsLink, isMarkdownName, nextFreeSlot } from "./profileStats.js";
+import { MD_MAX_BYTES, isHttpsLink, isMarkdownName, move, nextFreeSlot, weekdays } from "./profileStats.js";
 
 const contextKey = (person) => `pp.profile.context.${person}`;
 function loadContext(person) {
@@ -11,16 +11,35 @@ function saveContext(person, value) {
   try { localStorage.setItem(contextKey(person), JSON.stringify(value)); } catch { /* storage may be blocked */ }
 }
 
+function Spark({ values, bad }) {
+  if (!values?.length) return null;
+  const max = Math.max(...values, 1);
+  const pts = values.map((v, i) => `${(i / Math.max(values.length - 1, 1)) * 100},${28 - (v / max) * 24}`).join(" ");
+  return <svg className={`pprofile-spark${bad ? " is-bad" : ""}`} viewBox="0 0 100 30" preserveAspectRatio="none" aria-hidden="true"><polyline points={pts} fill="none" strokeWidth="2" vectorEffect="non-scaling-stroke" /></svg>;
+}
+
+function Tile({ label, value, trend, bad }) {
+  return (
+    <div className="pprofile-tile">
+      <dt>{label}</dt>
+      <dd className={bad && value ? "is-bad" : ""}>{value}</dd>
+      <Spark values={trend} bad={bad} />
+    </div>
+  );
+}
+
 /**
- * One person's profile. `profile`: { person, name, role, avatar, stats, upNext, busy, sample, today }.
- * Stats come from real ledger task rows unless `profile.sample` is set, and then the panel says so.
+ * One person's profile. `profile`: { person, name, role, state, avatar, color, stats, upNext, busy, sample, today,
+ * trends, timeline, current, assignable }. Stats come from real ledger task rows unless `profile.sample` is set,
+ * and then the panel says so. Trends, timeline and the calendar only exist for sample data: the ledger keeps no
+ * calendar slots or review times, so a real project shows what it has and nothing invented.
  */
 export function PersonProfile({ profile, onClose, onAssign, onShareLink }) {
   const { person, name, role, stats, sample } = profile;
   const [queue, setQueue] = useState(profile.upNext ?? []);
   const [scheduled, setScheduled] = useState([]);
   const [title, setTitle] = useState("");
-  const [when, setWhen] = useState("up-next");
+  const [pick, setPick] = useState(null);
   const [taskId, setTaskId] = useState("");
   const real = Array.isArray(profile.assignable);
   const [ctx, setCtx] = useState(() => loadContext(person));
@@ -35,9 +54,11 @@ export function PersonProfile({ profile, onClose, onAssign, onShareLink }) {
     return () => document.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  const busy = [...(profile.busy ?? []), ...scheduled.map((s) => s.date)];
-  const slot = nextFreeSlot(busy, profile.today);
+  const busyDates = [...(profile.busy ?? []), ...scheduled.map((x) => x.date)];
+  const slot = nextFreeSlot(busyDates, profile.today);
+  const days = weekdays(profile.today, 10);
   const canAssign = Boolean(onAssign) || sample;
+  const date = pick ?? null;
 
   const assign = async (event) => {
     event.preventDefault();
@@ -50,11 +71,9 @@ export function PersonProfile({ profile, onClose, onAssign, onShareLink }) {
     }
     const t = title.trim();
     if (!t) return;
-    try {
-      if (when === "up-next") setQueue((q) => [...q, { title: t }]);
-      else setScheduled((s) => [...s, { title: t, date: slot }]);
-      setTitle("");
-    } catch (e) { setError(e?.message || "Could not assign this work"); }
+    if (date) setScheduled((x) => [...x, { title: t, date }]);
+    else setQueue((q) => [...q, { title: t }]);
+    setTitle(""); setPick(null);
   };
   const update = (next) => { setCtx(next); saveContext(person, next); };
   const takeFile = async (file) => {
@@ -77,35 +96,89 @@ export function PersonProfile({ profile, onClose, onAssign, onShareLink }) {
     } catch (e) { setError(e?.message || "Could not save this link"); }
   };
 
+  const capacity = profile.capacity ?? 5;
+  const added = Math.max(0, queue.length - (profile.upNext?.length ?? 0)) + scheduled.length;
+  const used = stats.open + added;
+  const load = Math.min(100, Math.round((used / capacity) * 100));
+  const openRows = stats.openTasks ?? [];
+
   return createPortal(
     <div className="pprofile-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <aside className="pprofile" role="dialog" aria-modal="true" aria-label={`${name} profile`}>
-        <header className="pprofile-head">
-          <span className="pprofile-avatar" style={profile.color ? { borderColor: profile.color } : undefined}>
+        <header className="pprofile-hero" style={profile.color ? { "--accent": profile.color } : undefined}>
+          <span className="pprofile-avatar">
             {profile.avatar ? <img src={profile.avatar} alt="" /> : name.slice(0, 1)}
+            {profile.state && <i className={`pprofile-dot is-${profile.state}`} title={profile.state} />}
           </span>
-          <div><h2>{name}</h2><p>{role}{profile.state ? ` · ${profile.state}` : ""}</p></div>
+          <div className="pprofile-who">
+            <h2>{name}</h2>
+            <p>{role}{profile.state ? ` · ${profile.state}` : ""}</p>
+            {profile.current && <p className="pprofile-current"><b>Now</b> {profile.current}</p>}
+            <div className="pprofile-load" role="img" aria-label={`Workload ${load}%`}><span style={{ width: `${load}%` }} /></div>
+            <small>Workload {load}% · {used} of {capacity} slots</small>
+          </div>
           <button ref={closeRef} type="button" className="pprofile-close" onClick={onClose} aria-label="Close profile">Close</button>
         </header>
-        {sample && <p className="pprofile-sample" role="note">Sample data. These numbers and the schedule are examples, not this project's ledger.</p>}
+        {sample && <p className="pprofile-sample" role="note">Sample data. These numbers, charts and the calendar are examples, not this project's ledger.</p>}
 
-        <section aria-label="Stats">
-          <dl className="pprofile-stats">
-            <div><dt>Tasks finished</dt><dd>{stats.finished}</dd></div>
-            <div><dt>Open work</dt><dd>{stats.open}</dd></div>
-            <div><dt>Failed checks</dt><dd className={stats.errors ? "is-bad" : ""}>{stats.errors}</dd></div>
-            {stats.linesDone != null && <div><dt>Lines of code done</dt><dd>{stats.linesDone.toLocaleString("en-AU")}</dd></div>}
-          </dl>
-          {!sample && stats.total === 0 && <p className="pprofile-muted">No tasks are on this person's name yet.</p>}
-        </section>
+        <dl className="pprofile-tiles" aria-label="Stats">
+          <Tile label="Tasks finished" value={stats.finished} trend={profile.trends?.done} />
+          <Tile label="Failed checks" value={stats.errors} trend={profile.trends?.errors} bad />
+          {stats.linesDone != null && <Tile label="Lines changed" value={stats.linesDone.toLocaleString("en-AU")} trend={profile.trends?.lines} />}
+          {profile.reviewHours != null ? <Tile label="Review turnaround" value={`${profile.reviewHours} h`} trend={profile.trends?.review} /> : <Tile label="Open work" value={stats.open} />}
+        </dl>
+        {!sample && stats.total === 0 && <p className="pprofile-muted">No tasks are on this person's name yet.</p>}
 
-        <section aria-label="Planned next">
-          <h3>Planned next</h3>
-          {stats.openTasks?.length > 0 && <ul>{stats.openTasks.map((t) => <li key={t.id}>{t.label} <small>{t.status}</small></li>)}</ul>}
-          {queue.length > 0 && <ul>{queue.map((q, i) => <li key={`${q.title}-${i}`}>{q.title} <small>up next</small></li>)}</ul>}
-          {scheduled.length > 0 && <ul>{scheduled.map((s, i) => <li key={`${s.title}-${i}`}>{s.title} <small>{s.date}</small></li>)}</ul>}
-          {!stats.openTasks?.length && !queue.length && !scheduled.length && <p className="pprofile-muted">Nothing planned yet.</p>}
-        </section>
+        <div className="pprofile-grid">
+          <section aria-label="Up next">
+            <h3>Up next</h3>
+            {openRows.length > 0 && <ul className="pprofile-cards">{openRows.map((t) => <li key={t.id}><b>{t.label}</b><small>{t.status}</small></li>)}</ul>}
+            {queue.length > 0 && (
+              <ol className="pprofile-cards" aria-label="Queue">
+                {queue.map((q, i) => (
+                  <li key={`${q.title}-${i}`}>
+                    <b>{q.title}</b>
+                    <span className="pprofile-order">
+                      <button type="button" aria-label={`Move ${q.title} up`} disabled={i === 0} onClick={() => setQueue((x) => move(x, i, -1))}>↑</button>
+                      <button type="button" aria-label={`Move ${q.title} down`} disabled={i === queue.length - 1} onClick={() => setQueue((x) => move(x, i, 1))}>↓</button>
+                    </span>
+                  </li>
+                ))}
+              </ol>
+            )}
+            {scheduled.length > 0 && <ul className="pprofile-cards">{scheduled.map((x, i) => <li key={`${x.title}-${i}`}><b>{x.title}</b><small>{x.date}</small></li>)}</ul>}
+            {!openRows.length && !queue.length && !scheduled.length && <p className="pprofile-muted">Nothing planned yet.</p>}
+          </section>
+
+          {profile.timeline?.length > 0 && (
+            <section aria-label="Recent work">
+              <h3>Recent work</h3>
+              <ol className="pprofile-timeline">
+                {profile.timeline.map((t, i) => <li key={i} className={`is-${t.kind}`}><small>{t.when}</small> {t.text}</li>)}
+              </ol>
+            </section>
+          )}
+        </div>
+
+        {sample && (
+          <section aria-label="Calendar">
+            <h3>Calendar <small>click a free day to book it</small></h3>
+            <div className="pprofile-cal" role="group" aria-label="Next ten working days">
+              {days.map((d) => {
+                const booked = busyDates.includes(d.date);
+                const free = !booked;
+                return (
+                  <button key={d.date} type="button" disabled={booked} aria-pressed={pick === d.date}
+                    className={`pprofile-day${booked ? " is-booked" : ""}${d.date === slot ? " is-next" : ""}${pick === d.date ? " is-picked" : ""}`}
+                    title={booked ? "Booked" : d.date === slot ? "Next free slot" : "Free"}
+                    onClick={() => free && setPick(pick === d.date ? null : d.date)}>
+                    <small>{d.dow}</small><b>{d.day}</b>
+                  </button>
+                );
+              })}
+            </div>
+          </section>
+        )}
 
         <section aria-label="Allocate work">
           <h3>Allocate work</h3>
@@ -121,15 +194,16 @@ export function PersonProfile({ profile, onClose, onAssign, onShareLink }) {
                   </label>
                   <button type="submit" disabled={!taskId}>Allocate to {name}</button>
                 </>
-              ) : (<>
-              <label>Work<input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="What should they do?" autoComplete="off" /></label>
-              <fieldset>
-                <legend>When</legend>
-                <label><input type="radio" name={`when-${person}`} checked={when === "up-next"} onChange={() => setWhen("up-next")} /> Up next</label>
-                <label><input type="radio" name={`when-${person}`} checked={when === "slot"} onChange={() => setWhen("slot")} /> Next free slot ({slot})</label>
-              </fieldset>
-              <button type="submit" disabled={!title.trim()}>Allocate to {name}</button>
-              </>)}
+              ) : (
+                <>
+                  <label>Work<input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="What should they do?" autoComplete="off" /></label>
+                  <div className="pprofile-seg" role="group" aria-label="When">
+                    <button type="button" aria-pressed={!pick} onClick={() => setPick(null)}>Up next</button>
+                    <button type="button" aria-pressed={pick === slot} onClick={() => setPick(slot)}>Next free slot · {slot}</button>
+                  </div>
+                  <button type="submit" disabled={!title.trim()}>Allocate to {name}{pick ? ` on ${pick}` : ""}</button>
+                </>
+              )}
             </form>
           ) : <p className="pprofile-muted">Assigning work to people from here is not connected on this project yet.</p>}
         </section>
@@ -142,12 +216,12 @@ export function PersonProfile({ profile, onClose, onAssign, onShareLink }) {
             Drop a markdown file here, or
             <label className="pprofile-pick">choose one<input type="file" accept=".md,.markdown,.txt,text/markdown,text/plain" onChange={(e) => { takeFile(e.target.files?.[0]); e.target.value = ""; }} /></label>
           </div>
-          {ctx.files.length > 0 && <ul>{ctx.files.map((f) => <li key={f.name}>{f.name} <small>{f.text.length.toLocaleString("en-AU")} chars</small> <button type="button" onClick={() => update({ ...ctx, files: ctx.files.filter((x) => x.name !== f.name) })}>Remove</button></li>)}</ul>}
+          {ctx.files.length > 0 && <ul className="pprofile-cards">{ctx.files.map((f) => <li key={f.name}><b>{f.name}</b><small>{f.text.length.toLocaleString("en-AU")} chars</small> <button type="button" onClick={() => update({ ...ctx, files: ctx.files.filter((x) => x.name !== f.name) })}>Remove</button></li>)}</ul>}
           <form onSubmit={addLink} className="pprofile-linkform">
             <input aria-label="Reference link" value={link} onChange={(e) => setLink(e.target.value)} placeholder="https://…" autoComplete="off" />
             <button type="submit" disabled={!link.trim()}>Add link</button>
           </form>
-          {ctx.links.length > 0 && <ul>{ctx.links.map((l) => <li key={l}><a href={l} target="_blank" rel="noopener noreferrer">{l}</a></li>)}</ul>}
+          {ctx.links.length > 0 && <ul className="pprofile-cards">{ctx.links.map((l) => <li key={l}><a href={l} target="_blank" rel="noopener noreferrer">{l}</a></li>)}</ul>}
           <p className="pprofile-muted">Files are kept in this browser only. Links are shared with the project when it is connected.</p>
         </section>
         {error && <p className="pprofile-error" role="alert">{error}</p>}

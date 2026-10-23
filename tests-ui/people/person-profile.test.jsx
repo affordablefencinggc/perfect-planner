@@ -29,9 +29,15 @@ describe("PersonProfile", () => {
     render(<PersonProfile profile={profile({ sample: true })} onClose={() => {}} />);
     expect(screen.getByRole("note").textContent).toMatch(/Sample data/);
     fireEvent.change(screen.getByLabelText("Work"), { target: { value: "Export API" } });
-    fireEvent.click(screen.getByLabelText(/Next free slot/));
-    fireEvent.click(screen.getByRole("button", { name: "Allocate to Mira" }));
-    expect(screen.getByText("2026-10-23")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /Next free slot/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Allocate to Mira/ }));
+    expect(screen.getByText("Export API").closest("li").textContent).toMatch(/2026-10-23/);
+  });
+  it("reorders the up-next queue", () => {
+    render(<PersonProfile profile={profile({ sample: true, upNext: [{ title: "First" }, { title: "Second" }] })} onClose={() => {}} />);
+    fireEvent.click(screen.getByLabelText("Move Second up"));
+    const items = screen.getByLabelText("Queue").querySelectorAll("li b");
+    expect([...items].map((n) => n.textContent)).toEqual(["Second", "First"]);
   });
   it("does not offer allocation when it is not connected", () => {
     render(<PersonProfile profile={profile()} onClose={() => {}} />);

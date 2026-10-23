@@ -309,9 +309,24 @@ function runtimeEventSeveritiesForShell(level) {
 }
 
 const DEMO_PROFILE_STATS = {
-  Danie: { finished: 14, open: 2, errors: 1, linesDone: 3120, upNext: ["Approve plan P3"], busy: ["2026-10-26", "2026-10-27"] },
-  Mira: { finished: 22, open: 3, errors: 4, linesDone: 6480, upNext: ["Ledger export API"], busy: ["2026-10-26"] },
-  Jon: { finished: 17, open: 1, errors: 2, linesDone: 4210, upNext: ["Review the People tab"], busy: [] },
+  Danie: {
+    finished: 14, open: 2, errors: 1, linesDone: 3120, reviewHours: 5, capacity: 5, current: "Approving plan P3",
+    upNext: ["Approve plan P3", "Sign off collision order"], busy: ["2026-10-26", "2026-10-27"],
+    trends: { done: [1, 2, 1, 3, 2, 2, 3, 4], errors: [0, 1, 0, 0, 1, 0, 0, 0], lines: [200, 340, 150, 610, 420, 380, 520, 500], review: [8, 6, 7, 5, 6, 5, 4, 5] },
+    timeline: [{ when: "Today", text: "Approved plan P2", kind: "ok" }, { when: "Yesterday", text: "Resolved 2 collisions", kind: "ok" }, { when: "Mon", text: "Check failed on B03", kind: "bad" }],
+  },
+  Mira: {
+    finished: 22, open: 3, errors: 4, linesDone: 6480, reviewHours: 9, capacity: 5, current: "Ledger export API",
+    upNext: ["Ledger export API", "Rate limit the bridge"], busy: ["2026-10-26", "2026-10-28"],
+    trends: { done: [2, 3, 2, 4, 3, 3, 2, 3], errors: [1, 0, 2, 0, 1, 0, 0, 0], lines: [600, 900, 420, 1100, 800, 950, 880, 830], review: [12, 10, 11, 9, 8, 9, 10, 9] },
+    timeline: [{ when: "Today", text: "Merged B02 backend contract", kind: "ok" }, { when: "Yesterday", text: "Check failed on B05 (flaky test)", kind: "bad" }, { when: "Mon", text: "Claimed ledger export task", kind: "ok" }],
+  },
+  Jon: {
+    finished: 17, open: 1, errors: 2, linesDone: 4210, reviewHours: 3, capacity: 5, current: "Reviewing the People tab",
+    upNext: ["Review the People tab"], busy: [],
+    trends: { done: [1, 1, 2, 2, 3, 2, 3, 3], errors: [0, 0, 1, 0, 0, 1, 0, 0], lines: [300, 280, 500, 640, 700, 520, 610, 660], review: [5, 4, 4, 3, 4, 3, 3, 3] },
+    timeline: [{ when: "Today", text: "Reviewed 3 diffs", kind: "ok" }, { when: "Tue", text: "Merged B04 UI shell", kind: "ok" }, { when: "Mon", text: "Check failed on B08", kind: "bad" }],
+  },
 };
 
 const ownerMeta = {
@@ -849,6 +864,7 @@ function TopBar({
                   person: profileName.toLowerCase(), name: profileName, role: person.role, state: person.state,
                   avatar: meta?.profileSrc, color: meta?.color, sample: true, today: "2026-10-26",
                   busy: demo.busy, upNext: demo.upNext.map((title) => ({ title })),
+                  trends: demo.trends, timeline: demo.timeline, current: demo.current, reviewHours: demo.reviewHours, capacity: demo.capacity,
                   stats: { finished: demo.finished, open: demo.open, errors: demo.errors, linesDone: demo.linesDone, total: demo.finished + demo.open, openTasks: [] },
                 }}
               />
