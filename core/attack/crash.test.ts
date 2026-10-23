@@ -365,7 +365,7 @@ describe.skipIf(WINDOWS).each([
   // REAL DEFECT (found by this attack): the gate moves main with update-ref and only then writes test.passed,
   // merge.done and task.done. A kill in between leaves the work merged in git and the task unfinished in the ledger,
   // and the Merge button then refuses with "main was left untouched" although main holds the merge.
-  it.fails("after the restart the person can still finish the task (the app notices main already holds the approved merge)", () => {
+  it("after the restart the person can still finish the task (the app notices main already holds the approved merge)", () => {
     expect(run.retry.status, run.retry.message).toBe(200);
   });
 });
