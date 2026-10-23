@@ -113,7 +113,7 @@ export function buildPeopleView(entries: readonly LedgerEntry[], options: { owne
   for (const d of roster.docs.values()) {
     docs.push({ doc: d.doc, title: d.title, path: d.path, version: `v${d.versions}`, clauses: [...d.clauses], kind: "document", sharedBy: d.sharedBy, at: d.at, entry: d.entry });
   }
-  const view: PeopleView = { members, docs };
+  const view: PeopleView = { members, docs, assignments: Object.fromEntries(roster.assignments) };
   const owner = ownerOf(roster);
   if (owner) view.owner = members.find((m) => m.person === owner.person);
   const head = entries[entries.length - 1]?.n;
