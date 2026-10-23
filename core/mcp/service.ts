@@ -83,7 +83,7 @@ export class AgentService {
 
   /** Validate and run one tool call. Every transport goes through here. */
   async call(caller: Caller, tool: string, rawArgs: unknown): Promise<unknown> {
-    if (!(tool in TOOL_INPUTS)) throw new ToolError("NOT_FOUND", `There is no tool called ${tool}.`);
+    if (!Object.prototype.hasOwnProperty.call(TOOL_INPUTS, tool)) throw new ToolError("NOT_FOUND", `There is no tool called ${tool}.`);
     const name = tool as ToolName;
     const parsed = TOOL_INPUTS[name].safeParse(rawArgs ?? {});
     if (!parsed.success) {

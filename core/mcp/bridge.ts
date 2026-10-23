@@ -15,8 +15,10 @@ function readBody(req: IncomingMessage): Promise<string> {
     req.on("data", (chunk: Buffer) => {
       size += chunk.length;
       if (size > MAX_BODY) {
+        // Answer first, then hang up (see the handler); stop collecting what is still arriving.
+        req.removeAllListeners("data");
+        req.resume();
         reject(new ToolError("INVALID", "Request is too large."));
-        req.destroy();
       } else chunks.push(chunk);
     });
     req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
@@ -42,10 +44,17 @@ export async function startBridge(service: AgentService, port = 0): Promise<Brid
     const auth = req.headers.authorization ?? "";
     const token = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
     try {
-      const body = JSON.parse(await readBody(req)) as { tool?: unknown; args?: unknown; agent?: unknown };
+      const parsed: unknown = JSON.parse(await readBody(req));
+      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) throw new ToolError("INVALID", "Body must be a JSON object with a tool and its args.");
+      const body = parsed as { tool?: unknown; args?: unknown; agent?: unknown };
       const result = await service.call({ token, ...(typeof body.agent === "string" ? { agent: body.agent } : {}) }, String(body.tool ?? ""), body.args ?? {});
       send(200, { ok: true, result });
     } catch (error) {
+      if (error instanceof ToolError && /too large/.test(error.message)) {
+        res.setHeader("connection", "close");
+        res.once("finish", () => req.destroy());
+        return send(413, { ok: false, code: "INVALID", message: error.message });
+      }
       if (error instanceof ToolError) return send(STATUS[error.code] ?? 400, { ok: false, code: error.code, message: error.message });
       if (error instanceof SyntaxError) return send(400, { ok: false, code: "INVALID", message: "Body must be JSON." });
       send(500, { ok: false, code: "ERROR", message: "Perfect Planner could not complete the call." });
