@@ -113,6 +113,7 @@ const GitInventoryPanel = lazy(() => import("./components/GitInventoryPanel.jsx"
   default: BranchToolsUnavailable,
 })));
 import "./components/GitInventoryPanel.css";
+const PersonProfile = lazy(() => import("./people/PersonProfile.jsx").then((m) => ({ default: m.PersonProfile })));
 import {
   readCurrentTruthGeneration,
   TruthGenerationReadError,
@@ -308,6 +309,30 @@ function runtimeEventSeveritiesForShell(level) {
     : "info";
 }
 
+const DEMO_PROFILE_STATS = {
+  Danie: {
+    about: "Owns the plan and signs off every collision order.", meta: ["Since Mar 2026", "Mon-Fri, 9-5 AEST", "9-day streak"], skills: [{k:"Planning",v:92},{k:"Review",v:74},{k:"Backend",v:55},{k:"Frontend",v:48},{k:"Testing",v:66}], mix: [{k:"Plans",v:46},{k:"Reviews",v:34},{k:"Fixes",v:20}], agents: ["Planning agent"], pairs: "Mira (7 reviews)", branch: "pp/b01-plan-approval",
+    finished: 14, open: 2, errors: 1, linesDone: 3120, reviewHours: 5, capacity: 5, current: "Approving plan P3",
+    upNext: ["Approve plan P3", "Sign off collision order"], busy: ["2026-10-26", "2026-10-27"],
+    trends: { done: [1, 2, 1, 3, 2, 2, 3, 4], errors: [0, 1, 0, 0, 1, 0, 0, 0], lines: [200, 340, 150, 610, 420, 380, 520, 500], review: [8, 6, 7, 5, 6, 5, 4, 5] },
+    timeline: [{ when: "Today", text: "Approved plan P2", kind: "ok" }, { when: "Yesterday", text: "Resolved 2 collisions", kind: "ok" }, { when: "Mon", text: "Check failed on B03", kind: "bad" }],
+  },
+  Mira: {
+    about: "Backend lead. Ledger, bridge and anything that has to be correct.", meta: ["Since Feb 2026", "Mon-Thu, 8-4 AEST", "14-day streak"], skills: [{k:"Backend",v:95},{k:"Testing",v:80},{k:"Review",v:70},{k:"Frontend",v:35},{k:"Planning",v:58}], mix: [{k:"Features",v:52},{k:"Fixes",v:33},{k:"Reviews",v:15}], agents: ["Build Agent A"], pairs: "Jon (12 reviews)", branch: "pp/b02-ledger-export",
+    finished: 22, open: 3, errors: 4, linesDone: 6480, reviewHours: 9, capacity: 5, current: "Ledger export API",
+    upNext: ["Ledger export API", "Rate limit the bridge"], busy: ["2026-10-26", "2026-10-28"],
+    trends: { done: [2, 3, 2, 4, 3, 3, 2, 3], errors: [1, 0, 2, 0, 1, 0, 0, 0], lines: [600, 900, 420, 1100, 800, 950, 880, 830], review: [12, 10, 11, 9, 8, 9, 10, 9] },
+    timeline: [{ when: "Today", text: "Merged B02 backend contract", kind: "ok" }, { when: "Yesterday", text: "Check failed on B05 (flaky test)", kind: "bad" }, { when: "Mon", text: "Claimed ledger export task", kind: "ok" }],
+  },
+  Jon: {
+    about: "Frontend lead. Screens, motion and making things feel right.", meta: ["Since Apr 2026", "Tue-Fri, 10-6 AEST", "6-day streak"], skills: [{k:"Frontend",v:94},{k:"Review",v:82},{k:"Testing",v:60},{k:"Backend",v:40},{k:"Planning",v:52}], mix: [{k:"Features",v:44},{k:"Reviews",v:41},{k:"Fixes",v:15}], agents: ["Review Agent B"], pairs: "Mira (12 reviews)", branch: "pp/b04-people-tab",
+    finished: 17, open: 1, errors: 2, linesDone: 4210, reviewHours: 3, capacity: 5, current: "Reviewing the People tab",
+    upNext: ["Review the People tab"], busy: [],
+    trends: { done: [1, 1, 2, 2, 3, 2, 3, 3], errors: [0, 0, 1, 0, 0, 1, 0, 0], lines: [300, 280, 500, 640, 700, 520, 610, 660], review: [5, 4, 4, 3, 4, 3, 3, 3] },
+    timeline: [{ when: "Today", text: "Reviewed 3 diffs", kind: "ok" }, { when: "Tue", text: "Merged B04 UI shell", kind: "ok" }, { when: "Mon", text: "Check failed on B08", kind: "bad" }],
+  },
+};
+
 const ownerMeta = {
   Danie: {
     color: "#4f7d60",
@@ -474,6 +499,7 @@ function TopBar({
   const activeProject = projectContext.activeProject;
   const demoMode = isDemoProject(activeProject);
   const [openMenu, setOpenMenu] = useState(null);
+  const [profileName, setProfileName] = useState(null);
   const agentObservations=useAgentSessionObservations(activeProject);
   const browserInput=useBrowserInputMarkerControl(activeProject);
   const [actionView, setActionView] = useState("menu");
@@ -805,8 +831,7 @@ function TopBar({
                     <button
                       key={person.name}
                       className="demo-sample-row"
-                      disabled
-                      title={`${DEMO_ONLY_REASON}: sample people have no profile pages.`}
+                      onClick={() => { setProfileName(person.name); setOpenMenu(null); }}
                     >
                       <span
                         className="popover-avatar"
@@ -831,6 +856,24 @@ function TopBar({
               </div>
             )}
           </div>
+          {profileName && (() => {
+            const person = people.find((x) => x.name === profileName);
+            const demo = DEMO_PROFILE_STATS[profileName];
+            if (!person || !demo) return null;
+            const meta = ownerMeta[profileName];
+            return (
+              <Suspense fallback={null}><PersonProfile
+                onClose={() => setProfileName(null)}
+                profile={{
+                  person: profileName.toLowerCase(), name: profileName, role: person.role, state: person.state,
+                  avatar: meta?.profileSrc, color: meta?.color, sample: true, today: "2026-10-26",
+                  busy: demo.busy, upNext: demo.upNext.map((title) => ({ title })),
+                  trends: demo.trends, timeline: demo.timeline, about: demo.about, pairs: demo.pairs, branch: demo.branch, meta: demo.meta, skills: demo.skills, mix: demo.mix, agents: demo.agents, current: demo.current, reviewHours: demo.reviewHours, capacity: demo.capacity,
+                  stats: { finished: demo.finished, open: demo.open, errors: demo.errors, linesDone: demo.linesDone, total: demo.finished + demo.open, openTasks: [] },
+                }}
+              /></Suspense>
+            );
+          })()}
           <button
             className="top-metric-button"
             aria-haspopup="dialog"
@@ -1127,13 +1170,12 @@ function TopBar({
                       </p>
                     ) : (
                       <div className="more-actions-list">
-                        <DemoOnlyReason>sample people have no profile pages.</DemoOnlyReason>
+                        <DemoOnlyReason>sample people show example stats on their profile.</DemoOnlyReason>
                         {people.map((person) => (
                           <button
                             key={person.name}
                             className="demo-sample-row"
-                            disabled
-                            title={`${DEMO_ONLY_REASON}: sample people have no profile pages.`}
+                            onClick={() => { setProfileName(person.name); setOpenMenu(null); }}
                           >
                             <UsersThreeIcon />
                             <span>

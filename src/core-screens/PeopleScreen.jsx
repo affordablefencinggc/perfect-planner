@@ -65,6 +65,7 @@ function PeopleDetails({ data }) {
 
 export default function PeopleScreen() {
   const resource = useCoreResource("/people", { isEmpty: (data) => !data || !data.view });
+  const tasksResource = useCoreResource("/tasks", { isEmpty: () => false });
   const advanced = useAdvanced();
   const [notice, setNotice] = useState(null);
   const data = resource.data;
@@ -94,6 +95,11 @@ export default function PeopleScreen() {
       setNotice(null);
       if (file.size > PHOTO_UPLOAD_MAX) throw new Error("Photos must be 512 KB or smaller.");
       await run("/people/photo", { image: await readAsBase64(file) }, "Your photo was saved.");
+    },
+    onAssign: async ({ person, task }) => {
+      setNotice(null);
+      await run("/people/assign", { person, task }, `${task} was given to ${nameOf(person)}.`);
+      tasksResource.reload?.();
     },
     onShareDoc: async ({ title, path }) => {
       setNotice(null);
@@ -129,7 +135,7 @@ export default function PeopleScreen() {
       {notice && (
         <p className={`people-screen-notice is-${notice.kind}`} role={notice.kind === "bad" ? "alert" : "status"}>{notice.text}</p>
       )}
-      {data && <PeoplePanel view={data.view} photos={data.photos ?? {}} me={data.me} starter={data.starter} {...handlers} {...(data.ownerMissing ? { onAddMember: undefined, onShareDoc: undefined } : {})} />}
+      {data && <PeoplePanel view={data.view} photos={data.photos ?? {}} tasks={tasksResource.data?.tasks ?? []} me={data.me} starter={data.starter} {...handlers} {...(data.ownerMissing ? { onAddMember: undefined, onShareDoc: undefined, onAssign: undefined } : {})} />}
       {data && <PeopleDetails data={data} />}
     </CoreScreen>
   );
