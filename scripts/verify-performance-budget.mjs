@@ -14,12 +14,14 @@ export const PERFORMANCE_BUDGETS = Object.freeze({
   // Both changes were sized against 480 KiB separately; together they measure 500.4 KiB, hence 504.
   // Core loop screens (Oct 2026): six on-demand core screens on top of the above measure 539.2 KiB (#15). The run-loop-from-app work (Tasks, planning from the description, start history, owner stop) brings the total to 549.1 KiB; 552 leaves under 3 KiB of headroom. First-load limits unchanged.
   // Build target raised from Vite's default (Safari 14) to the desktop webviews we ship in (Oct 2026): 549.6 -> 539.5 KiB measured, same limit.
-  maxTotalJavaScriptGzipBytes: 552 * 1024,
+  // Task spine (Oct 2026, owner OK): the Evidence-page spine and its filters measure 552.6 KiB; 560 leaves about 7 KiB of headroom.
+  maxTotalJavaScriptGzipBytes: 560 * 1024,
   // UI trial sweep (Oct 2026): +1 KiB for the shared frame stylesheet (sr-only, popover bounds, small-screen rules).
   maxIndividualStylesheetGzipBytes: 45 * 1024,
   // UI polish (Oct 2026): total raised for the page frame and per-screen polish layers; the per-file limit is unchanged.
   // Core loop screens (Oct 2026): raised for their on-demand stylesheets.
-  maxTotalStylesheetGzipBytes: 80 * 1024,
+  // Task spine (Oct 2026, owner OK): its stylesheet brings the total to 80.5 KiB; 82 leaves under 2 KiB of headroom.
+  maxTotalStylesheetGzipBytes: 82 * 1024,
   maxClientBytes: 14 * 1024 * 1024,
   maxClientFiles: 200, // raised from 160 when v1 feature panels moved to on-demand chunks
 });

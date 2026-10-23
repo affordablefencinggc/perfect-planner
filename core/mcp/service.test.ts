@@ -495,6 +495,34 @@ describe("propose_test (test first)", () => {
   });
 });
 
+describe("the needle over the bridge", () => {
+  it("picks a tool for the caller's role, and refuses a bad token", async () => {
+    const { service, w1, connect } = setup();
+    const bridge = await startBridge(service);
+    try {
+      const ask = async (token: string, body: unknown) => {
+        const res = await fetch(`${bridge.url}/route`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${token}` }, body: JSON.stringify(body) });
+        return { status: res.status, body: (await res.json()) as { ok: boolean; result?: { tool: string; args: Record<string, string> }[] } };
+      };
+      // Before check-in the only legal step is hello.
+      expect((await ask(w1, { intent: "start" })).body.result![0]!.tool).toBe("hello");
+      const worker = await hello(service, w1, "Worker 1");
+      // T-1's test is approved but unclaimed: claim it.
+      const next = await ask(w1, { agent: worker.agent });
+      expect(next.body.result![0]).toMatchObject({ tool: "claim_task", args: { task: "T-1" } });
+      // A main chat is never offered a worker-only tool.
+      const main = await hello(service, connect, "Main");
+      const tools = (await ask(connect, { agent: main.agent, intent: "claim T-1 and attach proof", limit: 11 })).body.result!.map((c) => c.tool);
+      expect(tools).not.toContain("claim_task");
+      expect(tools).not.toContain("attach_proof");
+      expect((await ask("pp_w_nope", { intent: "x" })).status).toBe(401);
+      expect((await fetch(`${bridge.url}/route`, { method: "POST", headers: { authorization: `Bearer ${w1}` }, body: "not json" })).status).toBe(400);
+    } finally {
+      await bridge.close();
+    }
+  });
+});
+
 describe("a connect line from before a restart", () => {
   it("is refused with words that say a restart ended it and where the new line is, and a new token works", async () => {
     const { ledger, connect: old } = setup();

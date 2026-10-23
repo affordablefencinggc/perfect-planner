@@ -9,6 +9,7 @@ import { LedgerError, type Actor, type EntryDraft, type Ledger, type LedgerEntry
 import { Relay, trustedEntry } from "../relay/relay";
 import { attemptLabel, foldBoard, type TaskView } from "./board";
 import { lookup } from "../lookup/index";
+import { route, type NeedleChoice } from "./needle";
 import { TestGate } from "../gate/index";
 import { TokenStore, tokenId, type Grant } from "./tokens";
 import { TOOL_INFO, TOOL_INPUTS, type ToolInput, type ToolName } from "./tools";
@@ -116,6 +117,23 @@ export class AgentService {
       if (error instanceof LedgerError) throw new ToolError("REFUSED", `${error.message} (${error.code})`);
       throw error;
     }
+  }
+
+  /** The needle: which tool to call next. Reads only, so any token that is valid for this project may ask. */
+  suggest(caller: Caller, intent: string, limit = 3): NeedleChoice[] {
+    if (!this.tokens.resolve(caller.token)) throw new ToolError("UNAUTHORIZED", "This token is not valid for this project, or it was revoked.");
+    const agent = caller.agent ? this.agents.get(caller.agent) : undefined;
+    const known = agent && agent.token === caller.token ? agent : undefined;
+    return route(
+      {
+        role: known ? known.role : "unknown",
+        intent: intent.slice(0, 2000),
+        tasks: [...this.board().values()],
+        ...(known?.task ? { task: known.task } : {}),
+        ...(known?.role === "main" ? { openQuestions: this.relay.openFor(known.person) } : {}),
+      },
+      Math.min(Math.max(1, Math.trunc(limit) || 3), 11),
+    );
   }
 
   private dispatch(agent: AgentRecord, name: ToolName, args: unknown): unknown {
