@@ -255,7 +255,7 @@ describe("attack 8: a submodule repo that also sets submodule.recurse and names 
   // its try/catch, so when git fails the rollback (remove the worktree, delete the branch) never happens. The failed
   // dispatch leaves branch pp/T-1, a registered worktree and a half-made folder; every retry says "Branch pp/T-1
   // already exists" even after the person has fixed the setting.
-  it.fails("a failed start leaves nothing behind, and once the repo is fixed the same task starts", async () => {
+  it("a failed start leaves nothing behind, and once the repo is fixed the same task starts", async () => {
     expectNothingLeftBehind(repo, win);
     git(repo, "config", "--unset", "submodule.recurse");
     git(repo, "rm", "-q", "--cached", ".gitmodules");
