@@ -130,4 +130,44 @@ describe("CoreSpine", () => {
     await new Promise((r) => setTimeout(r, 50));
     expect(container.querySelector(".core-spine")?.getAttribute("data-state") ?? "gone").not.toBe("ready");
   });
+  test("with many tasks it counts who is waiting on whom, and a button shows just those", async () => {
+    const many = [
+      ...Array.from({ length: 4 }, (_, i) => task(`T-${i + 1}`)),
+      task("T-5", { stage: "test-proposed" }),
+      task("T-6", { stage: "building", dispatch: { model: "gemini-3-pro" } }),
+      task("T-7", { stage: "building", dispatch: { model: "gpt-5-codex" } }),
+      task("T-8", { stage: "done", merged: { mergeCommit: "abc" } }),
+    ];
+    routeFetch({ tasks: many });
+    render(<CoreSpine />);
+    const group = await screen.findByRole("group", { name: "Show tasks" });
+    expect(within(group).getByRole("button", { name: /^All 8/ })).toBeTruthy();
+    expect(within(group).getByRole("button", { name: /^Need you 1/ })).toBeTruthy();
+    expect(within(group).getByRole("button", { name: /^Working 2/ })).toBeTruthy();
+    expect(within(group).getByRole("button", { name: /^Not started 4/ })).toBeTruthy();
+    expect(within(group).getByRole("button", { name: /^Merged 1/ })).toBeTruthy();
+    fireEvent.click(within(group).getByRole("button", { name: /^Working/ }));
+    const list = screen.getByRole("list", { name: "Tasks from the ledger" });
+    expect(within(list).getAllByRole("article").map((n) => n.getAttribute("aria-label"))).toEqual(["T-6 Task T-6", "T-7 Task T-7"]);
+    fireEvent.click(within(group).getByRole("button", { name: /^All/ }));
+    expect(within(list).getAllByRole("article")).toHaveLength(8);
+  });
+
+  test("a task nobody has touched is a one-line row; one with a worker or waiting on you is a full card", async () => {
+    routeFetch({ tasks: [task("T-1"), task("T-2", { stage: "test-proposed" }), task("T-3", { stage: "building", dispatch: { model: "claude-opus-5-5" } }), task("T-4"), task("T-5")] });
+    render(<CoreSpine />);
+    await screen.findByRole("list", { name: "Tasks from the ledger" });
+    expect(screen.queryByRole("list", { name: "T-1 progress" })).toBeNull();
+    expect(screen.getByRole("list", { name: "T-2 progress" })).toBeTruthy();
+    expect(screen.getByRole("list", { name: "T-3 progress" })).toBeTruthy();
+    expect(screen.getAllByText("No proof attached")).toHaveLength(2);
+  });
+
+  test("reports how many tasks the ledger has, so the older proof panel can step aside", async () => {
+    routeFetch({ tasks: [task("T-1"), task("T-2")] });
+    const onCount = vi.fn();
+    render(<CoreSpine onCount={onCount} />);
+    await screen.findByRole("list", { name: "Tasks from the ledger" });
+    await waitFor(() => expect(onCount).toHaveBeenLastCalledWith(2));
+  });
 });

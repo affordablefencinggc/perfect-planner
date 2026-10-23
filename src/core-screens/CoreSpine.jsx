@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { useCoreResource } from "./coreApi.js";
 import { modelLabel } from "./CoreAgentConnect.jsx";
 import "./CoreSpine.css";
@@ -55,8 +56,10 @@ function Node({ task, agents }) {
   const stage = STAGES[task.stage] ?? { done: 0, who: null, text: String(task.stage ?? "Unknown") };
   const worker = task.stage === "done" ? null : workerFor(task, agents);
   const working = task.stage === "building" && worker && !worker.quiet;
+  // A task nobody has touched is one line; the full card is for work that is moving or waiting on you.
+  const idle = !worker && task.stage !== "done" && stage.who !== "you" && !task.proofs?.length && !task.lastProgress;
   return (
-    <li className={`spine-node spine-stage-${task.stage}`} data-stage={task.stage} data-working={working ? "true" : "false"}>
+    <li className={`spine-node spine-stage-${task.stage}${idle ? " spine-idle" : ""}`} data-stage={task.stage} data-working={working ? "true" : "false"}>
       <span className="spine-dot" aria-hidden="true" />
       <article aria-label={`${task.label} ${task.title}`}>
         <header>
@@ -69,27 +72,40 @@ function Node({ task, agents }) {
           {stage.who === "you" && <strong className="spine-you"> · your turn</strong>}
           {worker?.quiet && task.stage === "building" && <span className="core-muted"> · its worker has not been heard from lately</span>}
         </p>
-        <ol className="spine-stations" aria-label={`${task.label} progress`}>
+        {!idle && <ol className="spine-stations" aria-label={`${task.label} progress`}>
           {STATIONS.map((name, i) => (
             <li key={name} data-state={i < stage.done ? "done" : i === stage.done && stage.who ? "next" : "todo"}>{name}</li>
           ))}
-        </ol>
+        </ol>}
         {task.lastProgress && <p className="spine-progress core-muted">{String(task.lastProgress.text ?? task.lastProgress).slice(0, 200)}</p>}
-        <p className="spine-meta core-muted">
+        {!idle && <p className="spine-meta core-muted">
           {task.proofs?.length ? `${task.proofs.length} proof item${task.proofs.length === 1 ? "" : "s"}` : "No proof attached"}
           {task.merged?.mergeCommit ? ` · merged at ${String(task.merged.mergeCommit).slice(0, 12)}` : ""}
-        </p>
+        </p>}
       </article>
     </li>
   );
 }
 
-export default function CoreSpine({ onWorkspace }) {
+const FILTERS = [
+  ["all", "All", () => true],
+  ["you", "Need you", (t, w) => STAGES[t.stage]?.who === "you" && t.stage !== "done"],
+  ["working", "Working", (t, w) => Boolean(w) && t.stage !== "done"],
+  ["idle", "Not started", (t, w) => !w && t.stage !== "done" && STAGES[t.stage]?.who !== "you"],
+  ["done", "Merged", (t) => t.stage === "done"],
+];
+
+export default function CoreSpine({ onWorkspace, onCount }) {
+  const [filter, setFilter] = useState("all");
   const tasks = useCoreResource("/tasks", { isEmpty: (data) => !data?.tasks?.length, pollMs: 4000 });
   const agents = useCoreResource("/agents", { pollMs: 4000 });
   if (tasks.status === "no-session") return null;
   const list = tasks.data?.tasks ? [...tasks.data.tasks].sort((a, b) => taskNumber(a.id) - taskNumber(b.id)) : [];
   const done = list.filter((t) => t.stage === "done").length;
+  useEffect(() => { onCount?.(list.length); }, [list.length, onCount]);
+  const workerOf = (t) => workerFor(t, agents.data?.agents);
+  const counts = Object.fromEntries(FILTERS.map(([id, , test]) => [id, list.filter((t) => test(t, workerOf(t))).length]));
+  const shown = list.filter((t) => FILTERS.find(([id]) => id === filter)[2](t, workerOf(t)));
   return (
     <section className="core-spine core-card" aria-labelledby="core-spine-title" data-state={tasks.status}>
       <header>
@@ -104,9 +120,16 @@ export default function CoreSpine({ onWorkspace }) {
           {onWorkspace && <button type="button" className="core-button" onClick={() => onWorkspace("planning")}>Open Deep planning</button>}
         </p>
       )}
+      {tasks.status === "ready" && list.length > 4 && (
+        <div className="spine-filters" role="group" aria-label="Show tasks">
+          {FILTERS.map(([id, label]) => (
+            <button key={id} type="button" className="core-button" aria-pressed={filter === id} onClick={() => setFilter(id)} disabled={id !== "all" && !counts[id]}>{label} <span className="core-muted">{counts[id]}</span></button>
+          ))}
+        </div>
+      )}
       {tasks.status === "ready" && (
         <ol className="spine-list" aria-label="Tasks from the ledger">
-          {list.map((task) => <Node key={task.id} task={task} agents={agents.data?.agents} />)}
+          {shown.map((task) => <Node key={task.id} task={task} agents={agents.data?.agents} />)}
         </ol>
       )}
     </section>

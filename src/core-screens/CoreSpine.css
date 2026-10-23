@@ -34,3 +34,11 @@
 @media (prefers-reduced-motion: reduce) {
   .core-spine .spine-model-orbit, .core-spine .spine-node[data-working="true"] .spine-dot { animation: none; }
 }
+
+.core-spine .spine-filters { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.core-spine .spine-filters button[aria-pressed="true"] { background: var(--ink); color: var(--surface); }
+.core-spine .spine-idle article { padding: var(--space-2) var(--space-3); grid-template-columns: auto 1fr; align-items: center; column-gap: var(--space-3); }
+.core-spine .spine-idle article > header { display: contents; }
+.core-spine .spine-idle .spine-state { grid-column: 2; color: var(--muted); }
+.core-spine .spine-idle .spine-id { grid-column: 1; }
+.core-spine .spine-idle h3 { grid-column: 2; font-size: var(--text-sm); }
