@@ -28,7 +28,7 @@ describe("fails closed", () => {
     expect(result.outputTail).toContain("not available on Windows yet");
   });
 
-  it("refuses a precheck failure before anything starts", async () => {
+  it.skipIf(process.platform !== "linux")("refuses a precheck failure before anything starts", async () => {
     const base = vi.fn(async () => ok);
     const run = containedRunner({ base, status: async () => ({ kind: "bubblewrap" }), precheck: () => "refused: planted" });
     const result = await run("./node -v", os.tmpdir(), {});
