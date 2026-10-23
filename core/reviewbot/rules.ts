@@ -88,6 +88,8 @@ const GENERATED: ReadonlyArray<{ target: string; source: string }> = [
 const COST_LINES: ReadonlyArray<[RegExp, string]> = [
   [/\bmacos[-\w.]*/i, "macOS runner (macOS is dropped everywhere)"],
   [/self-hosted/i, "self-hosted runner"],
+  // Larger runners are picked by group or label, not by an image name.
+  [/\bgroup\s*:|\blabels?\s*:/i, "runner group or label (larger or self-hosted runner)"],
   [/\b(?:ubuntu|windows)-[\w.-]*(?:large|xlarge|\d+-?cores?|\d+x\b)[\w.-]*/i, "larger paid runner"],
 ];
 const INSTALLER_LINES = /\btauri(?::|\s+)build\b|\bnpm run tauri\b|\bcargo tauri\b|\bpackage:installer|\bmakensis\b|\bdmg\b/i;
@@ -136,7 +138,9 @@ export function reviewPullRequest(facts: PrFacts): Review {
 
     // 3. Gate, CI, key storage and push-scan files need the person's typed OK.
     for (const p of paths(file)) {
-      const hit = GATE_PATHS.find(([re]) => re.test(p));
+      // Windows checkouts are case-insensitive and accept backslashes, so Core\\Gate\\x.ts is core/gate/x.ts there.
+      const folded = p.replace(/\\/g, "/").toLowerCase();
+      const hit = GATE_PATHS.find(([re]) => re.test(p) || re.test(folded));
       if (hit) {
         add("gate-files", "hold", `Touches ${hit[1]}: the user must type the OK in the project thread.`, p);
         break;

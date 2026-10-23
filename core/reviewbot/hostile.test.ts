@@ -15,7 +15,7 @@ const findings = (f: PrFacts) => reviewPullRequest(f).findings.map((x) => x.rule
 
 describe("a gate file cannot be hidden", () => {
   // F7 (low): the rule is case-sensitive. On Windows (this project's platform) a checkout is case-insensitive, so Core/Gate/ lands in core/gate/.
-  it.fails("by case, a dot-segment, a double slash or a leading dot-slash", () => {
+  it("by case, a dot-segment, a double slash or a leading dot-slash", () => {
     const missed: string[] = [];
     for (const p of ["Core/Gate/gate.ts", "core//gate/gate.ts", "./core/gate/gate.ts", "core/./gate/gate.ts", "core/gate/../gate/gate.ts", ".GitHub/workflows/ci.yml", ".github//workflows/ci.yml", "core\\gate\\gate.ts", "CORE/GATE/gate.ts"]) {
       if (verdict(facts({ files: [file(p)] })) === "GO") missed.push(p);
@@ -44,7 +44,7 @@ describe("a costly runner cannot be hidden", () => {
   for (const line of spellings) {
     // F8: a runner group (GitHub's larger runners are chosen by group or label) is not flagged as cost.
     const known = /group:/.test(line);
-    (known ? it.fails : it)(`spotted: ${line.trim()}`, () => {
+    (known ? it : it)(`spotted: ${line.trim()}`, () => {
       expect(findings(facts({ files: [file(wf, [line])] })), `"${line.trim()}" not flagged as cost`).toContain("cost");
     });
   }
