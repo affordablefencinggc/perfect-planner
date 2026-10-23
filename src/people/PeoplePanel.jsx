@@ -183,9 +183,9 @@ export function PeoplePanel({ view, photos = {}, me, starter, now = () => new Da
         return (
           <PersonProfile
             onClose={() => setProfileOf(null)}
-            onAssign={onAssign}
+            onAssign={isOwner ? onAssign : undefined}
             onShareLink={isOwner ? onShareDoc : undefined}
-            profile={{ person: m.person, name: m.name, role: ROLE_LABEL[m.role] ?? m.role, avatar: photos[m.person], stats, today: now().toISOString().slice(0, 10) }}
+            profile={{ person: m.person, name: m.name, role: ROLE_LABEL[m.role] ?? m.role, avatar: photos[m.person], stats, assignable: isOwner && onAssign ? tasks.filter((t) => !t.owner && t.status !== "done" && t.stage !== "done").map((t) => ({ id: t.id, label: t.label ?? t.id })) : undefined, today: now().toISOString().slice(0, 10) }}
           />
         );
       })()}

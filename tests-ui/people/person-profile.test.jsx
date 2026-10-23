@@ -43,6 +43,14 @@ describe("PersonProfile", () => {
     fireEvent.click(screen.getByRole("button", { name: "Add link" }));
     expect((await screen.findByRole("alert")).textContent).toMatch(/https/);
   });
+  it("assigns an existing unowned task through onAssign", async () => {
+    const onAssign = vi.fn().mockResolvedValue({});
+    render(<PersonProfile profile={profile({ assignable: [{ id: "T-4", label: "Export CSV" }] })} onAssign={onAssign} onClose={() => {}} />);
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "T-4" } });
+    fireEvent.click(screen.getByRole("button", { name: "Allocate to Mira" }));
+    await Promise.resolve();
+    expect(onAssign).toHaveBeenCalledWith({ person: "mira", task: "T-4" });
+  });
   it("closes on Escape", () => {
     const onClose = vi.fn();
     render(<PersonProfile profile={profile()} onClose={onClose} />);

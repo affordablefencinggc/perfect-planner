@@ -19,7 +19,7 @@
 .pprofile label { display: grid; gap: 2px; font-size: 12px; color: var(--muted, #5f6762); }
 .pprofile fieldset { border: 0; padding: 0; margin: 0; display: grid; gap: 4px; }
 .pprofile fieldset label { display: flex; gap: 6px; align-items: center; color: var(--ink, #27302b); font-size: 13px; }
-.pprofile input[type="text"], .pprofile input:not([type]) { font: inherit; padding: 5px 8px; border: 1px solid var(--line-strong, #9aa5ae); border-radius: 6px; background: var(--paper-strong, #fff); color: var(--ink, #27302b); }
+.pprofile select, .pprofile input[type="text"], .pprofile input:not([type]) { font: inherit; padding: 5px 8px; border: 1px solid var(--line-strong, #9aa5ae); border-radius: 6px; background: var(--paper-strong, #fff); color: var(--ink, #27302b); }
 .pprofile button { font: inherit; padding: 5px 12px; border-radius: 6px; border: 1px solid var(--line-strong, #9aa5ae); background: var(--paper-strong, #fff); color: var(--ink, #27302b); cursor: pointer; }
 .pprofile button:disabled { opacity: 0.5; cursor: not-allowed; }
 .pprofile-close { margin-left: auto; }

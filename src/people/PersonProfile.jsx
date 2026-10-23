@@ -21,6 +21,8 @@ export function PersonProfile({ profile, onClose, onAssign, onShareLink }) {
   const [scheduled, setScheduled] = useState([]);
   const [title, setTitle] = useState("");
   const [when, setWhen] = useState("up-next");
+  const [taskId, setTaskId] = useState("");
+  const real = Array.isArray(profile.assignable);
   const [ctx, setCtx] = useState(() => loadContext(person));
   const [link, setLink] = useState("");
   const [error, setError] = useState("");
@@ -39,11 +41,16 @@ export function PersonProfile({ profile, onClose, onAssign, onShareLink }) {
 
   const assign = async (event) => {
     event.preventDefault();
+    setError("");
+    if (real) {
+      const picked = profile.assignable.find((x) => x.id === taskId);
+      if (!picked) return;
+      try { await onAssign({ person, task: picked.id }); setTaskId(""); } catch (e) { setError(e?.message || "Could not assign this work"); }
+      return;
+    }
     const t = title.trim();
     if (!t) return;
-    setError("");
     try {
-      if (onAssign) await onAssign({ person, title: t, when, date: slot });
       if (when === "up-next") setQueue((q) => [...q, { title: t }]);
       else setScheduled((s) => [...s, { title: t, date: slot }]);
       setTitle("");
@@ -104,6 +111,17 @@ export function PersonProfile({ profile, onClose, onAssign, onShareLink }) {
           <h3>Allocate work</h3>
           {canAssign ? (
             <form onSubmit={assign}>
+              {real ? (
+                <>
+                  <label>Task
+                    <select value={taskId} onChange={(e) => setTaskId(e.target.value)} disabled={!profile.assignable.length}>
+                      <option value="">{profile.assignable.length ? "Choose an unassigned task" : "No unassigned tasks"}</option>
+                      {profile.assignable.map((x) => <option key={x.id} value={x.id}>{x.id} · {x.label}</option>)}
+                    </select>
+                  </label>
+                  <button type="submit" disabled={!taskId}>Allocate to {name}</button>
+                </>
+              ) : (<>
               <label>Work<input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="What should they do?" autoComplete="off" /></label>
               <fieldset>
                 <legend>When</legend>
@@ -111,6 +129,7 @@ export function PersonProfile({ profile, onClose, onAssign, onShareLink }) {
                 <label><input type="radio" name={`when-${person}`} checked={when === "slot"} onChange={() => setWhen("slot")} /> Next free slot ({slot})</label>
               </fieldset>
               <button type="submit" disabled={!title.trim()}>Allocate to {name}</button>
+              </>)}
             </form>
           ) : <p className="pprofile-muted">Assigning work to people from here is not connected on this project yet.</p>}
         </section>

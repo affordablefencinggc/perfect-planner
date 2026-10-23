@@ -96,6 +96,11 @@ export default function PeopleScreen() {
       if (file.size > PHOTO_UPLOAD_MAX) throw new Error("Photos must be 512 KB or smaller.");
       await run("/people/photo", { image: await readAsBase64(file) }, "Your photo was saved.");
     },
+    onAssign: async ({ person, task }) => {
+      setNotice(null);
+      await run("/people/assign", { person, task }, `${task} was given to ${nameOf(person)}.`);
+      tasksResource.reload?.();
+    },
     onShareDoc: async ({ title, path }) => {
       setNotice(null);
       await run("/people/docs", { title, path }, `${title} is now shared with everyone on the project.`);
@@ -130,7 +135,7 @@ export default function PeopleScreen() {
       {notice && (
         <p className={`people-screen-notice is-${notice.kind}`} role={notice.kind === "bad" ? "alert" : "status"}>{notice.text}</p>
       )}
-      {data && <PeoplePanel view={data.view} photos={data.photos ?? {}} tasks={tasksResource.data?.tasks ?? []} me={data.me} starter={data.starter} {...handlers} {...(data.ownerMissing ? { onAddMember: undefined, onShareDoc: undefined } : {})} />}
+      {data && <PeoplePanel view={data.view} photos={data.photos ?? {}} tasks={tasksResource.data?.tasks ?? []} me={data.me} starter={data.starter} {...handlers} {...(data.ownerMissing ? { onAddMember: undefined, onShareDoc: undefined, onAssign: undefined } : {})} />}
       {data && <PeopleDetails data={data} />}
     </CoreScreen>
   );
