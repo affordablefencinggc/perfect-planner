@@ -70,7 +70,7 @@ describe("TasksScreen", () => {
       "POST /tasks/T-1/dispatch": async (init) => {
         expect(JSON.parse(init.body)).toEqual({ model: "claude-sonnet-4-5" });
         tasks = [task({ worktree: { path: "/work/notes/.perfect-planner/worktrees/T-1", branch: "pp/T-1", base: "main", port: 5200 }, dispatch: { issuedAt: "now", model: "claude-sonnet-4-5" } })];
-        return ok({ task: "T-1", title: "Save notes", worktree: "/work/notes/.perfect-planner/worktrees/T-1", branch: "pp/T-1", tokenFile: "/p/.perfect-planner/tokens/T-1.token", brief: "You are a Perfect Planner worker on T-1: Save notes.\n2. Test first: … propose_test", setup: `cd "/w" && claude mcp add perfect-planner-core --env 'PP_AGENT_TOKEN_FILE=/p/.perfect-planner/tokens/T-1.token' -- node '/a'`, start: 'claude "$(cat "/b/T-1.md")"', json: "{}", shell: "Terminal", agentBuilt: true });
+        return ok({ task: "T-1", title: "Save notes", worktree: "/work/notes/.perfect-planner/worktrees/T-1", branch: "pp/T-1", tokenFile: "/p/.perfect-planner/tokens/T-1.token", brief: "You are a Perfect Planner worker on T-1: Save notes.\n2. Test first: … propose_test", setup: `cd "/w" && claude mcp add perfect-planner-core --env 'PP_AGENT_TOKEN_FILE=/p/.perfect-planner/tokens/T-1.token' -- node '/a'`, start: 'claude "$(cat "/b/T-1.md")"', json: "{}", agents: { gemini: { setup: "cd /w && node connect.mjs --agent gemini", start: "gemini --approval-mode auto_edit -i brief", note: "Choose Trust folder first." }, codex: { setup: "cd /w && node connect.mjs --agent codex", start: "codex -s workspace-write -a on-request brief", note: "One connection per computer." } }, shell: "Terminal", agentBuilt: true });
       },
     });
     renderScreen();
@@ -83,6 +83,8 @@ describe("TasksScreen", () => {
     expect(document.body.textContent).not.toContain(TOKEN);
     expect(screen.getByLabelText("Brief for T-1").textContent).toContain("propose_test");
     expect(screen.getByLabelText("Start command for T-1").textContent).toContain("claude");
+    expect(screen.getByLabelText("gemini start for T-1").textContent).toContain("auto_edit");
+    expect(screen.getByLabelText("codex set-up for T-1").textContent).toContain("--agent codex");
     expect(fetch.mock.calls.filter(([u]) => String(u).includes("/dispatch"))).toHaveLength(1);
     fireEvent.click(screen.getByRole("button", { name: "Hide command" }));
     expect(screen.queryByLabelText("Set-up command for T-1")).toBeNull();

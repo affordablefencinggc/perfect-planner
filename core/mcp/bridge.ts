@@ -60,17 +60,42 @@ export async function startBridge(service: AgentService, port = 0): Promise<Brid
   };
 }
 
-/** The agent side: a RemoteCall that reaches the bridge with this agent's token. */
-export function bridgeCall(url: string, token: string, fetchImpl: typeof fetch = fetch): RemoteCall {
+const NOT_RUNNING = "Perfect Planner is not running. Open the app, then click Connect agent for a fresh line.";
+
+function refused(error: unknown): boolean {
+  // fetch wraps the socket error: TypeError("fetch failed") with the code on .cause.
+  const code = (error as { cause?: { code?: string }; code?: string })?.cause?.code ?? (error as { code?: string })?.code;
+  return code === "ECONNREFUSED" || code === "ENOTFOUND";
+}
+
+/**
+ * The agent side: a RemoteCall that reaches the bridge with this agent's token. A refused connection
+ * never reached the app, so it is tried once more after a short wait (the app may be restarting);
+ * anything that did reach the app is never sent twice.
+ */
+export function bridgeCall(url: string, token: string, fetchImpl: typeof fetch = fetch, retryWaitMs = 500): RemoteCall {
   return async ({ tool, args, agent }) => {
-    const response = await fetchImpl(`${url}/call`, {
-      method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
-      body: JSON.stringify({ tool, args, agent }),
-    });
+    const send = () =>
+      fetchImpl(`${url}/call`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+        body: JSON.stringify({ tool, args, agent }),
+      });
+    let response: Response;
+    try {
+      response = await send().catch(async (error: unknown) => {
+        if (!refused(error)) throw error;
+        await new Promise((resolve) => setTimeout(resolve, retryWaitMs));
+        return send();
+      });
+    } catch (error) {
+      throw Object.assign(new Error(refused(error) ? NOT_RUNNING : "Perfect Planner did not answer. If the app is open, try the call again; a write may or may not have been recorded, so check_inbox first."), { code: "UNAVAILABLE" });
+    }
     const body = (await response.json().catch(() => null)) as { ok?: boolean; result?: unknown; code?: string; message?: string } | null;
     if (body?.ok) return body.result;
-    throw Object.assign(new Error(body?.message ?? `Perfect Planner answered ${response.status}.`), { code: body?.code ?? "ERROR" });
+    if (response.status === 401 && !body?.message) throw Object.assign(new Error("Your connection ended (the app restarted). Run the new line from Connect agent."), { code: "UNAUTHORIZED" });
+    if (response.status === 401) throw Object.assign(new Error(`${body?.message} If the app restarted, run the new line from Connect agent.`), { code: "UNAUTHORIZED" });
+    throw Object.assign(new Error(body?.message ?? (response.status >= 500 ? "Perfect Planner had an internal problem. Nothing was changed that you can rely on; try again or check_inbox." : `Perfect Planner answered ${response.status}.`)), { code: body?.code ?? "ERROR" });
   };
 }
 
