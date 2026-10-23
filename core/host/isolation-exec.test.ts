@@ -12,6 +12,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { runTestCommand } from "../gate/index";
+import { sandboxStatus } from "../exec/index";
 import { cleanAfterEach, cleanAll, dispatch, git, track, twoProjects } from "./isolation-testing";
 import { hostCall } from "./testing";
 
@@ -59,6 +60,7 @@ interface Probe {
   mainCheckoutWrite: string;
   otherRepoWrite: string;
   network: string;
+  ownLoopback: string;
   uid: number | null;
   stray: number;
 }
@@ -68,7 +70,8 @@ interface Probe {
  * done-when test, and run by the gate when the person approves it (it must fail first, so it exits 1).
  * It reads, writes and connects to places that belong to other things, and reports what happened.
  */
-async function runHostileTest() {
+async function runHostileTest(contained = false) {
+  if (contained) vi.stubEnv("PP_CONTAIN_TESTS", "1");
   vi.stubEnv("ANTHROPIC_API_KEY", "fake-value-for-anthropic");
   vi.stubEnv("GITHUB_TOKEN", "fake-value-for-github");
   const { ctx, alpha, beta } = await twoProjects();
@@ -109,6 +112,8 @@ async function runHostileTest() {
     'const stray = spawn(process.execPath, ["-e", "setTimeout(() => {}, 120000)"], { detached: true, stdio: "ignore" });',
     "stray.unref();",
     "r.stray = stray.pid;",
+    'spawn(process.execPath, ["-e", "setTimeout(() => require(\\"node:fs\\").writeFileSync(\\"late.txt\\", \\"x\\"), 1500)"], { detached: true, stdio: "ignore", cwd: process.cwd() }).unref();',
+    'await new Promise((resolve) => { const own = net.createServer((socket) => socket.destroy()); own.listen(0, "127.0.0.1", () => { const socket = net.connect(own.address().port, "127.0.0.1"); socket.on("connect", () => { r.ownLoopback = "CONNECTED"; socket.destroy(); own.close(); resolve(); }); socket.on("error", (error) => { r.ownLoopback = "BLOCKED:" + error.code; own.close(); resolve(); }); }); });',
     `await new Promise((resolve) => { const socket = net.connect(${port}, "127.0.0.1"); socket.on("connect", () => { r.network = "CONNECTED"; socket.destroy(); resolve(); }); socket.on("error", (error) => { r.network = "BLOCKED:" + error.code; resolve(); }); });`,
     'console.log("PROBE:" + JSON.stringify(r));',
     "process.exit(1);",
@@ -133,13 +138,18 @@ async function runHostileTest() {
       return false;
     }
   };
-  const strayAlive = alive(probe.stray);
-  // Never leave the stray process behind.
-  try {
-    process.kill(probe.stray, "SIGKILL");
-  } catch {
-    // already gone
+  // Contained, the pid is in the sandbox's own numbering; the late file answers the same question.
+  const strayAlive = contained ? false : alive(probe.stray);
+  if (!contained) {
+    // Never leave the stray process behind.
+    try {
+      process.kill(probe.stray, "SIGKILL");
+    } catch {
+      // already gone
+    }
   }
+  await new Promise((resolve) => setTimeout(resolve, 2500));
+  const lateFile = fs.existsSync(path.join(a.worktree, "late.txt"));
   const ownUid = typeof process.getuid === "function" ? process.getuid() : null;
   const written = {
     mainCheckout: fs.existsSync(path.join(alpha.repo, "WRITTEN-BY-THE-TEST.txt")),
@@ -148,7 +158,7 @@ async function runHostileTest() {
   };
   await cleanAll();
   vi.unstubAllEnvs();
-  return { probe, strayAlive, ownUid, written };
+  return { probe, strayAlive, ownUid, written, lateFile, output };
 }
 
 describe("the hostile test, run by the gate in project A's worktree", () => {
@@ -173,7 +183,7 @@ describe("the hostile test, run by the gate in project A's worktree", () => {
 
   // Not enforced. Each test states the safe outcome and fails today (it.fails). The probe's own report
   // shows what the test could do; the assertion is what a sandbox would have to make true.
-  describe("not enforced (known gaps, step B)", () => {
+  describe("not enforced by default: containment is off (known gaps, step B)", () => {
     it.fails("known gap: the test cannot read the project's real .env in the main checkout (../../../.env)", () => {
       expect(result.probe.mainCheckoutEnv).toMatch(/^BLOCKED/);
     });
@@ -217,5 +227,74 @@ describe("the hostile test, run by the gate in project A's worktree", () => {
     gapOnPosix("known gap: a process the test left running is stopped when the check ends", () => {
       expect(result.strayAlive).toBe(false);
     });
+  });
+});
+
+// The same hostile test with "Contain test commands" on (PP_CONTAIN_TESTS=1). Needs bubblewrap and user
+// namespaces; where this computer has neither, the block is skipped and says why.
+const containment = process.platform === "linux" ? await sandboxStatus() : { kind: "none" as const, reason: "Linux only" };
+describe.skipIf(containment.kind !== "bubblewrap")(`the same hostile test with containment on (${containment.kind === "bubblewrap" ? "bubblewrap" : `skipped: ${containment.reason}`})`, () => {
+  let result: Awaited<ReturnType<typeof runHostileTest>>;
+  beforeAll(async () => {
+    result = await runHostileTest(true);
+  }, 120_000);
+  afterAll(async () => {
+    await cleanAll();
+    vi.unstubAllEnvs();
+  });
+
+  it("the output says how the run was contained", () => {
+    expect(result.output.split("\n")[0]).toBe("[contained: bubblewrap, no network, writes only in the worktree]");
+  });
+
+  it("the test sees none of the host's secrets and the worktree's own .env still reads", () => {
+    expect(result.probe.envNames).toEqual([]);
+    expect(result.probe.worktreeEnv).toMatch(/^[A-Z_]+=PLACEHOLDER\nPORT=3000\n$/);
+  });
+
+  it("the test cannot read the project's real .env in the main checkout (../../../.env)", () => {
+    expect(result.probe.mainCheckoutEnv).toMatch(/^BLOCKED/);
+  });
+
+  it("the test cannot read another project's worker token file", () => {
+    expect(result.probe.otherProjectToken).toMatch(/^BLOCKED/);
+  });
+
+  it("the test cannot read another project's ledger in the app's data folder", () => {
+    expect(result.probe.otherProjectLedger).toMatch(/^BLOCKED/);
+  });
+
+  it("the test cannot read files in the user's home folder (a stand-in ~/.ssh)", () => {
+    expect(result.probe.homeSecret).toMatch(/^BLOCKED/);
+  });
+
+  it("the test cannot write outside its worktree", () => {
+    expect(result.probe.outsideWrite).toMatch(/^BLOCKED/);
+    expect(result.written.outside).toBe(false);
+  });
+
+  it("the test cannot write into its own project's main checkout, skipping the diff review", () => {
+    expect(result.probe.mainCheckoutWrite).toMatch(/^BLOCKED/);
+    expect(result.written.mainCheckout).toBe(false);
+  });
+
+  it("the test cannot write into another project's git folder", () => {
+    expect(result.probe.otherRepoWrite).toMatch(/^BLOCKED/);
+    expect(result.written.otherRepo).toBe(false);
+  });
+
+  it("the test cannot reach a host loopback port, but its own loopback still works", () => {
+    expect(result.probe.network).toMatch(/^BLOCKED/);
+    expect(result.probe.ownLoopback).toBe("CONNECTED");
+  });
+
+  it("a process the test left running is stopped when the check ends", () => {
+    expect(result.lateFile).toBe(false);
+  });
+
+  // Still open: bubblewrap without root maps the test to the same user id, so it is not a "different, limited
+  // user". It has no capabilities and no view of the rest of the computer, but the id is equal.
+  it.fails("known gap: the test runs as a different OS user", () => {
+    expect(result.probe.uid).not.toBe(result.ownUid);
   });
 });
