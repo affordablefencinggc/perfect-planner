@@ -158,7 +158,7 @@ describe("attack 12: a key store that errors must not look like a key that was n
   // The signing-key vault has the same shape: its PowerShell helper swallows every error while looking an item up
   // (`try { ... } catch { $null }`) and then prints "missing", so a locked or failing Credential Locker reads as "this
   // key does not exist" and the app may make a new one. Checked on the script the app sends, with a stand-in powershell.
-  it("the signing-key vault's lookup script does not turn an error into 'missing'", () => {
+  it.skipIf(WINDOWS)("the signing-key vault's lookup script does not turn an error into 'missing'", () => {
     const dir = tempDir("pp-attack-fakeps-");
     const log = path.join(dir, "scripts.txt");
     const fake = path.join(dir, os.platform() === "win32" ? "powershell.cmd" : "powershell");
@@ -170,7 +170,6 @@ describe("attack 12: a key store that errors must not look like a key that was n
         : `#!/usr/bin/env node\nconst a = process.argv.slice(2); const i = a.indexOf("-EncodedCommand");\nrequire("node:fs").appendFileSync(${JSON.stringify(log)}, Buffer.from(a[i + 1], "base64").toString("utf16le") + "\\n=====\\n");\nprocess.stdout.write("missing");\n`,
       { mode: 0o755 },
     );
-    if (os.platform() === "win32") throw new Error("the stand-in powershell is a POSIX script; this check runs on Linux and macOS");
     const store = osSecretStore("attack-vault", "win32", () => fake);
     expect(store.get("signing")).toBeUndefined();
     const scripts = fs.readFileSync(log, "utf8");

@@ -166,7 +166,9 @@ test("uncertain preflight process termination propagates a typed cleanup failure
 
 // The Windows flake (git-driver-config-unverified / MCP_GIT_COMMAND_FAILED): when git is too slow to answer the
 // driver-config question inside the time budget, the call must still refuse, and the refusal must say it was the clock.
-test("a git that is too slow to answer the driver-config question refuses, and names the time limit", async (t) => {
+// The stand-in gits are POSIX shell scripts; Windows only starts a real .exe, so these two run elsewhere (Windows CI run 39966315401 showed it).
+const posixOnly = { skip: process.platform === "win32" && "the stand-in git is a shell script" };
+test("a git that is too slow to answer the driver-config question refuses, and names the time limit", posixOnly, async (t) => {
   const root = await repository(t);
   const bin = await fixture(t);
   const slow = path.join(bin, "git");
@@ -175,7 +177,7 @@ test("a git that is too slow to answer the driver-config question refuses, and n
   await assert.rejects(runGuardedGit(root, ["status", "--porcelain"], { gitExecutable: slow, timeoutMs: 400 }), /git-driver-config-unverified \(git-time-limit\)/);
 });
 
-test("a git that fails the driver-config question outright refuses and names the exit code", async (t) => {
+test("a git that fails the driver-config question outright refuses and names the exit code", posixOnly, async (t) => {
   const root = await repository(t);
   const bin = await fixture(t);
   const broken = path.join(bin, "git");
