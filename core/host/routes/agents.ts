@@ -20,6 +20,7 @@ import { writeOwnerOnlyFile } from "../tokenFile";
 import { waitingQuestions } from "./decisions";
 import { localPersonId } from "./people";
 import { repoState } from "./tasks";
+import { extraRepoRoots } from "../../repos/index";
 import { chosenRepoRoot, rootsFileFor } from "../protectedRoots";
 
 export const AGENT_SERVER_NAME = "perfect-planner-core";
@@ -170,7 +171,8 @@ export const rootsFilePath = rootsFileFor;
  */
 export function projectRoots(project: CoreProject, extra: readonly (string | undefined)[] = []): string[] {
   const manager = project.state.get("tasks.worktrees") as { repoRoot?: unknown; worktreeRoot?: unknown } | undefined;
-  const roots = [project.root, chosenRepoRoot(project.root), manager?.repoRoot, manager?.worktreeRoot, ...extra];
+  const all = project.state.get("tasks.worktrees.all") as Map<string, { repoRoot: string; worktreeRoot: string }> | undefined;
+  const roots = [project.root, chosenRepoRoot(project.root), ...extraRepoRoots(project.root), manager?.repoRoot, manager?.worktreeRoot, ...[...(all?.values() ?? [])].flatMap((m) => [m.repoRoot, m.worktreeRoot]), ...extra];
   return [...new Set(roots.filter((root): root is string => typeof root === "string" && path.isAbsolute(root)))];
 }
 

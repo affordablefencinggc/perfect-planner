@@ -228,7 +228,8 @@ export class GitWatcher {
       try {
         if (!existsSync(info.path)) throw new Error("worktree folder is missing");
         const [files, commits] = await Promise.all([changedFiles(info.path, info.baseSha), commitsSince(info.path, info.baseSha)]);
-        read.set(info.taskId, files);
+        // Files of another repo never collide with this repo's files of the same name.
+        read.set(info.taskId, info.repo ? files.map((file) => `${info.repo}:${file}`) : files);
         await this.observeCommits(info, commits, result);
         this.trackProgress(info, files, commits, result);
       } catch (error) {

@@ -5,6 +5,7 @@ import { describeLaunchFolder } from "../browser/launchFolder.js";
 import { WorkHeader } from "./WorkHeader.jsx";
 import { CoreScreen } from "./CoreScreen.jsx";
 import { coreGet, useCoreResource } from "./coreApi.js";
+import { CostPanel, GroupBar, RepoBar } from "./TasksRepos.jsx";
 import "./TasksScreen.css";
 
 // Run the core loop from the app (core/host/routes/tasks.ts): start a worker on a task, approve
@@ -170,7 +171,7 @@ function DiffView({ diff }) {
   );
 }
 
-function TaskCard({ task, repoRoot, project, act, busy, notice, dispatchFor, onDispatched, onHideDispatch }) {
+function TaskCard({ task, repoRoot, project, act, busy, notice, dispatchFor, onDispatched, onHideDispatch, showRepo }) {
   const [model, setModel] = useState(task.dispatch?.model ?? DEFAULT_WORKER_MODEL);
   const [diff, setDiff] = useState(null);
   const [diffError, setDiffError] = useState(null);
@@ -207,6 +208,7 @@ function TaskCard({ task, repoRoot, project, act, busy, notice, dispatchFor, onD
       <header>
         <div>
           <span className="core-tasks-id">{task.label}</span>
+          {showRepo && <span className="core-pill core-tasks-repo-pill">{task.repo}</span>}
           <h3>{task.title}</h3>
           {task.clauses.length > 0 && <span className="core-muted core-tasks-clauses">{task.clauses.join(" · ")}</span>}
         </div>
@@ -427,6 +429,7 @@ function QueuePanel({ data, post, busy, onStarted, onNotice }) {
 
 const NOTICE = {
   dispatch: () => null,
+  "merge-group": (r) => ({ tone: r.merged?.length ? "good" : "warn", text: r.message ?? `Merged ${r.merged.map((m) => `${m.task} (${m.repo})`).join(" and ")}.` }),
   test: () => ({ tone: "good", text: "Test saved. Approve it to run it on today's code." }),
   "approve-test": (r) => {
     if (!r.failsFirst) return { tone: "bad", text: `Approved, but ${r.reason ?? "the test did not fail on today's code"}${r.output ? `\n\n${tail(r.output)}` : ""}` };
@@ -475,6 +478,10 @@ export default function TasksScreen() {
   };
 
   const saveRepo = async (root) => resource.post("/tasks/repo", { root });
+  const addRepo = async (name, root) => resource.post("/repos", { name, root });
+  const removeRepo = (name) => act("repo", "repo", "/repos/remove", { name });
+  const mergeGroup = (group) => act(`group:${group.group}`, "merge-group", `/tasks/groups/${group.group}/merge`, { commits: Object.fromEntries(group.tasks.map((id) => [id, data.tasks.find((t) => t.id === id)?.diffApproval?.commit])) });
+  const manyRepos = (data?.repos?.length ?? 0) > 1;
 
   return (
     <CoreScreen
@@ -486,16 +493,21 @@ export default function TasksScreen() {
     >
       {data && !data.repo?.ok && <RepoPicker repo={data.repo} onSave={saveRepo} />}
       {data?.repo?.ok && data.queue && data.tasks.length > 0 && <QueuePanel data={{ ...data, project: resource.project }} post={resource.post} busy={busy} onNotice={setBusy} onStarted={(list) => setDispatches((all) => ({ ...all, ...Object.fromEntries(list.map((d) => [d.task, d])) }))} />}
-      {data?.repo?.ok && (
+      {data?.repo?.ok && !manyRepos && (
         <p className="core-muted core-tasks-repo-line">Workers branch from <code>{data.repo.root}</code></p>
       )}
+      {data?.repo?.ok && data.repos && <RepoBar repos={data.repos} onAdd={addRepo} onRemove={removeRepo} />}
+      {notices.repo && <p className={`core-tasks-notice ${notices.repo.tone}`}>{notices.repo.text}</p>}
+      {data?.groups?.map((group) => <GroupBar key={group.group} group={group} tasks={data.tasks} busy={busy === `group:${group.group}`} notice={notices[`group:${group.group}`]} onMerge={mergeGroup} />)}
+      {data && data.tasks.length > 0 && <CostPanel />}
       {data && data.tasks.length > 0 && (
         <div className="core-tasks-list">
           {data.tasks.map((task) => (
             <TaskCard
               key={task.id}
               task={task}
-              repoRoot={data.repo?.root}
+              showRepo={manyRepos}
+              repoRoot={(data.repos?.find((r) => r.name === (task.repo ?? "main")) ?? data.repo)?.root}
               project={resource.project}
               act={act}
               busy={busy}

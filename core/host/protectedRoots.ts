@@ -7,6 +7,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { isLocalWindowsPath, isWithin, registeredRoots } from "../exec/index";
+import { extraRepoRoots } from "../repos/index";
 
 const REPO_FILE = "repo.json";
 
@@ -50,6 +51,7 @@ export function protectFor(tokenFile: string | null): string[] {
   if (!tokenFile) return [];
   const project = path.dirname(path.dirname(path.dirname(tokenFile)));
   const repo = chosenRepoRoot(project);
+  const more = extraRepoRoots(project).filter((root) => path.isAbsolute(root) && !repoRefusal(root));
   let recorded: unknown[] = [];
   try {
     const roots = (JSON.parse(fs.readFileSync(rootsFileFor(tokenFile), "utf8")) as { roots?: unknown }).roots;
@@ -57,7 +59,7 @@ export function protectFor(tokenFile: string | null): string[] {
   } catch {
     // an older app wrote no roots file
   }
-  const roots = [project, ...(repo ? [repo] : []), ...recorded].filter((root): root is string => typeof root === "string" && path.isAbsolute(root));
+  const roots = [project, ...(repo ? [repo] : []), ...more, ...recorded].filter((root): root is string => typeof root === "string" && path.isAbsolute(root));
   // A whole drive or the home folder is never a protected root: it would hide ~/.local/bin/claude.
   return [...new Set(roots)].filter((root) => !repoRefusal(root));
 }
