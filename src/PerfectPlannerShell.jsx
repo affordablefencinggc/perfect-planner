@@ -77,6 +77,7 @@ import { GearSixIcon } from "@phosphor-icons/react";
 import "./settings/settings.css";
 const loadSettingsWorkspace = () => import("./settings/SettingsWorkspace.jsx");
 const SettingsWorkspace = lazy(() => loadSettingsWorkspace().then((module) => ({ default: module.SettingsWorkspace })));
+import { WorkHeader } from "./core-screens/WorkHeader.jsx";
 import { DEMO_ONLY_REASON, DemoOnlyReason, DemoSampleBadge } from "./demo/DemoSampleNotice.jsx";
 const loadRuntimeTools = (name) => import("./components/RuntimeConnectionsPanel.jsx")
   .then((module) => ({ default: module[name] })).catch(() => ({ default: RuntimeToolsUnavailable }));
@@ -1539,15 +1540,21 @@ function RepositoryDrawer({
   );
 }
 
-// Demo inspector shows only fields the selected sample item actually carries.
-function demoInspectorProperties(selected) {
-  const missing = "Not recorded in the sample";
+// Same layout a real task gets; sample items only fill the fields they carry.
+function demoInspectorFacts(selected, mustHaves) {
+  const files = Array.isArray(selected.files) ? selected.files.length : 0;
   return [
-    ["Owner", selected.owner ?? missing],
-    ["Branch", selected.branch ?? missing],
-    ["Repository", selected.repository ?? missing],
-    ["Depends on", selected.dependency ?? missing],
-    ["Files", Array.isArray(selected.files) && selected.files.length ? selected.files.join(" · ") : missing],
+    ["Repository", selected.repository, true],
+    ["Branch", selected.branch],
+    ["Owner / agent", selected.owner],
+    ["Worktree", selected.worktree, true],
+    ["Contract", `${mustHaves} must-haves`],
+    ["File scope", files ? `${files} file${files === 1 ? "" : "s"}` : null],
+    ["Model", selected.model],
+    ["Started", selected.startedAt],
+    ["Last heartbeat", selected.heartbeat],
+    ["Depends on", selected.dependency],
+    ["Estimate", selected.estimate],
   ];
 }
 
@@ -1599,19 +1606,12 @@ export function InspectorDrawer({ open, onClose, selected, side = "right", demoM
         </IconButton>
       </div>
       <div className="drawer-scroll inspector-body" ref={(node) => keyboardScrollable(node)} role="region" aria-label="Inspector details">
-        <div className="inspector-summary">
-          <StatusChip status={selected.status} />
-          <span>{selected.estimate ?? "No estimate in the sample"}</span>
-        </div>
-        <DemoOnlyReason>this item comes from the sample project; nothing here describes real work.</DemoOnlyReason>
-        <dl className="property-list">
-          {demoInspectorProperties(selected).map(([label, value]) => (
-            <div key={label}>
-              <dt>{label}</dt>
-              <dd>{value}</dd>
-            </div>
-          ))}
-        </dl>
+        <WorkHeader
+          status={<StatusChip status={selected.status} />}
+          badge="Demo only"
+          empty="Not recorded in the sample"
+          facts={demoInspectorFacts(selected, checklist.length)}
+        />
         <section className="inspector-section">
           <div className="section-title">
             <ListChecksIcon />
