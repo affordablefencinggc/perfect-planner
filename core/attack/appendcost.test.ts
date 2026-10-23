@@ -6,8 +6,8 @@ import { startTestHost } from "../host/testing";
 
 const d = process.env.PP_SOAK === "1" ? describe : describe.skip;
 d("append cost by ledger size", () => {
-  // FOUND (F6): a person-signed append re-verifies the signature of every person entry in the ledger (ownerChain -> selfSigned), so it grows with the ledger.
-  it.fails("one append does not get slower in proportion to the ledger", async () => {
+  // Found by the soak (F6), fixed by memoising selfSigned in core/ledger/recovery.ts: a person-signed append re-verifies the signature of every person entry in the ledger (ownerChain -> selfSigned), so it grows with the ledger.
+  it("one append does not get slower in proportion to the ledger", async () => {
     const ctx = await startTestHost();
     try {
       const project = ctx.host.project("grow");

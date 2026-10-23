@@ -242,10 +242,17 @@ export function checkRecoveryCode(entries: readonly LedgerEntry[], typed: string
   }
 }
 
+// The answer depends only on the entry's own (frozen) content, so it is remembered per entry object: ownerChain runs on every
+// person-signed write and used to re-verify every earlier person signature each time (F6 of the soak trial).
+const selfSignedMemo = new WeakMap<LedgerEntry, boolean>();
+
 function selfSigned(entry: LedgerEntry): boolean {
+  const known = selfSignedMemo.get(entry);
+  if (known !== undefined) return known;
   const sig = entry.sig;
-  if (!sig || typeof sig.pub !== "string" || typeof sig.value !== "string" || keyIdOf(sig.pub) !== sig.key) return false;
-  return verifies(sig.pub, signedBytes(entry), sig.value);
+  const ok = !!sig && typeof sig.pub === "string" && typeof sig.value === "string" && keyIdOf(sig.pub) === sig.key && verifies(sig.pub, signedBytes(entry), sig.value);
+  if (Object.isFrozen(entry)) selfSignedMemo.set(entry, ok);
+  return ok;
 }
 
 function verifies(publicKey: string, message: Buffer, signature: string): boolean {

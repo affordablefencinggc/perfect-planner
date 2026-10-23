@@ -271,7 +271,7 @@ export class Ledger {
   append(draft: EntryDraft): LedgerEntry {
     if (!this.writable) throw new LedgerError("READ_ONLY", `this ledger is read-only (${this.store.description})`);
     if (!this.chain.ok) {
-      throw new LedgerError("CHAIN_BROKEN", `writes are stopped: ${this.chain.firstBad} failed the fingerprint check (${this.chain.problem}); acknowledge it first`);
+      throw new LedgerError("CHAIN_BROKEN", this.stoppedMessage());
     }
     return this.write(draft);
   }
@@ -332,7 +332,7 @@ export class Ledger {
     if (!this.writable) throw new LedgerError("READ_ONLY", `this ledger is read-only (${this.store.description})`);
     if (person?.kind !== "person") throw new LedgerError("BAD_ACTOR", "only a person can trust a key");
     if (!this.chain.ok && this.chain.problem !== "signature") {
-      throw new LedgerError("CHAIN_BROKEN", `writes are stopped: ${this.chain.firstBad} failed the fingerprint check (${this.chain.problem}); acknowledge it first`);
+      throw new LedgerError("CHAIN_BROKEN", this.stoppedMessage());
     }
     // The hash chain is intact here, so the tip is safe to record as HEAD.
     const tip = this.last();
@@ -450,7 +450,7 @@ export class Ledger {
     if (!this.writable) throw new LedgerError("READ_ONLY", `this ledger is read-only (${this.store.description})`);
     if (person?.kind !== "person") throw new LedgerError("BAD_ACTOR", "only a person can set a recovery code");
     if (!this.chain.ok) {
-      throw new LedgerError("CHAIN_BROKEN", `writes are stopped: ${this.chain.firstBad} failed the fingerprint check (${this.chain.problem}); acknowledge it first`);
+      throw new LedgerError("CHAIN_BROKEN", this.stoppedMessage());
     }
     return this.makeRecoveryCode(person, reason);
   }
@@ -617,6 +617,13 @@ export class Ledger {
     } finally {
       this.writingOwnerEntry = false;
     }
+  }
+
+  /** Why writes are stopped: a save that failed (full disk) is fixed by restarting, not by acknowledging a tampered entry. */
+  private stoppedMessage(): string {
+    if (this.chain.ok) return "writes are stopped";
+    if (this.chain.problem === "write") return `writes are stopped because saving ${this.chain.firstBad} failed (${this.chain.detail ?? "write error"}); free the space or fix the folder, then restart the app`;
+    return `writes are stopped: ${this.chain.firstBad} failed the fingerprint check (${this.chain.problem}); acknowledge it first`;
   }
 
   private write(input: EntryDraft, acknowledging = false): LedgerEntry {
