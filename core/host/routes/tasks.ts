@@ -21,6 +21,7 @@ import { AGENT_SERVER_NAME, agentEntryPath, connectLine, nodeBinary, quoteFor, t
 
 export { quoteFor };
 import { localPerson, localPersonId } from "./people";
+import { replayRoster } from "../../people/index";
 import { protectRepository } from "../project";
 import { chosenRepoRoot, repoRefusal } from "../protectedRoots";
 import { syncJevPolicy } from "./decisions";
@@ -216,7 +217,7 @@ function personSummary(actor: Actor | undefined) {
   return actor ? { kind: actor.kind, id: actor.id, ...(actor.model ? { model: actor.model } : {}) } : undefined;
 }
 
-function viewTask(project: CoreProject, task: TaskView, worktrees: WorktreeInfo[], board: ReadonlyMap<string, TaskView>) {
+function viewTask(project: CoreProject, task: TaskView, worktrees: WorktreeInfo[], board: ReadonlyMap<string, TaskView>, assignments: ReadonlyMap<string, string>) {
   const label = attemptLabel(task);
   const gate = deriveState(project.entries(), label);
   const tree = worktrees.find((w) => w.taskId === label);
@@ -237,6 +238,8 @@ function viewTask(project: CoreProject, task: TaskView, worktrees: WorktreeInfo[
     title: task.title,
     status: task.status,
     owner: task.owner,
+    /** The person the owner gave this task to (People), when they did. */
+    assignee: assignments.get(task.id) ?? null,
     attempt: task.attempt,
     clauses: task.clauses,
     lastProgress: task.lastProgress,
@@ -271,7 +274,8 @@ async function overview(project: CoreProject) {
   const repo = await repoState(project);
   const worktrees = await listWorktrees(project, repo);
   const board = project.service.board();
-  const tasks = [...board.values()].map((task) => viewTask(project, task, worktrees, board));
+  const assignments = replayRoster(project.entries(), project.ledger.owner).assignments;
+  const tasks = [...board.values()].map((task) => viewTask(project, task, worktrees, board, assignments));
   return { repo, tasks };
 }
 
@@ -400,7 +404,8 @@ async function dispatch(project: CoreProject, host: CoreHost, id: string, body: 
   const bridge = await host.bridge(project);
   // One worker per task at a time: a new dispatch replaces the previous worker's token.
   revokeWorker(project, label);
-  const person = localPersonId(project);
+  // A task given to a person is worked for them; otherwise for the person at this computer.
+  const person = replayRoster(project.entries(), project.ledger.owner).assignments.get(task.id) ?? localPersonId(project);
   const token = project.service.tokens.issue({ role: "worker", person, task: task.id, ...(model ? { model } : {}) });
   const record: Dispatch = { task: label, issuedAt: new Date().toISOString(), token, ...(model ? { model } : {}) };
   dispatches(project).set(label, record);
