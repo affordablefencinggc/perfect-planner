@@ -179,12 +179,19 @@ describe("attack 7: Jev is missing, wrong, down or slow", () => {
     expect(jev.seen.length).toBe(2);
   });
 
-  it.each([500, 502, 503, 400, 403, 404])("Jev says %i: unavailable, one request", async (status) => {
+  it.each([500, 400, 403, 404])("Jev says %i: unavailable, one request", async (status) => {
     const jev = await stub((_req, res) => json(res, status, { answers: Object.fromEntries(Object.keys(GOOD).map((q) => [q, { choice: GOOD[q as keyof typeof GOOD], confidence: 1 }])) }));
     const { ledger, reviewer: r } = reviewer(jev.url);
     // Even an error status that carries a perfect-looking body is not an approval.
     expectSafe(await review(r), ledger);
     expect(jev.seen.length).toBe(1);
+  });
+
+  it.each([502, 503, 504])("Jev says %i forever: one retry, then unavailable, never an approval even with a perfect-looking body", async (status) => {
+    const jev = await stub((_req, res) => json(res, status, { answers: Object.fromEntries(Object.keys(GOOD).map((q) => [q, { choice: GOOD[q as keyof typeof GOOD], confidence: 1 }])) }));
+    const { ledger, reviewer: r } = reviewer(jev.url);
+    expectSafe(await review(r), ledger);
+    expect(jev.seen.length).toBe(2);
   });
 
   it("a redirect to another address does not carry the key along", async () => {
