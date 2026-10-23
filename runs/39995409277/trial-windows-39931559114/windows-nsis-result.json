@@ -1,0 +1,33 @@
+{
+  "label": "windows-nsis",
+  "app": "C:\\Users\\runneradmin\\AppData\\Local\\Perfect Planner\\perfect-planner-desktop.exe",
+  "platform": "win32",
+  "checks": [
+    {
+      "name": "launch",
+      "pass": true,
+      "seen": "WebDriver session up after 1331 ms"
+    },
+    {
+      "name": "first-run screen",
+      "pass": true,
+      "seen": "\"PP Perfect Planner v0.1 clean-room · Friday 23 October 2026 Home 01Define 02Coordinate 03Build 04Prove 05Release Index / Connect agent No project selected PURPOSE Choose a local app folder without inventing project facts\""
+    },
+    {
+      "name": "settings opens",
+      "pass": true,
+      "seen": "opened via \"Settings\": \"Settings Fine-tune every stage and feature. Changes apply immediately and are saved on this device. Safety rules (collision gates, proof, review) are never rel\""
+    },
+    {
+      "name": "open project folder",
+      "pass": false,
+      "seen": "no \"Choose app folder\" button (navigated via \"01Define > Structure\")"
+    },
+    {
+      "name": "connect agent shows a line",
+      "pass": false,
+      "seen": "no line; panel says \"AGENT CHECK-IN Connect agent Connect an agent Give your coding agent its own way to check in. The first agent you connect becomes your main chat: it answers questions from the agents working on tasks. This folder has no Perfect Planner hist\""
+    }
+  ],
+  "fatal": null
+}

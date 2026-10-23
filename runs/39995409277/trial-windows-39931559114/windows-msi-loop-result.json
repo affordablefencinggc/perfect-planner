@@ -1,0 +1,60 @@
+{
+  "label": "windows-msi",
+  "checks": [
+    {
+      "name": "plan: idea and recommended answers",
+      "pass": true,
+      "seen": "40 recommendations used; no blocking questions; 40 answers saved, 2119 ms each on average, slowest 7410 ms"
+    },
+    {
+      "name": "plan: approve",
+      "pass": true,
+      "seen": "Plan approved"
+    },
+    {
+      "name": "open git folder in Tasks",
+      "pass": true,
+      "seen": "Workers branch from D:\\a\\_temp\\loop-repo-windows-msi"
+    },
+    {
+      "name": "connect agent: line runs as copied, agent checks in",
+      "pass": true,
+      "seen": "checked in as main; line on the app's own Node"
+    },
+    {
+      "name": "start worker on T-1 (window gives the set-up command)",
+      "pass": true,
+      "seen": "set-up command shown (404 chars, private key not logged)"
+    },
+    {
+      "name": "stand-in worker checks in over MCP and proposes a test",
+      "pass": true,
+      "seen": "trial-worker-f17172a8 checked in as worker on T-1; window shows \"Test to approve\""
+    },
+    {
+      "name": "approve test in the window (it fails first)",
+      "pass": true,
+      "seen": "T-1 | Build App shell | Waiting for the worker to claim | Done-when test | node tests/notes.check.mjs | tests/notes.check.mjs · Proposed by trial-worker-f17172a8 (claude-trial) · approved by you (owner) · fails on today's code"
+    },
+    {
+      "name": "stand-in worker builds, commits, attaches proof",
+      "pass": true,
+      "seen": "proof attached at a22fb78c7e2a"
+    },
+    {
+      "name": "check the work in the window",
+      "pass": true,
+      "seen": "check passed"
+    },
+    {
+      "name": "read the diff and approve it",
+      "pass": true,
+      "seen": "diff approved"
+    },
+    {
+      "name": "merge into main",
+      "pass": true,
+      "seen": "main now holds src/notes.mjs (e54cef4 Merge pp/T-1 (T-1) into main)"
+    }
+  ]
+}
