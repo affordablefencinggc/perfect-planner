@@ -15,6 +15,7 @@ import { installNumberingRules } from "../numbering/index";
 import { installPeopleRules, listAgent } from "../people/index";
 import { installPlanningRules } from "../planning/index";
 import { installReleaseRules, protectProject, type CommandRunner, type ProtectionReport } from "../release/index";
+import { extraRepoRoots } from "../repos/index";
 import { ensureRequiredIgnores, PRIVATE_DIR, runGit } from "../worktrees/index";
 import { containedRunner, protectRoots, registeredRoots } from "../exec/index";
 import type { ProjectWatch } from "./watch";
@@ -371,6 +372,12 @@ export function openCoreProject(baseRoot: string, key: string, override: string 
     if (chosen && path.resolve(chosen) !== path.resolve(root)) {
       guard([chosen]);
       await protectRepository(ledger, chosen).catch(() => undefined);
+    }
+    // Each extra repo of the project gets the same pre-push scan (core/repos).
+    for (const extra of extraRepoRoots(root)) {
+      if (!fs.existsSync(extra) || isHomeOrDrive(extra)) continue;
+      guard([extra]);
+      await protectRepository(ledger, extra).catch(() => undefined);
     }
     return report;
   });

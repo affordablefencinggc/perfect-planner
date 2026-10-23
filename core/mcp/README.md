@@ -10,7 +10,7 @@ chat (helpers get their own, §9.5). Only SHA-256 digests of tokens are kept.
 | `hello(name, model)` | any | nothing; registers the agent and returns its role |
 | `list_tasks()` | any | nothing; each task carries `dependsOn` (the tasks that must be done before it starts, from its signed `task.created`) |
 | `claim_task(T)` | worker | `task.claimed` |
-| `report_progress(T, text)` | worker | `task.progress` |
+| `report_progress(T, text, usage?)` | worker | `task.progress` (`usage`: `{inputTokens, outputTokens, cacheReadTokens?, costUsd?}` since your last report; a figure that fails the checks is dropped and named in `usageIgnored`, the line is still written) |
 | `attach_proof(T, kind, link)` | worker | `task.proof` |
 | `ask_main(T, question, options?, blocking?, wait_seconds?)` | worker | `question.asked` (+ `question.answered` when settled) |
 | `check_inbox()` | main: digest (open questions, and `notices` of what the app's git watcher saw, each shown once); worker: its answers and pause state | nothing |
@@ -74,3 +74,16 @@ without Perfect Planner.
   that stops programs started by name from being looked up in the current
   folder. It affects every program you run, so whether to set it is up to you.
   Perfect Planner and its skill never set it for you.
+
+## The needle (which tool next)
+
+`POST /route` on the same loopback bridge, with the agent's bearer token, answers "which of the tools should I call?".
+Body: `{ "agent": "<id from hello>", "intent": "what I want to do", "limit": 3 }`. Both `agent` and `intent` are optional.
+Reply: the legal tools for this agent's role, best first, each with a score, one plain line of why, and any arguments
+it could fill in (the task number, the question number, the reference). It reads the board and never writes.
+
+It is plain code (`core/mcp/needle.ts`), not a model: word matches on the intent plus what the board says comes next
+for the task (no approved test → `propose_test`, approved → `claim_task`, claimed → `report_progress` / `attach_proof`,
+blocked → `check_inbox`). It keeps no state, so every ledger and every agent can ask at once; 24,000 calls over 12
+ledgers of 200 tasks take well under a second. A real small model can be put behind the same `route()` shape later;
+none is bundled.

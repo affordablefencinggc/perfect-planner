@@ -9,8 +9,10 @@ import { LedgerError, type Actor, type EntryDraft, type Ledger, type LedgerEntry
 import { Relay, trustedEntry } from "../relay/relay";
 import { attemptLabel, foldBoard, type TaskView } from "./board";
 import { lookup } from "../lookup/index";
+import { route, type NeedleChoice } from "./needle";
 import { TestGate } from "../gate/index";
 import { TokenStore, tokenId, type Grant } from "./tokens";
+import { parseUsage } from "../cost/index";
 import { TOOL_INFO, TOOL_INPUTS, type ToolInput, type ToolName } from "./tools";
 import { looksSecret, redactSecrets } from "../jev/redact";
 
@@ -116,6 +118,23 @@ export class AgentService {
       if (error instanceof LedgerError) throw new ToolError("REFUSED", `${error.message} (${error.code})`);
       throw error;
     }
+  }
+
+  /** The needle: which tool to call next. Reads only, so any token that is valid for this project may ask. */
+  suggest(caller: Caller, intent: string, limit = 3): NeedleChoice[] {
+    if (!this.tokens.resolve(caller.token)) throw new ToolError("UNAUTHORIZED", "This token is not valid for this project, or it was revoked.");
+    const agent = caller.agent ? this.agents.get(caller.agent) : undefined;
+    const known = agent && agent.token === caller.token ? agent : undefined;
+    return route(
+      {
+        role: known ? known.role : "unknown",
+        intent: intent.slice(0, 2000),
+        tasks: [...this.board().values()],
+        ...(known?.task ? { task: known.task } : {}),
+        ...(known?.role === "main" ? { openQuestions: this.relay.openFor(known.person) } : {}),
+      },
+      Math.min(Math.max(1, Math.trunc(limit) || 3), 11),
+    );
   }
 
   private dispatch(agent: AgentRecord, name: ToolName, args: unknown): unknown {
@@ -238,10 +257,13 @@ export class AgentService {
     return { task: attemptLabel(view), status: "claimed", entry: entry.n };
   }
 
-  private progress(agent: AgentRecord, { task, text }: ToolInput<"report_progress">) {
+  private progress(agent: AgentRecord, { task, text, usage }: ToolInput<"report_progress">) {
     this.notPaused(agent);
     this.ownTask(agent, task, true);
-    return { entry: this.write({ actor: this.actor(agent), type: "task.progress", subject: task, summary: redactSecrets(text) }).n };
+    // A usage figure that cannot be believed is dropped, not the progress line: the work was still reported.
+    const read = usage === undefined ? null : parseUsage(usage);
+    const entry = this.write({ actor: this.actor(agent), type: "task.progress", subject: task, summary: redactSecrets(text), ...(read?.ok ? { data: { usage: read.usage } } : {}) });
+    return { entry: entry.n, ...(read && !read.ok ? { usageIgnored: read.problem } : {}) };
   }
 
   private proof(agent: AgentRecord, { task, kind, link }: ToolInput<"attach_proof">) {
