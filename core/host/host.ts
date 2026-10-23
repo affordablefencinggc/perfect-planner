@@ -16,6 +16,7 @@ import { PersonSessions } from "./session";
 import { registerRoutes } from "./routes/index";
 import { syncJevPolicy } from "./routes/decisions";
 import { chosenRepoRoot } from "./routes/tasks";
+import { extraRepoRoots } from "../repos/index";
 import { startProjectWatch, type ProjectWatchOptions } from "./watch";
 import { protectRoots } from "../exec/index";
 import { GitProgramRefusedError } from "../worktrees/index";
@@ -170,7 +171,7 @@ export class CoreHost {
       // The project folder and the repo the person picked are protected before the first git run.
       const root = projectRootFor(this.options.root, key, this.options.projectRootOverride);
       const chosen = chosenRepoRoot(root);
-      const release = protectRoots([root, ...(chosen ? [chosen] : [])].filter((dir) => !isHomeOrDrive(dir)));
+      const release = protectRoots([root, ...(chosen ? [chosen] : []), ...extraRepoRoots(root)].filter((dir) => !isHomeOrDrive(dir)));
       try {
         // Read before the open adds its own exclude line and hook, so they never count as earlier use.
         this.priorUse.set(key, await priorUseSignals(chosen ?? root));
@@ -183,6 +184,7 @@ export class CoreHost {
     if (project.owner.state === "new" && !project.owner.signals) project.owner.signals = this.priorUse.get(key) ?? [];
     const chosen = chosenRepoRoot(project.root);
     if (chosen) project.protectRoots([chosen]);
+    project.protectRoots(extraRepoRoots(project.root).filter((dir) => !isHomeOrDrive(dir)));
     await project.ready;
     await syncJevPolicy(project);
     return project;

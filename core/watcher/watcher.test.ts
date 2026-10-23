@@ -57,6 +57,29 @@ describe("GitWatcher commits", { timeout: 60_000 }, () => {
   });
 });
 
+describe("GitWatcher over two repos", { timeout: 60_000 }, () => {
+  it("does not call the same file name in two different repos a collision, and still does inside one repo", async () => {
+    const one = await makeTaskRepo(["T-1", "T-3"]);
+    const two = await makeTaskRepo(["T-2"]);
+    try {
+      const ledger = await memoryLedger();
+      const t1 = one.tasks["T-1"];
+      const t3 = one.tasks["T-3"];
+      const t2 = { ...two.tasks["T-2"], repo: "web" };
+      for (const t of [t1, t2]) writeFiles(t.path, { "src/shared.ts": `export const a = "${t.taskId}";\n` });
+      const apart = await watcherFor(ledger, () => [t1, t2]).tick();
+      expect(apart.errors).toEqual([]);
+      expect(apart.collisions).toEqual([]);
+      writeFiles(t3.path, { "src/shared.ts": "export const a = 3;\n" });
+      const together = await watcherFor(ledger, () => [t1, t2, t3]).tick();
+      expect(together.collisions).toEqual([{ tasks: ["T-1", "T-3"], files: ["src/shared.ts"] }]);
+    } finally {
+      one.cleanup();
+      two.cleanup();
+    }
+  });
+});
+
 describe("GitWatcher collisions", { timeout: 60_000 }, () => {
   it("logs the acceptance collision once when one side is only uncommitted, then resolves it", async () => {
     fixture = await makeTaskRepo();

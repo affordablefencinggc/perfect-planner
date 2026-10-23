@@ -11,6 +11,7 @@ import { attemptLabel, foldBoard, type TaskView } from "./board";
 import { lookup } from "../lookup/index";
 import { TestGate } from "../gate/index";
 import { TokenStore, tokenId, type Grant } from "./tokens";
+import { parseUsage } from "../cost/index";
 import { TOOL_INFO, TOOL_INPUTS, type ToolInput, type ToolName } from "./tools";
 import { looksSecret, redactSecrets } from "../jev/redact";
 
@@ -191,10 +192,13 @@ export class AgentService {
     return { task: attemptLabel(view), status: "claimed", entry: entry.n };
   }
 
-  private progress(agent: AgentRecord, { task, text }: ToolInput<"report_progress">) {
+  private progress(agent: AgentRecord, { task, text, usage }: ToolInput<"report_progress">) {
     this.notPaused(agent);
     this.ownTask(agent, task, true);
-    return { entry: this.write({ actor: this.actor(agent), type: "task.progress", subject: task, summary: redactSecrets(text) }).n };
+    // A usage figure that cannot be believed is dropped, not the progress line: the work was still reported.
+    const read = usage === undefined ? null : parseUsage(usage);
+    const entry = this.write({ actor: this.actor(agent), type: "task.progress", subject: task, summary: redactSecrets(text), ...(read?.ok ? { data: { usage: read.usage } } : {}) });
+    return { entry: entry.n, ...(read && !read.ok ? { usageIgnored: read.problem } : {}) };
   }
 
   private proof(agent: AgentRecord, { task, kind, link }: ToolInput<"attach_proof">) {
