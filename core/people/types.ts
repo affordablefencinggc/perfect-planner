@@ -34,6 +34,7 @@ export const PEOPLE_OPS = [
   "photo.cleared",
   "doc.shared",
   "doc.removed",
+  "task.assigned",
 ] as const;
 export type PeopleOp = (typeof PEOPLE_OPS)[number];
 
@@ -75,6 +76,8 @@ export interface DocShared {
   clauses?: string[];
 }
 export interface DocRemoved { op: "doc.removed"; doc: string }
+/** The owner gives a task (T-n) to a member: theirs to work, and the person its worker is started for. */
+export interface TaskAssigned { op: "task.assigned"; task: string; person: string }
 
 export type PeopleEvent =
   | MemberAdded
@@ -83,7 +86,8 @@ export type PeopleEvent =
   | PhotoSet
   | PhotoCleared
   | DocShared
-  | DocRemoved;
+  | DocRemoved
+  | TaskAssigned;
 
 export const PHOTO_MIMES = ["image/png", "image/jpeg", "image/webp", "image/gif"] as const;
 export type PhotoMime = (typeof PHOTO_MIMES)[number];
@@ -149,6 +153,8 @@ export interface PeopleView {
   members: Member[];
   owner?: Member;
   docs: SharedDoc[];
+  /** Task (T-n) -> the member it is assigned to. Tasks nobody assigned are not listed. */
+  assignments: Record<string, string>;
   /** Ledger head the view was built from. */
   head?: string;
 }

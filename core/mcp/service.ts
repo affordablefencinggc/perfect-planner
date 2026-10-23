@@ -48,6 +48,11 @@ export interface AgentServiceOptions {
   gate?: TestGate;
   /** Milliseconds now; tests pass a fake clock. */
   now?: () => number;
+  /**
+   * Called when an agent checks in, and again when the roster refuses its write for not being listed under
+   * anyone. The host lists the agent under the person whose token it holds; true means it is listed now.
+   */
+  onJoin?: (agent: AgentRecord) => boolean;
 }
 
 /** An agent not heard from for this long no longer counts as checked in, and no longer holds the main chat. */
@@ -65,8 +70,11 @@ export class AgentService {
   private readonly lastSeen = new Map<string, number>();
   private readonly now: () => number;
 
+  private readonly onJoin: ((agent: AgentRecord) => boolean) | undefined;
+
   constructor(options: AgentServiceOptions) {
     this.now = options.now ?? Date.now;
+    this.onJoin = options.onJoin;
     this.ledger = options.ledger;
     this.tokens = options.tokens ?? new TokenStore();
     this.relay = options.relay ?? new Relay({ ledger: options.ledger });
@@ -92,9 +100,19 @@ export class AgentService {
     if (need === "worker" && agent.role !== "worker") throw new ToolError("FORBIDDEN", `${name} is for workers launched on a task.`);
     if (need === "main" && agent.role !== "main") throw new ToolError("FORBIDDEN", `${name} is for ${agent.person}'s main chat only.`);
 
+    const run = async () => this.dispatch(agent, name, parsed.data);
     try {
-      return await this.dispatch(agent, name, parsed.data);
+      return await run();
     } catch (error) {
+      // A roster that began after this agent checked in does not list it yet: list it, then try once more.
+      if (error instanceof LedgerError && /is not listed as anyone's agent/.test(error.message) && this.listUnderPerson(agent)) {
+        try {
+          return await run();
+        } catch (again) {
+          if (again instanceof LedgerError) throw new ToolError("REFUSED", `${again.message} (${again.code})`);
+          throw again;
+        }
+      }
       if (error instanceof LedgerError) throw new ToolError("REFUSED", `${error.message} (${error.code})`);
       throw error;
     }
@@ -157,7 +175,17 @@ export class AgentService {
     this.agents.set(id, record);
     this.lastSeen.set(id, this.now());
     if (role === "main") this.mains.set(grant.person, id);
+    this.listUnderPerson(record);
     return this.welcome(record);
+  }
+
+  /** Never lets a failed listing break a check-in: the agent is then refused with the roster's own words. */
+  private listUnderPerson(agent: AgentRecord): boolean {
+    try {
+      return this.onJoin?.(agent) ?? false;
+    } catch {
+      return false;
+    }
   }
 
   private welcome(agent: AgentRecord): { agent: string; role: AgentRole; task?: string; person: string; instructions: string } {

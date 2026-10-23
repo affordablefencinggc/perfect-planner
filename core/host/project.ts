@@ -12,7 +12,7 @@ import { hostWitness } from "./witness";
 import { readOwnerPin, rememberedGenesis, rememberFolder, writeOwnerPin, type OwnerPin } from "./owner";
 import { DEFAULT_LOCAL_PERSON } from "./routes/people";
 import { installNumberingRules } from "../numbering/index";
-import { installPeopleRules } from "../people/index";
+import { installPeopleRules, listAgent } from "../people/index";
 import { installPlanningRules } from "../planning/index";
 import { installReleaseRules, protectProject, type CommandRunner, type ProtectionReport } from "../release/index";
 import { ensureRequiredIgnores, PRIVATE_DIR, runGit } from "../worktrees/index";
@@ -322,7 +322,7 @@ export function openCoreProject(baseRoot: string, key: string, override: string 
   const gate = new TestGate({ ledger, requireJevTestReview: policy.requireJevTestReview });
   // TestGate copies its policy; give it the shared object so the host's switch reaches the gate and the rule together.
   Object.assign(gate, { policy });
-  const service = new AgentService({ ledger, gate });
+  const service = new AgentService({ ledger, gate, onJoin: (agent) => listAgent(ledger, agent.person, agent.id) });
   // Shipping safety on for every project the app opens: the release rules hold before the first
   // review, and the whole-branch secret scan runs before every push (a non-git folder is reported).
   // The host excludes .perfect-planner/ before it opens a project for a request (host.ts openProject);
