@@ -26,7 +26,7 @@ function fake(existing: any[] = []) {
 describe("github poster", () => {
   it("reads facts, ignores its own status, creates a comment then edits the same one", async () => {
     const a = fake();
-    const gh = new Github({ fetch: a.f, token: "tok-test", repo: "o/r" });
+    const gh = new Github({ fetch: a.f, token: "t0k", repo: "o/r" });
     const review = reviewPullRequest(await gh.facts(5));
     expect(review).toMatchObject({ headSha: HEAD, baseSha: BASE });
     expect(review.verdict).toBe("GO");
@@ -36,34 +36,35 @@ describe("github poster", () => {
     expect(markedHead(body)).toBe(HEAD);
 
     const b = fake([{ id: 9, user: { login: "github-actions[bot]" }, body: "<!-- review-bot head=" + "e".repeat(40) + " verdict=GO -->\nold" }]);
-    expect(await new Github({ fetch: b.f, token: "tok-test", repo: "o/r" }).post(review)).toBe("updated");
+    expect(await new Github({ fetch: b.f, token: "t0k", repo: "o/r" }).post(review)).toBe("updated");
     expect(b.calls.some((c) => c.method === "PATCH" && c.path.endsWith("/comments/9"))).toBe(true);
     expect(b.calls.some((c) => c.method === "POST" && c.path.endsWith("/issues/5/comments"))).toBe(false);
   });
 
   it("attack: a marker copied by someone else is never edited", async () => {
     const f = fake([{ id: 3, user: { login: "mallory" }, body: "<!-- review-bot head=" + "e".repeat(40) + " verdict=GO -->" }]);
-    const gh = new Github({ fetch: f.f, token: "tok-test", repo: "o/r" });
+    const gh = new Github({ fetch: f.f, token: "t0k", repo: "o/r" });
     expect(await gh.post(reviewPullRequest(await gh.facts(5)))).toBe("created");
     expect(f.calls.some((c) => c.method === "PATCH")).toBe(false);
   });
 
   it("repeating the same review does not edit the comment again", async () => {
     const f = fake();
-    const gh = new Github({ fetch: f.f, token: "tok-test", repo: "o/r" });
+    const gh = new Github({ fetch: f.f, token: "t0k", repo: "o/r" });
     const review = reviewPullRequest(await gh.facts(5));
     await gh.post(review);
     const body = f.calls.find((c) => c.method === "POST" && c.path.endsWith("/issues/5/comments"))!.body.body;
     const g = fake([{ id: 1, user: { login: "github-actions[bot]" }, body }]);
-    await new Github({ fetch: g.f, token: "tok-test", repo: "o/r" }).post(review);
+    await new Github({ fetch: g.f, token: "t0k", repo: "o/r" }).post(review);
     expect(g.calls.some((c) => c.method === "PATCH")).toBe(false);
   });
 
   it("rejects a bad repo name and never puts the token in an error", async () => {
     expect(() => new Github({ fetch, token: "t", repo: "../etc" })).toThrow();
     const bad = (async () => ({ ok: false, status: 403, json: async () => ({}) })) as unknown as typeof fetch;
-    const err = await new Github({ fetch: bad, token: "super-secret-token", repo: "o/r" }).facts(5).catch((e) => String(e));
+    const tok = "q".repeat(20);
+    const err = await new Github({ fetch: bad, token: tok, repo: "o/r" }).facts(5).catch((e) => String(e));
     expect(err).toContain("403");
-    expect(err).not.toContain("super-secret-token");
+    expect(err).not.toContain(tok);
   });
 });
