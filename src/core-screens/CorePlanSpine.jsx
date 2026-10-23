@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { GitBranchIcon } from "@phosphor-icons/react";
 import { useCoreResource } from "./coreApi.js";
 import { modelLabel } from "./CoreAgentConnect.jsx";
@@ -8,8 +8,7 @@ import "./CoreSpine.css";
 
 // The Plan page for a real project. The main spine is the artery: every task of the project as a vertebra, with
 // the people who own them along the top. Opening a person gives their own spine: their head on top, their tasks
-// down the line, the AI models working them running down it in parallel, and veins for every dependency (to their
-// own tasks, and out to other people's). Everything is read from this project's ledger; nothing is a sample.
+// down the line, and the AI models working them running down it in parallel. Everything is read from this project's ledger; nothing is a sample.
 
 // The robot drawings exist per vendor; a model we cannot place gets no robot rather than someone else's.
 const ROBOT = { claude: "claude", gemini: "gemini", codex: "gpt" };
@@ -31,8 +30,6 @@ const STAGE_TEXT = {
 };
 const NEEDS_YOU = new Set(["test-proposed", "test-passes-already", "review-diff", "ready-to-merge"]);
 const HALTED = new Set(["test-passes-already", "jev-found-gaps"]);
-// How far each vein bulges away from the spine, so several on one stretch do not lie on top of each other.
-const LANES = [16, 25, 34, 43, 52];
 
 const taskNumber = (id) => Number(String(id).replace(/\D/g, "")) || 0;
 
@@ -85,7 +82,7 @@ function Owner({ person, via, onPerson }) {
   );
 }
 
-function Vertebra({ task, side, owner, via, agents, onOpen, onPerson }) {
+function Vertebra({ task, side, owner, via, agents, onOpen, onPerson, people, onAssign }) {
   const worker = liveWorker(task, agents);
   const model = worker?.model ?? task.dispatch?.model;
   const family = model ? modelFamily(model) : null;
@@ -120,6 +117,15 @@ function Vertebra({ task, side, owner, via, agents, onOpen, onPerson }) {
         </span>
       )}
       {task.merged?.mergeCommit && <span className="core-vertebra-note">Merged at {String(task.merged.mergeCommit).slice(0, 12)}</span>}
+      {people && task.stage !== "done" && (
+        <label className="core-assign" onClick={(event) => event.stopPropagation()}>
+          <span>Give to</span>
+          <select aria-label={`Give ${task.label} to`} value={owner?.person ?? ""} onChange={(event) => event.target.value && onAssign(task, event.target.value)}>
+            {!owner && <option value="">Pick a person</option>}
+            {people.filter((p) => p.role !== "viewer").map((p) => <option key={p.person} value={p.person}>{p.name}</option>)}
+          </select>
+        </label>
+      )}
       {task.waitingFor?.message && <span className="core-vertebra-note core-waiting">{task.waitingFor.message}</span>}
       {task.lastProgress && <span className="core-vertebra-note">{String(task.lastProgress.text ?? task.lastProgress).slice(0, 160)}</span>}
     </article>
@@ -144,23 +150,6 @@ export function groupByPhase(tasks, roadmap) {
   return phases;
 }
 
-/** Every "this task waits for that one" the ledger knows, between tasks that exist, once each. */
-export function dependencyEdges(tasks, roadmap) {
-  const have = new Set(tasks.map((t) => t.id));
-  const doneIds = new Set(tasks.filter((t) => t.stage === "done").map((t) => t.id));
-  const seen = new Set();
-  const edges = [];
-  const add = (from, to) => {
-    const key = `${from}>${to}`;
-    if (from === to || !have.has(from) || !have.has(to) || seen.has(key)) return;
-    seen.add(key);
-    edges.push({ from, to, live: !doneIds.has(from) });
-  };
-  for (const phase of roadmap?.phases ?? []) for (const item of phase.tasks ?? []) if (item.task) for (const d of item.dependsOnTasks ?? []) add(String(d), item.task);
-  for (const t of tasks) for (const d of t.waitingFor?.tasks ?? []) add(d, t.id);
-  return edges;
-}
-
 /** Everyone with a head on the spine: the roster, plus anyone a task names who is not on it. */
 export function peopleOf({ tasks, groups, agents, people }) {
   const members = people?.view?.members ?? [];
@@ -173,7 +162,7 @@ export function peopleOf({ tasks, groups, agents, people }) {
   const ownerId = new Map();
   for (const task of tasks) {
     const worker = liveWorker(task, agents);
-    const named = worker?.person ?? ownerOfTask.get(task.id);
+    const named = worker?.person ?? task.assignee ?? ownerOfTask.get(task.id);
     const id = named ?? fallback;
     via.set(task.id, named ? "Owner" : "Approves:");
     if (!id) continue;
@@ -189,67 +178,11 @@ export function peopleOf({ tasks, groups, agents, people }) {
   return { list: [...byId.values()], byId, ownerId, via };
 }
 
-/** Draws the veins: one curve per dependency between two vertebrae, plus a stub out to other people's tasks. */
-function Veins({ canvasRef, edges, stubs, onPerson, signature }) {
-  const [geo, setGeo] = useState({ paths: [], chips: [] });
-  useLayoutEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return undefined;
-    const measure = () => {
-      const box = canvas.getBoundingClientRect();
-      const at = (id) => {
-        const el = canvas.querySelector(`[data-junction="${id}"]`);
-        if (!el) return null;
-        const r = el.getBoundingClientRect();
-        return { x: r.left - box.left + r.width / 2, y: r.top - box.top + r.height / 2, left: Boolean(el.closest(".single-node-row")?.classList.contains("row-left")) };
-      };
-      const paths = edges.flatMap((e, i) => {
-        const a = at(e.from), b = at(e.to);
-        if (!a || !b) return [];
-        // Longer veins swing further out, so they read as separate vessels, never past the spine's own column.
-        const bulge = LANES[i % LANES.length] + Math.min(Math.abs(b.y - a.y) / 25, 18);
-        return [{ key: `${e.from}>${e.to}`, live: e.live, d: `M${a.x},${a.y} C${a.x + bulge},${a.y} ${b.x + bulge},${b.y} ${b.x},${b.y}` }];
-      });
-      const chips = stubs.flatMap((s, i) => {
-        const a = at(s.inside);
-        if (!a) return [];
-        // The vein leaves on the side away from the card, out to a tag for the other person's task.
-        const dir = a.left ? 1 : -1;
-        const x = dir === 1 ? box.width - 96 : 96;
-        const y = a.y + (i % 2 ? 14 : -14);
-        return [{ ...s, key: `${s.inside}>${s.outside}`, x, y, d: `M${a.x},${a.y} C${a.x + dir * 160},${a.y} ${x - dir * 160},${y} ${x},${y}` }];
-      });
-      setGeo({ paths, chips });
-    };
-    measure();
-    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
-    observer?.observe(canvas);
-    window.addEventListener("resize", measure);
-    return () => { observer?.disconnect(); window.removeEventListener("resize", measure); };
-  }, [canvasRef, edges, stubs, signature]);
-  return (
-    <>
-      <svg className="core-veins" aria-hidden="true" data-veins={geo.paths.length + geo.chips.length}>
-        {geo.paths.map((p) => <path key={p.key} className={`core-vein${p.live ? " flowing" : ""}`} d={p.d} />)}
-        {geo.chips.map((c) => <path key={c.key} className={`core-vein${c.live ? " flowing" : ""}`} d={c.d} />)}
-      </svg>
-      {geo.chips.map((c) => (
-        <button key={c.key} type="button" className="core-vein-chip" style={{ top: c.y - 13, left: c.x - 74 }} onClick={() => onPerson(c.person)} title={`${c.label}: open ${c.name}'s spine`}>
-          {c.outside} · {c.name}
-        </button>
-      ))}
-    </>
-  );
-}
-
-function SpineCanvas({ groups, edges, stubs, model, agents, onWorkspace, onPerson, runners, className = "" }) {
-  const canvasRef = useRef(null);
+function SpineCanvas({ groups, model, agents, onWorkspace, onPerson, onAssign, runners, className = "" }) {
   let index = 0;
-  const signature = groups.map((g) => g.rows.map((r) => `${r.task.id}:${r.task.stage}`).join(",")).join("|");
   return (
-    <div className={`plan-canvas ${className}`} ref={canvasRef}>
+    <div className={`plan-canvas ${className}`}>
       <div className="spine-line" aria-hidden="true" />
-      <Veins canvasRef={canvasRef} edges={edges} stubs={stubs} onPerson={onPerson} signature={signature} />
       {groups.map((phase) => (
         <div className="phase-row" key={phase.id}>
           <div className="phase-capsule" role="group" aria-label={`${phase.n ? `Phase ${phase.n}` : "Group"} ${phase.title}`}>
@@ -261,11 +194,11 @@ function SpineCanvas({ groups, edges, stubs, model, agents, onWorkspace, onPerso
               const side = index++ % 2 === 0 ? "left" : "right";
               const worker = liveWorker(task, agents);
               const runner = runners && isWorking(task, worker) ? robotOf(task, worker, "running") : null;
-              const card = <Vertebra task={task} side={side} owner={model.byId.get(model.ownerId.get(task.id))} via={model.via.get(task.id)} agents={agents} onOpen={() => onWorkspace?.("tasks")} onPerson={onPerson} />;
+              const card = <Vertebra task={task} side={side} owner={model.byId.get(model.ownerId.get(task.id))} via={model.via.get(task.id)} agents={agents} onOpen={() => onWorkspace?.("tasks")} onPerson={onPerson} people={model.assignable ? model.list : null} onAssign={onAssign} />;
               return (
                 <div className={`single-node-row row-${side}`} key={task.id}>
                   {side === "left" ? <div className="node-slot node-left has-node">{card}</div> : <div className="node-spacer" />}
-                  <div className="spine-junction" data-junction={task.id} aria-hidden="true">
+                  <div className="spine-junction" aria-hidden="true">
                     {runner && <span className="spine-runner" title={`${runner.label} · working down this spine`}><img src={runner.src} alt="" /></span>}
                   </div>
                   {side === "right" ? <div className="node-slot node-right has-node">{card}</div> : <div className="node-spacer" />}
@@ -303,40 +236,47 @@ export default function CorePlanSpine({ onWorkspace, onCount }) {
   const roadmap = useCoreResource("/planning/roadmap", { pollMs: 15000 });
   const people = useCoreResource("/people", { pollMs: 30000 });
   const [open, setOpen] = useState(null);
+  const [problem, setProblem] = useState(null);
   const list = useMemo(() => (tasks.data?.tasks ? [...tasks.data.tasks].sort((a, b) => taskNumber(a.id) - taskNumber(b.id)) : []), [tasks.data]);
   const live = agents.data?.agents;
   const groups = useMemo(() => groupByPhase(list, roadmap.data), [list, roadmap.data]);
-  const edges = useMemo(() => dependencyEdges(list, roadmap.data), [list, roadmap.data]);
   const model = useMemo(() => peopleOf({ tasks: list, groups, agents: live, people: people.data }), [list, groups, live, people.data]);
   useEffect(() => { onCount?.(list.length); }, [list.length, onCount]);
   if (tasks.status === "no-session" || tasks.status === "loading" || tasks.status === "empty") return null;
   if (tasks.status === "error") return <p role="alert" className="core-tasks-warn">The ledger could not be read, so the spine is not drawn. {tasks.error?.message} <button type="button" className="core-button" onClick={tasks.reload}>Try again</button></p>;
 
+  // Only the owner gives tasks out, and only when there is someone to give them to.
+  const assign = async (task, person) => {
+    setProblem(null);
+    try {
+      await people.post("/people/assign", { task: task.id, person });
+      await tasks.reload();
+    } catch (error) {
+      setProblem(error?.message || "That could not be saved.");
+    }
+  };
+  const assignable = Boolean(people.data?.me && people.data?.view?.owner?.person === people.data.me && model.list.filter((p) => p.role !== "viewer").length > 1);
+  const shared = { ...model, assignable };
   const person = open ? model.byId.get(open) : null;
   const done = list.filter((t) => t.stage === "done").length;
   const working = list.filter((t) => isWorking(t, liveWorker(t, live))).length;
+  const warning = problem && <p role="alert" className="core-tasks-warn">{problem}</p>;
 
   if (person) {
     const mine = new Set(person.tasks.map((t) => t.id));
     const mineGroups = groups.map((g) => ({ ...g, rows: g.rows.filter((r) => mine.has(r.task.id)) })).filter((g) => g.rows.length);
-    const own = edges.filter((e) => mine.has(e.from) && mine.has(e.to));
-    const stubs = edges.filter((e) => mine.has(e.from) !== mine.has(e.to)).map((e) => {
-      const inside = mine.has(e.from) ? e.from : e.to;
-      const outside = mine.has(e.from) ? e.to : e.from;
-      const other = model.byId.get(model.ownerId.get(outside));
-      return { inside, outside, live: e.live, person: other?.person ?? "", name: other?.name ?? "", label: mine.has(e.from) ? `${outside} waits for ${inside}` : `${inside} waits for ${outside}` };
-    }).filter((s) => s.person && s.person !== person.person);
     return (
       <section className="workspace plan-workspace core-plan-spine" aria-label={`${person.name}'s spine`}>
         <header className="core-person-head">
           <button type="button" className="core-button" onClick={() => setOpen(null)}>← Main spine</button>
           <Face person={person} photo={person.photo} big />
           <h2>{person.name}</h2>
-          <p className="core-muted" role="status">{person.role ? `${person.role} · ` : ""}{person.tasks.length} task{person.tasks.length === 1 ? "" : "s"} · {person.merged} merged · {person.working} model{person.working === 1 ? "" : "s"} working in parallel{stubs.length ? ` · ${stubs.length} vein${stubs.length === 1 ? "" : "s"} out to other people` : ""}</p>
+          <p className="core-muted" role="status">{person.role ? `${person.role} · ` : ""}{person.tasks.length} task{person.tasks.length === 1 ? "" : "s"} · {person.merged} merged · {person.working} model{person.working === 1 ? "" : "s"} working in parallel</p>
         </header>
+        {warning}
         {person.tasks.length === 0
           ? <p className="core-empty" role="status">{person.name} has no tasks on this project yet.</p>
-          : <SpineCanvas className="core-person-canvas" groups={mineGroups} edges={own} stubs={stubs} model={model} agents={live} onWorkspace={onWorkspace} onPerson={setOpen} runners />}
+          : <SpineCanvas className="core-person-canvas" groups={mineGroups} model={shared} agents={live} onWorkspace={onWorkspace} onPerson={setOpen} onAssign={assign} runners />}
       </section>
     );
   }
@@ -344,8 +284,9 @@ export default function CorePlanSpine({ onWorkspace, onCount }) {
   return (
     <section className="workspace plan-workspace core-plan-spine" aria-label="Plan spine">
       <PeopleStrip people={model.list} onPerson={setOpen} />
-      <p className="core-muted core-plan-count" role="status">{done} of {list.length} merged · {working} working now · {edges.length} dependenc{edges.length === 1 ? "y" : "ies"} · every card is a task on this project's ledger</p>
-      <SpineCanvas groups={groups} edges={edges} stubs={[]} model={model} agents={live} onWorkspace={onWorkspace} onPerson={setOpen} />
+      <p className="core-muted core-plan-count" role="status">{done} of {list.length} merged · {working} working now · every card is a task on this project's ledger</p>
+      {warning}
+      <SpineCanvas groups={groups} model={shared} agents={live} onWorkspace={onWorkspace} onPerson={setOpen} onAssign={assign} />
     </section>
   );
 }

@@ -78,18 +78,11 @@
 .core-person-canvas { padding-top: 0 !important; }
 .core-person-canvas .spine-line { top: 0; }
 
-/* Veins: a curve for every dependency between two vertebrae; red and flowing while the task it waits for is not merged. */
-.core-veins { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 1; pointer-events: none; overflow: visible; }
-.core-vein { fill: none; stroke: #4f8e67; stroke-width: 2.5; opacity: 0.6; stroke-linecap: round; }
-.core-vein.flowing { stroke: #b8432f; opacity: 0.8; stroke-dasharray: 6 8; animation: vein-flow 1.2s linear infinite; }
-@keyframes vein-flow { to { stroke-dashoffset: -28; } }
-.core-vein-chip { position: absolute; z-index: 4; width: 148px; padding: 4px 8px; border: 1px solid var(--border-strong); border-radius: 999px; background: var(--surface); font: 700 10px var(--mono); color: var(--ink); cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.core-vein-chip:hover { border-color: var(--amber); }
-@media (max-width: 1240px) { .core-vein-chip { display: none; } }
-
 /* Models running down a person's spine, in parallel: one runner per task being built, sliding from its vertebra to the next. */
 .core-plan-spine .spine-junction { overflow: visible; }
 .spine-runner { position: absolute; left: 50%; top: 0; width: 34px; height: 34px; margin-left: -17px; z-index: 6; pointer-events: auto; animation: spine-run 3.2s ease-in-out infinite; }
 .spine-runner img { width: 34px; height: 34px; }
 @keyframes spine-run { 0% { transform: translateY(-8px); opacity: 0; } 15% { opacity: 1; } 85% { opacity: 1; } 100% { transform: translateY(150px); opacity: 0; } }
-@media (prefers-reduced-motion: reduce) { .core-plan-spine .perimeter-worker.running, .core-vein.flowing { animation: none; } .spine-runner { animation: none; opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .core-plan-spine .perimeter-worker.running .spine-runner { animation: none; opacity: 1; } }
+.core-plan-spine .core-assign { display: flex; align-items: center; gap: 8px; margin: 8px 22px 0; font: 11px system-ui, sans-serif; color: #5b605c; }
+.core-plan-spine .core-assign select { font: inherit; padding: 2px 6px; border: 1px solid var(--border-strong); border-radius: 6px; background: #fff; color: var(--ink); }
