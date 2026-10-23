@@ -1,0 +1,36 @@
+/* Task spine: a vertical line with one node per real task; the model working on a task orbits its symbol. */
+.core-spine { display: grid; gap: var(--space-3); margin-bottom: var(--space-4); }
+.core-spine > header h3 { margin: 0; font-size: var(--text-lg); }
+.core-spine > header p { margin: var(--space-1) 0 0; font-size: var(--text-sm); }
+.core-spine .spine-list { position: relative; list-style: none; margin: 0; padding: 0 0 0 var(--space-6); display: grid; gap: var(--space-4); }
+.core-spine .spine-list::before { content: ""; position: absolute; left: 9px; top: 6px; bottom: 6px; width: 2px; background: var(--border-strong); }
+.core-spine .spine-node { position: relative; }
+.core-spine .spine-dot { position: absolute; left: calc(-1 * var(--space-6) + 3px); top: 8px; width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--border-strong); background: var(--surface); }
+.core-spine .spine-stage-done .spine-dot { background: var(--green); border-color: var(--green); }
+.core-spine .spine-stage-building .spine-dot { background: var(--amber); border-color: var(--amber); }
+.core-spine .spine-node[data-working="true"] .spine-dot { animation: spine-pulse 1.6s ease-in-out infinite; }
+.core-spine article { display: grid; gap: var(--space-2); padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); }
+.core-spine article > header { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+.core-spine article h3 { margin: 0; font-size: var(--text-base); flex: 1 1 12em; overflow-wrap: anywhere; }
+.core-spine .spine-id { font-family: var(--mono); font-size: var(--text-xs); color: var(--muted); }
+.core-spine .spine-state { margin: 0; font-size: var(--text-sm); }
+.core-spine .spine-you { color: var(--amber-text); }
+.core-spine .spine-stations { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: var(--space-1); }
+.core-spine .spine-stations li { padding: 2px var(--space-2); border-radius: 999px; font-size: var(--text-xs); border: 1px solid var(--border); color: var(--muted); }
+.core-spine .spine-stations li[data-state="done"] { background: var(--green-soft); border-color: var(--green); color: var(--ink); }
+.core-spine .spine-stations li[data-state="next"] { background: var(--amber-soft); border-color: var(--amber); color: var(--ink); }
+.core-spine .spine-progress, .core-spine .spine-meta { margin: 0; font-size: var(--text-xs); overflow-wrap: anywhere; }
+
+/* The model symbol: a letter in a circle; while its worker is building, a small dot circles it. */
+.core-spine .spine-model { position: relative; display: inline-grid; place-items: center; width: 30px; height: 30px; border-radius: 50%; font-weight: 700; font-size: var(--text-sm); color: #fff; background: var(--muted); flex: none; }
+.core-spine .spine-model-claude { background: #b4561f; }
+.core-spine .spine-model-gemini { background: #2f5fd0; }
+.core-spine .spine-model-codex { background: #1f7a4d; }
+.core-spine .spine-model-unknown { background: var(--muted); }
+.core-spine .spine-model-orbit { position: absolute; inset: -7px; border-radius: 50%; border: 1px dashed var(--border-strong); animation: spine-orbit 3s linear infinite; }
+.core-spine .spine-model-orbit i { position: absolute; top: -3px; left: calc(50% - 3px); width: 6px; height: 6px; border-radius: 50%; background: var(--amber); }
+@keyframes spine-orbit { to { transform: rotate(360deg); } }
+@keyframes spine-pulse { 50% { box-shadow: 0 0 0 5px var(--amber-soft); } }
+@media (prefers-reduced-motion: reduce) {
+  .core-spine .spine-model-orbit, .core-spine .spine-node[data-working="true"] .spine-dot { animation: none; }
+}

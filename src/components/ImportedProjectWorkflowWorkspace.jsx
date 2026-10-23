@@ -17,6 +17,7 @@ import { usePlanTaskDriftWatch } from "../project/usePlanApproval.js";
 import { focusRequirementTarget } from "./focusRequirementTarget.js";
 import { ProjectTruthGate } from "./ProjectTruthGate.jsx";
 const TaskDraftLedger = lazy(() => import("./TaskDraftLedger.jsx").then(module => ({ default: module.TaskDraftLedger })));
+const CoreSpine = lazy(() => import("../core-screens/CoreSpine.jsx"));
 const TaskDraftMap = lazy(() => import("./TaskDraftMap.jsx").then(module => ({ default: module.TaskDraftMap })));
 import "./ImportedProjectWorkflowWorkspace.css";
 
@@ -183,6 +184,7 @@ export function ImportedProjectWorkflowWorkspace({
     {workspace === "ledger" && <Suspense fallback={<p role="status">Opening task drafts…</p>}><TaskDraftLedger project={activeProject} /></Suspense>}
     {workspace === "plan" && <Suspense fallback={<p role="status">Opening the saved task map…</p>}><TaskDraftMap project={activeProject} records={records} onWorkspace={onWorkspace} /></Suspense>}
 
+    {workspace === "evidence" && <Suspense fallback={<p role="status">Opening the task spine…</p>}><CoreSpine onWorkspace={onWorkspace} /></Suspense>}
     {workspacePanels[workspace] && (() => { const FeaturePanel = workspacePanels[workspace]; return <Suspense fallback={<p role="status">Opening this step…</p>}><FeaturePanel project={activeProject} records={records} onWorkspace={onWorkspace} onSelect={onSelect} /></Suspense>; })()}
 
     <section className="imported-workflow-context" aria-label="Workspace contract">
