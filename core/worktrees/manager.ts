@@ -449,6 +449,7 @@ export class WorktreeManager {
     if (!existsSync(file)) return { schemaVersion: 1, worktrees: [] };
     const parsed = JSON.parse(readFileSync(file, "utf8")) as Registry;
     if (parsed.schemaVersion !== 1 || !Array.isArray(parsed.worktrees)) throw new WorktreeError(`${file} is not a worktree registry this version understands.`);
+    this.syncLeases(parsed);
     return parsed;
   }
 
