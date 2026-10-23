@@ -199,6 +199,16 @@ describe("tasks routes", () => {
     expect((await tasks()).tasks[0]).toMatchObject({ id: "T-1", attempt: 2, label: "T-1.a2", status: "open" });
   }, 60_000);
 
+  it("B1: never suggests the host's own data folder as the git folder", async () => {
+    await ctx.stop();
+    ctx = await startTestHost();
+    const view = await tasks();
+    expect(view.repo.ok).toBe(false);
+    expect(view.repo.suggested).toBeUndefined();
+    await ctx.stop();
+    ctx = await startTestHost({ projectRootOverride: repo });
+  }, 60_000);
+
   it("says plainly when the project folder is not a git repository", async () => {
     await ctx.stop();
     const plain = fs.mkdtempSync(path.join(os.tmpdir(), "pp-tasks-plain-"));
@@ -327,6 +337,12 @@ describe("worker commands", () => {
     const posix = workerCommands({ worktree: "/w/$(x)", bridgeUrl: "http://127.0.0.1:1", tokenFile: "/t/T-1.token", entry: "/a/agent.mjs", briefFile: "/b/`x`.md", platform: "linux" });
     expect(posix.setup).toBe("cd '/w/$(x)' && node '/a/connect.mjs' --agent claude http://127.0.0.1:1 '/t/T-1.token'");
     expect(posix.start).toBe("claude \"$(cat '/b/`x`.md')\"");
+    expect(posix.agents.gemini.setup).toBe("cd '/w/$(x)' && node '/a/connect.mjs' --agent gemini http://127.0.0.1:1 '/t/T-1.token'");
+    expect(posix.agents.gemini.start).toBe("gemini --approval-mode auto_edit -i \"$(cat '/b/`x`.md')\"");
+    expect(posix.agents.codex.setup).toContain("--agent codex");
+    expect(posix.agents.codex.start).toBe("codex -s workspace-write -a on-request \"$(cat '/b/`x`.md')\"");
+    // Never an approve-everything flag, for any agent.
+    for (const a of Object.values(posix.agents)) expect(a.start).not.toMatch(/yolo|danger|bypass|full-auto/);
     expect(workerCommands({ worktree: "C:\\w", bridgeUrl: "http://127.0.0.1:1", tokenFile: "C:\\t", entry: "C:\\a", briefFile: "C:\\b.md", platform: "win32" }).start).toBe("claude (Get-Content -Raw 'C:\\b.md')");
   });
 });

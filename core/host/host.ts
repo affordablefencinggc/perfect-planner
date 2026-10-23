@@ -260,6 +260,10 @@ export class CoreHost {
       if (method === "POST") pinOwnerAfterWrite(this.options.root, project, this.keys);
       send(200, { ok: true, result: result ?? null });
     } catch (error) {
+      if (error instanceof HttpError && error.status === 413) {
+        res.setHeader("connection", "close");
+        res.once("finish", () => req.destroy());
+      }
       if (error instanceof HttpError) return send(error.status, { ok: false, code: error.code, message: error.message });
       // The repo's config names a program git would run (a filter or merge driver): a plain refusal, not a crash.
       if (error instanceof GitProgramRefusedError) return send(409, { ok: false, code: "GIT_PROGRAM_REFUSED", message: error.message });
@@ -299,8 +303,10 @@ function readJson(req: IncomingMessage): Promise<unknown> {
     req.on("data", (chunk: Buffer) => {
       size += chunk.length;
       if (size > MAX_BODY) {
+        // Answer 413 first, then hang up once it is sent (see the handler); stop collecting what is still arriving.
+        req.removeAllListeners("data");
+        req.resume();
         reject(new HttpError(413, "TOO_LARGE", "That request is too large."));
-        req.destroy();
       } else chunks.push(chunk);
     });
     req.on("end", () => {

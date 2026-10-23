@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { CheckCircleIcon, CopyIcon, GitMergeIcon, PlayIcon, SpinnerGapIcon, WarningCircleIcon } from "@phosphor-icons/react";
 import { copyText } from "../project/connectAgentSetup.js";
+import { describeLaunchFolder } from "../browser/launchFolder.js";
 import { AdvancedOnly, CoreScreen } from "./CoreScreen.jsx";
 import { coreGet, useCoreResource } from "./coreApi.js";
 import { CostPanel, GroupBar, RepoBar } from "./TasksRepos.jsx";
@@ -60,6 +61,13 @@ function DispatchPanel({ dispatch, onClose }) {
         <summary>Read the brief, or use another agent</summary>
         <Snippet label="Brief" id={`${dispatch.task}:brief`} text={dispatch.brief} copied={copied} onCopy={copy} />
         <Snippet label="MCP settings" id={`${dispatch.task}:json`} text={dispatch.json} copied={copied} onCopy={copy} />
+        {Object.entries(dispatch.agents ?? {}).map(([name, a]) => (
+          <div key={name}>
+            <p className="core-muted">{name === "gemini" ? "Gemini CLI" : "Codex CLI"}: run the set-up, then the start command. {a.note}</p>
+            <Snippet label={`${name} set-up`} id={`${dispatch.task}:${name}:setup`} text={a.setup} copied={copied} onCopy={copy} />
+            <Snippet label={`${name} start`} id={`${dispatch.task}:${name}:start`} text={a.start} copied={copied} onCopy={copy} />
+          </div>
+        ))}
       </details>
       {copied && !copied.ok && <p className="core-tasks-warn">Copy did not work here. Select the text and copy it by hand.</p>}
       <p className="core-muted">The command holds this worker's private key and works only for {dispatch.task}. It is shown once.</p>
@@ -82,6 +90,13 @@ function JevLine({ label, line }) {
 function RepoPicker({ repo, onSave }) {
   const [root, setRoot] = useState(repo.suggested ?? "");
   const [error, setError] = useState(null);
+  // No folder suggested by the host: offer the folder the person already imported, once, unless they typed something.
+  useEffect(() => {
+    if (repo.suggested) return undefined;
+    let live = true;
+    describeLaunchFolder().then((folder) => { if (live && folder?.path) setRoot((current) => current || folder.path); });
+    return () => { live = false; };
+  }, [repo.suggested]);
   const [busy, setBusy] = useState(false);
   const save = async (event) => {
     event.preventDefault();

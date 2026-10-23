@@ -42,6 +42,66 @@ async function expectCode(promise: Promise<unknown>, code: string, text?: RegExp
   if (text) expect((error as Error).message).toMatch(text);
 }
 
+describe("agents that go quiet", () => {
+  function quietSetup() {
+    const ledger = Ledger.openSync(new MemoryStore(), { now: () => new Date("2026-10-09T05:00:00Z") });
+    const tokens = new TokenStore();
+    let clock = Date.parse("2026-10-09T05:00:00Z");
+    const service = new AgentService({ ledger, tokens, now: () => clock });
+    return { service, tokens, advance: (minutes: number) => { clock += minutes * 60_000; } };
+  }
+
+  it("counts only agents heard from lately, and drops revoked ones", async () => {
+    const { service, tokens, advance } = quietSetup();
+    const connect = tokens.issue({ role: "connect", person: "owner" });
+    const other = tokens.issue({ role: "connect", person: "owner" });
+    await hello(service, connect, "Claude Code");
+    await hello(service, other, "Old terminal");
+    expect(service.liveAgents().map((a) => a.name).sort()).toEqual(["Claude Code", "Old terminal"]);
+    advance(9);
+    await service.call(await hello(service, connect, "Claude Code"), "list_tasks", {});
+    advance(2);
+    expect(service.liveAgents().map((a) => a.name)).toEqual(["Claude Code"]);
+    tokens.revoke(connect);
+    expect(service.liveAgents()).toEqual([]);
+  });
+
+  it("hands the main chat to the next agent once the old one has gone quiet, and keeps the old one read-only", async () => {
+    const { service, tokens, advance } = quietSetup();
+    const first = tokens.issue({ role: "connect", person: "owner" });
+    const second = tokens.issue({ role: "connect", person: "owner" });
+    const a = await hello(service, first, "Claude Code");
+    expect(a.role).toBe("main");
+    advance(5);
+    expect((await hello(service, second, "Gemini")).role).toBe("observer");
+    advance(6);
+    const b = await hello(service, second, "Codex");
+    expect(b.role).toBe("main");
+    await expectCode(service.call(a, "answer", { question: "Q-1", text: "x" }), "FORBIDDEN", /main chat/);
+    expect(service.listAgents().find((x) => x.id === a.agent)?.role).toBe("observer");
+  });
+
+  it("never hands the main chat to a worker, however long the main chat has been quiet", async () => {
+    const { service, tokens, advance } = quietSetup();
+    const connect = tokens.issue({ role: "connect", person: "owner" });
+    const worker = tokens.issue({ role: "worker", person: "owner", task: "T-1" });
+    const main = await hello(service, connect, "Claude Code");
+    advance(60);
+    expect((await hello(service, worker, "Worker")).role).toBe("worker");
+    expect(service.listAgents().find((x) => x.id === main.agent)?.role).toBe("main");
+  });
+
+  it("reports when each agent was last heard from", async () => {
+    const { service, tokens, advance } = quietSetup();
+    const connect = tokens.issue({ role: "connect", person: "owner" });
+    const a = await hello(service, connect, "Claude Code");
+    advance(3);
+    await service.call(a, "list_tasks", {});
+    expect(service.seenAt(a.agent)).toBe("2026-10-09T05:03:00.000Z");
+    expect(service.seenAt("nobody")).toBeUndefined();
+  });
+});
+
 describe("check-in and roles", () => {
   it("makes the first connected agent the main chat and later ones observers", async () => {
     const { service, connect, tokens } = setup();

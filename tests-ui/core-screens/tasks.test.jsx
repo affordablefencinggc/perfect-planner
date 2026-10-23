@@ -57,6 +57,29 @@ describe("TasksScreen", () => {
     expect(await screen.findByText("/work/notes")).toBeTruthy();
   });
 
+  test("B1: with no folder suggested by the host, the box starts with the folder the person imported, and never one they typed over", async () => {
+    routeFetch({
+      "GET /tasks": async () => ok(view([task()], { ok: false, reason: "Choose it below." })),
+      "GET /api/launch-folder": async () => ({ ok: true, status: 200, json: async () => ({ available: true, name: "old", path: "/work/old" }) }),
+    });
+    renderScreen();
+    await waitFor(() => expect(screen.getByLabelText("Git folder").value).toBe("/work/old"));
+  });
+
+  test("B1: a folder the person already typed is not replaced by the imported folder", async () => {
+    let release;
+    const gate = new Promise((resolve) => { release = resolve; });
+    routeFetch({
+      "GET /tasks": async () => ok(view([task()], { ok: false, reason: "Choose it below." })),
+      "GET /api/launch-folder": async () => { await gate; return { ok: true, status: 200, json: async () => ({ available: true, name: "old", path: "/work/old" }) }; },
+    });
+    renderScreen();
+    fireEvent.change(await screen.findByLabelText("Git folder"), { target: { value: "/mine" } });
+    release();
+    await new Promise((r) => setTimeout(r, 30));
+    expect(screen.getByLabelText("Git folder").value).toBe("/mine");
+  });
+
   test("the git folder box starts with the folder already imported", async () => {
     routeFetch({ "GET /tasks": async () => ok(view([task()], { ok: false, reason: "Choose it below.", suggested: "/work/imported" })) });
     renderScreen();
@@ -70,7 +93,7 @@ describe("TasksScreen", () => {
       "POST /tasks/T-1/dispatch": async (init) => {
         expect(JSON.parse(init.body)).toEqual({ model: "claude-sonnet-4-5" });
         tasks = [task({ worktree: { path: "/work/notes/.perfect-planner/worktrees/T-1", branch: "pp/T-1", base: "main", port: 5200 }, dispatch: { issuedAt: "now", model: "claude-sonnet-4-5" } })];
-        return ok({ task: "T-1", title: "Save notes", worktree: "/work/notes/.perfect-planner/worktrees/T-1", branch: "pp/T-1", tokenFile: "/p/.perfect-planner/tokens/T-1.token", brief: "You are a Perfect Planner worker on T-1: Save notes.\n2. Test first: … propose_test", setup: `cd "/w" && claude mcp add perfect-planner-core --env 'PP_AGENT_TOKEN_FILE=/p/.perfect-planner/tokens/T-1.token' -- node '/a'`, start: 'claude "$(cat "/b/T-1.md")"', json: "{}", shell: "Terminal", agentBuilt: true });
+        return ok({ task: "T-1", title: "Save notes", worktree: "/work/notes/.perfect-planner/worktrees/T-1", branch: "pp/T-1", tokenFile: "/p/.perfect-planner/tokens/T-1.token", brief: "You are a Perfect Planner worker on T-1: Save notes.\n2. Test first: … propose_test", setup: `cd "/w" && claude mcp add perfect-planner-core --env 'PP_AGENT_TOKEN_FILE=/p/.perfect-planner/tokens/T-1.token' -- node '/a'`, start: 'claude "$(cat "/b/T-1.md")"', json: "{}", agents: { gemini: { setup: "cd /w && node connect.mjs --agent gemini", start: "gemini --approval-mode auto_edit -i brief", note: "Choose Trust folder first." }, codex: { setup: "cd /w && node connect.mjs --agent codex", start: "codex -s workspace-write -a on-request brief", note: "One connection per computer." } }, shell: "Terminal", agentBuilt: true });
       },
     });
     renderScreen();
@@ -83,6 +106,8 @@ describe("TasksScreen", () => {
     expect(document.body.textContent).not.toContain(TOKEN);
     expect(screen.getByLabelText("Brief for T-1").textContent).toContain("propose_test");
     expect(screen.getByLabelText("Start command for T-1").textContent).toContain("claude");
+    expect(screen.getByLabelText("gemini start for T-1").textContent).toContain("auto_edit");
+    expect(screen.getByLabelText("codex set-up for T-1").textContent).toContain("--agent codex");
     expect(fetch.mock.calls.filter(([u]) => String(u).includes("/dispatch"))).toHaveLength(1);
     fireEvent.click(screen.getByRole("button", { name: "Hide command" }));
     expect(screen.queryByLabelText("Set-up command for T-1")).toBeNull();

@@ -46,6 +46,10 @@ export interface AgentView {
   person: string;
   task?: string;
   connectedAt?: string;
+  /** When the agent last called a tool. */
+  lastSeen?: string;
+  /** Not heard from lately: the header no longer counts it as checked in. */
+  quiet?: boolean;
   connection?: string;
   revoked?: boolean;
 }
@@ -191,6 +195,7 @@ function viewAgents(project: CoreProject): { agents: AgentView[]; connections: C
   const now = new Date().toISOString();
   const linked = new Map<string, string>();
 
+  const liveIds = new Set(project.service.liveAgents().map((a) => a.id));
   const agents = project.service.listAgents().map((record): AgentView => {
     if (!firstSeen.has(record.id)) firstSeen.set(record.id, now);
     const token = tokens.get(record.id);
@@ -203,6 +208,8 @@ function viewAgents(project: CoreProject): { agents: AgentView[]; connections: C
       role: record.role,
       person: record.person,
       connectedAt: firstSeen.get(record.id)!,
+      ...(project.service.seenAt(record.id) ? { lastSeen: project.service.seenAt(record.id)! } : {}),
+      ...(liveIds.has(record.id) ? {} : { quiet: true }),
       ...(record.model ? { model: record.model } : {}),
       ...(record.task ? { task: record.task } : {}),
       ...(conn ? { connection: conn.id } : {}),

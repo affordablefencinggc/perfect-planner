@@ -63,6 +63,18 @@ function readCost(payload: unknown): number | null {
   return null;
 }
 
+// A 500 is usually the same answer again, so it is not retried; the busy and gateway codes usually clear.
+const RETRY_STATUS = new Set([429, 502, 503, 504, 529]);
+const MAX_RETRY_AFTER_MS = 10_000;
+
+/** Retry-After in seconds or as a date, capped so a hostile or broken server cannot stall a review. */
+function retryDelay(response: Response, attempt: number, now: () => number): number {
+  const header = response.headers?.get?.("retry-after");
+  const seconds = header && /^\d+(\.\d+)?$/.test(header.trim()) ? Number(header) * 1000 : header ? Date.parse(header) - now() : NaN;
+  const wanted = Number.isFinite(seconds) ? seconds : 500 * attempt;
+  return Math.min(Math.max(wanted, 0), MAX_RETRY_AFTER_MS);
+}
+
 export function createJevTransport(options: TransportOptions): (request: JevRequest) => Promise<JevCallResult> {
   const doFetch = options.fetchImpl ?? fetch;
   const endpoint = options.endpoint ?? JEV_ENDPOINT;
@@ -74,28 +86,47 @@ export function createJevTransport(options: TransportOptions): (request: JevRequ
     const key = await options.keys.read().catch(() => null);
     if (!key) return { ok: false, problem: "no_key", detail: "No Jev key is saved. Add your TypeSafe key in Settings." };
     const names = Object.keys(request.questions);
+    let lastStatus: number | undefined;
+    let lastDetail = "Jev stayed busy after retrying.";
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      let response: Response;
       try {
-        const response = await doFetch(endpoint, {
+        response = await doFetch(endpoint, {
           method: "POST",
           headers: { Authorization: `Bearer ${key.reveal()}`, "Content-Type": "application/json" },
           body: JSON.stringify(request),
           signal: AbortSignal.timeout(timeoutMs),
         });
-        if ((response.status === 429 || response.status === 529) && attempt < maxAttempts) {
+      } catch (error) {
+        const timedOut = (error as Error).name === "TimeoutError" || (error as Error).name === "AbortError";
+        lastDetail = timedOut ? `Jev did not answer in ${Math.round(timeoutMs / 1000)} s.` : key.scrub(`Jev could not be reached: ${(error as Error).message}`);
+        lastStatus = undefined;
+        // A reset or refused connection is retried like a 503; a timeout is not (a second wait would double the person's).
+        if (attempt < maxAttempts && !timedOut) {
           await sleep(500 * attempt);
           continue;
         }
-        if (!response.ok) return { ok: false, problem: "request_failed", status: response.status, detail: `Jev answered ${response.status}.` };
-        const payload: unknown = await response.json().catch(() => null);
-        const answers = readAnswers(payload, names);
-        if (!answers) return { ok: false, problem: "malformed", status: response.status, detail: "Jev's reply did not answer every question." };
-        const model = typeof (payload as { model?: unknown })?.model === "string" ? (payload as { model: string }).model : request.model;
-        return { ok: true, answers, model, cost: readCost(payload), status: response.status };
-      } catch (error) {
-        return { ok: false, problem: "request_failed", detail: key.scrub(`Jev could not be reached: ${(error as Error).message}`) };
+        return { ok: false, problem: "request_failed", detail: lastDetail };
       }
+      if (response.status === 401 || response.status === 403) {
+        return { ok: false, problem: "request_failed", status: response.status, detail: `Jev rejected the key (${response.status}). Check it in Settings.` };
+      }
+      if (RETRY_STATUS.has(response.status)) {
+        lastStatus = response.status;
+        lastDetail = response.status === 429 ? "Jev stayed busy (429) after retrying." : `Jev had a problem (${response.status}) and kept having it after retrying.`;
+        if (attempt < maxAttempts) {
+          await sleep(retryDelay(response, attempt, Date.now));
+          continue;
+        }
+        return { ok: false, problem: "request_failed", status: response.status, detail: lastDetail };
+      }
+      if (!response.ok) return { ok: false, problem: "request_failed", status: response.status, detail: `Jev answered ${response.status}.` };
+      const payload: unknown = await response.json().catch(() => null);
+      const answers = readAnswers(payload, names);
+      if (!answers) return { ok: false, problem: "malformed", status: response.status, detail: "Jev's reply did not answer every question." };
+      const model = typeof (payload as { model?: unknown })?.model === "string" ? (payload as { model: string }).model : request.model;
+      return { ok: true, answers, model, cost: readCost(payload), status: response.status };
     }
-    return { ok: false, problem: "request_failed", detail: "Jev stayed busy (429) after retrying." };
+    return { ok: false, problem: "request_failed", ...(lastStatus ? { status: lastStatus } : {}), detail: lastDetail };
   };
 }

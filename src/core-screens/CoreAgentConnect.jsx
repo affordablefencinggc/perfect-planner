@@ -210,6 +210,7 @@ export function CoreAgentConnect() {
                     <strong>{agent.name}</strong>
                     {agent.model && <span className="core-muted"> · {modelLabel(agent.model)}</span>}
                     {agent.task && <span className="core-muted"> · {agent.task}</span>}
+                    {agent.quiet && <span className="core-muted"> · not heard from lately</span>}
                     {advanced && <code className="core-advanced"> {agent.id}</code>}
                   </div>
                   <span className={`core-pill ${agent.role === "main" ? "good" : ""}`}>{ROLE_LABEL[agent.role] ?? agent.role}</span>

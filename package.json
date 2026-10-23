@@ -13,6 +13,7 @@
     "verify:mcp": "node scripts/verify-perfect-planner-mcp.mjs",
     "verify:native-mcp": "node scripts/verify-bundled-native-mcp.mjs",
     "verify:secrets": "node scripts/verify-secrets.mjs",
+    "review:bot": "node scripts/review-bot.mjs",
     "verify:push": "node scripts/verify-local-push.mjs",
     "hooks:install": "node scripts/install-git-hooks.mjs",
     "verify:performance": "node scripts/verify-performance-budget.mjs",

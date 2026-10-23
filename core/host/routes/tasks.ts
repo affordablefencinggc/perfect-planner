@@ -12,6 +12,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { deriveState, sensitiveChanges, testSupportFiles, type GateState } from "../../gate/index";
 import type { Actor } from "../../ledger/index";
+import type { AgentKind } from "../agentKinds";
 import { attemptLabel, unmetDependencies, waitingMessage, type TaskView } from "../../mcp/index";
 import { WorktreeError, WorktreeManager, git, refreshCarriedSettings, runGit, WORKTREES_ACTOR, type WorktreeInfo } from "../../worktrees/index";
 import type { CoreHost } from "../host";
@@ -118,7 +119,10 @@ export async function repoState(project: CoreProject, name: string | null = null
     const taken = await repoClaimRefusal(project, top, { write: false });
     return taken ? { name: repoName, ok: false, reason: taken } : { name: repoName, ok: true, root: top };
   }
-  const suggested = extra || repoRefusal(project.root) ? undefined : project.root;
+  // The host's own folder for this project (<app data>/projects/<key>) is never a suggestion: the person's
+  // imported folder is offered by the screen instead.
+  const ownData = path.basename(path.dirname(project.root)) === "projects";
+  const suggested = extra || ownData || repoRefusal(project.root) ? undefined : project.root;
   if (refusal) return { name: repoName, ok: false, reason: refusal, suggested };
   return {
     name: repoName,
@@ -132,6 +136,25 @@ export async function repoState(project: CoreProject, name: string | null = null
   };
 }
 
+/**
+ * One merge at a time per git folder. A merge fast-forwards the folder's checked-out branch (index, files, then the
+ * ref), so two at once could interleave and leave staged files behind that make every later merge say "uncommitted
+ * changes". Merges for different folders still run side by side.
+ */
+const mergeQueues = new Map<string, Promise<unknown>>();
+async function oneMergeAtATime<T>(root: string, run: () => Promise<T>): Promise<T> {
+  const key = process.platform === "win32" ? root.toLowerCase() : root;
+  const before = mergeQueues.get(key) ?? Promise.resolve();
+  const turn = before.then(run, run);
+  const settled = turn.then(() => undefined, () => undefined);
+  mergeQueues.set(key, settled);
+  try {
+    return await turn;
+  } finally {
+    if (mergeQueues.get(key) === settled) mergeQueues.delete(key);
+  }
+}
+
 async function requireRepo(project: CoreProject, name: string | null = null): Promise<string> {
   const repo = await repoState(project, name);
   if (!repo.ok || !repo.root) throw new HttpError(409, repo.name === PRIMARY_REPO ? "NO_REPO" : "REPO_MISSING", repo.reason ?? "Choose your project's git folder first.");
@@ -139,6 +162,12 @@ async function requireRepo(project: CoreProject, name: string | null = null): Pr
   if (taken) throw new HttpError(409, "REPO_IN_USE", taken);
   project.protectRoots([repo.root]);
   return repo.root;
+}
+
+/** Parallel worktrees per project: 10 unless PP_MAX_PARALLEL says otherwise. */
+function parallelCap(): number {
+  const wanted = Number(process.env.PP_MAX_PARALLEL);
+  return Number.isInteger(wanted) && wanted >= 1 && wanted <= 50 ? wanted : 10;
 }
 
 /** The repo a task belongs to, from its signed task.created (null: the project's first repo). */
@@ -155,7 +184,7 @@ function manager(project: CoreProject, root: string, name: string | null = null)
   }
   let current = all.get(real);
   if (!current) {
-    current = new WorktreeManager({ repoRoot: root, ledger: project.ledger });
+    current = new WorktreeManager({ repoRoot: root, ledger: project.ledger, maxParallel: parallelCap() });
     all.set(real, current);
     project.protectRoots([current.repoRoot, current.worktreeRoot]);
   }
@@ -392,7 +421,19 @@ export function workerCommands(options: { worktree: string; bridgeUrl: string; t
   const setup = windows ? `cd ${quote(worktree)}; ${add}` : `cd ${quote(worktree)} && ${add}`;
   const start = windows ? `claude (Get-Content -Raw ${quote(briefFile)})` : `claude "$(cat ${quote(briefFile)})"`;
   const json = JSON.stringify({ mcpServers: { [AGENT_SERVER_NAME]: { command: nodeBinary(), args: [entry], env: { PP_BRIDGE_URL: bridgeUrl, PP_AGENT_TOKEN_FILE: tokenFile } } } }, null, 2);
-  return { setup, start, json, shell: windows ? "PowerShell" : "Terminal" };
+  // Gemini CLI and Codex CLI: the same two steps with their own connect line and start command. Both start
+  // interactively with the person at the keyboard and ask before running commands (Codex: workspace-write
+  // sandbox; Gemini: edits auto-approved, shell asks); neither is ever started with its approve-everything flag.
+  const brief = windows ? `(Get-Content -Raw ${quote(briefFile)})` : `"$(cat ${quote(briefFile)})"`;
+  const agentSetup = (agent: AgentKind) => {
+    const line = connectLine(bridgeUrl, tokenFile, entry, windows ? "win32" : "linux", agent);
+    return windows ? `cd ${quote(worktree)}; ${line}` : `cd ${quote(worktree)} && ${line}`;
+  };
+  const agents = {
+    gemini: { setup: agentSetup("gemini"), start: `gemini --approval-mode auto_edit -i ${brief}`, note: "Choose Trust folder first (start gemini once in the task folder), or the set-up command is refused." },
+    codex: { setup: agentSetup("codex"), start: `codex -s workspace-write -a on-request ${brief}`, note: "Codex keeps one connection for this computer, so this replaces any other Codex worker's." },
+  };
+  return { setup, start, json, agents, shell: windows ? "PowerShell" : "Terminal" };
 }
 
 // ---------- routes ----------
@@ -872,7 +913,7 @@ async function mergeTask(project: CoreProject, id: string, commit: unknown) {
   // for exactly this commit. The gate refuses to merge without it (never reachable from an agent).
   const state = deriveState(project.entries(), label);
   if (!state.mergeApproval || state.mergeApproval.commit !== approved) refuse(project.service.gate.approveMerge(label, localPerson(project), approved));
-  const merged = await project.service.gate.mergeAndVerify(label, { repoRoot: root, branch: tree.branch, integrationBranch: tree.baseRef, actor: localPerson(project) });
+  const merged = await oneMergeAtATime(root, () => project.service.gate.mergeAndVerify(label, { repoRoot: root, branch: tree.branch, integrationBranch: tree.baseRef, actor: localPerson(project) }));
   if (!merged.ok) throw new HttpError(409, "REFUSED", withOutputTail(merged.reason, merged.output));
   revokeWorker(project, label);
   dispatches(project).delete(label);
