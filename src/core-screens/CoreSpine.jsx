@@ -112,10 +112,10 @@ export default function CoreSpine({ onWorkspace, onCount, actions = false }) {
   const [picked, setPicked] = useState(false);
   const tasks = useCoreResource("/tasks", { isEmpty: (data) => !data?.tasks?.length, pollMs: 4000 });
   const agents = useCoreResource("/agents", { pollMs: 4000 });
-  if (tasks.status === "no-session") return null;
   const list = tasks.data?.tasks ? [...tasks.data.tasks].sort((a, b) => taskNumber(a.id) - taskNumber(b.id)) : [];
-  const done = list.filter((t) => t.stage === "done").length;
   useEffect(() => { onCount?.(list.length); }, [list.length, onCount]);
+  if (tasks.status === "no-session") return null;
+  const done = list.filter((t) => t.stage === "done").length;
   const workerOf = (t) => workerFor(t, agents.data?.agents);
   const counts = Object.fromEntries(FILTERS.map(([id, , test]) => [id, list.filter((t) => test(t, workerOf(t))).length]));
   // On the Build page the first thing to see is what is waiting on the person, until they pick a view.
