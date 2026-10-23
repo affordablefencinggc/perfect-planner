@@ -1551,7 +1551,7 @@ function demoInspectorProperties(selected) {
   ];
 }
 
-export function InspectorDrawer({ open, onClose, selected, side = "right", demoMode = false }) {
+export function InspectorDrawer({ open, onClose, selected, side = "right", demoMode = false, onToast }) {
   const dialogRef = useDialogFocus(open, onClose);
   if (!selected) return null;
   if (!demoMode) return (
@@ -1691,7 +1691,7 @@ export function InspectorDrawer({ open, onClose, selected, side = "right", demoM
         )}
       </div>
       <div className="drawer-action">
-        <button className="primary-button" disabled title={`${DEMO_ONLY_REASON}: approvals are not recorded in the Demo.`}>
+        <button className="primary-button" aria-disabled="true" onClick={() => onToast?.(`${DEMO_ONLY_REASON}: approvals are not recorded in the Demo.`, "warning")} title={`${DEMO_ONLY_REASON}: approvals are not recorded in the Demo.`}>
           <ShieldCheckIcon weight="bold" /> Approve next gate
         </button>
         <DemoOnlyReason>approvals are not recorded in the Demo.</DemoOnlyReason>
@@ -5889,7 +5889,7 @@ function OpsDock({
                     </div>
                   );
                 })}
-                <button className="primary-button" disabled title={`${DEMO_ONLY_REASON}: there is no repository to merge.`}>
+                <button className="primary-button" aria-disabled="true" onClick={() => onToast(`${DEMO_ONLY_REASON}: there is no repository to merge.`, "warning")} title={`${DEMO_ONLY_REASON}: there is no repository to merge.`}>
                   <GitMergeIcon /> Run merge gate
                 </button>
                 <DemoOnlyReason>this conveyor is an example; there is no repository to merge.</DemoOnlyReason>
@@ -6854,6 +6854,7 @@ function PerfectPlannerShellCore({
           selected={selectedForInspector}
           demoMode={demoMode}
           side={inspectorSide}
+          onToast={showToast}
         />
       )}
       {(leftOpen || rightOpen) && (
