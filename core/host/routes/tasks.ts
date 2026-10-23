@@ -861,6 +861,19 @@ export function registerTaskRoutes(router: Router): void {
   });
 }
 
+/** Merges into one repo's main checkout one at a time: two at once race on git's index and HEAD locks (found by the soak, F9). */
+const MERGE_QUEUES = new Map<string, Promise<unknown>>();
+function inRepoQueue<T>(root: string, work: () => Promise<T>): Promise<T> {
+  const key = fs.realpathSync(root);
+  const next = (MERGE_QUEUES.get(key) ?? Promise.resolve()).then(work, work);
+  const tail = next.catch(() => undefined);
+  MERGE_QUEUES.set(key, tail);
+  void tail.then(() => {
+    if (MERGE_QUEUES.get(key) === tail) MERGE_QUEUES.delete(key);
+  });
+  return next;
+}
+
 async function mergeTask(project: CoreProject, id: string, commit: unknown) {
   const task = findTask(project, id);
   const label = attemptLabel(task);
@@ -881,7 +894,7 @@ async function mergeTask(project: CoreProject, id: string, commit: unknown) {
   // for exactly this commit. The gate refuses to merge without it (never reachable from an agent).
   const state = deriveState(project.entries(), label);
   if (!state.mergeApproval || state.mergeApproval.commit !== approved) refuse(project.service.gate.approveMerge(label, localPerson(project), approved));
-  const merged = await project.service.gate.mergeAndVerify(label, { repoRoot: root, branch: tree.branch, integrationBranch: tree.baseRef, actor: localPerson(project) });
+  const merged = await inRepoQueue(root, () => project.service.gate.mergeAndVerify(label, { repoRoot: root, branch: tree.branch, integrationBranch: tree.baseRef, actor: localPerson(project) }));
   if (!merged.ok) throw new HttpError(409, "REFUSED", withOutputTail(merged.reason, merged.output));
   revokeWorker(project, label);
   dispatches(project).delete(label);

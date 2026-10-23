@@ -103,6 +103,8 @@ export class WorktreeError extends Error {}
 
 /** Dev-server ports handed out in this process, by repo. Two projects open at once must not share one while neither server is listening yet. */
 const PORT_LEASES = new Map<number, string>();
+/** Ports leased by a create() that has not registered its worktree yet; a registry read must not drop them. */
+const PENDING_PORTS = new Set<number>();
 
 /**
  * One git worktree per task (spec 5.3 and 5.6). Each gets branch pp/T-n, a folder under
@@ -188,10 +190,13 @@ export class WorktreeManager {
     }
     // A finished add is never locked; a "initializing" lock here is a killed earlier add's, written after our clean-up.
     await runGit(this.repoRoot, ["worktree", "unlock", worktreePath]);
+    let leased: number | undefined;
     try {
       const realPath = realDir(worktreePath);
       if (!isWithin(realDir(this.worktreeRoot), realPath)) throw new WorktreeError("Worktree folder was redirected outside .perfect-planner/worktrees.");
       const port = await this.freePort(registry.worktrees);
+      leased = port;
+      PENDING_PORTS.add(port);
       const tracked = new Set(lines(await git(this.repoRoot, ["ls-files", "--", ".env*"])));
       const settings = copyLocalSettings(this.repoRoot, realPath, tracked);
       if (this.secretScan) await this.installSecretScan(realPath);
@@ -199,6 +204,7 @@ export class WorktreeManager {
       const info: WorktreeInfo = { taskId, branch, path: realPath, baseSha, baseRef: base, port, actor: actor.id, createdAt: this.now().toISOString(), claims: claims.map(toRepoPath).sort() };
       registry.worktrees.push(info);
       await this.writeRegistry(registry);
+      PENDING_PORTS.delete(port);
       this.ledger.append({
         type: "worktree.created",
         // Agents may not write git entries; the manager records the launch and names who asked.
@@ -210,6 +216,7 @@ export class WorktreeManager {
       });
       return info;
     } catch (error) {
+      if (leased !== undefined) PENDING_PORTS.delete(leased);
       // Nothing has been written in a worktree this young, so a forced rollback discards no one's work.
       await runGit(this.repoRoot, ["worktree", "remove", "--force", worktreePath]);
       await runGit(this.repoRoot, ["branch", "-D", branch]);
@@ -517,7 +524,7 @@ export class WorktreeManager {
   /** Keeps this repo's leases equal to the ports its registry holds; a lease with no worktree behind it is dropped. */
   private syncLeases(registry: Registry): void {
     const held = new Set(registry.worktrees.map((info) => info.port));
-    for (const [port, holder] of PORT_LEASES) if (holder === this.repoRoot && !held.has(port)) PORT_LEASES.delete(port);
+    for (const [port, holder] of PORT_LEASES) if (holder === this.repoRoot && !held.has(port) && !PENDING_PORTS.has(port)) PORT_LEASES.delete(port);
     for (const port of held) PORT_LEASES.set(port, this.repoRoot);
   }
 
