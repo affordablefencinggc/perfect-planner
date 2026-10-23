@@ -94,7 +94,8 @@ async function hit(method: "GET" | "POST", route: string, body?: unknown, rawQue
   const ms = Date.now() - started;
   const tag = `${status}${json?.code ? " " + json.code : ""}`;
   tally.set(tag, (tally.get(tag) ?? 0) + 1);
-  const bad = status >= 500 || typeof json?.ok !== "boolean" || ms > 8_000;
+  // A hang is the 15 s race above; this only flags a call close to one. 8 s flaked on loaded runners (/status took 8983 ms on #80).
+  const bad = status >= 500 || typeof json?.ok !== "boolean" || ms > 14_000;
   if (bad) problems.push(`${method} ${route} ${JSON.stringify(body)?.slice(0, 80)} -> ${status} ${json?.code} ${String(json?.message ?? "").slice(0, 100)} (${ms} ms)`);
 }
 
