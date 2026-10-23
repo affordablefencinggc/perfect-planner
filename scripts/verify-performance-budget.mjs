@@ -21,8 +21,7 @@ export const PERFORMANCE_BUDGETS = Object.freeze({
   // UI polish (Oct 2026): total raised for the page frame and per-screen polish layers; the per-file limit is unchanged.
   // Core loop screens (Oct 2026): raised for their on-demand stylesheets.
   // Task spine (Oct 2026, owner OK): its stylesheet brings the total to 80.5 KiB; 82 leaves under 2 KiB of headroom.
-  // People profile panel and multi-repo views (Oct 2026, owner OK: "raise it to whatever we need"): 86 leaves about 1 KiB of headroom.
-  maxTotalStylesheetGzipBytes: 86 * 1024,
+  maxTotalStylesheetGzipBytes: 82 * 1024,
   maxClientBytes: 14 * 1024 * 1024,
   maxClientFiles: 200, // raised from 160 when v1 feature panels moved to on-demand chunks
 });
