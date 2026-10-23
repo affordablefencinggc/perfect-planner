@@ -126,8 +126,7 @@ describe("tasks routes", () => {
     expect(checked.body.result).toMatchObject({ passed: true, commit: head });
     const diff = (await hostCall(ctx.base, "GET", `/tasks/T-1/diff${q}`)).body.result;
     expect(diff.files).toEqual([".github/workflows/ci.yml", "package.json", "src/save.js", "tests/save.check.mjs"]);
-    // The gate's own list: the proposed test file counts too, since a change there changes what is checked.
-    // The approved test file itself (tests/save.check.mjs, unchanged since approval) is not flagged; the rest still are.
+    // The gate's own list, minus the approved test file: it passed unchanged at this tip, and the person read it when approving the test.
     expect(diff.sensitive).toEqual([".github/workflows/ci.yml", "package.json"]);
     expect(diff.text).toContain("export const save");
     expect((await tasks()).tasks[0]).toMatchObject({ stage: "review-diff" });

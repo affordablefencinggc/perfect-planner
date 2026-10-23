@@ -395,3 +395,85 @@ describe("TasksScreen: waiting on other tasks, updating from main, releasing fil
     await waitFor(() => expect(within(t2).queryByRole("button", { name: "Release file claims" })).toBeNull());
   });
 });
+
+describe("TasksScreen queue and batch", () => {
+  const queueOf = (over) => ({ limit: 2, running: [], notStarted: [], waitingForYou: [], readyToMerge: [], done: 0, ...over });
+  const withQueue = (tasks, queue, settings = { limit: 2, autoMerge: false }) => ({ repo: REPO, tasks, queue, settings });
+  const diffOf = (id, commit, files, sensitive = []) => ({ task: id, base: "b", commit, files, sensitive, text: "+x", truncated: false });
+
+  test("shows the line: running of limit, what waits and why, and Start all starts only what can start", async () => {
+    let started = false;
+    const fetch = routeFetch({
+      "GET /tasks": async () => ok(withQueue([task({ id: "T-1", label: "T-1" }), task({ id: "T-2", label: "T-2", title: "Share" }), task({ id: "T-3", label: "T-3", title: "Export" })], queueOf({ notStarted: [{ id: "T-1", why: "Can start now." }, { id: "T-2", why: "Waiting for a free worker (limit 2)." }, { id: "T-3", why: "T-3 cannot start yet because it needs T-1." }] }))),
+      "POST /tasks/start-all": async (init) => {
+        started = true;
+        expect(JSON.parse(init.body)).toEqual({ model: "claude-sonnet-4-5" });
+        return ok({ ...withQueue([task()], queueOf()), started: [{ task: "T-1", title: "Save notes", worktree: "/w", branch: "pp/T-1", tokenFile: "/t", brief: "b", setup: "cd /w", start: "claude x", json: "{}", shell: "Terminal" }], refused: [] });
+      },
+    });
+    renderScreen();
+    const queue = await screen.findByRole("region", { name: "Worker queue" });
+    expect(within(queue).getByText(/0 of 2 workers running · 3 not started/)).toBeTruthy();
+    expect(within(queue).getByText("Waiting for a free worker (limit 2).")).toBeTruthy();
+    expect(within(queue).getByText(/cannot start yet/)).toBeTruthy();
+    fireEvent.click(within(queue).getByRole("button", { name: /Start all \(1\)/ }));
+    await waitFor(() => expect(started).toBe(true));
+    expect(await within(queue).findByText(/Started 1 worker; the commands are on each card/)).toBeTruthy();
+    expect(fetch.mock.calls.some(([u]) => String(u).includes("/tasks/start-all"))).toBe(true);
+  });
+
+  test("changing the limit and the auto-merge switch are saved", async () => {
+    const bodies = [];
+    routeFetch({
+      "GET /tasks": async () => ok(withQueue([task()], queueOf())),
+      "POST /tasks/settings": async (init) => { bodies.push(JSON.parse(init.body)); return ok(withQueue([task()], queueOf())); },
+    });
+    renderScreen();
+    const queue = await screen.findByRole("region", { name: "Worker queue" });
+    fireEvent.change(within(queue).getByLabelText("Workers at once"), { target: { value: "5" } });
+    await waitFor(() => expect(bodies).toEqual([{ limit: 5 }]));
+    fireEvent.click(within(queue).getByLabelText(/Merge right after I approve a diff with no flagged files/));
+    await waitFor(() => expect(bodies[1]).toEqual({ autoMerge: true }));
+  });
+
+  test("batch: clean diffs are offered together, a flagged one is only listed, and the result says what happened per task", async () => {
+    const t = (n, stage, extra = {}) => task({ id: `T-${n}`, label: `T-${n}`, title: `Task ${n}`, stage, status: "claimed", ...extra });
+    const tasks = [t(1, "review-diff"), t(2, "review-diff"), t(3, "review-diff"), t(4, "ready-to-merge", { diffApproval: { commit: "d".repeat(40) } })];
+    let sent;
+    routeFetch({
+      "GET /tasks": async () => ok(withQueue(tasks, queueOf({ waitingForYou: ["T-1", "T-2", "T-3"], readyToMerge: ["T-4"] }))),
+      "GET /tasks/T-1/diff": async () => ok(diffOf("T-1", "a".repeat(40), ["src/a.js", "tests/a.test.js"])),
+      "GET /tasks/T-2/diff": async () => ok(diffOf("T-2", "b".repeat(40), ["src/b.js"])),
+      "GET /tasks/T-3/diff": async () => ok(diffOf("T-3", "c".repeat(40), ["package.json"], ["package.json"])),
+      "POST /tasks/batch": async (init) => {
+        sent = JSON.parse(init.body);
+        return ok({ ...withQueue([], queueOf()), results: [{ id: "T-1", outcome: "merged", message: "Approved and merged." }, { id: "T-2", outcome: "failed", message: "The test fails after the merge (exit code 1).\n\nEnd of the test output:\nexpected 2 got 3" }, { id: "T-4", outcome: "merged", message: "Merged." }] });
+      },
+    });
+    renderScreen();
+    fireEvent.click(await screen.findByRole("button", { name: "Review 4 finished tasks together" }));
+    const panel = await screen.findByRole("region", { name: "Approve together" });
+    expect(within(panel).getByText("3 with no flagged files")).toBeTruthy();
+    expect(within(panel).getByText("1 to read yourself")).toBeTruthy();
+    expect(within(panel).getByText(/flagged: package.json/)).toBeTruthy();
+    fireEvent.click(within(panel).getByRole("button", { name: "Approve and merge these 3" }));
+    await waitFor(() => expect(sent).toBeTruthy());
+    expect(sent.items).toEqual([{ id: "T-1", commit: "a".repeat(40) }, { id: "T-2", commit: "b".repeat(40) }, { id: "T-4", commit: "d".repeat(40) }]);
+    const result = await screen.findByRole("status", { name: "Batch result" });
+    expect(within(result).getByText(/T-1 Merged\./)).toBeTruthy();
+    expect(within(result).getByText(/T-2 Failed\./)).toBeTruthy();
+    expect(result.textContent).toContain("expected 2 got 3");
+  });
+
+  test("a merge refused after the test failed shows the end of the test output", async () => {
+    const t = task({ id: "T-1", label: "T-1", stage: "ready-to-merge", status: "claimed", diffApproval: { commit: "a".repeat(40) }, worktree: { path: "/w", branch: "pp/T-1", base: "main", port: 5200 } });
+    routeFetch({
+      "GET /tasks": async () => ok(view([t])),
+      "POST /tasks/T-1/merge": async () => refused("The test fails after the merge (exit code 1); main was left untouched.\n\nEnd of the test output:\nexpected 2 got 3"),
+    });
+    renderScreen();
+    fireEvent.click(await screen.findByRole("button", { name: /Merge into main/ }));
+    const notice = await screen.findByText(/main was left untouched/);
+    expect(notice.textContent).toContain("expected 2 got 3");
+  });
+});

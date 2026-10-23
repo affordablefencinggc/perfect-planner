@@ -202,6 +202,61 @@ function staleClaimReason(project: CoreProject, tree: WorktreeInfo, board: Reado
     : `${tree.taskId} has no worker on it`;
 }
 
+// ---------- worker limit, auto-merge switch and the queue ----------
+
+const SETTINGS_FILE = "tasks-settings.json";
+const DEFAULT_LIMIT = 3;
+const MAX_LIMIT = 8;
+const MAX_BATCH = 50;
+
+export interface TaskSettings {
+  /** How many workers may run at once; Start all stops there and the rest wait. */
+  limit: number;
+  /** When on, approving a diff that touches no flagged file merges it straight away. */
+  autoMerge: boolean;
+}
+
+function settingsFile(project: CoreProject): string {
+  return path.join(project.root, ".perfect-planner", SETTINGS_FILE);
+}
+
+export function taskSettings(project: CoreProject): TaskSettings {
+  try {
+    const raw = JSON.parse(fs.readFileSync(settingsFile(project), "utf8")) as { limit?: unknown; autoMerge?: unknown };
+    const limit = typeof raw.limit === "number" && Number.isInteger(raw.limit) && raw.limit >= 1 && raw.limit <= MAX_LIMIT ? raw.limit : DEFAULT_LIMIT;
+    return { limit, autoMerge: raw.autoMerge === true };
+  } catch {
+    return { limit: DEFAULT_LIMIT, autoMerge: false };
+  }
+}
+
+/** A worker is running on the task and has not handed in work yet; a task waiting on a diff or a merge holds no slot. */
+function hasWorker(task: { stage: string; status: string; dispatch: unknown }): boolean {
+  return Boolean(task.dispatch || task.status === "claimed") && !["done", "review-diff", "ready-to-merge", "reopened"].includes(task.stage);
+}
+
+function queueOf(tasks: Array<ReturnType<typeof viewTask>>, limit: number) {
+  const running = tasks.filter(hasWorker);
+  const slots = Math.max(0, limit - running.length);
+  const notStarted = tasks.filter((t) => !hasWorker(t) && !["done", "review-diff", "ready-to-merge"].includes(t.stage));
+  let free = slots;
+  return {
+    limit,
+    running: running.map((t) => t.id),
+    notStarted: notStarted.map((t) => {
+      if (t.waitingFor) return { id: t.id, why: t.waitingFor.message };
+      if (free > 0) {
+        free -= 1;
+        return { id: t.id, why: "Can start now." };
+      }
+      return { id: t.id, why: `Waiting for a free worker (limit ${limit}).` };
+    }),
+    waitingForYou: tasks.filter((t) => t.stage === "review-diff").map((t) => t.id),
+    readyToMerge: tasks.filter((t) => t.stage === "ready-to-merge").map((t) => t.id),
+    done: tasks.filter((t) => t.stage === "done").length,
+  };
+}
+
 // ---------- the view ----------
 
 export function stageOf(task: TaskView, gate: GateState): TaskStage {
@@ -280,7 +335,8 @@ async function overview(project: CoreProject) {
   const board = project.service.board();
   const assignments = replayRoster(project.entries(), project.ledger.owner).assignments;
   const tasks = [...board.values()].map((task) => viewTask(project, task, worktrees, board, assignments));
-  return { repo, tasks };
+  const settings = taskSettings(project);
+  return { repo, tasks, settings, queue: queueOf(tasks, settings.limit) };
 }
 
 function findTask(project: CoreProject, id: string): TaskView {
@@ -727,8 +783,8 @@ export function registerTaskRoutes(router: Router): void {
   });
 
   /** POST /tasks/:id/approve-diff: the person approves the diff at the commit the test passed on. */
-  router.post("/tasks/:id/approve-diff", async ({ project, params, body }) => {
-    const task = findTask(project, params.id!);
+  const approveDiff = async (project: CoreProject, id: string, body: unknown) => {
+    const task = findTask(project, id);
     const label = attemptLabel(task);
     const passed = deriveState(project.entries(), label).worktree;
     const tip = await git((await worktreeFor(project, label)).path, ["rev-parse", "HEAD"]);
@@ -739,6 +795,7 @@ export function registerTaskRoutes(router: Router): void {
     // Files that can run code on this machine need their own confirmation, naming exactly those files.
     const tree = await worktreeFor(project, label);
     const { sensitive } = await changedFiles(project, label, tree, tip);
+    const clean = sensitive.length === 0;
     const confirmed = bodyOf(body).confirmSensitive;
     if (sensitive.length && !(Array.isArray(confirmed) && confirmed.length === sensitive.length && sensitive.every((file) => confirmed.includes(file)))) {
       throw new HttpError(409, "CONFIRM_SENSITIVE", `This diff changes files that can run code on your computer (${sensitive.join(", ")}). Confirm you read them before approving.`);
@@ -762,8 +819,9 @@ export function registerTaskRoutes(router: Router): void {
       }
     }
     refuse(project.service.gate.approveDiff(attemptLabel(task), localPerson(project)));
-    return { approved: true, ...(jev ? { jev } : {}), ...(await overview(project)) };
-  });
+    return { approved: true, clean, ...(jev ? { jev } : {}), ...(await overview(project)) };
+  };
+  router.post("/tasks/:id/approve-diff", ({ project, params, body }) => approveDiffAndMaybeMerge(project, params.id!, body));
 
   /** POST /tasks/:id/reject { notes }: the diff goes back to the worker as the next attempt. */
   router.post("/tasks/:id/reject", async ({ project, params, body }) => {
@@ -794,8 +852,8 @@ export function registerTaskRoutes(router: Router): void {
    * POST /tasks/:id/merge: merge the worker's branch into the branch it started from. The gate merges
    * into a throwaway candidate, reruns the test there, and only on a pass moves the branch and writes done.
    */
-  router.post("/tasks/:id/merge", async ({ project, params, body }) => {
-    const task = findTask(project, params.id!);
+  const mergeTask = async (project: CoreProject, id: string, body: unknown) => {
+    const task = findTask(project, id);
     const label = attemptLabel(task);
     const root = await requireRepo(project);
     const tree = await worktreeFor(project, label);
@@ -821,5 +879,95 @@ export function registerTaskRoutes(router: Router): void {
     await project.watch?.tick();
     const removed = await manager(project, root).remove(label, WORKTREES_ACTOR).catch((error: Error) => ({ error: error.message }));
     return { merged: true, commit: merged.mergeCommit, into: tree.baseRef, removed, ...(await overview(project)) };
+  };
+  router.post("/tasks/:id/merge", ({ project, params, body }) => mergeTask(project, params.id!, body));
+
+  /** With the auto-merge switch on, approving a diff that touches no flagged file merges it right away; any refusal stops at "ready to merge". */
+  const approveDiffAndMaybeMerge = async (project: CoreProject, id: string, body: unknown) => {
+    const result = (await approveDiff(project, id, body)) as { approved: boolean; clean: boolean };
+    if (!result.approved || !result.clean || !taskSettings(project).autoMerge) return result;
+    const commit = deriveState(project.entries(), attemptLabel(findTask(project, id))).diffApproval?.commit;
+    try {
+      return { ...result, ...((await mergeTask(project, id, { commit })) as object) };
+    } catch (error) {
+      if (error instanceof HttpError) return { ...result, autoMergeStopped: error.message };
+      throw error;
+    }
+  };
+
+  /** POST /tasks/settings { limit?, autoMerge? }: the worker limit and the auto-merge switch. */
+  router.post("/tasks/settings", async ({ project, body }) => {
+    const { limit, autoMerge } = bodyOf(body);
+    if (limit !== undefined && !(typeof limit === "number" && Number.isInteger(limit) && limit >= 1 && limit <= MAX_LIMIT)) throw new HttpError(400, "INVALID", `The worker limit is a whole number from 1 to ${MAX_LIMIT}.`);
+    if (autoMerge !== undefined && typeof autoMerge !== "boolean") throw new HttpError(400, "INVALID", "Auto-merge is on or off.");
+    const next = { ...taskSettings(project), ...(limit !== undefined ? { limit: limit as number } : {}), ...(autoMerge !== undefined ? { autoMerge: autoMerge as boolean } : {}) };
+    fs.mkdirSync(path.dirname(settingsFile(project)), { recursive: true });
+    fs.writeFileSync(settingsFile(project), JSON.stringify(next, null, 2));
+    return overview(project);
+  });
+
+  /** POST /tasks/start-all { model? }: starts workers on the tasks that can start, up to the limit; the rest stay queued. */
+  router.post("/tasks/start-all", async ({ project, host, body }) => {
+    const { model } = bodyOf(body);
+    const first = await overview(project);
+    const started: unknown[] = [];
+    const refused: Array<{ id: string; message: string }> = [];
+    for (const item of first.queue.notStarted) {
+      if (item.why !== "Can start now.") continue;
+      try {
+        started.push(await dispatch(project, host, item.id, { ...(typeof model === "string" ? { model } : {}) }));
+      } catch (error) {
+        if (!(error instanceof HttpError)) throw error;
+        refused.push({ id: item.id, message: error.message });
+      }
+    }
+    return { started, refused, ...(await overview(project)) };
+  });
+
+  /**
+   * POST /tasks/batch { items: [{ id, commit }] }: approve and merge the diffs the person was shown, one after another
+   * through the same code as a single click. A diff with a flagged file is never approved here, a commit that moved since
+   * the screen loaded is skipped, and one failure does not stop the rest.
+   */
+  router.post("/tasks/batch", async ({ project, body }) => {
+    const items = bodyOf(body).items;
+    if (!Array.isArray(items) || !items.length || items.length > MAX_BATCH) throw new HttpError(400, "INVALID", `Name between 1 and ${MAX_BATCH} tasks.`);
+    const results: Array<{ id: string; outcome: "merged" | "approved" | "skipped" | "failed"; message: string }> = [];
+    for (const item of items) {
+      const { id, commit } = bodyOf(item);
+      if (typeof id !== "string") continue;
+      const done = (outcome: "merged" | "approved" | "skipped" | "failed", message: string) => results.push({ id, outcome, message });
+      try {
+        const task = findTask(project, id);
+        const label = attemptLabel(task);
+        const stage = (await overview(project)).tasks.find((t) => t.id === id)?.stage;
+        const tree = await worktreeFor(project, label);
+        const tip = await git(tree.path, ["rev-parse", "HEAD"]);
+        if (!sameCommit(commit, tip)) {
+          done("skipped", "The work changed since the screen loaded. Open it and read the new diff.");
+        } else if (stage === "review-diff") {
+          const { sensitive } = await changedFiles(project, label, tree, tip);
+          if (sensitive.length) {
+            done("skipped", `Touches files that can run code (${sensitive.join(", ")}). Open it and read them.`);
+            continue;
+          }
+          const approved = (await approveDiff(project, id, { commit: tip })) as { approved: boolean };
+          if (!approved.approved) {
+            done("skipped", "Jev sent the change back, so it was not approved.");
+            continue;
+          }
+          await mergeTask(project, id, { commit: tip });
+          done("merged", "Approved and merged.");
+        } else if (stage === "ready-to-merge") {
+          await mergeTask(project, id, { commit: tip });
+          done("merged", "Merged.");
+        } else {
+          done("skipped", "Not waiting for a diff or a merge.");
+        }
+      } catch (error) {
+        done("failed", error instanceof Error ? error.message : String(error));
+      }
+    }
+    return { results, ...(await overview(project)) };
   });
 }
