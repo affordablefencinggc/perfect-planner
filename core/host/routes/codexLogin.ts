@@ -7,7 +7,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { NO_CWD_SEARCH_ENV } from "../../exec/index";
-import { agentLaunch } from "../agentConnect";
+import { agentLaunch } from "../agentLaunch";
 import { childEnv } from "../protectedRoots";
 import { HttpError, type Router } from "../router";
 import { projectRoots } from "./agents";
