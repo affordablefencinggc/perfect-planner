@@ -3,6 +3,7 @@ import { Ledger, LedgerError, MemoryStore, type Actor, type EntryDraft, type Led
 import { appendNumbered, installNumberingRules } from "../numbering/index";
 import {
   addMember,
+  assignTask,
   auditPeople,
   openPeopleLedger,
   buildPeopleView,
@@ -12,6 +13,8 @@ import {
   clearPhoto,
   docId,
   installPeopleRules,
+  LISTED_AGENTS_MAX,
+  listAgent,
   MemoryPhotoStore,
   parsePeopleEvent,
   peopleEvent,
@@ -132,7 +135,7 @@ describe("solo first", () => {
     write(ledger, { actor: owner, type: "test.approved", subject: "T-1", data: { test: "npm test" } });
     write(ledger, { actor: stranger, type: "task.progress", subject: "T-1" });
     expect(ledger.entries()).toHaveLength(4);
-    expect(peopleView(ledger)).toEqual({ members: [], docs: [], head: "L-000004" });
+    expect(peopleView(ledger)).toEqual({ members: [], docs: [], assignments: {}, head: "L-000004" });
   });
 
   it("lets a solo person share documents before setting up a roster", () => {
@@ -614,5 +617,55 @@ describe("the pinned owner key", () => {
     await expect(openPeopleLedger(store, { readOnly: true })).rejects.toMatchObject({ code: "NO_OWNER_KEY" });
     const repinned = await Ledger.open(store, { readOnly: true, ownerKey });
     expect(peopleView(repinned).members.map((m) => m.person)).toEqual(["looplet-spare", "mia"]);
+  });
+});
+
+describe("giving tasks to people", () => {
+  it("lets only the owner assign, only to members who can work, and the latest assignment wins", () => {
+    const ledger = team();
+    assignTask(ledger, owner, "T-1", "mia");
+    expect(refusal(() => assignTask(ledger, mia, "T-2", "mia"))).toMatch(/only the owner gives tasks/);
+    expect(refusal(() => assignTask(ledger, owner, "T-2", "sam"))).toMatch(/viewer and cannot be given work/);
+    expect(refusal(() => assignTask(ledger, owner, "T-2", "stranger"))).toMatch(/not on the project/);
+    expect(buildPeopleView(ledger.entries(), { owner: ledger.owner }).assignments).toEqual({ "T-1": "mia" });
+    assignTask(ledger, owner, "T-1", "looplet-spare");
+    expect(buildPeopleView(ledger.entries(), { owner: ledger.owner }).assignments).toEqual({ "T-1": "looplet-spare" });
+  });
+
+  it("drops a removed person's tasks, and reads only well-formed assignments", () => {
+    const ledger = team();
+    assignTask(ledger, owner, "T-3", "mia");
+    removeMember(ledger, owner, "mia");
+    expect(buildPeopleView(ledger.entries(), { owner: ledger.owner }).assignments).toEqual({});
+    expect(parsePeopleEvent({ op: "task.assigned", task: "T-3", person: "mia" })).toBeDefined();
+    expect(parsePeopleEvent({ op: "task.assigned", task: "3", person: "mia" })).toBeUndefined();
+    expect(parsePeopleEvent({ op: "task.assigned", task: "T-3", person: "Not A Slug" })).toBeUndefined();
+  });
+});
+
+describe("listing an agent under the person who connected it", () => {
+  it("lists it once, in the owner's name, so the roster rule lets it write", () => {
+    const ledger = team();
+    const stray: Actor = { kind: "agent", id: "sam-bot-1", model: "claude-x" };
+    createTask(ledger);
+    const progress = () => write(ledger, { actor: stray, type: "task.progress", subject: "T-1" });
+    expect(refusal(progress)).toMatch(/not listed as anyone's agent/);
+    expect(listAgent(ledger, "mia", "sam-bot-1")).toBe(true);
+    const before = ledger.entries().length;
+    expect(listAgent(ledger, "mia", "sam-bot-1")).toBe(true);
+    expect(ledger.entries().length).toBe(before);
+    expect(progress).not.toThrow();
+    expect(buildPeopleView(ledger.entries(), { owner: ledger.owner }).members.find((m) => m.person === "mia")!.agents).toEqual(["mia-worker", "sam-bot-1"]);
+  });
+
+  it("does nothing without a roster or for someone who is not on it, and keeps the newest agents when the list is full", () => {
+    expect(listAgent(open(), "mia", "a-1")).toBe(false);
+    const ledger = team();
+    expect(listAgent(ledger, "stranger", "a-1")).toBe(false);
+    for (let i = 0; i < LISTED_AGENTS_MAX + 5; i++) listAgent(ledger, "mia", `bot-${i}`);
+    const agents = buildPeopleView(ledger.entries(), { owner: ledger.owner }).members.find((m) => m.person === "mia")!.agents;
+    expect(agents).toHaveLength(LISTED_AGENTS_MAX);
+    expect(agents.at(-1)).toBe(`bot-${LISTED_AGENTS_MAX + 4}`);
+    expect(agents).not.toContain("bot-0");
   });
 });
