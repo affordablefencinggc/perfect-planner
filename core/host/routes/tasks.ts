@@ -116,6 +116,25 @@ export async function repoState(project: CoreProject): Promise<RepoState> {
   };
 }
 
+/**
+ * One merge at a time per git folder. A merge fast-forwards the folder's checked-out branch (index, files, then the
+ * ref), so two at once could interleave and leave staged files behind that make every later merge say "uncommitted
+ * changes". Merges for different folders still run side by side.
+ */
+const mergeQueues = new Map<string, Promise<unknown>>();
+async function oneMergeAtATime<T>(root: string, run: () => Promise<T>): Promise<T> {
+  const key = process.platform === "win32" ? root.toLowerCase() : root;
+  const before = mergeQueues.get(key) ?? Promise.resolve();
+  const turn = before.then(run, run);
+  const settled = turn.then(() => undefined, () => undefined);
+  mergeQueues.set(key, settled);
+  try {
+    return await turn;
+  } finally {
+    if (mergeQueues.get(key) === settled) mergeQueues.delete(key);
+  }
+}
+
 async function requireRepo(project: CoreProject): Promise<string> {
   const repo = await repoState(project);
   if (!repo.ok || !repo.root) throw new HttpError(409, "NO_REPO", repo.reason ?? "Choose your project's git folder first.");
@@ -772,7 +791,7 @@ export function registerTaskRoutes(router: Router): void {
     // for exactly this commit. The gate refuses to merge without it (never reachable from an agent).
     const state = deriveState(project.entries(), label);
     if (!state.mergeApproval || state.mergeApproval.commit !== approved) refuse(project.service.gate.approveMerge(label, localPerson(project), approved));
-    const merged = await project.service.gate.mergeAndVerify(label, { repoRoot: root, branch: tree.branch, integrationBranch: tree.baseRef, actor: localPerson(project) });
+    const merged = await oneMergeAtATime(root, () => project.service.gate.mergeAndVerify(label, { repoRoot: root, branch: tree.branch, integrationBranch: tree.baseRef, actor: localPerson(project) }));
     if (!merged.ok) throw new HttpError(409, "REFUSED", withOutputTail(merged.reason, merged.output));
     revokeWorker(project, label);
     dispatches(project).delete(label);

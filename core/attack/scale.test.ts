@@ -13,6 +13,10 @@ import { appendNumbered } from "../numbering/index";
 import { asPersonRequest } from "../host/keys";
 import { hostCall, startTestHost } from "../host/testing";
 
+// These suites test the host's own logic (concurrency, routes, bridge), which does not change with the OS, and
+// Linux CI runs them in full. Windows core CI is already close to its 15-minute limit, so there they are skipped
+// unless PP_ATTACK_ALL=1 (set it to run them on a Windows machine).
+const runHere = process.platform !== "win32" || process.env.PP_ATTACK_ALL === "1";
 const PROJECTS = Number(process.env.PP_SCALE_PROJECTS ?? 2);
 const WORKERS = Number(process.env.PP_SCALE_WORKERS ?? 5);
 const env = { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t.invalid", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t.invalid" };
@@ -29,6 +33,7 @@ const refusals: string[] = [];
 const ports: number[] = [];
 
 beforeAll(async () => {
+  if (!runHere) return;
   ctx = await startTestHost();
   for (const key of keys) {
     const repo = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), `pp-${key}-`)));
@@ -52,6 +57,7 @@ beforeAll(async () => {
 }, 120_000);
 
 afterAll(async () => {
+  if (!runHere) return;
   if (refusals.length) console.log(`scale: ${refusals.length} refusals seen\n${refusals.slice(0, 40).join("\n")}`);
   await ctx.stop();
   for (const repo of repos) fs.rmSync(repo, { recursive: true, force: true });
@@ -70,7 +76,7 @@ async function person(key: string, route: string, body: unknown = {}, tries = 1)
   return last!;
 }
 
-describe(`${PROJECTS} projects x ${WORKERS} parallel workers`, () => {
+describe.skipIf(!runHere)(`${PROJECTS} projects x ${WORKERS} parallel workers`, () => {
   it("finishes every task, loses nothing, claims nothing twice", async () => {
     const started = Date.now();
     await Promise.all(keys.map(async (key, ki) => {
@@ -141,6 +147,7 @@ describe(`${PROJECTS} projects x ${WORKERS} parallel workers`, () => {
       const key = keys[ki]!;
       const view = (await hostCall(ctx.base, "GET", `/tasks?project=${key}`)).body.result.tasks as any[];
       const notDone = view.filter((t) => t.status !== "done").map((t) => `${t.id}:${t.stage}`);
+      if (notDone.length) console.log(`scale: ${key} not done; main checkout status:\n${git(repos[ki]!, "status", "--porcelain", "--untracked-files=no")}\nhead ${git(repos[ki]!, "rev-parse", "HEAD")} branch ${git(repos[ki]!, "rev-parse", "--abbrev-ref", "HEAD")}`);
       expect(notDone, `${key} tasks not done`).toEqual([]);
       const files = git(repos[ki]!, "ls-tree", "-r", "--name-only", "main").split("\n").filter((f) => f.startsWith("src/part-"));
       expect(files.sort(), `${key} files on main`).toHaveLength(WORKERS);
