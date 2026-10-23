@@ -12,6 +12,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { deriveState, sensitiveChanges, testSupportFiles, type GateState } from "../../gate/index";
 import type { Actor } from "../../ledger/index";
+import type { AgentKind } from "../agentKinds";
 import { attemptLabel, unmetDependencies, waitingMessage, type TaskView } from "../../mcp/index";
 import { WorktreeError, WorktreeManager, git, refreshCarriedSettings, runGit, WORKTREES_ACTOR, type WorktreeInfo } from "../../worktrees/index";
 import type { CoreHost } from "../host";
@@ -342,7 +343,19 @@ export function workerCommands(options: { worktree: string; bridgeUrl: string; t
   const setup = windows ? `cd ${quote(worktree)}; ${add}` : `cd ${quote(worktree)} && ${add}`;
   const start = windows ? `claude (Get-Content -Raw ${quote(briefFile)})` : `claude "$(cat ${quote(briefFile)})"`;
   const json = JSON.stringify({ mcpServers: { [AGENT_SERVER_NAME]: { command: nodeBinary(), args: [entry], env: { PP_BRIDGE_URL: bridgeUrl, PP_AGENT_TOKEN_FILE: tokenFile } } } }, null, 2);
-  return { setup, start, json, shell: windows ? "PowerShell" : "Terminal" };
+  // Gemini CLI and Codex CLI: the same two steps with their own connect line and start command. Both start
+  // interactively with the person at the keyboard and ask before running commands (Codex: workspace-write
+  // sandbox; Gemini: edits auto-approved, shell asks); neither is ever started with its approve-everything flag.
+  const brief = windows ? `(Get-Content -Raw ${quote(briefFile)})` : `"$(cat ${quote(briefFile)})"`;
+  const agentSetup = (agent: AgentKind) => {
+    const line = connectLine(bridgeUrl, tokenFile, entry, windows ? "win32" : "linux", agent);
+    return windows ? `cd ${quote(worktree)}; ${line}` : `cd ${quote(worktree)} && ${line}`;
+  };
+  const agents = {
+    gemini: { setup: agentSetup("gemini"), start: `gemini --approval-mode auto_edit -i ${brief}`, note: "Choose Trust folder first (start gemini once in the task folder), or the set-up command is refused." },
+    codex: { setup: agentSetup("codex"), start: `codex -s workspace-write -a on-request ${brief}`, note: "Codex keeps one connection for this computer, so this replaces any other Codex worker's." },
+  };
+  return { setup, start, json, agents, shell: windows ? "PowerShell" : "Terminal" };
 }
 
 // ---------- routes ----------

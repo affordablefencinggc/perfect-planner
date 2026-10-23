@@ -59,6 +59,13 @@ function DispatchPanel({ dispatch, onClose }) {
         <summary>Read the brief, or use another agent</summary>
         <Snippet label="Brief" id={`${dispatch.task}:brief`} text={dispatch.brief} copied={copied} onCopy={copy} />
         <Snippet label="MCP settings" id={`${dispatch.task}:json`} text={dispatch.json} copied={copied} onCopy={copy} />
+        {Object.entries(dispatch.agents ?? {}).map(([name, a]) => (
+          <div key={name}>
+            <p className="core-muted">{name === "gemini" ? "Gemini CLI" : "Codex CLI"}: run the set-up, then the start command. {a.note}</p>
+            <Snippet label={`${name} set-up`} id={`${dispatch.task}:${name}:setup`} text={a.setup} copied={copied} onCopy={copy} />
+            <Snippet label={`${name} start`} id={`${dispatch.task}:${name}:start`} text={a.start} copied={copied} onCopy={copy} />
+          </div>
+        ))}
       </details>
       {copied && !copied.ok && <p className="core-tasks-warn">Copy did not work here. Select the text and copy it by hand.</p>}
       <p className="core-muted">The command holds this worker's private key and works only for {dispatch.task}. It is shown once.</p>
