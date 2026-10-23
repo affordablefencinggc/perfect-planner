@@ -66,7 +66,8 @@ try {
   const review = bot.reviewPullRequest(await github.facts(number, extra));
   process.stdout.write(bot.renderReview(review));
   if (flag("post")) console.error(`Comment ${await github.post(review)}.`);
-  process.exitCode = review.verdict === "GO" ? 0 : review.verdict === "NO-GO" ? 1 : 3;
+  // Posting is the job in CI; the verdict is exit code 0 there. By hand, 0 GO, 1 NO-GO, 3 HOLD or WAIT.
+  process.exitCode = flag("post") ? 0 : review.verdict === "GO" ? 0 : review.verdict === "NO-GO" ? 1 : 3;
 } finally {
   rmSync(work, { recursive: true, force: true });
 }
