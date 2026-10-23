@@ -60,7 +60,7 @@ describe("a costly runner cannot be hidden", () => {
 
 describe("a secret or a personal email cannot be hidden", () => {
   const key = "AKIA" + "ABCDEFGHIJKLMNOP"; // shaped like an AWS key id, split so this file passes the push scan
-  const ghp = "ghp_" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8";
+  const ghp = "ghp_" + ["a1B2c3", "D4e5F6", "g7H8i9", "J0k1L2", "m3N4o5", "P6q7R8"].join("");
   it("in a file GitHub gave no patch for", () => {
     const big: ChangedFile = { path: "src/data.json", status: "added", additions: 90000, deletions: 0 };
     expect(verdict(facts({ files: [big] })), "a huge file with no patch cannot be scanned and still got GO").not.toBe("GO");
