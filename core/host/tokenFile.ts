@@ -4,9 +4,8 @@
 // is refused before anything opens it (opening \\host\share leaks the NTLM hash).
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { isLocalWindowsPath } from "../exec/index";
+import { isLocalWindowsPath, system32Tool } from "../exec/index";
 
 /**
  * True for anything that is not a plain local path. On Windows only a drive-letter path (C:\...) is
@@ -19,32 +18,46 @@ export function isNetworkPath(value: string, platform: NodeJS.Platform = process
 }
 
 export function icaclsPath(): string {
-  return path.join(process.env.SystemRoot ?? process.env.windir ?? "C:\\Windows", "System32", "icacls.exe");
+  return system32Tool("icacls.exe");
 }
 
-/** Removes inherited entries and grants full control to the current user alone. */
-function ownerOnlyAcl(target: string): void {
-  const user = os.userInfo().username;
-  const domain = process.env.USERDOMAIN;
-  const who = domain ? `${domain}\\${user}` : user;
-  execFileSync(icaclsPath(), [target, "/inheritance:r", "/grant:r", `${who}:F`], { stdio: "ignore", windowsHide: true });
+/** Runs a system program and returns its output; tests stand in for it. */
+export type RunSystemTool = (file: string, args: string[]) => string;
+const runSystemTool: RunSystemTool = (file, args) => execFileSync(file, args, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], windowsHide: true });
+
+/** The current user's SID (S-1-5-...), so a missing USERDOMAIN or a renamed account cannot grant the wrong person. */
+function currentUserSid(run: RunSystemTool): string {
+  const sid = /"(S-1-[\d-]+)"\s*$/.exec(run(system32Tool("whoami.exe"), ["/user", "/fo", "csv", "/nh"]).trim())?.[1];
+  if (!sid) throw new Error("Could not tell which Windows user this is, so the token file was not written.");
+  return sid;
+}
+
+/** Removes inherited entries and grants full control to the current user alone. Throws if Windows refuses. */
+function ownerOnlyAcl(target: string, run: RunSystemTool): void {
+  run(icaclsPath(), [target, "/inheritance:r", "/grant:r", `*${currentUserSid(run)}:F`]);
 }
 
 /**
  * Writes text to a file only this OS user can read. An older file (or a link planted in its place)
  * is removed first, and the new one is created exclusively, so the write never follows a link.
  */
-export function writeOwnerOnlyFile(file: string, text: string, platform: NodeJS.Platform = process.platform): void {
+export function writeOwnerOnlyFile(file: string, text: string, platform: NodeJS.Platform = process.platform, run: RunSystemTool = runSystemTool): void {
   const dir = path.dirname(file);
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-  if (platform === "win32") ownerOnlyAcl(dir);
+  if (platform === "win32") ownerOnlyAcl(dir, run);
   else fs.chmodSync(dir, 0o700);
   fs.rmSync(file, { force: true });
   const fd = fs.openSync(file, "wx", 0o600);
   try {
-    fs.writeSync(fd, text);
-  } finally {
-    fs.closeSync(fd);
+    try {
+      fs.writeSync(fd, text);
+    } finally {
+      fs.closeSync(fd);
+    }
+    if (platform === "win32") ownerOnlyAcl(file, run);
+  } catch (error) {
+    // Never leave a token behind that this user alone may not be able to read.
+    fs.rmSync(file, { force: true });
+    throw error;
   }
-  if (platform === "win32") ownerOnlyAcl(file);
 }

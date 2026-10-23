@@ -90,7 +90,7 @@ export class AgentService {
       throw new ToolError("INVALID", parsed.error.issues.map((i) => `${i.path.join(".") || "input"}: ${i.message}`).join("; "));
     }
     const grant = this.tokens.resolve(caller.token);
-    if (!grant) throw new ToolError("UNAUTHORIZED", "This token is not valid for this project, or it was revoked.");
+    if (!grant) throw new ToolError("UNAUTHORIZED", "This token is not valid for this project. It was revoked, or it is from before Perfect Planner restarted (a restart ends every connection). Copy a new line from Connect agent.");
     if (name === "hello") return this.hello(caller.token, grant, parsed.data as ToolInput<"hello">);
 
     const agent = caller.agent ? this.agents.get(caller.agent) : undefined;

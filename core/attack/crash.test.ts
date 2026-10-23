@@ -1,25 +1,26 @@
 // Attack 5: kill the host (SIGKILL, whole process group, no cleanup) during a ledger write, during a merge and
 // during worktree add; start it again; the ledger chain must verify and the repo must hold no half-merge and no
 // orphan lock. The host runs in its own process (core/attack/crashHost.ts, bundled here with esbuild).
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { FileStore, Ledger, verifyChain } from "../ledger/index";
-import { addTask, buildCheckApprove, cleanTemp, connectWindow, dispatchAndApproveTest, git, hostKeysOn, makeRepo, sleep, startWindow, tempDir } from "./helpers";
+import { addTask, buildCheckApprove, cleanTemp, connectWindow, dispatchAndApproveTest, git, hostKeysOn, hostKillPlan, makeRepo, sleep, startWindow, tempDir } from "./helpers";
 
-// NOT RUN on Windows: the host is started as its own process group and killed with SIGKILL (detached + process.kill(-pid)),
-// which Windows does not have. A Windows version would kill the tree with taskkill /F /T; it is not written. The first
-// Windows run (windows-latest run 39034910848) failed this file to load with "SyntaxError: Invalid or unexpected token":
-// Git for Windows checks scripts/build-core-host.mjs out with CRLF line endings, and its "#!" first line then does not load under
-// Vitest. So the bundler is imported inside beforeAll, after the Windows return, not at the top of the file.
+// Windows: attack 5a (the ledger write) runs there too; the host's whole process tree is killed with taskkill /T /F
+// (helpers.hostKillPlan). Attacks 5b and 5c still skip Windows. 5a was written without a Windows machine: its first run
+// on the Windows job (ready PRs, main, tags) is its first run, so a red result there means "check the test" as well as
+// "check the code". The bundler is built by a child node process, not imported here: Git for Windows checks
+// scripts/build-core-host.mjs out with CRLF line endings, and its "#!" first line then does not load under Vitest
+// (windows-latest run 39034910848: "SyntaxError: Invalid or unexpected token").
 const WINDOWS = process.platform === "win32";
 let bundle = "";
 beforeAll(async () => {
-  if (WINDOWS) return;
-  const { buildCoreHost } = await import("../../scripts/build-core-host.mjs");
   const out = tempDir("pp-attack-bundle-");
-  await buildCoreHost({ outDir: out, standalone: true, entries: { crashHost: path.resolve("core/attack/crashHost.ts") } });
+  const script = `import { buildCoreHost } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/build-core-host.mjs")).href)}; await buildCoreHost({ outDir: ${JSON.stringify(out)}, standalone: true, entries: { crashHost: ${JSON.stringify(path.resolve("core/attack/crashHost.ts"))} } });`;
+  execFileSync(process.execPath, ["--input-type=module", "-e", script], { stdio: "pipe" });
   bundle = path.join(out, "crashHost.mjs");
 }, 60_000);
 const running: Running[] = [];
@@ -38,7 +39,7 @@ interface Running {
 
 /** The host as its own process group. `crash` switches on a crash point (see crashHost.ts). */
 async function spawnHost(o: { data: string; project: string; secrets: string; crash?: Record<string, string> }): Promise<Running> {
-  const child = spawn(process.execPath, [bundle], { detached: true, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, PP_ATTACK_DATA: o.data, PP_ATTACK_PROJECT: o.project, PP_ATTACK_SECRETS: o.secrets, ...o.crash } });
+  const child = spawn(process.execPath, [bundle], { detached: true, windowsHide: true, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, PP_ATTACK_DATA: o.data, PP_ATTACK_PROJECT: o.project, PP_ATTACK_SECRETS: o.secrets, ...o.crash } });
   const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => child.on("exit", (code, signal) => resolve({ code, signal })));
   let stderr = "";
   child.stderr!.on("data", (chunk: Buffer) => (stderr += chunk));
@@ -61,8 +62,10 @@ async function spawnHost(o: { data: string; project: string; secrets: string; cr
     win,
     exited,
     kill: async () => {
+      const plan = hostKillPlan(pid);
       try {
-        process.kill(-pid, "SIGKILL");
+        if (plan.kind === "signal") process.kill(plan.group, "SIGKILL");
+        else execFileSync(plan.file, plan.args, { stdio: "ignore", windowsHide: true });
       } catch {
         // already gone
       }
@@ -159,7 +162,7 @@ function freshProject(files?: Record<string, string>) {
 
 // ---------- a kill during a ledger write ----------
 
-describe.skipIf(WINDOWS)("attack 5a: the host is killed while a ledger entry is being written", () => {
+describe("attack 5a: the host is killed while a ledger entry is being written", () => {
   /** Writes the person's tasks until the host dies; returns how many the host said it had recorded. */
   async function writeUntilDead(h: Running): Promise<number> {
     let acknowledged = 0;
@@ -365,7 +368,7 @@ describe.skipIf(WINDOWS).each([
   // REAL DEFECT (found by this attack): the gate moves main with update-ref and only then writes test.passed,
   // merge.done and task.done. A kill in between leaves the work merged in git and the task unfinished in the ledger,
   // and the Merge button then refuses with "main was left untouched" although main holds the merge.
-  it.fails("after the restart the person can still finish the task (the app notices main already holds the approved merge)", () => {
+  it("after the restart the person can still finish the task (the app notices main already holds the approved merge)", () => {
     expect(run.retry.status, run.retry.message).toBe(200);
   });
 });
@@ -459,7 +462,7 @@ describe.skipIf(WINDOWS).each([
   // The kill leaves all of that, the branch pp/T-1 stays, nothing in the app's registry or ledger knows the
   // worktree, and Start worker is refused for good: "Branch pp/T-1 already exists. Use the next attempt id
   // instead of reusing it." (core/worktrees/manager.ts createNow; reconcile on start is lane L10's).
-  it.fails("after the restart git still works, no lock is left behind and the task can be started again", () => {
+  it("after the restart git still works, no lock is left behind and the task can be started again", () => {
     expect(run.after.gitErrors).toEqual([]);
     expect(run.after.locks).toEqual([]);
     expect(run.retry.status, run.retry.message).toBe(200);
