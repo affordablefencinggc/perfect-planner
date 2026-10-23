@@ -17,6 +17,7 @@ import type { CoreProject } from "../project";
 import { AGENT_KINDS, type AgentKind } from "../agentKinds";
 import { HttpError, type Router } from "../router";
 import { writeOwnerOnlyFile } from "../tokenFile";
+import { waitingQuestions } from "./decisions";
 import { localPersonId } from "./people";
 import { repoState } from "./tasks";
 import { chosenRepoRoot, rootsFileFor } from "../protectedRoots";
@@ -228,7 +229,7 @@ export function registerAgentRoutes(router: Router): void {
   router.get("/agents", ({ project, host }) => {
     const url = project.state.get(BRIDGE_URL) as string | undefined;
     const entry = agentEntryPath();
-    return { bridge: { enabled: host.bridgeEnabled, ...(url ? { url } : {}) }, skillLine: skillLine(entry.path), agentBuilt: entry.built, ...viewAgents(project) };
+    return { bridge: { enabled: host.bridgeEnabled, ...(url ? { url } : {}) }, skillLine: skillLine(entry.path), agentBuilt: entry.built, waiting: waitingQuestions(project), ...viewAgents(project) };
   });
 
   router.post("/agents/connect", async ({ project, host, body }) => {
