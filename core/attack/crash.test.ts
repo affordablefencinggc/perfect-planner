@@ -459,7 +459,7 @@ describe.skipIf(WINDOWS).each([
   // The kill leaves all of that, the branch pp/T-1 stays, nothing in the app's registry or ledger knows the
   // worktree, and Start worker is refused for good: "Branch pp/T-1 already exists. Use the next attempt id
   // instead of reusing it." (core/worktrees/manager.ts createNow; reconcile on start is lane L10's).
-  it.fails("after the restart git still works, no lock is left behind and the task can be started again", () => {
+  it("after the restart git still works, no lock is left behind and the task can be started again", () => {
     expect(run.after.gitErrors).toEqual([]);
     expect(run.after.locks).toEqual([]);
     expect(run.retry.status, run.retry.message).toBe(200);
