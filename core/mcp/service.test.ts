@@ -522,3 +522,13 @@ describe("the needle over the bridge", () => {
     }
   });
 });
+
+describe("a connect line from before a restart", () => {
+  it("is refused with words that say a restart ended it and where the new line is, and a new token works", async () => {
+    const { ledger, connect: old } = setup();
+    const restarted = new AgentService({ ledger, tokens: new TokenStore() });
+    await expectCode(restarted.call({ token: old }, "hello", { name: "Old line" }), "UNAUTHORIZED", /restarted.*Connect agent/s);
+    const fresh = restarted.tokens.issue({ role: "connect", person: "owner" });
+    await expect(hello(restarted, fresh, "New line")).resolves.toMatchObject({ role: "main" });
+  });
+});

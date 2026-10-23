@@ -1,6 +1,7 @@
 // Every screen registers its routes here. One module per screen, owned by that screen.
 import type { Router } from "../router";
 import { registerAgentRoutes } from "./agents";
+import { registerCodexLoginRoutes } from "./codexLogin";
 import { registerDecisionRoutes } from "./decisions";
 import { registerKeyRoutes } from "./keys";
 import { registerMvpRoutes } from "./mvp";
@@ -18,6 +19,7 @@ export function registerRoutes(router: Router): void {
   registerPeopleRoutes(router);
   registerSearchRoutes(router);
   registerAgentRoutes(router);
+  registerCodexLoginRoutes(router);
   registerTaskRoutes(router);
   registerPlanRoutes(router);
   registerKeyRoutes(router);
