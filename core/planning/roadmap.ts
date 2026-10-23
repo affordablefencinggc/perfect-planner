@@ -3,7 +3,7 @@
 
 import { isAuthoritative, type Actor, type Ledger, type LedgerEntry } from "../ledger/index";
 import { appendNumbered } from "../numbering/index";
-import { contractDigest, draftContract, normalizeContract } from "./contract";
+import { contractDigest, draftContract, normalizeContract, repoAwareDoneWhen } from "./contract";
 import { nodeArea } from "./mindmap";
 import type { RepoIndex } from "./repo";
 import type { MindMap, MindNode, PhaseId, Roadmap, RoadmapPhase, RoadmapTask, TaskContract } from "./types";
@@ -142,12 +142,14 @@ export function buildRoadmap(map: MindMap, opts: { owner?: string; repo?: RepoIn
       },
       opts.repo,
     );
+    const real = repoAwareDoneWhen(drafted.contract.allowedFiles, opts.repo, doneWhen);
+    if (real !== doneWhen) drafted.contract = { ...drafted.contract, doneWhen: real };
     return {
       key: taskKey(node.id),
       title: titleOf(node),
       phase: phaseOf(node),
       owner,
-      doneWhen,
+      doneWhen: real,
       node: node.id,
       change: node.kind === "risk" ? "fix" : "feature",
       dependsOn: ordered.filter((n) => deps.has(n.id)).map((n) => taskKey(n.id)),
@@ -156,7 +158,8 @@ export function buildRoadmap(map: MindMap, opts: { owner?: string; repo?: RepoIn
     };
   });
 
-  const releaseDone = "`npm test` passes on a clean checkout and a test proves the release entry (R-1, v1.0.0) is in the ledger with its stamp.";
+  const suite = opts.repo?.tests?.suite ?? "npm test";
+  const releaseDone = `\`${suite}\` passes on a clean checkout and a test proves the release entry (R-1, v1.0.0) is in the ledger with its stamp.`;
   const release = draftContract({ kind: "release", label: "Cut the first release", parts: [], doneWhen: releaseDone }, opts.repo);
   tasks.push({
     key: FINAL_TASK_KEY,

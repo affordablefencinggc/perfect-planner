@@ -17,6 +17,7 @@ import { isDependencyPath, isProtectedPath, isTestLike, normalizePattern, pathCo
 import { isAuthoritative, type Actor, type Ledger, type LedgerEntry } from "../ledger/index";
 import { appendNumbered } from "../numbering/index";
 import type { RepoIndex } from "./repo";
+import { existingTestsFor, testCommand } from "./tests";
 import type { ContractFlag, SizeCap, TaskContract } from "./types";
 
 /** Small on purpose: tasks are broken into tiny pieces. */
@@ -236,6 +237,32 @@ export function draftContract(spec: ContractSpec, repo?: RepoIndex, cap: SizeCap
     }
   }
   return make([`${codeFolder(code)}/${slugOf(spec.label)}/**`]);
+}
+
+/**
+ * Replaces the generic "`npm test` passes" in a done-when with what the repo really has: the existing test
+ * files that match the task's files and the command that runs them, or, when there is none, where a new test
+ * goes and the command that will run it. Unchanged when the repo says nothing about its tests.
+ */
+export function repoAwareDoneWhen(allowedFiles: readonly string[], repo: RepoIndex | undefined, generic: string): string {
+  if (!repo?.tests) return generic;
+  const code = repo.files.filter((f) => allowedFiles.some((p) => pathCovered(p, f)) && !isTestLike(f));
+  if (!code.length) return generic;
+  const tests = existingTestsFor(repo.files, code).slice(0, 3);
+  const suite = repo.tests.suite;
+  const lead = generic.replace(/[;,]? ?(and )?`npm test` passes[^.]*\.?$/, "").replace(/\.$/, "");
+  if (tests.length) {
+    const commands = [...new Set(tests.map((t) => testCommand(repo.tests, t)).filter((c): c is string => !!c))];
+    const run = commands.length ? ` Run \`${commands.join("`, `")}\`.` : suite ? ` Run \`${suite}\`.` : "";
+    return oneLine(`${lead}, and the existing test${tests.length > 1 ? "s" : ""} ${tests.map((t) => `\`${t}\``).join(", ")} still pass with it.${run}`, MAX_DONE_WHEN);
+  }
+  const first = code[0]!;
+  const dot = first.lastIndexOf(".");
+  const ext = dot > 0 ? first.slice(dot) : "";
+  const newTest = `${dot > 0 ? first.slice(0, dot) : first}.test${ext}`;
+  const command = testCommand(repo.tests, newTest);
+  const run = command ? ` Run \`${command}\`.` : suite ? ` Run \`${suite}\`.` : "";
+  return oneLine(`${lead}; no test covers these files yet, so add one such as \`${newTest}\`.${run}`, MAX_DONE_WHEN);
 }
 
 // ---------- what the ledger says ----------

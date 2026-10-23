@@ -93,7 +93,9 @@ export async function repoState(project: CoreProject): Promise<RepoState> {
   // is never the project's repo, so it is neither used nor protected.
   const refusal = top ? repoRefusal(top) : null;
   if (top && !refusal) return { ok: true, root: top };
-  const suggested = repoRefusal(project.root) ? undefined : project.root;
+  // The project folder is the app's data folder in the desktop app, so it is never offered as a guess: it
+  // got here because it is not a git checkout. Only the folder the person chose before (now broken) is.
+  const suggested = typeof chosen === "string" && chosen && !repoRefusal(chosen) ? chosen : undefined;
   if (refusal) return { ok: false, reason: refusal, suggested };
   return {
     ok: false,

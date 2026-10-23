@@ -206,8 +206,8 @@ describe("tasks routes", () => {
     const view = await tasks();
     expect(view.repo.ok).toBe(false);
     expect(view.repo.reason).toMatch(/git/);
-    // The folder the person already imported is offered as the answer, not an empty box.
-    expect(view.repo.suggested).toBe(fs.realpathSync(plain));
+    // The project folder (the app's data folder on the desktop) is never offered as a guess for the git folder.
+    expect(view.repo.suggested).toBeUndefined();
     const res = await post("/tasks/T-1/dispatch");
     expect(res.status).toBe(409);
     // Close the host before removing its folder: Windows refuses to delete a folder whose ledger is still open.

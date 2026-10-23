@@ -7,6 +7,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { mentionsApp, NOT_AN_APP_FACTS } from "./description";
 import { profileIdea, SIGNALS } from "./profile";
+import { readTestSetup, type TestSetup } from "./tests";
 import type { IdeaProfile } from "./types";
 
 /** One question the repo already answers. */
@@ -149,6 +150,16 @@ export function readRepoStack(root: string): RepoStack {
   }
   if (has("react") || has("vite") || has("next")) signals.add("web");
 
+  // testing: the repo already has tests and a command that runs them, and CI that releases
+  const tests = readTestSetup(root);
+  if (tests.suite || tests.runners.length > 0 || tests.pytest) {
+    const how = tests.suite ?? tests.runners.map((r) => `npm run ${r.script}`).join(", ");
+    add({ id: "testing.strategy", choice: "unit-integration", text: `Automated tests (${how || "pytest"})`, evidence: [PKG] });
+  }
+  const workflows = exists(root, ".github/workflows") ? fs.readdirSync(path.join(root, ".github/workflows")).filter((f) => /\.ya?ml$/.test(f)) : [];
+  const releaseFlow = workflows.find((f) => /release|deploy|publish/i.test(f));
+  if (releaseFlow) add({ id: "testing.deploy", text: `CI release workflow (${releaseFlow})`, evidence: [`.github/workflows/${releaseFlow}`] });
+
   // A package with a `bin`, or a plain library with an entry point and no UI, app or server framework, is not an app.
   const appDeps = ["react", "next", "vue", "svelte", "@sveltejs/kit", "electron", "@capacitor/core", "expo", "react-native", "express", "fastify", "koa", "hono", "@nestjs/core"];
   const entry = Boolean(pkg && (pkg.bin || pkg.main || pkg.exports || pkg.module));
@@ -187,6 +198,8 @@ export function profileRepo(
 /** The files of a repo, repo-relative with "/", for contracts to guess a task's likely files from. */
 export interface RepoIndex {
   files: string[];
+  /** How the repo runs its tests (read from package.json and runner configs). */
+  tests?: TestSetup;
   /** The walk stopped at its file limit, so the list is not everything. */
   truncated: boolean;
 }
@@ -225,5 +238,6 @@ export function listRepoFiles(root: string, options: { maxFiles?: number; maxDep
     }
   };
   if (fs.existsSync(root)) walk(root, "", 0);
-  return { files, truncated };
+  const tests = readTestSetup(root);
+  return tests.suite || tests.runners.length > 0 || tests.pytest ? { files, truncated, tests } : { files, truncated };
 }
