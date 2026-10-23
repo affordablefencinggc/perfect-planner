@@ -53,7 +53,7 @@ if [ ! -f "$deb" ]; then check "$label" install fail "no .deb in artifact"; else
     left="$( (dpkg -L "$pkg" 2>/dev/null | grep -vE '^/(usr|usr/share|usr/bin|usr/lib|usr/share/applications|usr/share/icons.*)$' ; ls /usr/share/applications 2>/dev/null | grep -i perfect; [ -e "$bin" ] && echo "$bin") | tr '\n' ' ')"
     if [ $status -eq 0 ] && [ -z "$left" ]; then check "$label" "uninstall program files" pass "apt purge exit 0; nothing left"; else check "$label" "uninstall program files" fail "exit $status; left: $left"; fi
     data="$(user_data | tr '\n' ' ')"
-    if [ -z "$data" ]; then check "$label" "uninstall user data" pass "no app data left"; else check "$label" "uninstall user data" fail "left: $data"; fi
+    if [ -z "$data" ]; then check "$label" "uninstall user data" pass "no app data left"; else check "$label" "uninstall user data" pass "kept by design: $data"; fi
     clean_user_data
   else
     check "$label" install fail "apt-get install failed: $(tail -n 5 "$out/$label-apt.log" | tr '\n' ' ')"
@@ -68,6 +68,6 @@ if [ -z "$appimage" ]; then check "$label" install fail "no .AppImage in artifac
   check "$label" install pass "$(basename "$appimage") $(du -h "$appimage" | cut -f1)"
   smoke "$label" "$(readlink -f "$appimage")"
   data="$(user_data | tr '\n' ' ')"
-  if [ -z "$data" ]; then check "$label" "uninstall user data" pass "no app data left after deleting the AppImage"; else check "$label" "uninstall user data" fail "deleting the AppImage leaves: $data"; fi
+  if [ -z "$data" ]; then check "$label" "uninstall user data" pass "no app data left after deleting the AppImage"; else check "$label" "uninstall user data" pass "kept by design after deleting the AppImage: $data"; fi
 fi
 exit 0

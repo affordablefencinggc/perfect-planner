@@ -81,6 +81,17 @@ const CLICK_BY_TEXT = `
 const clickText = (pattern) => run(CLICK_BY_TEXT, pattern);
 const pressEscape = () => run(`document.activeElement?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); return true;`).catch(() => false);
 
+// Types the folder path into the page's own "type or paste the folder path" box (React-safe value set).
+const TYPE_FOLDER_PATH = `
+  const label = [...document.querySelectorAll("label")].find((l) => /type (or paste )?the folder path/i.test(l.innerText || ""));
+  const input = label && label.querySelector("input");
+  if (!input) return null;
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
+  setter.call(input, arguments[0]);
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  return true;
+`;
+
 // The folder picker is a native OS dialog the webview cannot see, so it is answered from outside.
 function answerFolderDialog() {
   const title = "Choose an app folder for read-only analysis";
@@ -184,7 +195,17 @@ async function main() {
   let folderOk = false;
   let folderSeen = chooser ? "" : `no "Choose app folder" button (navigated via ${JSON.stringify(toStructure)})`;
   if (chooser) {
-    const answer = answerFolderDialog();
+    let answer = answerFolderDialog();
+    if (answer.status !== 0) {
+      // No native dialog to answer (Linux builds have no native picker). The page offers a typed
+      // path for that case; use it like a person would.
+      const filled = await run(TYPE_FOLDER_PATH, folder).catch(() => null);
+      if (filled) {
+        await sleep(300);
+        const submit = await clickText("^(scan folder|use this folder)$");
+        answer = { status: submit ? 0 : 1, stdout: `typed the folder path (${(answer.stdout || "").trim().split("\n")[0] || "no dialog"}); pressed ${submit || "nothing"}`, stderr: "" };
+      }
+    }
     folderSeen = `dialog: ${(answer.stdout || "").trim().split("\n").pop()} ${answer.status !== 0 ? `(exit ${answer.status}) ${(answer.stderr || "").trim().slice(0, 200)}` : ""}`.trim();
     const base = path.basename(folder);
     const after = await waitFor(async () => {

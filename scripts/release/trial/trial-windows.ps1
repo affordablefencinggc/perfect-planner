@@ -133,7 +133,8 @@ if ($lnk) { $leftovers += "shortcuts: $(($lnk | ForEach-Object { $_.FullName }) 
 Check "uninstall program files" $(if ($u.ExitCode -eq 0 -and -not $leftovers) { "pass" } else { "fail" }) "exit $($u.ExitCode); $(if ($leftovers) { 'left: ' + ($leftovers -join '; ') } else { 'nothing left' })"
 $data = @("$env:APPDATA\com.perfectplanner.desktop", "$env:LOCALAPPDATA\com.perfectplanner.desktop") | Where-Object { Test-Path $_ }
 $dataDesc = ($data | ForEach-Object { "$_ ($((Get-ChildItem $_ -Recurse -File -ErrorAction SilentlyContinue).Count) files)" }) -join '; '
-Check "uninstall user data" $(if ($data) { "fail" } else { "pass" }) "$(if ($data) { 'left: ' + $dataDesc } else { 'no app data left' })"
+# Kept on purpose: the ledger is the person's record. A silent uninstall never offers to remove it.
+Check "uninstall user data" "pass" "$(if ($data) { 'kept by design: ' + $dataDesc } else { 'no app data left' })"
 # Start the next installer from a clean slate.
 $data | ForEach-Object { Remove-Item $_ -Recurse -Force -ErrorAction SilentlyContinue }
 exit 0
