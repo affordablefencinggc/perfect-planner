@@ -105,7 +105,10 @@ export async function repoState(project: CoreProject): Promise<RepoState> {
     const taken = await repoClaimRefusal(project, top, { write: false });
     return taken ? { ok: false, reason: taken } : { ok: true, root: top };
   }
-  const suggested = repoRefusal(project.root) ? undefined : project.root;
+  // The host's own folder for this project (<app data>/projects/<key>) is never a suggestion: the person's
+  // imported folder is offered by the screen instead.
+  const ownData = path.basename(path.dirname(project.root)) === "projects";
+  const suggested = ownData || repoRefusal(project.root) ? undefined : project.root;
   if (refusal) return { ok: false, reason: refusal, suggested };
   return {
     ok: false,

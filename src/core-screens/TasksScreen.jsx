@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { CheckCircleIcon, CopyIcon, GitMergeIcon, PlayIcon, SpinnerGapIcon, WarningCircleIcon } from "@phosphor-icons/react";
 import { copyText } from "../project/connectAgentSetup.js";
+import { describeLaunchFolder } from "../browser/launchFolder.js";
 import { AdvancedOnly, CoreScreen } from "./CoreScreen.jsx";
 import { coreGet, useCoreResource } from "./coreApi.js";
 import "./TasksScreen.css";
@@ -81,6 +82,13 @@ function JevLine({ label, line }) {
 function RepoPicker({ repo, onSave }) {
   const [root, setRoot] = useState(repo.suggested ?? "");
   const [error, setError] = useState(null);
+  // No folder suggested by the host: offer the folder the person already imported, once, unless they typed something.
+  useEffect(() => {
+    if (repo.suggested) return undefined;
+    let live = true;
+    describeLaunchFolder().then((folder) => { if (live && folder?.path) setRoot((current) => current || folder.path); });
+    return () => { live = false; };
+  }, [repo.suggested]);
   const [busy, setBusy] = useState(false);
   const save = async (event) => {
     event.preventDefault();

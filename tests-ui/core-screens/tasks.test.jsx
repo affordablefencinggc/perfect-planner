@@ -57,6 +57,29 @@ describe("TasksScreen", () => {
     expect(await screen.findByText("/work/notes")).toBeTruthy();
   });
 
+  test("B1: with no folder suggested by the host, the box starts with the folder the person imported, and never one they typed over", async () => {
+    routeFetch({
+      "GET /tasks": async () => ok(view([task()], { ok: false, reason: "Choose it below." })),
+      "GET /api/launch-folder": async () => ({ ok: true, status: 200, json: async () => ({ available: true, name: "old", path: "/work/old" }) }),
+    });
+    renderScreen();
+    await waitFor(() => expect(screen.getByLabelText("Git folder").value).toBe("/work/old"));
+  });
+
+  test("B1: a folder the person already typed is not replaced by the imported folder", async () => {
+    let release;
+    const gate = new Promise((resolve) => { release = resolve; });
+    routeFetch({
+      "GET /tasks": async () => ok(view([task()], { ok: false, reason: "Choose it below." })),
+      "GET /api/launch-folder": async () => { await gate; return { ok: true, status: 200, json: async () => ({ available: true, name: "old", path: "/work/old" }) }; },
+    });
+    renderScreen();
+    fireEvent.change(await screen.findByLabelText("Git folder"), { target: { value: "/mine" } });
+    release();
+    await new Promise((r) => setTimeout(r, 30));
+    expect(screen.getByLabelText("Git folder").value).toBe("/mine");
+  });
+
   test("the git folder box starts with the folder already imported", async () => {
     routeFetch({ "GET /tasks": async () => ok(view([task()], { ok: false, reason: "Choose it below.", suggested: "/work/imported" })) });
     renderScreen();

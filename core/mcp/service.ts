@@ -46,7 +46,12 @@ export interface AgentServiceOptions {
   relay?: Relay;
   /** The test gate propose_test defines tests through (default: one over the same ledger). */
   gate?: TestGate;
+  /** Milliseconds now; tests pass a fake clock. */
+  now?: () => number;
 }
+
+/** An agent not heard from for this long no longer counts as checked in, and no longer holds the main chat. */
+export const AGENT_QUIET_MS = 10 * 60 * 1000;
 
 export class AgentService {
   readonly ledger: Ledger;
@@ -56,8 +61,12 @@ export class AgentService {
   private readonly agents = new Map<string, AgentRecord & { grant: Grant; token: string }>();
   /** person -> agent id of their main chat */
   private readonly mains = new Map<string, string>();
+  /** agent id -> when it last called any tool (ms) */
+  private readonly lastSeen = new Map<string, number>();
+  private readonly now: () => number;
 
   constructor(options: AgentServiceOptions) {
+    this.now = options.now ?? Date.now;
     this.ledger = options.ledger;
     this.tokens = options.tokens ?? new TokenStore();
     this.relay = options.relay ?? new Relay({ ledger: options.ledger });
@@ -78,6 +87,7 @@ export class AgentService {
 
     const agent = caller.agent ? this.agents.get(caller.agent) : undefined;
     if (!agent || agent.token !== caller.token) throw new ToolError("UNAUTHORIZED", "Call hello first; this agent has not checked in with this token.");
+    this.lastSeen.set(agent.id, this.now());
     const need = TOOL_INFO[name].caller;
     if (need === "worker" && agent.role !== "worker") throw new ToolError("FORBIDDEN", `${name} is for workers launched on a task.`);
     if (need === "main" && agent.role !== "main") throw new ToolError("FORBIDDEN", `${name} is for ${agent.person}'s main chat only.`);
@@ -128,15 +138,24 @@ export class AgentService {
     const slug = input.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40) || "agent";
     const id = `${slug}-${tokenId(token)}`;
     const known = this.agents.get(id);
-    if (known && known.token === token) return this.welcome(known);
+    if (known && known.token === token) {
+      this.lastSeen.set(id, this.now());
+      return this.welcome(known);
+    }
     let role: AgentRole;
     if (grant.role === "worker") role = "worker";
-    else if (!this.mains.has(grant.person)) role = "main";
+    else if (!this.mains.has(grant.person) || this.mainIsGone(grant.person)) role = "main";
     else role = "observer";
+    // A main chat that went quiet hands the role over; the old one stays on the roster as read-only.
+    if (role === "main" && grant.role !== "worker") {
+      const old = this.agents.get(this.mains.get(grant.person) ?? "");
+      if (old && old.role === "main") old.role = "observer";
+    }
     // The person-set model wins; a self-declared one is kept but marked unverified.
     const model = grant.model ?? (input.model ? `unverified:${input.model}` : undefined);
     const record = { id, name: input.name, person: grant.person, role, grant, token, ...(model ? { model } : {}), ...(grant.task ? { task: grant.task } : {}) };
     this.agents.set(id, record);
+    this.lastSeen.set(id, this.now());
     if (role === "main") this.mains.set(grant.person, id);
     return this.welcome(record);
   }
@@ -333,6 +352,27 @@ export class AgentService {
 
   listAgents(): AgentRecord[] {
     return [...this.agents.values()].map(({ grant: _grant, token: _token, ...rest }) => rest);
+  }
+
+  /** When the agent last called a tool, as an ISO time, or undefined if it never has. */
+  seenAt(id: string): string | undefined {
+    const at = this.lastSeen.get(id);
+    return at === undefined ? undefined : new Date(at).toISOString();
+  }
+
+  /** Agents heard from within `quietMs` whose token still works: what the header counts as checked in. */
+  liveAgents(quietMs: number = AGENT_QUIET_MS): AgentRecord[] {
+    const cutoff = this.now() - quietMs;
+    return [...this.agents.values()]
+      .filter((a) => (this.lastSeen.get(a.id) ?? 0) >= cutoff && this.tokens.resolve(a.token))
+      .map(({ grant: _grant, token: _token, ...rest }) => rest);
+  }
+
+  private mainIsGone(person: string): boolean {
+    const id = this.mains.get(person);
+    const seen = id ? this.lastSeen.get(id) : undefined;
+    const grant = id ? this.agents.get(id) : undefined;
+    return !id || seen === undefined || this.now() - seen >= AGENT_QUIET_MS || !grant || !this.tokens.resolve(grant.token);
   }
 }
 
