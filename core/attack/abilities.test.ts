@@ -82,8 +82,6 @@ async function hit(method: "GET" | "POST", route: string, body?: unknown, rawQue
     json = res.body;
   } catch (error) {
     const message = String((error as Error).message);
-    // A body past the size limit may be cut off by the server hanging up; that is a refusal, not a break.
-    if (/fetch failed|terminated|ECONNRESET|socket|other side closed|body/i.test(message) && JSON.stringify(body ?? "").length > 200_000) return;
     problems.push(`${method} ${route} ${JSON.stringify(body)?.slice(0, 80)} -> ${message}`);
     return;
   }
@@ -125,6 +123,13 @@ describe("every route survives garbage", () => {
       }
     }
   }, 600_000);
+
+  it("an oversize body gets a plain 413, and the service keeps answering", async () => {
+    const big = await hostCall(ctx.base, "POST", `/planning/start?project=${KEY}`, { idea: "x".repeat(900_000) });
+    expect(big.status).toBe(413);
+    expect(big.body.code).toBe("TOO_LARGE");
+    expect((await hostCall(ctx.base, "GET", `/summary?project=${KEY}`)).status).toBe(200);
+  }, 60_000);
 
   it("wrong method, unknown routes and mangled paths are refused cleanly", async () => {
     for (const p of ["/nope", "/tasks/../../x", "/%00", "/tasks//dispatch", "/" + "a".repeat(5000), "/tasks/%zz/dispatch"]) {
