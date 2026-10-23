@@ -4,7 +4,7 @@ import { TOOL_INFO, TOOL_NAMES, type ToolName } from "./tools";
 import type { TaskView } from "./board";
 
 const task = (over: Partial<TaskView> = {}): TaskView => ({
-  id: "T-1", title: "Invoices", status: "open", owner: null, attempt: 1, clauses: [], dependsOn: [], testApproved: false, proofs: [], lastProgress: null, lastEntry: "L-1", ...over,
+  id: "T-1", title: "Invoices", status: "open", owner: null, repo: null, group: null, attempt: 1, clauses: [], dependsOn: [], testApproved: false, proofs: [], lastProgress: null, lastEntry: "L-1", ...over,
 });
 
 const worker = (t: Partial<TaskView>, intent = ""): NeedleInput => ({ role: "worker", task: "T-1", tasks: [task(t)], intent });
