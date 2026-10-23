@@ -42,3 +42,4 @@
 .core-spine .spine-idle .spine-state { grid-column: 2; color: var(--muted); }
 .core-spine .spine-idle .spine-id { grid-column: 1; }
 .core-spine .spine-idle h3 { grid-column: 2; font-size: var(--text-sm); }
+.core-spine .spine-act { justify-self: start; }

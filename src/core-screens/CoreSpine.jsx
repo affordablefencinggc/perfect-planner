@@ -24,6 +24,17 @@ const STAGES = {
   done: { done: 6, who: null, text: "Merged and done" },
 };
 
+// What the person does next on the Tasks screen, per stage; shown as a button on the Build page.
+const NEXT_ACTION = {
+  "needs-test": "Start a worker",
+  "test-proposed": "Review the test",
+  "test-approved": "Start a worker",
+  "ready-to-claim": "Start a worker",
+  "review-diff": "Review the change",
+  "ready-to-merge": "Merge",
+  reopened: "Start a worker",
+};
+
 /** The family a model belongs to, for its symbol. Anything unrecognised is shown as unknown, never guessed. */
 export function modelFamily(model) {
   const text = String(model ?? "").replace(/^unverified:/, "").toLowerCase();
@@ -52,7 +63,7 @@ function ModelSymbol({ worker, active }) {
   );
 }
 
-function Node({ task, agents }) {
+function Node({ task, agents, onAct }) {
   const stage = STAGES[task.stage] ?? { done: 0, who: null, text: String(task.stage ?? "Unknown") };
   const worker = task.stage === "done" ? null : workerFor(task, agents);
   const working = task.stage === "building" && worker && !worker.quiet;
@@ -77,6 +88,7 @@ function Node({ task, agents }) {
             <li key={name} data-state={i < stage.done ? "done" : i === stage.done && stage.who ? "next" : "todo"}>{name}</li>
           ))}
         </ol>}
+        {onAct && NEXT_ACTION[task.stage] && <button type="button" className="core-button spine-act" onClick={() => onAct(task)}>{NEXT_ACTION[task.stage]}</button>}
         {task.lastProgress && <p className="spine-progress core-muted">{String(task.lastProgress.text ?? task.lastProgress).slice(0, 200)}</p>}
         {!idle && <p className="spine-meta core-muted">
           {task.proofs?.length ? `${task.proofs.length} proof item${task.proofs.length === 1 ? "" : "s"}` : "No proof attached"}
@@ -95,8 +107,9 @@ const FILTERS = [
   ["done", "Merged", (t) => t.stage === "done"],
 ];
 
-export default function CoreSpine({ onWorkspace, onCount }) {
+export default function CoreSpine({ onWorkspace, onCount, actions = false }) {
   const [filter, setFilter] = useState("all");
+  const [picked, setPicked] = useState(false);
   const tasks = useCoreResource("/tasks", { isEmpty: (data) => !data?.tasks?.length, pollMs: 4000 });
   const agents = useCoreResource("/agents", { pollMs: 4000 });
   if (tasks.status === "no-session") return null;
@@ -105,7 +118,9 @@ export default function CoreSpine({ onWorkspace, onCount }) {
   useEffect(() => { onCount?.(list.length); }, [list.length, onCount]);
   const workerOf = (t) => workerFor(t, agents.data?.agents);
   const counts = Object.fromEntries(FILTERS.map(([id, , test]) => [id, list.filter((t) => test(t, workerOf(t))).length]));
-  const shown = list.filter((t) => FILTERS.find(([id]) => id === filter)[2](t, workerOf(t)));
+  // On the Build page the first thing to see is what is waiting on the person, until they pick a view.
+  const view = actions && !picked && counts.you > 0 ? "you" : filter;
+  const shown = list.filter((t) => FILTERS.find(([id]) => id === view)[2](t, workerOf(t)));
   return (
     <section className="core-spine core-card" aria-labelledby="core-spine-title" data-state={tasks.status}>
       <header>
@@ -123,13 +138,13 @@ export default function CoreSpine({ onWorkspace, onCount }) {
       {tasks.status === "ready" && list.length > 4 && (
         <div className="spine-filters" role="group" aria-label="Show tasks">
           {FILTERS.map(([id, label]) => (
-            <button key={id} type="button" className="core-button" aria-pressed={filter === id} onClick={() => setFilter(id)} disabled={id !== "all" && !counts[id]}>{label} <span className="core-muted">{counts[id]}</span></button>
+            <button key={id} type="button" className="core-button" aria-pressed={view === id} onClick={() => { setPicked(true); setFilter(id); }} disabled={id !== "all" && !counts[id]}>{label} <span className="core-muted">{counts[id]}</span></button>
           ))}
         </div>
       )}
       {tasks.status === "ready" && (
         <ol className="spine-list" aria-label="Tasks from the ledger">
-          {shown.map((task) => <Node key={task.id} task={task} agents={agents.data?.agents} />)}
+          {shown.map((task) => <Node key={task.id} task={task} agents={agents.data?.agents} onAct={actions && onWorkspace ? () => onWorkspace("tasks") : undefined} />)}
         </ol>
       )}
     </section>

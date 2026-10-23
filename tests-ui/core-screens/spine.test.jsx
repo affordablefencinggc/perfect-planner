@@ -170,4 +170,23 @@ describe("CoreSpine", () => {
     await screen.findByRole("list", { name: "Tasks from the ledger" });
     await waitFor(() => expect(onCount).toHaveBeenLastCalledWith(2));
   });
+  test("on the Build page it opens on what waits for you and each row says what to do next", async () => {
+    routeFetch({ tasks: [task("T-1"), task("T-2", { stage: "test-proposed" }), task("T-3", { stage: "ready-to-merge" }), task("T-4"), task("T-5"), task("T-6")] });
+    const onWorkspace = vi.fn();
+    render(<CoreSpine actions onWorkspace={onWorkspace} />);
+    const list = await screen.findByRole("list", { name: "Tasks from the ledger" });
+    expect(within(list).getAllByRole("article").map((n) => n.getAttribute("aria-label"))).toEqual(["T-2 Task T-2", "T-3 Task T-3"]);
+    fireEvent.click(screen.getByRole("button", { name: "Review the test" }));
+    expect(onWorkspace).toHaveBeenCalledWith("tasks");
+    expect(screen.getByRole("button", { name: "Merge" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /^All/ }));
+    expect(within(list).getAllByRole("article")).toHaveLength(6);
+  });
+
+  test("without actions there are no next-step buttons", async () => {
+    routeFetch({ tasks: [task("T-1", { stage: "test-proposed" })] });
+    render(<CoreSpine onWorkspace={() => {}} />);
+    await screen.findByRole("list", { name: "Tasks from the ledger" });
+    expect(screen.queryByRole("button", { name: "Review the test" })).toBeNull();
+  });
 });
