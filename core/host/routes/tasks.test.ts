@@ -199,6 +199,16 @@ describe("tasks routes", () => {
     expect((await tasks()).tasks[0]).toMatchObject({ id: "T-1", attempt: 2, label: "T-1.a2", status: "open" });
   }, 60_000);
 
+  it("B1: never suggests the host's own data folder as the git folder", async () => {
+    await ctx.stop();
+    ctx = await startTestHost();
+    const view = await tasks();
+    expect(view.repo.ok).toBe(false);
+    expect(view.repo.suggested).toBeUndefined();
+    await ctx.stop();
+    ctx = await startTestHost({ projectRootOverride: repo });
+  }, 60_000);
+
   it("says plainly when the project folder is not a git repository", async () => {
     await ctx.stop();
     const plain = fs.mkdtempSync(path.join(os.tmpdir(), "pp-tasks-plain-"));

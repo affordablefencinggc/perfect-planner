@@ -13,7 +13,7 @@ export interface CoreSummary {
   /** True once anything is in this project's ledger. */
   started: boolean;
   people: { members: number; owner?: string; ownerMissing: boolean };
-  /** Agents that checked in over MCP since the app started. Checked in, not verified. */
+  /** Agents heard from in the last 10 minutes with a token that still works. Checked in, not verified. */
   agents: { checkedIn: number; names: string[] };
   plan: { approved: boolean; latest?: string; tasks: number; idea?: string };
 }
@@ -25,7 +25,7 @@ export function coreSummary(project: CoreProject): CoreSummary {
   const plan = planApprovalView(entries);
   const latest = plan.latest ? entries.find((e) => e.n === plan.latest!.entry) : undefined;
   const idea = typeof latest?.data?.idea === "string" ? latest.data.idea : undefined;
-  const agents = project.service.listAgents();
+  const agents = project.service.liveAgents();
   return {
     project: project.key,
     started: entries.length > 0,
