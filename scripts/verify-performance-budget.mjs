@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { createHash } from "node:crypto";
-import { lstat, readFile, readdir, realpath } from "node:fs/promises";
+import { appendFile, lstat, readFile, readdir, realpath } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { gzipSync } from "node:zlib";
@@ -13,6 +13,7 @@ export const PERFORMANCE_BUDGETS = Object.freeze({
   // The per-file limit is unchanged, but the entry chunk itself grew about 7.5 KiB gzip over main, so first load is heavier.
   // Both changes were sized against 480 KiB separately; together they measure 500.4 KiB, hence 504.
   // Core loop screens (Oct 2026): six on-demand core screens on top of the above measure 539.2 KiB (#15). The run-loop-from-app work (Tasks, planning from the description, start history, owner stop) brings the total to 549.1 KiB; 552 leaves under 3 KiB of headroom. First-load limits unchanged.
+  // Build target raised from Vite's default (Safari 14) to the desktop webviews we ship in (Oct 2026): 549.6 -> 539.5 KiB measured, same limit.
   // Task spine (Oct 2026, owner OK): the Evidence-page spine and its filters measure 552.6 KiB; 560 leaves about 7 KiB of headroom.
   maxTotalJavaScriptGzipBytes: 560 * 1024,
   // UI trial sweep (Oct 2026): +1 KiB for the shared frame stylesheet (sr-only, popover bounds, small-screen rules).
@@ -361,6 +362,53 @@ async function measureCompressedAssets(scannedFiles, budgets, ceilings, startedA
   return { javascript, stylesheets, jsTotal, cssTotal, largestJs, largestCss };
 }
 
+const STATIC_IMPORT = /(?:\bfrom|\bimport)\s*["']\.\/([^"']+\.js)["']/g;
+const chunkName = (file) => path.posix.basename(file).replace(/-[A-Za-z0-9_-]{8}\.(js|css)$/, ".$1");
+
+// What each screen costs the user: the first-load set (entry script, preloads, stylesheets named by
+// index.html plus everything they import statically) and, per on-demand chunk, its own gzip bytes
+// plus any static dependencies that are not already in the first-load set.
+export function describeAssetCosts({ indexHtml, javascript, stylesheets, sources }) {
+  const gzipOf = new Map([...javascript, ...stylesheets].map((item) => [item.path, item.gzipBytes]));
+  const closure = (roots) => {
+    const seen = new Set();
+    const queue = [...roots];
+    while (queue.length) {
+      const file = queue.pop();
+      if (seen.has(file) || !gzipOf.has(file)) continue;
+      seen.add(file);
+      for (const match of (sources.get(file) ?? "").matchAll(STATIC_IMPORT)) queue.push(`assets/${match[1]}`);
+    }
+    return seen;
+  };
+  const referenced = [...indexHtml.matchAll(/(?:src|href)="\/(assets\/[^"]+\.(?:js|css))"/g)].map((match) => match[1]);
+  const firstLoad = closure(referenced.filter((file) => file.endsWith(".js")));
+  for (const file of referenced) if (file.endsWith(".css")) firstLoad.add(file);
+  const sum = (files) => [...files].reduce((total, file) => total + (gzipOf.get(file) ?? 0), 0);
+  const onDemand = javascript
+    .filter((item) => !firstLoad.has(item.path))
+    .map((item) => {
+      const files = closure([item.path]);
+      for (const file of files) if (firstLoad.has(file)) files.delete(file);
+      const base = item.path.replace(/-[A-Za-z0-9_-]{8}\.js$/, "");
+      for (const sheet of stylesheets) if (sheet.path.replace(/-[A-Za-z0-9_-]{8}\.css$/, "") === base) files.add(sheet.path);
+      return { chunk: chunkName(item.path), gzipBytes: sum(files) };
+    })
+    .sort((left, right) => right.gzipBytes - left.gzipBytes);
+  return { firstLoadBytes: sum(firstLoad), firstLoadFiles: firstLoad.size, onDemand };
+}
+
+export function formatAssetCosts(costs, totals) {
+  const kib = (bytes) => (bytes / 1024).toFixed(1);
+  return [
+    "| Where | gzip KiB |",
+    "| --- | ---: |",
+    `| First load (${costs.firstLoadFiles} files) | ${kib(costs.firstLoadBytes)} |`,
+    ...costs.onDemand.map((item) => `| ${item.chunk} (on demand) | ${kib(item.gzipBytes)} |`),
+    `| **All JS / all CSS** | **${kib(totals.jsTotal)} / ${kib(totals.cssTotal)}** |`,
+  ].join("\n");
+}
+
 export async function verifyPerformanceBudget(
   projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."),
   options = {},
@@ -377,8 +425,18 @@ export async function verifyPerformanceBudget(
   await verifyReleaseManifest(root, scan.files, scan.totalBytes, ceilings, startedAt);
   const compressed = await measureCompressedAssets(scan.files, budgets, ceilings, startedAt);
   checkDeadline(startedAt, ceilings);
+  const sources = new Map();
+  for (const item of compressed.javascript) sources.set(item.path, await readFile(path.join(client, item.path), "utf8"));
+  const costs = describeAssetCosts({
+    indexHtml: await readFile(path.join(client, "index.html"), "utf8"),
+    javascript: compressed.javascript,
+    stylesheets: compressed.stylesheets,
+    sources,
+  });
 
   return Object.freeze({
+    costs,
+    jsTotals: { jsTotal: compressed.jsTotal, cssTotal: compressed.cssTotal },
     budgets,
     files: scan.files.length,
     clientBytes: scan.totalBytes,
@@ -400,8 +458,13 @@ if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === imp
         `JavaScript: ${formatBytes(result.javascriptGzipBytes)} gzip aggregate; largest ${result.largestJavaScript.path} at ${formatBytes(result.largestJavaScript.gzipBytes)}.`,
         `CSS: ${formatBytes(result.stylesheetGzipBytes)} gzip aggregate; largest ${result.largestStylesheet.path} at ${formatBytes(result.largestStylesheet.gzipBytes)}.`,
         `Truth generation: ${result.generationId}.`,
+        "",
+        formatAssetCosts(result.costs, result.jsTotals),
       ].join("\n") + "\n",
     );
+    if (process.env.GITHUB_STEP_SUMMARY) {
+      await appendFile(process.env.GITHUB_STEP_SUMMARY, `### Bundle cost per screen\n\n${formatAssetCosts(result.costs, result.jsTotals)}\n`);
+    }
   } catch (error) {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
     process.exitCode = 1;

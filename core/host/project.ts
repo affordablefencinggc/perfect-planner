@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { FileStore, Ledger, type LedgerEntry } from "../ledger/index";
 import { installClauseRules } from "../lookup/index";
-import { TestGate, gateRule, type GatePolicy } from "../gate/index";
+import { TestGate, appNodeDir, gateRule, resolveCommand, runTestCommand, scrubbedEnv, testEnv, type GatePolicy, type TestRunner } from "../gate/index";
 import { AgentService } from "../mcp/index";
 import type { HostKeys } from "./keys";
 import { hostWitness } from "./witness";
@@ -16,7 +16,7 @@ import { installPeopleRules, listAgent } from "../people/index";
 import { installPlanningRules } from "../planning/index";
 import { installReleaseRules, protectProject, type CommandRunner, type ProtectionReport } from "../release/index";
 import { ensureRequiredIgnores, PRIVATE_DIR, runGit } from "../worktrees/index";
-import { protectRoots, registeredRoots } from "../exec/index";
+import { containedRunner, protectRoots, registeredRoots } from "../exec/index";
 import type { ProjectWatch } from "./watch";
 
 export interface CoreProject {
@@ -303,6 +303,27 @@ export function ledgerIntegrity(ledger: Ledger): LedgerIntegrity {
   return { state: "ok", writesStopped: false };
 }
 
+/**
+ * "Contain test commands" (opt-in, PP_CONTAIN_TESTS=1): run the gate's test commands inside the OS
+ * sandbox of core/exec/sandbox.ts. The gate's own runner still does the work inside the wrapper, and the
+ * planted-program checks run first on the command as written. Off, the gate runs tests as before.
+ */
+export function testRunnerFor(env: NodeJS.ProcessEnv = process.env): TestRunner | undefined {
+  if (env.PP_CONTAIN_TESTS !== "1") return undefined;
+  return containedRunner({
+    base: runTestCommand,
+    nodeDir: appNodeDir(),
+    precheck: (command, cwd, options) => {
+      const protect = options.protect ?? [];
+      const resolved = resolveCommand(command, cwd, testEnv(scrubbedEnv(process.env, options.env), { cwd, protect }), protect);
+      if (resolved.kind === "missing") return `command not found: ${resolved.program}`;
+      if (resolved.kind === "inside") return `refused: ${resolved.program} is ${resolved.file}, inside the project or one of its worktrees, so it could be a planted copy that reports a pass without running the test. Start the test with an installed program (node, npm, npx, python), then a script path.`;
+      if (resolved.kind === "unclear") return `refused: Perfect Planner can't tell which program "${resolved.program}" starts. Start the test with a plain program name or path.`;
+      return undefined;
+    },
+  });
+}
+
 export function openCoreProject(baseRoot: string, key: string, override: string | undefined, keys: HostKeys, ownerKeyFor?: OwnerKeySource): CoreProject {
   const root = projectRootFor(baseRoot, key, override);
   fs.mkdirSync(root, { recursive: true });
@@ -319,7 +340,8 @@ export function openCoreProject(baseRoot: string, key: string, override: string 
   // on the current code, and only the gate writes task.done after the test passes on the merge.
   const policy: GatePolicy = { requireJevTestReview: false };
   ledger.addRule(gateRule(policy));
-  const gate = new TestGate({ ledger, requireJevTestReview: policy.requireJevTestReview });
+  const run = testRunnerFor();
+  const gate = new TestGate({ ledger, requireJevTestReview: policy.requireJevTestReview, ...(run ? { run } : {}) });
   // TestGate copies its policy; give it the shared object so the host's switch reaches the gate and the rule together.
   Object.assign(gate, { policy });
   const service = new AgentService({ ledger, gate, onJoin: (agent) => listAgent(ledger, agent.person, agent.id) });
