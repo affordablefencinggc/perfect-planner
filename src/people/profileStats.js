@@ -18,7 +18,8 @@ export function statsFromTasks(member, tasks = []) {
     open: open.length,
     errors: errors.length,
     total: mine.length,
-    openTasks: open.map((t) => ({ id: t.id, label: t.label ?? t.id, status: t.status })),
+    openTasks: open.map((t) => ({ id: t.id, label: t.label ?? t.id, status: t.status, branch: t.worktree?.branch ?? null })),
+    recent: done.slice(-5).reverse().map((t) => ({ when: t.id, text: `Finished ${t.label ?? t.id}`, kind: "ok" })).concat(errors.slice(0, 3).map((t) => ({ when: t.id, text: `Check failed on ${t.label ?? t.id}`, kind: "bad" }))),
   };
 }
 
@@ -58,4 +59,20 @@ export function move(list, i, delta) {
   const next = list.slice();
   [next[i], next[j]] = [next[j], next[i]];
   return next;
+}
+
+/** Deterministic sample activity for the demo: `weeks` x 7 intensities in 0..1 (weekends quieter). */
+export function sampleHeat(seed, weeks = 26) {
+  let x = [...String(seed)].reduce((a, c) => (a * 31 + c.charCodeAt(0)) >>> 0, 7);
+  const next = () => ((x = (Math.imul(x, 1664525) + 1013904223) >>> 0) / 4294967296);
+  return Array.from({ length: weeks * 7 }, (_, i) => {
+    const r = next();
+    return i % 7 > 4 ? (r > 0.85 ? 0.3 : 0) : r < 0.2 ? 0 : 0.25 + r * 0.75;
+  });
+}
+
+/** Share of finished tasks that did not have a failed check, as a whole percent. */
+export function passRate(finished, errors) {
+  const total = finished + errors;
+  return total ? Math.round((finished / total) * 100) : null;
 }

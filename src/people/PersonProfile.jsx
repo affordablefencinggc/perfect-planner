@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import "./PersonProfile.css";
-import { MD_MAX_BYTES, isHttpsLink, isMarkdownName, move, nextFreeSlot, weekdays } from "./profileStats.js";
+import { MD_MAX_BYTES, isHttpsLink, isMarkdownName, move, nextFreeSlot, passRate, sampleHeat, weekdays } from "./profileStats.js";
 
 // Dropped files and links live in memory for this app session only; nothing is written to browser storage.
 const contexts = new Map();
@@ -44,6 +44,28 @@ function Tile({ label, value, trend, bad, i }) {
       <dd className={bad && value ? "is-bad" : ""}>{text}</dd>
       <Spark values={trend} bad={bad} i={i} />
     </div>
+  );
+}
+
+function Radar({ skills }) {
+  const n = skills.length;
+  const pt = (i, r) => { const a = (Math.PI * 2 * i) / n - Math.PI / 2; return `${(60 + Math.cos(a) * r).toFixed(1)},${(60 + Math.sin(a) * r).toFixed(1)}`; };
+  return (
+    <svg className="pprofile-radar" viewBox="0 0 120 120" role="img" aria-label={`Strengths: ${skills.map((k) => `${k.k} ${k.v}`).join(", ")}`}>
+      {[0.33, 0.66, 1].map((f) => <polygon key={f} points={skills.map((_, i) => pt(i, 40 * f)).join(" ")} className="pprofile-ring-bg" />)}
+      <polygon className="pprofile-radar-fill" points={skills.map((k, i) => pt(i, 40 * (k.v / 100))).join(" ")} />
+      {skills.map((k, i) => <text key={k.k} x={pt(i, 52).split(",")[0]} y={pt(i, 52).split(",")[1]} textAnchor="middle" dominantBaseline="middle">{k.k}</text>)}
+    </svg>
+  );
+}
+
+function Ring({ pct }) {
+  return (
+    <svg className="pprofile-ringsvg" viewBox="0 0 80 80" role="img" aria-label={`${pct}% passed first time`}>
+      <circle cx="40" cy="40" r="32" className="pprofile-ring-bg" />
+      <circle cx="40" cy="40" r="32" className="pprofile-ring-fg" pathLength="100" strokeDasharray={`${pct} 100`} />
+      <text x="40" y="45" textAnchor="middle">{pct}%</text>
+    </svg>
   );
 }
 
@@ -122,6 +144,8 @@ export function PersonProfile({ profile, onClose, onAssign, onShareLink }) {
     } catch (e) { setError(e?.message || "Could not save this link"); }
   };
 
+  const rate = passRate(stats.finished, stats.errors);
+  const heat = sample ? sampleHeat(person) : null;
   const capacity = profile.capacity ?? 5;
   const added = Math.max(0, queue.length - (profile.upNext?.length ?? 0)) + scheduled.length;
   const used = stats.open + added;
@@ -139,8 +163,10 @@ export function PersonProfile({ profile, onClose, onAssign, onShareLink }) {
           <div className="pprofile-who">
             <h2>{name}</h2>
             <p>{role}{profile.state ? ` · ${profile.state}` : ""}</p>
-            {profile.current && <p className="pprofile-current"><b>Now</b> {profile.current}</p>}
+            {profile.about && <p className="pprofile-about">{profile.about}</p>}
+            {profile.current && <p className="pprofile-current"><b>Now</b> {profile.current}{profile.branch && <code>{profile.branch}</code>}</p>}
             <div className="pprofile-load" role="img" aria-label={`Workload ${load}%`}><span style={{ width: `${load}%` }} /></div>
+            {(profile.meta?.length > 0 || profile.pairs) && <div className="pprofile-chips">{[...(profile.meta ?? []), ...(profile.pairs ? [`Pairs with ${profile.pairs}`] : [])].map((m) => <span key={m}>{m}</span>)}</div>}
             <small>Workload {load}% · {used} of {capacity} slots</small>
           </div>
           <button ref={closeRef} type="button" className="pprofile-close" onClick={onClose} aria-label="Close profile">Close</button>
@@ -155,15 +181,36 @@ export function PersonProfile({ profile, onClose, onAssign, onShareLink }) {
         </dl>
         {!sample && stats.total === 0 && <p className="pprofile-muted">No tasks are on this person's name yet.</p>}
 
+        <div className="pprofile-insights" style={{ "--i": 4 }}>
+          {profile.skills && <section aria-label="Strengths"><h3>Strengths</h3><Radar skills={profile.skills} /></section>}
+          <section aria-label="Quality">
+            <h3>Quality</h3>
+            {rate != null ? <Ring pct={rate} /> : <p className="pprofile-muted">No finished or failed work yet.</p>}
+            <small>{rate != null ? "of work passed its checks first time" : ""}</small>
+            {profile.mix && (
+              <>
+                <div className="pprofile-mix" role="img" aria-label={profile.mix.map((m) => `${m.k} ${m.v}%`).join(", ")}>{profile.mix.map((m, i) => <span key={m.k} style={{ width: `${m.v}%`, "--k": i }} />)}</div>
+                <small>{profile.mix.map((m) => `${m.k} ${m.v}%`).join(" · ")}</small>
+              </>
+            )}
+            {profile.agents?.length > 0 && <small>Runs {profile.agents.join(", ")}</small>}
+          </section>
+        </div>
+        {heat && (
+          <section aria-label="Activity" style={{ "--i": 5 }}>
+            <h3>Activity <small>last 26 weeks</small></h3>
+            <div className="pprofile-heat" role="img" aria-label="Daily activity, last 26 weeks">{heat.map((v, i) => <i key={i} style={{ opacity: v ? 0.2 + v * 0.8 : 0.07, "--d": Math.floor(i / 7) }} />)}</div>
+          </section>
+        )}
         <div className="pprofile-grid" style={{ "--i": 5 }}>
           <section aria-label="Up next" style={{ "--i": 5 }}>
             <h3>Up next</h3>
-            {openRows.length > 0 && <ul className="pprofile-cards">{openRows.map((t) => <li key={t.id}><b>{t.label}</b><small>{t.status}</small></li>)}</ul>}
+            {openRows.length > 0 && <ul className="pprofile-cards">{openRows.map((t) => <li key={t.id}><span><b>{t.label}</b>{t.branch && <code>{t.branch}</code>}</span><small className={`pprofile-chip is-${t.status}`}>{t.status}</small></li>)}</ul>}
             {queue.length > 0 && (
               <ol className="pprofile-cards" aria-label="Queue">
                 {queue.map((q, i) => (
                   <li key={`${q.title}-${i}`}>
-                    <b>{q.title}</b>
+                    <b>{q.title}</b><small className="pprofile-chip">up next</small>
                     <span className="pprofile-order">
                       <button type="button" aria-label={`Move ${q.title} up`} disabled={i === 0} onClick={() => setQueue((x) => move(x, i, -1))}>↑</button>
                       <button type="button" aria-label={`Move ${q.title} down`} disabled={i === queue.length - 1} onClick={() => setQueue((x) => move(x, i, 1))}>↓</button>
