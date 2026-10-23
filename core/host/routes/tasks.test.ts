@@ -127,7 +127,8 @@ describe("tasks routes", () => {
     const diff = (await hostCall(ctx.base, "GET", `/tasks/T-1/diff${q}`)).body.result;
     expect(diff.files).toEqual([".github/workflows/ci.yml", "package.json", "src/save.js", "tests/save.check.mjs"]);
     // The gate's own list: the proposed test file counts too, since a change there changes what is checked.
-    expect(diff.sensitive).toEqual([".github/workflows/ci.yml", "package.json", "tests/save.check.mjs"]);
+    // The approved test file itself (tests/save.check.mjs, unchanged since approval) is not flagged; the rest still are.
+    expect(diff.sensitive).toEqual([".github/workflows/ci.yml", "package.json"]);
     expect(diff.text).toContain("export const save");
     expect((await tasks()).tasks[0]).toMatchObject({ stage: "review-diff" });
     // A program planted in the repo's config (a filter git would run on diff) is a plain refusal, never a crash.
