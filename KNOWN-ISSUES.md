@@ -19,3 +19,7 @@ Things that do not work yet, or work with limits. We would rather tell you now.
 - **The app stops at the local merge.** It does not push, open a pull request or run CI. Do that with your own git.
 - **Open project folder has limits.** Linux has no folder picker, so type or paste the path. The Windows picker is not fully tested.
 - **Gemini and Codex agents are beta.** Claude Code is the supported agent. Gemini needs "Trust folder" set before you paste the connect line. Codex allows one connection per computer, and Start only launches Claude Code.
+
+## About this repository
+
+- **The public commit history contains the owner's personal email address and four profile photos.** None are in the current files. We chose not to rewrite history, so they remain in older commits. No secret or key is exposed.
