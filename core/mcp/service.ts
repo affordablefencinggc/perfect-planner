@@ -9,8 +9,10 @@ import { LedgerError, type Actor, type EntryDraft, type Ledger, type LedgerEntry
 import { Relay, trustedEntry } from "../relay/relay";
 import { attemptLabel, foldBoard, type TaskView } from "./board";
 import { lookup } from "../lookup/index";
+import { route, type NeedleChoice } from "./needle";
 import { TestGate } from "../gate/index";
 import { TokenStore, tokenId, type Grant } from "./tokens";
+import { parseUsage } from "../cost/index";
 import { TOOL_INFO, TOOL_INPUTS, type ToolInput, type ToolName } from "./tools";
 import { looksSecret, redactSecrets } from "../jev/redact";
 
@@ -46,7 +48,17 @@ export interface AgentServiceOptions {
   relay?: Relay;
   /** The test gate propose_test defines tests through (default: one over the same ledger). */
   gate?: TestGate;
+  /** Milliseconds now; tests pass a fake clock. */
+  now?: () => number;
+  /**
+   * Called when an agent checks in, and again when the roster refuses its write for not being listed under
+   * anyone. The host lists the agent under the person whose token it holds; true means it is listed now.
+   */
+  onJoin?: (agent: AgentRecord) => boolean;
 }
+
+/** An agent not heard from for this long no longer counts as checked in, and no longer holds the main chat. */
+export const AGENT_QUIET_MS = 10 * 60 * 1000;
 
 export class AgentService {
   readonly ledger: Ledger;
@@ -56,8 +68,15 @@ export class AgentService {
   private readonly agents = new Map<string, AgentRecord & { grant: Grant; token: string }>();
   /** person -> agent id of their main chat */
   private readonly mains = new Map<string, string>();
+  /** agent id -> when it last called any tool (ms) */
+  private readonly lastSeen = new Map<string, number>();
+  private readonly now: () => number;
+
+  private readonly onJoin: ((agent: AgentRecord) => boolean) | undefined;
 
   constructor(options: AgentServiceOptions) {
+    this.now = options.now ?? Date.now;
+    this.onJoin = options.onJoin;
     this.ledger = options.ledger;
     this.tokens = options.tokens ?? new TokenStore();
     this.relay = options.relay ?? new Relay({ ledger: options.ledger });
@@ -66,28 +85,56 @@ export class AgentService {
 
   /** Validate and run one tool call. Every transport goes through here. */
   async call(caller: Caller, tool: string, rawArgs: unknown): Promise<unknown> {
-    if (!(tool in TOOL_INPUTS)) throw new ToolError("NOT_FOUND", `There is no tool called ${tool}.`);
+    if (!Object.prototype.hasOwnProperty.call(TOOL_INPUTS, tool)) throw new ToolError("NOT_FOUND", `There is no tool called ${tool}.`);
     const name = tool as ToolName;
     const parsed = TOOL_INPUTS[name].safeParse(rawArgs ?? {});
     if (!parsed.success) {
       throw new ToolError("INVALID", parsed.error.issues.map((i) => `${i.path.join(".") || "input"}: ${i.message}`).join("; "));
     }
     const grant = this.tokens.resolve(caller.token);
-    if (!grant) throw new ToolError("UNAUTHORIZED", "This token is not valid for this project, or it was revoked.");
+    if (!grant) throw new ToolError("UNAUTHORIZED", "This token is not valid for this project. It was revoked, or it is from before Perfect Planner restarted (a restart ends every connection). Copy a new line from Connect agent.");
     if (name === "hello") return this.hello(caller.token, grant, parsed.data as ToolInput<"hello">);
 
     const agent = caller.agent ? this.agents.get(caller.agent) : undefined;
     if (!agent || agent.token !== caller.token) throw new ToolError("UNAUTHORIZED", "Call hello first; this agent has not checked in with this token.");
+    this.lastSeen.set(agent.id, this.now());
     const need = TOOL_INFO[name].caller;
     if (need === "worker" && agent.role !== "worker") throw new ToolError("FORBIDDEN", `${name} is for workers launched on a task.`);
     if (need === "main" && agent.role !== "main") throw new ToolError("FORBIDDEN", `${name} is for ${agent.person}'s main chat only.`);
 
+    const run = async () => this.dispatch(agent, name, parsed.data);
     try {
-      return await this.dispatch(agent, name, parsed.data);
+      return await run();
     } catch (error) {
+      // A roster that began after this agent checked in does not list it yet: list it, then try once more.
+      if (error instanceof LedgerError && /is not listed as anyone's agent/.test(error.message) && this.listUnderPerson(agent)) {
+        try {
+          return await run();
+        } catch (again) {
+          if (again instanceof LedgerError) throw new ToolError("REFUSED", `${again.message} (${again.code})`);
+          throw again;
+        }
+      }
       if (error instanceof LedgerError) throw new ToolError("REFUSED", `${error.message} (${error.code})`);
       throw error;
     }
+  }
+
+  /** The needle: which tool to call next. Reads only, so any token that is valid for this project may ask. */
+  suggest(caller: Caller, intent: string, limit = 3): NeedleChoice[] {
+    if (!this.tokens.resolve(caller.token)) throw new ToolError("UNAUTHORIZED", "This token is not valid for this project, or it was revoked.");
+    const agent = caller.agent ? this.agents.get(caller.agent) : undefined;
+    const known = agent && agent.token === caller.token ? agent : undefined;
+    return route(
+      {
+        role: known ? known.role : "unknown",
+        intent: intent.slice(0, 2000),
+        tasks: [...this.board().values()],
+        ...(known?.task ? { task: known.task } : {}),
+        ...(known?.role === "main" ? { openQuestions: this.relay.openFor(known.person) } : {}),
+      },
+      Math.min(Math.max(1, Math.trunc(limit) || 3), 11),
+    );
   }
 
   private dispatch(agent: AgentRecord, name: ToolName, args: unknown): unknown {
@@ -128,17 +175,36 @@ export class AgentService {
     const slug = input.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40) || "agent";
     const id = `${slug}-${tokenId(token)}`;
     const known = this.agents.get(id);
-    if (known && known.token === token) return this.welcome(known);
+    if (known && known.token === token) {
+      this.lastSeen.set(id, this.now());
+      return this.welcome(known);
+    }
     let role: AgentRole;
     if (grant.role === "worker") role = "worker";
-    else if (!this.mains.has(grant.person)) role = "main";
+    else if (!this.mains.has(grant.person) || this.mainIsGone(grant.person)) role = "main";
     else role = "observer";
+    // A main chat that went quiet hands the role over; the old one stays on the roster as read-only.
+    if (role === "main" && grant.role !== "worker") {
+      const old = this.agents.get(this.mains.get(grant.person) ?? "");
+      if (old && old.role === "main") old.role = "observer";
+    }
     // The person-set model wins; a self-declared one is kept but marked unverified.
     const model = grant.model ?? (input.model ? `unverified:${input.model}` : undefined);
     const record = { id, name: input.name, person: grant.person, role, grant, token, ...(model ? { model } : {}), ...(grant.task ? { task: grant.task } : {}) };
     this.agents.set(id, record);
+    this.lastSeen.set(id, this.now());
     if (role === "main") this.mains.set(grant.person, id);
+    this.listUnderPerson(record);
     return this.welcome(record);
+  }
+
+  /** Never lets a failed listing break a check-in: the agent is then refused with the roster's own words. */
+  private listUnderPerson(agent: AgentRecord): boolean {
+    try {
+      return this.onJoin?.(agent) ?? false;
+    } catch {
+      return false;
+    }
   }
 
   private welcome(agent: AgentRecord): { agent: string; role: AgentRole; task?: string; person: string; instructions: string } {
@@ -191,10 +257,13 @@ export class AgentService {
     return { task: attemptLabel(view), status: "claimed", entry: entry.n };
   }
 
-  private progress(agent: AgentRecord, { task, text }: ToolInput<"report_progress">) {
+  private progress(agent: AgentRecord, { task, text, usage }: ToolInput<"report_progress">) {
     this.notPaused(agent);
     this.ownTask(agent, task, true);
-    return { entry: this.write({ actor: this.actor(agent), type: "task.progress", subject: task, summary: redactSecrets(text) }).n };
+    // A usage figure that cannot be believed is dropped, not the progress line: the work was still reported.
+    const read = usage === undefined ? null : parseUsage(usage);
+    const entry = this.write({ actor: this.actor(agent), type: "task.progress", subject: task, summary: redactSecrets(text), ...(read?.ok ? { data: { usage: read.usage } } : {}) });
+    return { entry: entry.n, ...(read && !read.ok ? { usageIgnored: read.problem } : {}) };
   }
 
   private proof(agent: AgentRecord, { task, kind, link }: ToolInput<"attach_proof">) {
@@ -333,6 +402,27 @@ export class AgentService {
 
   listAgents(): AgentRecord[] {
     return [...this.agents.values()].map(({ grant: _grant, token: _token, ...rest }) => rest);
+  }
+
+  /** When the agent last called a tool, as an ISO time, or undefined if it never has. */
+  seenAt(id: string): string | undefined {
+    const at = this.lastSeen.get(id);
+    return at === undefined ? undefined : new Date(at).toISOString();
+  }
+
+  /** Agents heard from within `quietMs` whose token still works: what the header counts as checked in. */
+  liveAgents(quietMs: number = AGENT_QUIET_MS): AgentRecord[] {
+    const cutoff = this.now() - quietMs;
+    return [...this.agents.values()]
+      .filter((a) => (this.lastSeen.get(a.id) ?? 0) >= cutoff && this.tokens.resolve(a.token))
+      .map(({ grant: _grant, token: _token, ...rest }) => rest);
+  }
+
+  private mainIsGone(person: string): boolean {
+    const id = this.mains.get(person);
+    const seen = id ? this.lastSeen.get(id) : undefined;
+    const grant = id ? this.agents.get(id) : undefined;
+    return !id || seen === undefined || this.now() - seen >= AGENT_QUIET_MS || !grant || !this.tokens.resolve(grant.token);
   }
 }
 

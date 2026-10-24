@@ -1,8 +1,11 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { CheckCircleIcon, CopyIcon, GitMergeIcon, PlayIcon, SpinnerGapIcon, WarningCircleIcon } from "@phosphor-icons/react";
 import { copyText } from "../project/connectAgentSetup.js";
-import { AdvancedOnly, CoreScreen } from "./CoreScreen.jsx";
+import { describeLaunchFolder } from "../browser/launchFolder.js";
+import { WorkHeader } from "./WorkHeader.jsx";
+import { CoreScreen } from "./CoreScreen.jsx";
 import { coreGet, useCoreResource } from "./coreApi.js";
+import { CostPanel, GroupBar, RepoBar } from "./TasksRepos.jsx";
 import "./TasksScreen.css";
 
 // Run the core loop from the app (core/host/routes/tasks.ts): start a worker on a task, approve
@@ -27,6 +30,10 @@ const STAGE = {
   reopened: { label: "Sent back", tone: "warn" },
   done: { label: "Done", tone: "good" },
 };
+
+// The last 20 lines of a test's output, where the reason a test failed is.
+const tail = (output) => String(output ?? "").split(/\r?\n/).filter((l) => l.trim()).slice(-20).join("\n").slice(-2000);
+const withTail = (text, output) => (tail(output) ? `${text}\n\n${tail(output)}` : text);
 
 const who = (actor) => (!actor ? "" : actor.kind === "person" ? `you (${actor.id})` : actor.model ? `${actor.id} (${actor.model})` : actor.id);
 
@@ -59,6 +66,13 @@ function DispatchPanel({ dispatch, onClose }) {
         <summary>Read the brief, or use another agent</summary>
         <Snippet label="Brief" id={`${dispatch.task}:brief`} text={dispatch.brief} copied={copied} onCopy={copy} />
         <Snippet label="MCP settings" id={`${dispatch.task}:json`} text={dispatch.json} copied={copied} onCopy={copy} />
+        {Object.entries(dispatch.agents ?? {}).map(([name, a]) => (
+          <div key={name}>
+            <p className="core-muted">{name === "gemini" ? "Gemini CLI" : "Codex CLI"}: run the set-up, then the start command. {a.note}</p>
+            <Snippet label={`${name} set-up`} id={`${dispatch.task}:${name}:setup`} text={a.setup} copied={copied} onCopy={copy} />
+            <Snippet label={`${name} start`} id={`${dispatch.task}:${name}:start`} text={a.start} copied={copied} onCopy={copy} />
+          </div>
+        ))}
       </details>
       {copied && !copied.ok && <p className="core-tasks-warn">Copy did not work here. Select the text and copy it by hand.</p>}
       <p className="core-muted">The command holds this worker's private key and works only for {dispatch.task}. It is shown once.</p>
@@ -81,6 +95,13 @@ function JevLine({ label, line }) {
 function RepoPicker({ repo, onSave }) {
   const [root, setRoot] = useState(repo.suggested ?? "");
   const [error, setError] = useState(null);
+  // No folder suggested by the host: offer the folder the person already imported, once, unless they typed something.
+  useEffect(() => {
+    if (repo.suggested) return undefined;
+    let live = true;
+    describeLaunchFolder().then((folder) => { if (live && folder?.path) setRoot((current) => current || folder.path); });
+    return () => { live = false; };
+  }, [repo.suggested]);
   const [busy, setBusy] = useState(false);
   const save = async (event) => {
     event.preventDefault();
@@ -150,7 +171,7 @@ function DiffView({ diff }) {
   );
 }
 
-function TaskCard({ task, project, act, busy, notice, dispatchFor, onDispatched, onHideDispatch }) {
+function TaskCard({ task, repoRoot, project, act, busy, notice, dispatchFor, onDispatched, onHideDispatch, showRepo }) {
   const [model, setModel] = useState(task.dispatch?.model ?? DEFAULT_WORKER_MODEL);
   const [diff, setDiff] = useState(null);
   const [diffError, setDiffError] = useState(null);
@@ -187,6 +208,7 @@ function TaskCard({ task, project, act, busy, notice, dispatchFor, onDispatched,
       <header>
         <div>
           <span className="core-tasks-id">{task.label}</span>
+          {showRepo && <span className="core-pill core-tasks-repo-pill">{task.repo}</span>}
           <h3>{task.title}</h3>
           {task.clauses.length > 0 && <span className="core-muted core-tasks-clauses">{task.clauses.join(" · ")}</span>}
         </div>
@@ -214,7 +236,19 @@ function TaskCard({ task, project, act, busy, notice, dispatchFor, onDispatched,
         <p className="core-tasks-line"><span className="core-muted">Last check</span> {task.check.passed ? "passed" : "failed"}{task.check.commit ? ` at ${task.check.commit.slice(0, 12)}` : ""}</p>
       )}
       {task.merged && <p className="core-tasks-line"><span className="core-muted">Merged</span> {task.merged.commit?.slice(0, 12)}</p>}
-      <AdvancedOnly as="p">{task.worktree ? `${task.worktree.branch} · ${task.worktree.path} · port ${task.worktree.port}` : "No worktree"}</AdvancedOnly>
+      <WorkHeader
+        facts={[
+          ["Repository", repoRoot, true],
+          ["Branch", task.worktree?.branch],
+          ["Base", task.worktree ? base : null],
+          ["Worker", task.owner],
+          ["Model", task.dispatch?.model],
+          ["Started", task.dispatch?.issuedAt?.replace("T", " ").slice(0, 16)],
+          ["Worktree", task.worktree ? `${task.worktree.path} · port ${task.worktree.port}` : null, true],
+          ["Contract", task.test ? (task.approval ? "Test approved" : "Test proposed") : "No test yet"],
+          ["File scope", task.claims?.length ? `${task.claims.length} claimed` : null],
+        ]}
+      />
 
       {task.waitingFor && task.stage !== "done" && <p className="core-tasks-warn">{task.waitingFor.message}</p>}
       {task.claims?.length > 0 && <p className="core-tasks-line"><span className="core-muted">File claims</span> {task.claims.join(", ")}{task.staleClaims ? ` (${task.staleClaims}, so these can be released)` : ""}</p>}
@@ -298,11 +332,107 @@ function TaskCard({ task, project, act, busy, notice, dispatchFor, onDispatched,
   );
 }
 
+
+const BATCH_ICON = { merged: "Merged", approved: "Approved", skipped: "Skipped", failed: "Failed" };
+
+/** Worker limit, Start all, and where every task is in the line. All counts come from the host's ledger view. */
+function QueuePanel({ data, post, busy, onStarted, onNotice }) {
+  const { queue, settings } = data;
+  const [model, setModel] = useState(DEFAULT_WORKER_MODEL);
+  const [batch, setBatch] = useState(null);
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState(null);
+  const start = queue.notStarted.filter((t) => t.why === "Can start now.");
+  const run = async (key, fn) => {
+    setError(null);
+    setResult(null);
+    onNotice(key);
+    try { await fn(); } catch (e) { setError(e); } finally { onNotice(null); }
+  };
+  const save = (body) => run("settings", () => post("/tasks/settings", body));
+  const startAll = () => run("start-all", async () => {
+    const r = await post("/tasks/start-all", model.trim() ? { model: model.trim() } : {});
+    onStarted(r.started);
+    setResult({ started: r.started.length, refused: r.refused });
+  });
+  // Read every waiting diff, then offer the clean ones together. A diff with a flagged file is never in the batch.
+  const load = () => run("batch-load", async () => {
+    const ids = [...queue.waitingForYou, ...queue.readyToMerge];
+    const diffs = await Promise.all(queue.waitingForYou.map((id) => coreGet(`/tasks/${id}/diff`, data.project)));
+    const byId = Object.fromEntries(diffs.map((d) => [d.task.replace(/\.a\d+$/, ""), d]));
+    const tasks = Object.fromEntries(data.tasks.map((t) => [t.id, t]));
+    setBatch({
+      clean: ids.filter((id) => tasks[id].stage === "ready-to-merge" || !byId[id]?.sensitive.length).map((id) => ({ id, title: tasks[id].title, commit: byId[id]?.commit ?? tasks[id].diffApproval.commit, files: byId[id]?.files, ready: tasks[id].stage === "ready-to-merge" })),
+      flagged: ids.filter((id) => tasks[id].stage === "review-diff" && byId[id]?.sensitive.length).map((id) => ({ id, title: tasks[id].title, files: byId[id].sensitive })),
+    });
+  });
+  const merge = () => run("batch", async () => {
+    const r = await post("/tasks/batch", { items: batch.clean.map(({ id, commit }) => ({ id, commit })) });
+    setResult({ batch: r.results });
+    setBatch(null);
+  });
+  const waiting = queue.waitingForYou.length + queue.readyToMerge.length;
+  return (
+    <section className="core-card core-tasks-queue" aria-label="Worker queue">
+      <header>
+        <h3>Queue</h3>
+        <span className="core-muted">{queue.running.length} of {queue.limit} workers running · {queue.notStarted.length} not started · {queue.waitingForYou.length} diffs to read · {queue.readyToMerge.length} ready to merge · {queue.done} done</span>
+      </header>
+      <div className="core-tasks-actions">
+        <label>Workers at once
+          <select value={queue.limit} onChange={(e) => save({ limit: Number(e.target.value) })} disabled={Boolean(busy)}>
+            {[1, 2, 3, 4, 5, 6, 7, 8].map((n) => <option key={n} value={n}>{n}</option>)}
+          </select>
+        </label>
+        <label>Worker model<input value={model} onChange={(e) => setModel(e.target.value)} autoComplete="off" /></label>
+        <button type="button" className="core-button primary" onClick={startAll} disabled={Boolean(busy) || !start.length} title={start.length ? undefined : "No task can start right now"}>
+          {busy === "start-all" ? <SpinnerGapIcon aria-hidden="true" /> : <PlayIcon aria-hidden="true" />} Start all ({Math.min(start.length, Math.max(0, queue.limit - queue.running.length))})
+        </button>
+        <label className="core-tasks-switch"><span>
+          <input type="checkbox" checked={settings.autoMerge} onChange={(e) => save({ autoMerge: e.target.checked })} disabled={Boolean(busy)} /> Merge right after I approve a diff with no flagged files
+        </span></label>
+      </div>
+      {queue.notStarted.length > 0 && (
+        <ul className="core-tasks-queue-list" aria-label="Tasks not started">
+          {queue.notStarted.map((t) => <li key={t.id}><code>{t.id}</code> {t.why}</li>)}
+        </ul>
+      )}
+      {waiting > 1 && !batch && (
+        <button type="button" className="core-button" onClick={load} disabled={Boolean(busy)}>Review {waiting} finished tasks together</button>
+      )}
+      {batch && (
+        <div className="core-tasks-batch" role="region" aria-label="Approve together">
+          {batch.clean.length > 0 && <>
+            <strong>{batch.clean.length} with no flagged files</strong>
+            <ul>{batch.clean.map((t) => <li key={t.id}><code>{t.id}</code> {t.title} <span className="core-muted">{t.ready ? "already approved, ready to merge" : (t.files ?? []).join(", ")}</span></li>)}</ul>
+            <button type="button" className="core-button primary" onClick={merge} disabled={Boolean(busy)}>
+              {busy === "batch" ? <SpinnerGapIcon aria-hidden="true" /> : <GitMergeIcon aria-hidden="true" />} Approve and merge these {batch.clean.length}
+            </button>
+          </>}
+          {batch.flagged.length > 0 && <>
+            <strong>{batch.flagged.length} to read yourself</strong>
+            <ul>{batch.flagged.map((t) => <li key={t.id}><code>{t.id}</code> {t.title} <span className="core-muted">flagged: {t.files.join(", ")}</span></li>)}</ul>
+          </>}
+          <button type="button" className="core-button" onClick={() => setBatch(null)}>Close</button>
+        </div>
+      )}
+      {result?.started !== undefined && <p className="core-tasks-notice good" role="status">Started {result.started} worker{result.started === 1 ? "" : "s"}; the commands are on each card.{result.refused.map((r) => ` ${r.id}: ${r.message}`).join("")}</p>}
+      {result?.batch && (
+        <ul className="core-tasks-notice" role="status" aria-label="Batch result">
+          {result.batch.map((r) => <li key={r.id}><strong>{r.id} {BATCH_ICON[r.outcome]}.</strong> {withTail(r.message)}</li>)}
+        </ul>
+      )}
+      {error && <p className="core-tasks-warn" role="alert">{error.message}</p>}
+    </section>
+  );
+}
+
 const NOTICE = {
   dispatch: () => null,
+  "merge-group": (r) => ({ tone: r.merged?.length ? "good" : "warn", text: r.message ?? `Merged ${r.merged.map((m) => `${m.task} (${m.repo})`).join(" and ")}.` }),
   test: () => ({ tone: "good", text: "Test saved. Approve it to run it on today's code." }),
   "approve-test": (r) => {
-    if (!r.failsFirst) return { tone: "bad", text: `Approved, but ${r.reason ?? "the test did not fail on today's code"}${r.output ? ` Output: ${r.output.slice(-300)}` : ""}` };
+    if (!r.failsFirst) return { tone: "bad", text: `Approved, but ${r.reason ?? "the test did not fail on today's code"}${r.output ? `\n\n${tail(r.output)}` : ""}` };
     if (!r.jev) return { tone: "good", text: "Approved. The test fails on today's code, as it should, so the worker can claim the task now." };
     if (r.jev.state === "approved") return { tone: "good", text: "Approved. The test fails on today's code, as it should, and Jev found no gaps, so the worker can claim the task now." };
     const reasons = r.jev.reasons?.length ? ` ${r.jev.reasons.join(" ")}` : "";
@@ -310,8 +440,10 @@ const NOTICE = {
   },
   check: (r) => (r.passed
     ? { tone: "good", text: `The approved test passes in the worktree at ${String(r.commit ?? "").slice(0, 12)}. Review the diff next.` }
-    : { tone: "bad", text: `${r.reason ?? "The test failed."}${r.output ? ` Output: ${r.output.slice(-300)}` : ""}` }),
+    : { tone: "bad", text: withTail(r.reason ?? "The test failed.", r.output) }),
   "approve-diff": (r) => {
+    if (r.merged) return { tone: "good", text: `Approved and merged into ${r.into} at ${String(r.commit ?? "").slice(0, 12)} (auto-merge is on). The test passed on the merge and the task is done.` };
+    if (r.autoMergeStopped) return { tone: "bad", text: `Approved, but auto-merge stopped: ${r.autoMergeStopped}` };
     if (r.approved === false && r.reopenedAs) return { tone: "warn", text: `Jev sent the change back, so it was not approved. ${(r.jev?.reasons ?? []).join(" ")} Reopened as ${r.reopenedAs}; the worker's files are kept. Start a worker on it when you are ready.` };
     return { tone: "good", text: `${r.jev?.state === "approved" ? "Jev read the change and found no problems, and you approved it. " : "Diff approved. "}Merging reruns the test on the merged code first.` };
   },
@@ -346,6 +478,10 @@ export default function TasksScreen() {
   };
 
   const saveRepo = async (root) => resource.post("/tasks/repo", { root });
+  const addRepo = async (name, root) => resource.post("/repos", { name, root });
+  const removeRepo = (name) => act("repo", "repo", "/repos/remove", { name });
+  const mergeGroup = (group) => act(`group:${group.group}`, "merge-group", `/tasks/groups/${group.group}/merge`, { commits: Object.fromEntries(group.tasks.map((id) => [id, data.tasks.find((t) => t.id === id)?.diffApproval?.commit])) });
+  const manyRepos = (data?.repos?.length ?? 0) > 1;
 
   return (
     <CoreScreen
@@ -356,15 +492,22 @@ export default function TasksScreen() {
       empty={<><strong>No tasks yet.</strong>Approve the plan in Deep planning, or add your own task there, and the tasks appear here.</>}
     >
       {data && !data.repo?.ok && <RepoPicker repo={data.repo} onSave={saveRepo} />}
-      {data?.repo?.ok && (
+      {data?.repo?.ok && data.queue && data.tasks.length > 0 && <QueuePanel data={{ ...data, project: resource.project }} post={resource.post} busy={busy} onNotice={setBusy} onStarted={(list) => setDispatches((all) => ({ ...all, ...Object.fromEntries(list.map((d) => [d.task, d])) }))} />}
+      {data?.repo?.ok && !manyRepos && (
         <p className="core-muted core-tasks-repo-line">Workers branch from <code>{data.repo.root}</code></p>
       )}
+      {data?.repo?.ok && data.repos && <RepoBar repos={data.repos} onAdd={addRepo} onRemove={removeRepo} />}
+      {notices.repo && <p className={`core-tasks-notice ${notices.repo.tone}`}>{notices.repo.text}</p>}
+      {data?.groups?.map((group) => <GroupBar key={group.group} group={group} tasks={data.tasks} busy={busy === `group:${group.group}`} notice={notices[`group:${group.group}`]} onMerge={mergeGroup} />)}
+      {data && data.tasks.length > 0 && <CostPanel />}
       {data && data.tasks.length > 0 && (
         <div className="core-tasks-list">
           {data.tasks.map((task) => (
             <TaskCard
               key={task.id}
               task={task}
+              showRepo={manyRepos}
+              repoRoot={(data.repos?.find((r) => r.name === (task.repo ?? "main")) ?? data.repo)?.root}
               project={resource.project}
               act={act}
               busy={busy}

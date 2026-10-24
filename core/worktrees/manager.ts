@@ -1,4 +1,4 @@
-import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -101,6 +101,9 @@ export function preCommitHook(env: NodeJS.ProcessEnv = process.env): string {
 
 export class WorktreeError extends Error {}
 
+/** Dev-server ports handed out in this process, by repo. Two projects open at once must not share one while neither server is listening yet. */
+const PORT_LEASES = new Map<number, string>();
+
 /**
  * One git worktree per task (spec 5.3 and 5.6). Each gets branch pp/T-n, a folder under
  * .perfect-planner/worktrees, a free dev-server port, local settings with placeholder
@@ -165,6 +168,7 @@ export class WorktreeManager {
     const baseSha = await git(this.repoRoot, ["rev-parse", "--verify", `${base}^{commit}`]).catch(() => {
       throw new WorktreeError(`Base "${base}" is not a commit in this repo.`);
     });
+    await this.discardUnfinishedAdd(worktreePath, branch, baseSha);
     if ((await runGit(this.repoRoot, ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`])).code === 0) {
       throw new WorktreeError(`Branch ${branch} already exists. Use the next attempt id instead of reusing it.`);
     }
@@ -175,7 +179,15 @@ export class WorktreeManager {
     await this.excludeWorktreeDir();
     mkdirSync(this.worktreeRoot, { recursive: true });
     // git itself refuses a branch already checked out in another worktree; -b also refuses an existing branch.
-    await git(this.repoRoot, ["worktree", "add", "-b", branch, worktreePath, baseSha]);
+    try {
+      await git(this.repoRoot, ["worktree", "add", "-b", branch, worktreePath, baseSha]);
+    } catch (error) {
+      // A failed add (a refused setting, a full disk) can leave the branch, git's half-made worktree and the folder.
+      await this.discardUnfinishedAdd(worktreePath, branch, baseSha, true);
+      throw error;
+    }
+    // A finished add is never locked; a "initializing" lock here is a killed earlier add's, written after our clean-up.
+    await runGit(this.repoRoot, ["worktree", "unlock", worktreePath]);
     try {
       const realPath = realDir(worktreePath);
       if (!isWithin(realDir(this.worktreeRoot), realPath)) throw new WorktreeError("Worktree folder was redirected outside .perfect-planner/worktrees.");
@@ -203,6 +215,32 @@ export class WorktreeManager {
       await runGit(this.repoRoot, ["branch", "-D", branch]);
       throw error;
     }
+  }
+
+  /**
+   * Clear what a `git worktree add` that never finished leaves behind: git's own entry (locked "initializing" while it
+   * checks files out), its index.lock, the half-filled folder and the branch it created. The caller has checked that
+   * no registry entry lists the task, and only a branch with no commit of its own is deleted, so no work can be lost.
+   * `force` is for an add this process just saw fail.
+   */
+  private async discardUnfinishedAdd(worktreePath: string, branch: string, baseSha: string, force = false): Promise<void> {
+    const listed = await runGit(this.repoRoot, ["worktree", "list", "--porcelain"]);
+    const unfinished = listed.stdout.split(/\r?\n\r?\n/).some((block) => {
+      const own = block.split(/\r?\n/).find((line) => line.startsWith("worktree "));
+      return own !== undefined && samePath(own.slice("worktree ".length), worktreePath);
+    });
+    if (!force && !unfinished) return;
+    // A link planted where the folder goes is not git's leftover: leave it for the "already exists" refusal.
+    if (lstatSync(worktreePath, { throwIfNoEntry: false })?.isSymbolicLink()) return;
+    if ((await runGit(this.repoRoot, ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`])).code === 0) {
+      const own = await runGit(this.repoRoot, ["rev-list", "--count", `${baseSha}..${branch}`]);
+      if (own.code !== 0 || own.stdout.trim() !== "0") return; // the branch holds work: leave everything as it is
+    }
+    await runGit(this.repoRoot, ["worktree", "unlock", worktreePath]);
+    await runGit(this.repoRoot, ["worktree", "remove", "--force", worktreePath]);
+    if (isWithin(this.worktreeRoot, worktreePath)) rmSync(worktreePath, { recursive: true, force: true });
+    await runGit(this.repoRoot, ["worktree", "prune"]);
+    await runGit(this.repoRoot, ["branch", "-D", branch]);
   }
 
   /** Add file claims to a running task. Returns the conflicts and records nothing if there are any. */
@@ -446,10 +484,12 @@ export class WorktreeManager {
     if (!existsSync(file)) return { schemaVersion: 1, worktrees: [] };
     const parsed = JSON.parse(readFileSync(file, "utf8")) as Registry;
     if (parsed.schemaVersion !== 1 || !Array.isArray(parsed.worktrees)) throw new WorktreeError(`${file} is not a worktree registry this version understands.`);
+    this.syncLeases(parsed);
     return parsed;
   }
 
   private async writeRegistry(registry: Registry): Promise<void> {
+    this.syncLeases(registry);
     const file = await this.registryFile();
     mkdirSync(path.dirname(file), { recursive: true });
     const temp = `${file}.${process.pid}.tmp`;
@@ -474,10 +514,21 @@ export class WorktreeManager {
     await ensureRequiredIgnores(this.repoRoot, custom);
   }
 
+  /** Keeps this repo's leases equal to the ports its registry holds; a lease with no worktree behind it is dropped. */
+  private syncLeases(registry: Registry): void {
+    const held = new Set(registry.worktrees.map((info) => info.port));
+    for (const [port, holder] of PORT_LEASES) if (holder === this.repoRoot && !held.has(port)) PORT_LEASES.delete(port);
+    for (const port of held) PORT_LEASES.set(port, this.repoRoot);
+  }
+
   private async freePort(taken: WorktreeInfo[]): Promise<number> {
     const used = new Set(taken.map((info) => info.port));
     for (let port = this.portRange[0]; port <= this.portRange[1]; port += 1) {
-      if (!used.has(port) && (await portIsFree(port))) return port;
+      const holder = PORT_LEASES.get(port);
+      if (!used.has(port) && (!holder || holder === this.repoRoot) && (await portIsFree(port))) {
+        PORT_LEASES.set(port, this.repoRoot);
+        return port;
+      }
     }
     throw new WorktreeError(`No free dev-server port between ${this.portRange[0]} and ${this.portRange[1]}.`);
   }

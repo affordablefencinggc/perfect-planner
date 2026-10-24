@@ -4,3 +4,4 @@ export { TOOL_INFO, TOOL_INPUTS, TOOL_NAMES, PROOF_KINDS, type ToolName, type To
 export { foldBoard, attemptLabel, isTaskId, unmetDependencies, waitingMessage, type TaskStatus, type TaskView, type UnmetDependency } from "./board";
 export { createAgentMcpServer, type RemoteCall } from "./server";
 export { bridgeCall, directCall, startBridge, type Bridge } from "./bridge";
+export { route, type NeedleChoice, type NeedleInput, type NeedleRole } from "./needle";

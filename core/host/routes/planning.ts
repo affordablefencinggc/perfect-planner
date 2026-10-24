@@ -43,6 +43,9 @@ import {
 import type { CoreProject } from "../project";
 import { fingerprintOf, requireFingerprint } from "../fingerprint";
 import { HttpError, type Router } from "../router";
+import { knownRepoNames } from "../repoNames";
+import { groupKey, splitByRepo } from "../../repos/index";
+import { randomUUID } from "node:crypto";
 import { localPerson, localPersonId } from "./people";
 
 const STATE_KEY = "planning";
@@ -496,10 +499,23 @@ export function registerPlanningRoutes(router: Router): void {
     if (b.phase !== undefined && b.phase !== null && b.phase !== "" && !isPhase(b.phase)) {
       throw new HttpError(400, "INVALID", "phase must be one of foundation, core, integrations, hardening or release.");
     }
+    // Repos it touches: several make one task per repo, linked as a group (core/repos).
+    let repos: string[] = [];
+    if (b.repos !== undefined && b.repos !== null) {
+      if (!Array.isArray(b.repos) || b.repos.length > 12 || b.repos.some((r) => typeof r !== "string")) throw new HttpError(400, "INVALID", "repos must be a list of repo names.");
+      repos = [...new Set((b.repos as string[]).map((r) => r.trim()).filter(Boolean))];
+      const known = knownRepoNames(project);
+      const unknown = repos.filter((r) => !known.includes(r));
+      if (unknown.length) throw new HttpError(400, "UNKNOWN_REPO", `This project has no repo named ${unknown.map((r) => `"${r.slice(0, 40)}"`).join(", ")}. Its repos: ${known.join(", ")}.`);
+    }
     const state = planning(project);
     try {
-      const added = state.session.addTask(actorFor(project), { title, ...(doneWhen ? { doneWhen } : {}), refs, ...(isPhase(b.phase) ? { phase: b.phase } : {}) });
-      return { ...added, overview: overview(project) };
+      const phase = isPhase(b.phase) ? { phase: b.phase } : {};
+      const group = groupKey(`own-${randomUUID()}`);
+      const parts = splitByRepo(group, title, repos).map((part) =>
+        state.session.addTask(actorFor(project), { title: part.title, ...(doneWhen ? { doneWhen } : {}), refs, ...phase, ...(part.repo ? { repo: part.repo } : {}), ...(part.group ? { group: part.group } : {}) }),
+      );
+      return { ...parts[0]!, ...(parts.length > 1 ? { tasks: parts.map((p) => p.task) } : {}), overview: overview(project) };
     } catch (error) {
       refuse(error);
     }

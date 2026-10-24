@@ -533,6 +533,13 @@ function reviewCard(e: LedgerEntry, roster: Roster): DecisionCard {
   };
 }
 
+/** How many questions are waiting for the person (the Waiting count on Decisions), without building the whole view. */
+export function waitingQuestions(project: CoreProject): number {
+  let count = 0;
+  for (const q of askedQuestions(project.entries()).values()) if (!q.answered) count++;
+  return count;
+}
+
 export async function buildDecisionsView(project: CoreProject, now = new Date()): Promise<DecisionsView> {
   const entries = project.entries();
   const roster = rosterOf(project);
