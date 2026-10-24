@@ -22,6 +22,7 @@ import { AGENT_SERVER_NAME, agentEntryPath, connectLine, nodeBinary, quoteFor, t
 
 export { quoteFor };
 import { localPerson, localPersonId } from "./people";
+import { annotate, checkReadiness, prepareForDispatch, quietLabels, registerWorktreeCareRoutes, tidy, withHygieneLock } from "./worktreeCare";
 import { PRIMARY_REPO, readRepos } from "../../repos/index";
 import { sandboxStatus } from "../../exec/index";
 import { replayRoster } from "../../people/index";
@@ -110,7 +111,8 @@ export async function repoState(project: CoreProject, name: string | null = null
       chosen = undefined;
     }
   }
-  const candidate = typeof chosen === "string" && chosen ? chosen : project.root;
+  // The app's own data folder is never a project's repo, and never offered as one (it would send workers there).
+  const candidate = typeof chosen === "string" && chosen ? chosen : project.appData ? "" : project.root;
   const top = await gitTop(candidate);
   // git found the repo by walking up from the folder: a whole drive or the home folder (a dotfiles repo)
   // is never the project's repo, so it is neither used nor protected.
@@ -123,7 +125,7 @@ export async function repoState(project: CoreProject, name: string | null = null
   // The host's own folder for this project (<app data>/projects/<key>) is never a suggestion: the person's
   // imported folder is offered by the screen instead.
   const ownData = path.basename(path.dirname(project.root)) === "projects";
-  const suggested = extra || ownData || repoRefusal(project.root) ? undefined : project.root;
+  const suggested = extra || ownData || project.appData || repoRefusal(project.root) ? undefined : project.root;
   if (refusal) return { name: repoName, ok: false, reason: refusal, suggested };
   return {
     name: repoName,
@@ -208,11 +210,13 @@ function dispatches(project: CoreProject): Map<string, Dispatch> {
 
 /** The worktrees the git watcher should read, or the plain reason it cannot see any. Errors are not swallowed: an unreadable list is not an empty one. */
 export async function worktreesForWatcher(project: CoreProject): Promise<{ repo: RepoState; list: WorktreeInfo[] }> {
-  const { repos, worktrees } = await allRepos(project);
+  const { repos, worktrees } = await allRepos(project, { tidyFolders: false });
   const repo = repos[0]!;
-  // A done task's folder is about to be removed (or waits for its clean-up): a git process of ours inside it would keep Windows from removing it.
+  // A done task's folder is about to be removed (or waits for its clean-up), and a clean-up may be removing others right now:
+  // a git process of ours inside one would keep Windows from removing it.
   const board = project.service.board();
-  return { repo, list: worktrees.filter((tree) => board.get(tree.taskId.replace(/\.a\d+$/, ""))?.status !== "done") };
+  const quiet = quietLabels(project);
+  return { repo, list: worktrees.filter((tree) => !quiet.has(tree.taskId) && board.get(tree.taskId.replace(/\.a\d+$/, ""))?.status !== "done") };
 }
 
 /**
@@ -307,7 +311,9 @@ function personSummary(actor: Actor | undefined) {
   return actor ? { kind: actor.kind, id: actor.id, ...(actor.model ? { model: actor.model } : {}) } : undefined;
 }
 
-function viewTask(project: CoreProject, task: TaskView, worktrees: WorktreeInfo[], board: ReadonlyMap<string, TaskView>, assignments: ReadonlyMap<string, string>) {
+type FolderInfo = WorktreeInfo & { state?: string; note?: string };
+
+function viewTask(project: CoreProject, task: TaskView, worktrees: FolderInfo[], board: ReadonlyMap<string, TaskView>, assignments: ReadonlyMap<string, string>) {
   const label = attemptLabel(task);
   const gate = deriveState(project.entries(), label);
   const tree = worktrees.find((w) => w.taskId === label);
@@ -346,7 +352,7 @@ function viewTask(project: CoreProject, task: TaskView, worktrees: WorktreeInfo[
     check: gate.worktree ? { passed: gate.worktree.passed, commit: gate.worktree.commit, entry: gate.worktree.n } : null,
     diffApproval: gate.diffApproval ? { commit: gate.diffApproval.commit, by: personSummary(gate.diffApproval.reviewer), entry: gate.diffApproval.n } : null,
     merged: gate.merged ?? null,
-    worktree: tree ? { path: tree.path, branch: tree.branch, base: tree.baseRef, port: tree.port } : null,
+    worktree: tree ? { path: tree.path, branch: tree.branch, base: tree.baseRef, port: tree.port, state: tree.state ?? "ok", ...(tree.note ? { note: tree.note } : {}) } : null,
     dispatch: dispatch ? { issuedAt: dispatch.issuedAt, ...(dispatch.model ? { model: dispatch.model } : {}) } : null,
     // Why this task cannot start yet (dispatch refuses it for the same reason), in plain words; null when nothing blocks it.
     waitingFor: unmet.length ? { tasks: unmet.map((d) => d.id), message: waitingMessage(label, unmet) } : null,
@@ -357,18 +363,22 @@ function viewTask(project: CoreProject, task: TaskView, worktrees: WorktreeInfo[
   };
 }
 
-async function listWorktrees(project: CoreProject, repo: RepoState): Promise<WorktreeInfo[]> {
+async function listWorktrees(project: CoreProject, repo: RepoState, { tidyFolders = true } = {}): Promise<FolderInfo[]> {
   if (!repo.ok || !repo.root) return [];
-  const list = await (await manager(project, repo.root, repo.name)).list().catch(() => []);
+  const worktrees = await manager(project, repo.root, repo.name);
+  // On the first look after the app starts (and when a task finishes) stale records and safe leftovers are tidied; see worktreeCare.
+  // The git watcher's look does not tidy: a clean-up waits for the watcher's pass, so the pass must never wait for the clean-up.
+  if (tidyFolders) await tidy(project, worktrees, dispatches(project));
+  const list = await annotate(worktrees, await worktrees.list().catch(() => []));
   // Only other repos are tagged: the first repo's worktrees look exactly as they always did.
   return repo.name === PRIMARY_REPO ? list : list.map((info) => ({ ...info, repo: repo.name }));
 }
 
 /** Every repo of the project (the first one, then the extra ones) with the worktrees in each. A repo that cannot be read has its reason and no worktrees. */
-async function allRepos(project: CoreProject): Promise<{ repos: RepoState[]; worktrees: WorktreeInfo[] }> {
+async function allRepos(project: CoreProject, options: { tidyFolders?: boolean } = {}): Promise<{ repos: RepoState[]; worktrees: WorktreeInfo[] }> {
   const names = [PRIMARY_REPO, ...readRepos(project.root).repos.map((repo) => repo.name)];
   const repos = await Promise.all(names.map((name) => repoState(project, name)));
-  const lists = await Promise.all(repos.map((repo) => listWorktrees(project, repo)));
+  const lists = await Promise.all(repos.map((repo) => listWorktrees(project, repo, options)));
   return { repos, worktrees: lists.flat() };
 }
 
@@ -387,6 +397,8 @@ export async function overview(project: CoreProject) {
   const board = project.service.board();
   const assignments = replayRoster(project.entries(), project.ledger.owner).assignments;
   const tasks = [...board.values()].map((task) => viewTask(project, task, worktrees, board, assignments));
+  // What is missing before "Check the work" can run, in plain words (only while a task is being built).
+  await Promise.all(tasks.filter((task) => task.stage === "building" && task.worktree).map(async (task) => Object.assign(task, { checkReady: await checkReadiness({ proofs: task.proofs, worktree: task.worktree! }) })));
   const settings = taskSettings(project);
   return { repo: repos[0]!, containment: await containmentView(), settings, queue: queueOf(tasks, settings.limit), repos: repos.map((repo) => ({ ...repo, worktrees: worktrees.filter((w) => (w.repo ?? PRIMARY_REPO) === repo.name).length })), tasks, groups: taskGroups(tasks) };
 }
@@ -442,6 +454,7 @@ async function worktreeFor(project: CoreProject, label: string): Promise<Worktre
   const root = await requireRepo(project, name);
   const tree = await (await manager(project, root, name)).get(label);
   if (!tree) throw new HttpError(409, "NO_WORKTREE", `${label} has no worktree yet. Start a worker on it first.`);
+  if (!fs.existsSync(tree.path)) throw new HttpError(409, "WORKTREE_MISSING", `The folder for ${label} was deleted outside Perfect Planner. Its work is safe on the branch ${tree.branch}; press "Recreate the folder" on this task first.`);
   return tree;
 }
 
@@ -525,6 +538,7 @@ async function dispatch(project: CoreProject, host: CoreHost, id: string, body: 
   if (model !== undefined && !MODEL.test(model)) throw new HttpError(400, "INVALID", "Name the worker's model in letters, digits and . _ : / - (for example claude-sonnet-4).");
   const label = attemptLabel(task);
   const worktrees = await manager(project, root, repoName);
+  await prepareForDispatch(worktrees, label);
   let tree = await worktrees.get(label);
   if (!tree) {
     try {
@@ -751,7 +765,7 @@ export function registerTaskRoutes(router: Router): void {
   });
 
   /** POST /tasks/:id/dispatch { model? }: worktree, worker token for this task, brief and command. */
-  router.post("/tasks/:id/dispatch", ({ project, host, params, body }) => dispatch(project, host, params.id!, bodyOf(body)));
+  router.post("/tasks/:id/dispatch", ({ project, host, params, body }) => withHygieneLock(project, () => dispatch(project, host, params.id!, bodyOf(body))));
 
   /** POST /tasks/:id/test { command, files }: the person writes the done-when test themselves. */
   router.post("/tasks/:id/test", ({ project, params, body }) => {
@@ -1079,4 +1093,6 @@ export function registerTaskRoutes(router: Router): void {
     }
     return { results, ...(await overview(project)) };
   });
+
+  registerWorktreeCareRoutes(router, { requireRepo, manager, repoNames: (project) => [null, ...readRepos(project.root).repos.map((repo) => repo.name)], repoOf: repoOfLabel, dispatched: dispatches, findTask, overview });
 }

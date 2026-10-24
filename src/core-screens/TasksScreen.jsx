@@ -1,10 +1,10 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { CheckCircleIcon, CopyIcon, GitMergeIcon, PlayIcon, SpinnerGapIcon, WarningCircleIcon } from "@phosphor-icons/react";
-import { copyText } from "../project/connectAgentSetup.js";
 import { describeLaunchFolder } from "../browser/launchFolder.js";
+import { copyText } from "../project/connectAgentSetup.js";
 import { WorkHeader } from "./WorkHeader.jsx";
-import { CoreScreen } from "./CoreScreen.jsx";
-import { coreGet, useCoreResource } from "./coreApi.js";
+import { AdvancedOnly, CoreScreen, useAdvanced } from "./CoreScreen.jsx";
+import { coreGet, corePost, useCoreResource } from "./coreApi.js";
 import { CostPanel, GroupBar, RepoBar } from "./TasksRepos.jsx";
 import "./TasksScreen.css";
 
@@ -107,6 +107,13 @@ function RepoPicker({ repo, onSave }) {
     return () => { live = false; };
   }, [repo.suggested]);
   const [busy, setBusy] = useState(false);
+  // Offer the folder this window was opened for (never the app's own data folder), unless one is typed already.
+  useEffect(() => {
+    if (repo.suggested) return undefined;
+    let live = true;
+    describeLaunchFolder().then((found) => { if (live && found?.path) setRoot((now) => now || found.path); });
+    return () => { live = false; };
+  }, [repo.suggested]);
   const save = async (event) => {
     event.preventDefault();
     setBusy(true);
@@ -175,6 +182,41 @@ function DiffView({ diff }) {
   );
 }
 
+const sizeOf = (bytes, approx) => `${approx ? "over " : ""}${bytes >= 1e6 ? `${(bytes / 1e6).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1e3))} KB`}`;
+
+/** Advanced view: task folders nobody is working in, with owner, size and why each is kept. The person chooses. */
+function KeptFolders({ project, version, onChange }) {
+  const [list, setList] = useState(null);
+  const [said, setSaid] = useState("");
+  const load = useCallback(() => coreGet("/worktrees", project).then(setList, (e) => setSaid(e.message)), [project]);
+  useEffect(() => { load(); }, [load, version]);
+  const call = async (path, done) => {
+    setSaid("");
+    try { setSaid(done(await corePost(path, project, {}))); } catch (e) { setSaid(e.message); }
+    load();
+    onChange();
+  };
+  if (!list) return said ? <p className="core-tasks-warn" role="alert">{said}</p> : null;
+  return (
+    <section className="core-card core-tasks-folders" aria-label="Folders nobody is working in">
+      <h3>Folders nobody is working in</h3>
+      <p className="core-muted">Perfect Planner removes a task's folder by itself only when the task is finished and nothing in the folder can be lost. The rest are kept and listed here. Removing a folder keeps the work on its branch.</p>
+      {list.folders.length === 0 && <p className="core-muted">None. Every task folder belongs to a task still being worked on.</p>}
+      <ul>
+        {list.folders.map((f) => (
+          <li key={f.task}>
+            <strong>{f.task}</strong> <span className="core-muted">{f.branch} · Owner: {f.owner ?? "unknown"} · {sizeOf(f.sizeBytes, f.sizeApproximate)}</span>
+            <ul>{f.why.map((why) => <li key={why}>{why}</li>)}</ul>
+            {f.removable && <button type="button" className="core-button" onClick={() => call(`/worktrees/${encodeURIComponent(f.task)}/remove`, () => `Removed the folder for ${f.task}. Its work stays on ${f.branch}.`)}>Remove folder for {f.task}</button>}
+          </li>
+        ))}
+      </ul>
+      <button type="button" className="core-button" onClick={() => call("/worktrees/clean", (r) => (r.removed.length ? `Removed ${r.removed.length} ${r.removed.length === 1 ? "folder" : "folders"}: ${r.removed.map((x) => x.task).join(", ")}.` : "Nothing was safe to remove."))}>Clean up safe folders</button>
+      {said && <p className="core-tasks-line" role="status">{said}</p>}
+    </section>
+  );
+}
+
 function TaskCard({ contained, task, repoRoot, project, act, busy, notice, dispatchFor, onDispatched, onHideDispatch, showRepo }) {
   const [model, setModel] = useState(task.dispatch?.model ?? DEFAULT_WORKER_MODEL);
   const [diff, setDiff] = useState(null);
@@ -184,10 +226,15 @@ function TaskCard({ contained, task, repoRoot, project, act, busy, notice, dispa
   const [notes, setNotes] = useState("");
   const [releasing, setReleasing] = useState(false);
   const [releaseReason, setReleaseReason] = useState("");
+  const [doing, setDoing] = useState("");
   const stage = STAGE[task.stage] ?? { label: task.stage, tone: "" };
   const id = task.id;
   const working = busy === id;
-  const run = (step, path, body) => act(id, step, path, body);
+  const run = async (step, path, body) => { setDoing(step); try { return await act(id, step, path, body); } finally { setDoing(""); } };
+  // Why "Check the work" is greyed or slow, in plain words.
+  const checking = working && doing === "check";
+  const checkNote = checking ? "Running the approved test in the worker's folder. This can take a minute or more." : working ? "Another step on this task is still running." : task.checkReady?.note ?? "";
+  const folder = task.worktree && task.worktree.state && task.worktree.state !== "ok" ? task.worktree : null;
   const base = task.worktree?.base ?? "main";
 
   const showDiff = async () => {
@@ -254,10 +301,16 @@ function TaskCard({ contained, task, repoRoot, project, act, busy, notice, dispa
         ]}
       />
 
+      {folder && (
+        <p className="core-tasks-notice warn" role="status">
+          {folder.note}{" "}
+          {folder.state === "missing" && <button type="button" className="core-button" onClick={() => run("recreate", `/tasks/${id}/recreate-folder`)} disabled={working}>Recreate the folder</button>}
+        </p>
+      )}
       {task.waitingFor && task.stage !== "done" && <p className="core-tasks-warn">{task.waitingFor.message}</p>}
       {task.claims?.length > 0 && <p className="core-tasks-line"><span className="core-muted">File claims</span> {task.claims.join(", ")}{task.staleClaims ? ` (${task.staleClaims}, so these can be released)` : ""}</p>}
 
-      {notice && <p className={`core-tasks-notice ${notice.tone}`} role="status">{notice.text}</p>}
+      {notice && !(folder && notice.text.startsWith(folder.note)) && <p className={`core-tasks-notice ${notice.tone}`} role="status">{notice.text}</p>}
 
       {(task.stage === "test-proposed" || task.stage === "test-approved") && <Disclosure contained={contained} />}
       <div className="core-tasks-actions">
@@ -280,7 +333,9 @@ function TaskCard({ contained, task, repoRoot, project, act, busy, notice, dispa
           </button>
         )}
         {task.stage === "building" && (
-          <button type="button" className="core-button primary" onClick={() => run("check", `/tasks/${id}/check`)} disabled={working} title={working ? "Another step on this task is still running." : undefined}>Check the work</button>
+          <button type="button" className="core-button primary" onClick={() => run("check", `/tasks/${id}/check`)} disabled={working || task.checkReady?.ok === false} title={working ? "Another step on this task is still running." : undefined} aria-describedby={checkNote ? `${id}-check-why` : undefined}>
+            {checking ? <><SpinnerGapIcon aria-hidden="true" /> Checking…</> : "Check the work"}
+          </button>
         )}
         {(task.stage === "review-diff" || task.stage === "ready-to-merge") && (
           <>
@@ -309,6 +364,8 @@ function TaskCard({ contained, task, repoRoot, project, act, busy, notice, dispa
           <button type="button" className="core-button" onClick={() => run("release-claims", `/tasks/${id}/release-claims`)} disabled={working}>Release file claims</button>
         )}
       </div>
+
+      {task.stage === "building" && checkNote && <p id={`${id}-check-why`} className={task.checkReady?.ok === false && !working ? "core-tasks-warn" : "core-muted core-tasks-line"}>{checkNote}</p>}
 
       {canRelease && releasing && (
         <form className="core-tasks-sendback" aria-label={`Release ${task.label}`} onSubmit={async (e) => { e.preventDefault(); const ok = await run("release", `/tasks/${id}/release`, { owner: task.owner, ...(releaseReason.trim() ? { reason: releaseReason.trim() } : {}) }); if (ok) { setReleasing(false); setReleaseReason(""); } }}>
@@ -444,6 +501,7 @@ const NOTICE = {
     const reasons = r.jev.reasons?.length ? ` ${r.jev.reasons.join(" ")}` : "";
     return { tone: r.jev.state === "gaps" ? "bad" : "warn", text: `Approved, and the test fails on today's code, but the worker cannot start yet. ${r.jev.message}${reasons}${r.jev.canRetry ? " Press Ask Jev again to try again." : ""}` };
   },
+  recreate: (r) => ({ tone: "good", text: `Recreated the folder for ${r.recreated} from its branch ${r.branch}. The work saved on it is back.${r.ledgerNote ? ` ${r.ledgerNote}` : ""}` }),
   check: (r) => (r.passed
     ? { tone: "good", text: `The approved test passes in the worktree at ${String(r.commit ?? "").slice(0, 12)}. Review the diff next.` }
     : { tone: "bad", text: withTail(r.reason ?? "The test failed.", r.output) }),
@@ -484,6 +542,7 @@ export default function TasksScreen() {
   };
 
   const saveRepo = async (root) => resource.post("/tasks/repo", { root });
+  const advanced = useAdvanced();
   const addRepo = async (name, root) => resource.post("/repos", { name, root });
   const removeRepo = (name) => act("repo", "repo", "/repos/remove", { name });
   const mergeGroup = (group) => act(`group:${group.group}`, "merge-group", `/tasks/groups/${group.group}/merge`, { commits: Object.fromEntries(group.tasks.map((id) => [id, data.tasks.find((t) => t.id === id)?.diffApproval?.commit])) });
@@ -506,6 +565,7 @@ export default function TasksScreen() {
       {data?.repo?.ok && data.repos && <RepoBar repos={data.repos} onAdd={addRepo} onRemove={removeRepo} />}
       {notices.repo && <p className={`core-tasks-notice ${notices.repo.tone}`}>{notices.repo.text}</p>}
       {data?.groups?.map((group) => <GroupBar key={group.group} group={group} tasks={data.tasks} busy={busy === `group:${group.group}`} notice={notices[`group:${group.group}`]} onMerge={mergeGroup} />)}
+      {advanced && data?.repo?.ok && <KeptFolders project={resource.project} version={data.tasks.map((t) => `${t.id}${t.stage}${t.worktree?.state ?? ""}`).join()} onChange={resource.reload} />}
       {data && data.tasks.length > 0 && <CostPanel />}
       {data && data.tasks.length > 0 && (
         <div className="core-tasks-list">

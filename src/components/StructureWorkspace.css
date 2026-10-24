@@ -1445,7 +1445,7 @@
   font: 6px var(--mono);
 }
 .discovery-learning-lenses {
-  width: min(1500px, calc(100vw - 120px));
+  width: min(1500px, 100%);
   margin: 48px auto 0;
   padding: 16px;
   border: 1px solid #8d9692;
@@ -1484,6 +1484,7 @@
   gap: 12px;
 }
 .discovery-learning-lenses article {
+  min-width: 0;
   min-height: 94px;
   padding: 11px;
   display: grid;
@@ -1516,8 +1517,9 @@
 .discovery-learning-lenses .discovery-finding {
   margin: 0;
   display: grid;
-  grid-template-columns: 54px 1fr;
-  gap: 7px;
+  /* The label is as wide as its own text (QUESTION at the enforced 13px is wider than the old fixed 54px). */
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 8px;
   color: var(--muted);
   font: 7px/1.4 var(--mono);
 }
