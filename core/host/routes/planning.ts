@@ -57,6 +57,8 @@ import { knownRepoNames } from "../repoNames";
 import { groupKey, splitByRepo } from "../../repos/index";
 import { randomUUID } from "node:crypto";
 import { localPerson, localPersonId } from "./people";
+import { chosenRepository, isHomeOrDrive } from "../project";
+import { listRepoFiles } from "../../planning/repo";
 
 const STATE_KEY = "planning";
 const IDEA_FILE = "planning-idea.json";
@@ -94,12 +96,31 @@ function saveIdea(project: CoreProject, idea: string): void {
   }
 }
 
+const PLANNING_REPO_FILE = "planning-repo.json";
+
+/**
+ * The folder planning reads to learn what the project already is: the git folder the person chose for workers,
+ * else the folder they pointed planning at (POST /planning/repo), else the project folder when that is the
+ * person's own folder. The app's own data folder holds no code, so it is read last and finds nothing.
+ */
+export function planningRoot(project: CoreProject): string {
+  const git = chosenRepository(project.root);
+  if (git) return git;
+  try {
+    const pointed = (JSON.parse(fs.readFileSync(path.join(project.root, ".perfect-planner", PLANNING_REPO_FILE), "utf8")) as { root?: unknown }).root;
+    if (typeof pointed === "string" && path.isAbsolute(pointed) && fs.statSync(pointed).isDirectory() && !isHomeOrDrive(pointed)) return pointed;
+  } catch {
+    // none chosen
+  }
+  return project.root;
+}
+
 function planning(project: CoreProject): PlanningState {
   const person = localPersonId(project);
   let state = project.state.get(STATE_KEY) as PlanningState | undefined;
   if (!state || state.person !== person) {
     const idea = state?.idea ?? readIdea(project);
-    state = { session: new PlanningSession(project.ledger, { person }), person, idea, profile: idea ? profileRepo(idea, stackForIdea(readRepoStack(project.root), idea)) : null };
+    state = { session: new PlanningSession(project.ledger, { person }), person, idea, profile: idea ? profileRepo(idea, stackForIdea(readRepoStack(planningRoot(project)), idea)) : null };
     project.state.set(STATE_KEY, state);
   }
   return state;
@@ -431,12 +452,12 @@ function templateRequest(body: unknown): { id: TemplateId | null; depth?: Templa
 
 /** Records the person's pick, reading the folder as it is now. Nothing else is written. */
 function pickTemplate(project: CoreProject, state: PlanningState, request: NonNullable<ReturnType<typeof templateRequest>>, idea: string) {
-  const stack = stackForIdea(readRepoStack(project.root), idea);
+  const stack = stackForIdea(readRepoStack(planningRoot(project)), idea);
   try {
     return state.session.chooseTemplate(actorFor(project), {
       id: request.id,
       ...(request.depth ? { depth: request.depth } : {}),
-      ...(request.id ? { context: readRepoContext(project.root, stack, idea) } : {}),
+      ...(request.id ? { context: readRepoContext(planningRoot(project), stack, idea) } : {}),
     });
   } catch (error) {
     refuse(error);
@@ -455,7 +476,7 @@ export function registerPlanningRoutes(router: Router): void {
     const wanted = templateRequest(body);
     const state = planning(project);
     // What the repo already has (package.json, config files) and what the idea says both count; the idea wins.
-    const stack = stackForIdea(readRepoStack(project.root), idea);
+    const stack = stackForIdea(readRepoStack(planningRoot(project)), idea);
     const profile = profileRepo(idea, stack);
     const picked = wanted ? pickTemplate(project, state, wanted, idea) : undefined;
     let fromRepo: string[] = [];
@@ -476,6 +497,46 @@ export function registerPlanningRoutes(router: Router): void {
     state.profile = profile;
     saveIdea(project, idea);
     return { asked, described, fromRepo, signals: profile.signals, research: { live: false, note: RESEARCH_NOTE }, ...(picked ? { template: { changed: picked.changed, id: picked.choice.id ?? "blank" } } : {}), overview: overview(project) };
+  });
+
+  /**
+   * GET /planning/repo: what planning learned from the project's folder before any idea is typed: the stack it
+   * found, how many files, how it tests, and which starter fits. `known` is false when the folder holds no code
+   * (the app's own data folder), and the screen then asks the person to point at their repo.
+   */
+  router.get("/planning/repo", ({ project }) => {
+    const root = planningRoot(project);
+    const stack = readRepoStack(root);
+    const index = listRepoFiles(root);
+    const known = index.files.length > 0 && (stack.facts.length > 0 || index.files.length >= 3);
+    return {
+      known,
+      root: known ? root : null,
+      name: path.basename(root),
+      facts: stack.facts.map((f) => ({ id: f.id, text: f.text })),
+      fileCount: index.files.length,
+      truncated: index.truncated,
+      tests: index.tests?.suite ?? index.tests?.runners[0]?.script ?? null,
+      suggestedTemplate: known ? "add-feature" : null,
+    };
+  });
+
+  /** POST /planning/repo { path }: the person points planning at their repo folder (any folder with code; no git needed). Read-only. */
+  router.post("/planning/repo", ({ project, body }) => {
+    const raw = (body as { path?: unknown })?.path;
+    if (typeof raw !== "string" || !raw.trim() || !path.isAbsolute(raw.trim())) throw new HttpError(400, "INVALID", "Give the full path of your project's folder.");
+    let dir: string;
+    try {
+      dir = fs.realpathSync(raw.trim());
+      if (!fs.statSync(dir).isDirectory()) throw new Error("not a folder");
+    } catch {
+      throw new HttpError(422, "NOT_A_FOLDER", `${raw.trim()} is not a folder on this computer.`);
+    }
+    if (isHomeOrDrive(dir)) throw new HttpError(422, "NOT_A_PROJECT", `${dir} is a whole drive or your home folder. Choose your project's own folder.`);
+    if (listRepoFiles(dir, { maxFiles: 50 }).files.length === 0) throw new HttpError(422, "EMPTY_FOLDER", `${dir} has no files to read.`);
+    fs.mkdirSync(path.join(project.root, ".perfect-planner"), { recursive: true });
+    fs.writeFileSync(path.join(project.root, ".perfect-planner", PLANNING_REPO_FILE), JSON.stringify({ root: dir, at: new Date().toISOString() }, null, 2));
+    return { root: dir };
   });
 
   /** GET /planning/templates: the starter templates, the same for every project and repo, and which one is in use. */

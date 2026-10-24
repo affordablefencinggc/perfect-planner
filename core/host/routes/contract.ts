@@ -7,10 +7,11 @@
 import { checkContract, latestContractVerdict, patternProblem, recordContractVerdict, type ContractCheck } from "../../gate/index";
 import { isAuthoritative, type LedgerEntry } from "../../ledger/index";
 import type { TaskView } from "../../mcp/index";
+import { planningRoot } from "./planning";
 import { ContractError, baseTaskId, contractOf, listRepoFiles, widenContract, type ContractView, type RepoIndex } from "../../planning/index";
 import { WORKTREES_ACTOR, git, type WorktreeInfo, type WorktreeManager } from "../../worktrees/index";
 import type { CoreProject } from "../project";
-import { chosenRepoRoot, repoRefusal } from "../protectedRoots";
+import { repoRefusal } from "../protectedRoots";
 import { HttpError } from "../router";
 import { localPerson } from "./people";
 
@@ -22,7 +23,7 @@ const FULL_SHA = /^[0-9a-f]{40}$|^[0-9a-f]{64}$/;
 
 /** The folder planning reads the repo's file list from: the repo the person chose, else the project folder (never a drive or the home folder). */
 function scanRoot(project: CoreProject): string | undefined {
-  const root = chosenRepoRoot(project.root) ?? project.root;
+  const root = planningRoot(project);
   return repoRefusal(root) ? undefined : root;
 }
 

@@ -1,4 +1,4 @@
-import { useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import {
   CheckCircleIcon,
   FlagIcon,
@@ -74,6 +74,13 @@ function IdeaStart({ resource }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const [template, setTemplate] = useState("blank");
+  const repo = useCoreResource("/planning/repo");
+  const repoKnown = repo.status === "ready" && repo.data.known;
+  const [chosen, setChosen] = useState(false);
+  // A repo that was read starts as "add a feature to an existing app", until the person picks something else.
+  useEffect(() => {
+    if (repoKnown && !chosen && repo.data.suggestedTemplate) setTemplate(repo.data.suggestedTemplate);
+  }, [repoKnown, chosen, repo.data?.suggestedTemplate]);
   const id = useId();
   const submit = async (event) => {
     event.preventDefault();
@@ -90,22 +97,61 @@ function IdeaStart({ resource }) {
   return (
     <form className="planning-start" onSubmit={submit}>
       <LightbulbIcon aria-hidden="true" className="planning-start-icon" />
-      <strong>Start with your idea</strong>
-      <p>Describe what you want to build in a sentence or two. Perfect Planner turns it into the questions that need an answer before any code is written, with a recommendation for each.</p>
+      <strong>{repoKnown ? `What do you want to do in ${repo.data.name}?` : "Start with your idea"}</strong>
+      {repo.status === "ready" && <RepoRead repo={repo} />}
+      <p>{repoKnown ? "Say what to add, fix or change. " : "Describe what you want to build in a sentence or two. "} Perfect Planner turns it into the questions that need an answer before any code is written, with a recommendation for each.</p>
       <label htmlFor={`${id}-idea`} className="planning-label">Your idea</label>
       <textarea
         id={`${id}-idea`}
         rows={3}
         value={idea}
         onChange={(e) => setIdea(e.target.value)}
-        placeholder="For example: a desktop invoice app with Stripe payments that works offline"
+        placeholder={repoKnown ? "For example: add CSV export to the reports page" : "For example: a desktop invoice app with Stripe payments that works offline"}
       />
-      <TemplatePicker value={template} onChange={setTemplate} />
+      <TemplatePicker value={template} onChange={(t) => { setChosen(true); setTemplate(t); }} />
       <p className="core-muted planning-note">Recommendations come from built-in question packs. Live web research is off because it needs a research key, so no sources are attached yet.</p>
       {error && <p className="planning-refusal" role="alert">{error}</p>}
       <button type="submit" className="core-button primary" disabled={busy || idea.trim().length < 3}>
         {busy ? "Starting…" : "Start planning"}
       </button>
+    </form>
+  );
+}
+
+// What planning read from the project's folder before any idea is typed, or a box to point it at the repo.
+function RepoRead({ repo }) {
+  const [path, setPath] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const id = useId();
+  const data = repo.data;
+  const point = async (event) => {
+    event.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      await repo.post("/planning/repo", { path: path.trim() });
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  if (data.known) {
+    const facts = data.facts.map((f) => f.text);
+    return (
+      <p className="core-card planning-repo" role="status">
+        Read your repo <strong>{data.name}</strong>: {data.fileCount}{data.truncated ? "+" : ""} files{facts.length ? `, ${facts.join(", ")}` : ""}{data.tests ? `, tests run with ${data.tests}` : ", no tests found"}. Questions it already answers are not asked.
+      </p>
+    );
+  }
+  return (
+    <form className="core-card planning-repo" onSubmit={point}>
+      <label htmlFor={`${id}-repo`} className="planning-label">Plan from your existing repo (optional)</label>
+      <input id={`${id}-repo`} value={path} onChange={(e) => setPath(e.target.value)} placeholder="C:\repos\my-app" autoComplete="off" />
+      <p className="core-muted planning-note">Perfect Planner only reads file names and a few config files. Nothing is run or changed.</p>
+      {error && <p className="planning-refusal" role="alert">{error}</p>}
+      <button type="submit" className="core-button" disabled={busy || !path.trim()}>Read this folder</button>
     </form>
   );
 }
