@@ -42,7 +42,8 @@ function raw(base: string, method: string, route: string, headers: Record<string
   });
 }
 
-const ledgerCount = (win: Window) => win.host.project("p").entries().length;
+// The host's own watcher may note a commit after a restart (commit.observed by system:watcher); nothing else may appear.
+const ledgerCount = (win: Window) => win.host.project("p").entries().filter((e) => !(e.type === "commit.observed" && e.actor.kind === "system" && e.actor.id === "watcher")).length;
 const code = async (promise: Promise<unknown>): Promise<{ code: string; message: string }> =>
   promise.then(() => ({ code: "OK", message: "" }), (e: { code?: string; message?: string }) => ({ code: e.code ?? "UNREACHABLE", message: e.message ?? "" }));
 
