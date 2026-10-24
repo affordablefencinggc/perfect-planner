@@ -259,6 +259,22 @@ describe("finding Claude Code", () => {
     expect(claudeLaunch([], { Path: sneaky }, project, [])).toBeNull();
   });
 
+  it.runIf(windows)("runs the native claude.exe an npm shim's package ships when it has no cli.js, and only outside protected folders", () => {
+    const project = temp();
+    const outside = temp();
+    const npm = path.join(outside, "npm");
+    program(path.join(npm, "claude.cmd"));
+    const native = program(path.join(npm, "node_modules", "@anthropic-ai", "claude-code", "bin", "claude.exe"));
+    expect(claudeLaunch(["mcp", "list"], { Path: npm }, project, [])).toEqual({ command: native, args: ["mcp", "list"] });
+    // The same package linked into the project is refused.
+    const sneaky = path.join(outside, "sneaky");
+    program(path.join(sneaky, "claude.cmd"));
+    fs.mkdirSync(path.join(sneaky, "node_modules", "@anthropic-ai"), { recursive: true });
+    program(path.join(project, "pkg", "bin", "claude.exe"));
+    link(path.join(project, "pkg"), path.join(sneaky, "node_modules", "@anthropic-ai", "claude-code"));
+    expect(claudeLaunch([], { Path: sneaky }, project, [])).toBeNull();
+  });
+
   it.runIf(!windows)("runs an npm-installed claude script under this Node, so a planted node on PATH never runs", () => {
     const project = temp();
     const outside = temp();

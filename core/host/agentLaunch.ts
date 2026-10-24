@@ -26,12 +26,12 @@ export function agentLaunch(
   platform: NodeJS.Platform = process.platform,
   io: ExecutableIo = {},
 ): Launch | null {
-  const { cli, npmEntry } = AGENTS[agent];
+  const { cli, npmEntry, nativeExe } = AGENTS[agent];
   const program = findExecutable(cli, env, cwd, platform, protect, { ...io, windowsExtensions: [".exe", ".cmd"] });
   if (!program) return null;
   if (platform !== "win32") return nodeScript(program) ? { command: process.execPath, args: [program, ...args] } : { command: program, args };
   if (!/\.cmd$/i.test(program)) return { command: program, args };
-  const viaShim = shimLaunch(program, args, cwd, protect, npmEntry);
+  const viaShim = shimLaunch(program, args, cwd, protect, npmEntry, nativeExe);
   if (viaShim) return viaShim;
   // A shim whose package is gone (an npm folder earlier on PATH than a standalone install) must not hide a real
   // claude.exe further down PATH: look again for an .exe only, which is run as itself.
@@ -39,19 +39,28 @@ export function agentLaunch(
   return exe ? { command: exe, args } : null;
 }
 
-function shimLaunch(program: string, args: string[], cwd: string, protect: readonly string[], npmEntry: string): Launch | null {
+function shimLaunch(program: string, args: string[], cwd: string, protect: readonly string[], npmEntry: string, nativeExe?: string): Launch | null {
   // The npm package entry the shim (claude.cmd, gemini.cmd, codex.cmd) starts; it runs under this Node instead.
-  const entry = path.join(path.dirname(program), "node_modules", ...npmEntry.split("/"));
+  const entry = packageFile(program, npmEntry, cwd, protect);
+  if (entry) return { command: process.execPath, args: [entry, ...args] };
+  // Newer packages carry a native binary and no cli.js; the shim starts that, so it runs as itself.
+  const native = nativeExe ? packageFile(program, nativeExe, cwd, protect) : null;
+  return native ? { command: native, args } : null;
+}
+
+/** A file inside the npm package beside a shim, or null when it is missing or lies in a protected folder. */
+function packageFile(program: string, rel: string, cwd: string, protect: readonly string[]): string | null {
+  const file = path.join(path.dirname(program), "node_modules", ...rel.split("/"));
   let real: string;
   try {
-    if (!fs.statSync(entry).isFile()) return null;
-    real = fs.realpathSync.native(entry);
+    if (!fs.statSync(file).isFile()) return null;
+    real = fs.realpathSync.native(file);
   } catch {
     return null;
   }
   const roots = [cwd, ...protect, ...registeredRoots()];
-  if (roots.some((root) => isWithin(root, entry) || isWithin(root, real) || isWithin(safeReal(root), real))) return null;
-  return { command: process.execPath, args: [entry, ...args] };
+  if (roots.some((root) => isWithin(root, file) || isWithin(root, real) || isWithin(safeReal(root), real))) return null;
+  return file;
 }
 
 /** Claude Code's launch (kept for callers that only start Claude Code). */
