@@ -1,0 +1,43 @@
+{
+  "label": "ubuntu-22.04-deb",
+  "app": "/usr/bin/perfect-planner-desktop",
+  "platform": "linux",
+  "checks": [
+    {
+      "name": "launch",
+      "pass": true,
+      "seen": "WebDriver session up after 1187 ms"
+    },
+    {
+      "name": "first-run screen",
+      "pass": true,
+      "seen": "\"Perfect Planner Starting Perfect Planner…\""
+    },
+    {
+      "name": "settings opens",
+      "pass": true,
+      "seen": "opened via \"Settings\": \"Settings Fine-tune every stage and feature. Changes apply immediately and are saved on this device. Safety rules (collision gates, proof, review) are never rela\""
+    },
+    {
+      "name": "open project folder",
+      "pass": true,
+      "seen": "dialog: typed the folder path (dialog-not-found); pressed Use this folder; app shows: \"YPE OR PASTE THE FOLDER PATH Use this folder Ready to scan trial-sample-app. The scan only reads files; nothing is run or moved. App discovery map Empty until a folder is indexed\""
+    },
+    {
+      "name": "connect agent shows a line",
+      "pass": true,
+      "seen": "first line: \"'/usr/lib/Perfect Planner/desktop-host/node' '/usr/lib/Perfect Planner/desktop-host/core-host/connect.mjs' --agent claude http://127.0.0.1:33197 '/home/runner/.local/share/com.perfectplanner.desktop/authority/core/projects/default/.perfect-\""
+    },
+    {
+      "name": "connect lines runnable as copied",
+      "pass": true,
+      "seen": "1 copyable block(s); none has placeholders"
+    },
+    {
+      "name": "close",
+      "pass": true,
+      "seen": "session closed in 56 ms"
+    }
+  ],
+  "fatal": null
+}
