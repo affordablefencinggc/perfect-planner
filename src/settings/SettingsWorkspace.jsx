@@ -361,7 +361,7 @@ export function SettingsWorkspace({ onWorkspace, onClose, onToast, invoke, jevSt
           </Section>
 
           <Section id="data" title="Your data" intro="Uninstalling Perfect Planner keeps your plans, proof and settings on this computer. That is deliberate: the ledger is your record, and a reinstall picks it up again.">
-            <Row title="Where it lives" help="Windows: %LOCALAPPDATA%\com.perfectplanner.desktop. macOS: ~/Library/Application Support/com.perfectplanner.desktop. Linux: ~/.local/share/com.perfectplanner.desktop." />
+            <Row title="Where it lives" help="Windows: your ledger and settings are in %APPDATA%\com.perfectplanner.desktop, and the window's own browser data is in %LOCALAPPDATA%\com.perfectplanner.desktop. macOS: ~/Library/Application Support/com.perfectplanner.desktop. Linux: ~/.local/share/com.perfectplanner.desktop." />
             <Row title="Test commands" help="This command runs as you, with your files and network. When you approve a test, Perfect Planner runs it on this computer like any program you start yourself. Only the Tasks screen can say contained: bubblewrap, and that is an opt-in on Linux, off by default, and not available on Windows." />
             <Row title="To remove it" help="Close Perfect Planner, uninstall it, then delete that folder. This cannot be undone, and it also deletes the signed ledger. Your own project folders are never in it." />
           </Section>

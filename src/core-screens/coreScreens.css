@@ -10,6 +10,12 @@
   /* Room below the last row so the fixed Settings button (bottom-left) never covers it. */
   padding-bottom: calc(var(--space-5) + 80px);
   color: var(--ink);
+  /* The workspace around it is exactly window-high and does not scroll, so a long screen needs its own scrollbar. */
+  box-sizing: border-box;
+  height: 100%;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 .core-screen-head {
   display: flex;

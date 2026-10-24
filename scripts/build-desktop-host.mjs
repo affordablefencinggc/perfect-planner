@@ -11,6 +11,7 @@
 // src-tauri/build.rs makes it empty when missing, so plain cargo builds and tests still work.
 // Run by Tauri's beforeBuildCommand after build:client. The target comes from
 // TAURI_ENV_TARGET_TRIPLE (set by `tauri build`, including --target), else this machine.
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -101,6 +102,8 @@ export async function buildDesktopHost({ triple = process.env.TAURI_ENV_TARGET_T
   writeFileSync(path.join(out, "NODE-LICENSE.txt"), license);
   await buildCoreHost({ outDir: path.join(out, "core-host"), standalone: true, entries: { desktop: path.join(projectRoot, "src/node/desktopHost.mjs") } });
   cpSync(client, path.join(out, "client"), { recursive: true });
+  // Full licence texts of everything shipped (MIT/BSD/Apache require the text to travel with the software).
+  execFileSync(process.execPath, [path.join(projectRoot, "scripts", "generate-third-party-notices.mjs"), "--licenses-out", path.join(out, "THIRD-PARTY-LICENSES.txt"), "--no-notices"], { stdio: "inherit" });
   const manifest = { target: triple, node: { version: RUNTIME.version, binary: runtime.binary, sha256: sha256(node) }, entry: "core-host/desktop.mjs", client: "client" };
   writeFileSync(path.join(out, "desktop-host.json"), `${JSON.stringify(manifest, null, 2)}\n`);
   return { out, ...manifest };
