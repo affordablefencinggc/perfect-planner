@@ -16,12 +16,26 @@ user_data() { for d in ~/.local/share/com.perfectplanner.desktop ~/.config/com.p
 
 clean_user_data() { rm -rf ~/.local/share/com.perfectplanner.desktop ~/.config/com.perfectplanner.desktop ~/.cache/com.perfectplanner.desktop ~/.local/share/perfect-planner-desktop ~/.cache/perfect-planner-desktop; }
 
+leftover_report() { # label tag: what a process that outlived the window is doing, and whether it only needs longer to leave
+  local label="$1" tag="$2"
+  {
+    echo "== $tag, 5 s after close"; app_procs
+    for pid in $(pgrep -f 'perfect-planner-desktop|desktop-host/node' || true); do
+      echo "-- pid $pid"; ps -o pid,ppid,stat,etime,cmd -p "$pid" 2>/dev/null
+      echo "threads: $(ls /proc/$pid/task 2>/dev/null | wc -l)"; echo "thread waits: $(cat /proc/$pid/task/*/wchan 2>/dev/null | tr '\n' ' ')"
+    done
+    echo "windows named Perfect Planner: $(xdotool search --name 'Perfect Planner' 2>/dev/null | wc -l)"
+    sleep 30; echo "== $tag, 35 s after close"; app_procs
+  } >> "$out/$label-leftover.txt" 2>&1
+}
+
 smoke() { # label app
   local label="$1" app="$2"
   tauri-driver > "$out/$label-driver.log" 2>&1 & local driver=$!
   sleep 3
   node scripts/release/trial/smoke-app.mjs --app "$app" --folder "$folder" --out "$out" --label "$label"
   sleep 5
+  [ -n "$(app_procs)" ] && leftover_report "$label" "after the smoke"
   # The whole loop through the installed window, on a clean slate and a fresh git folder of its own.
   clean_user_data
   local repo="$RUNNER_TEMP/loop-repo-$label"
@@ -30,6 +44,10 @@ smoke() { # label app
   node scripts/release/trial/loop-app.mjs --app "$app" --repo "$repo" --out "$out" --label "$label" || true
   sleep 5
   local left; left="$(app_procs)"
+  if [ -n "$left" ]; then
+    leftover_report "$label" "after the loop"
+    left="$(app_procs)"
+  fi
   if [ -z "$left" ]; then check "$label" "no process after close" pass "none running"; else check "$label" "no process after close" fail "$left"; pkill -9 -f 'perfect-planner|\.AppImage' || true; fi
   kill "$driver" 2>/dev/null; pkill -f WebKitWebDriver 2>/dev/null || true
 }
