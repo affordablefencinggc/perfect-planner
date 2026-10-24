@@ -333,7 +333,7 @@ function TaskCard({ contained, task, repoRoot, project, act, busy, notice, dispa
           </button>
         )}
         {task.stage === "building" && (
-          <button type="button" className="core-button primary" onClick={() => run("check", `/tasks/${id}/check`)} disabled={working || task.checkReady?.ok === false} aria-describedby={checkNote ? `${id}-check-why` : undefined}>
+          <button type="button" className="core-button primary" onClick={() => run("check", `/tasks/${id}/check`)} disabled={working || task.checkReady?.ok === false} title={working ? "Another step on this task is still running." : undefined} aria-describedby={checkNote ? `${id}-check-why` : undefined}>
             {checking ? <><SpinnerGapIcon aria-hidden="true" /> Checking…</> : "Check the work"}
           </button>
         )}
@@ -353,6 +353,7 @@ function TaskCard({ contained, task, repoRoot, project, act, busy, notice, dispa
             )}
           </>
         )}
+        {canRelease && task.stalled && <span className="core-pill warn">stalled</span>}
         {canRelease && !releasing && (
           <button type="button" className="core-button" onClick={() => setReleasing(true)} disabled={working}>Release claim</button>
         )}

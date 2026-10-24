@@ -373,6 +373,16 @@ describe("TasksScreen", () => {
     });
   });
 
+  test("a stalled worker's task shows the stalled flag beside the Release button", async () => {
+    const tree = { path: "/w", branch: "pp/T-1", base: "main", port: 5200 };
+    routeFetch({ "GET /tasks": async () => ok(view([task({ status: "claimed", owner: "worker-1", stage: "building", worktree: tree, stalled: true })])) });
+    renderScreen();
+    const t1 = await card("T-1 Save notes");
+    const flag = within(t1).getByText("stalled");
+    const release = within(t1).getByRole("button", { name: "Release claim" });
+    expect(flag.nextElementSibling).toBe(release);
+  });
+
   const jevTree = { path: "/w", branch: "pp/T-1", base: "main", port: 5200 };
   const jevTest = { entry: "L-000007", command: "npm test", files: ["save.test.js"], by: "worker-1" };
 
