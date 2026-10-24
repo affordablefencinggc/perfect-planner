@@ -36,3 +36,16 @@ test('a new folder with no history offers the button that starts it, right under
  expect(screen.getByText(/^No plan approved yet\./)).toBeTruthy();
  vi.unstubAllGlobals();resetPersonSession();sessionStorage.clear();
 });
+
+test('B2: with no plan approved the map offers Deep planning, the real place to approve, not a dead end',async()=>{
+ const onWorkspace=vi.fn();
+ render(<ProjectContext.Provider value={{planStatuses:{},refreshPlan:vi.fn()}}><TaskDraftMap project={project} store={{read:async()=>ledger}} onWorkspace={onWorkspace}/></ProjectContext.Provider>);
+ const open=await screen.findByRole('button',{name:'Open Deep planning'});
+ open.click();
+ expect(onWorkspace).toHaveBeenCalledWith('planning');
+ cleanup();
+ await recordPlanApproval(project.projectId,{tasks:ledger.tasks,censusDigest:project.census.digest});
+ render(<ProjectContext.Provider value={{planStatuses:{},refreshPlan:vi.fn()}}><TaskDraftMap project={project} store={{read:async()=>ledger}} onWorkspace={onWorkspace}/></ProjectContext.Provider>);
+ await screen.findByRole('button',{name:'Open T0001: Keep obligations in Ledger'});
+ expect(screen.queryByRole('button',{name:'Open Deep planning'})).toBeNull();
+});

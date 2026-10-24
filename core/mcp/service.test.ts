@@ -42,6 +42,66 @@ async function expectCode(promise: Promise<unknown>, code: string, text?: RegExp
   if (text) expect((error as Error).message).toMatch(text);
 }
 
+describe("agents that go quiet", () => {
+  function quietSetup() {
+    const ledger = Ledger.openSync(new MemoryStore(), { now: () => new Date("2026-10-09T05:00:00Z") });
+    const tokens = new TokenStore();
+    let clock = Date.parse("2026-10-09T05:00:00Z");
+    const service = new AgentService({ ledger, tokens, now: () => clock });
+    return { service, tokens, advance: (minutes: number) => { clock += minutes * 60_000; } };
+  }
+
+  it("counts only agents heard from lately, and drops revoked ones", async () => {
+    const { service, tokens, advance } = quietSetup();
+    const connect = tokens.issue({ role: "connect", person: "owner" });
+    const other = tokens.issue({ role: "connect", person: "owner" });
+    await hello(service, connect, "Claude Code");
+    await hello(service, other, "Old terminal");
+    expect(service.liveAgents().map((a) => a.name).sort()).toEqual(["Claude Code", "Old terminal"]);
+    advance(9);
+    await service.call(await hello(service, connect, "Claude Code"), "list_tasks", {});
+    advance(2);
+    expect(service.liveAgents().map((a) => a.name)).toEqual(["Claude Code"]);
+    tokens.revoke(connect);
+    expect(service.liveAgents()).toEqual([]);
+  });
+
+  it("hands the main chat to the next agent once the old one has gone quiet, and keeps the old one read-only", async () => {
+    const { service, tokens, advance } = quietSetup();
+    const first = tokens.issue({ role: "connect", person: "owner" });
+    const second = tokens.issue({ role: "connect", person: "owner" });
+    const a = await hello(service, first, "Claude Code");
+    expect(a.role).toBe("main");
+    advance(5);
+    expect((await hello(service, second, "Gemini")).role).toBe("observer");
+    advance(6);
+    const b = await hello(service, second, "Codex");
+    expect(b.role).toBe("main");
+    await expectCode(service.call(a, "answer", { question: "Q-1", text: "x" }), "FORBIDDEN", /main chat/);
+    expect(service.listAgents().find((x) => x.id === a.agent)?.role).toBe("observer");
+  });
+
+  it("never hands the main chat to a worker, however long the main chat has been quiet", async () => {
+    const { service, tokens, advance } = quietSetup();
+    const connect = tokens.issue({ role: "connect", person: "owner" });
+    const worker = tokens.issue({ role: "worker", person: "owner", task: "T-1" });
+    const main = await hello(service, connect, "Claude Code");
+    advance(60);
+    expect((await hello(service, worker, "Worker")).role).toBe("worker");
+    expect(service.listAgents().find((x) => x.id === main.agent)?.role).toBe("main");
+  });
+
+  it("reports when each agent was last heard from", async () => {
+    const { service, tokens, advance } = quietSetup();
+    const connect = tokens.issue({ role: "connect", person: "owner" });
+    const a = await hello(service, connect, "Claude Code");
+    advance(3);
+    await service.call(a, "list_tasks", {});
+    expect(service.seenAt(a.agent)).toBe("2026-10-09T05:03:00.000Z");
+    expect(service.seenAt("nobody")).toBeUndefined();
+  });
+});
+
 describe("check-in and roles", () => {
   it("makes the first connected agent the main chat and later ones observers", async () => {
     const { service, connect, tokens } = setup();
@@ -432,5 +492,43 @@ describe("propose_test (test first)", () => {
     await expectCode(service.call(a, "propose_test", { task: "T-2", command: "x", files: ["t.mjs"] }), "FORBIDDEN");
     const b = await hello(service, w2, "w2");
     await expectCode(service.call(b, "propose_test", { task: "T-2", command: "node t.mjs", files: ["../outside.mjs"] }), "INVALID", /not a test file path/);
+  });
+});
+
+describe("the needle over the bridge", () => {
+  it("picks a tool for the caller's role, and refuses a bad token", async () => {
+    const { service, w1, connect } = setup();
+    const bridge = await startBridge(service);
+    try {
+      const ask = async (token: string, body: unknown) => {
+        const res = await fetch(`${bridge.url}/route`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${token}` }, body: JSON.stringify(body) });
+        return { status: res.status, body: (await res.json()) as { ok: boolean; result?: { tool: string; args: Record<string, string> }[] } };
+      };
+      // Before check-in the only legal step is hello.
+      expect((await ask(w1, { intent: "start" })).body.result![0]!.tool).toBe("hello");
+      const worker = await hello(service, w1, "Worker 1");
+      // T-1's test is approved but unclaimed: claim it.
+      const next = await ask(w1, { agent: worker.agent });
+      expect(next.body.result![0]).toMatchObject({ tool: "claim_task", args: { task: "T-1" } });
+      // A main chat is never offered a worker-only tool.
+      const main = await hello(service, connect, "Main");
+      const tools = (await ask(connect, { agent: main.agent, intent: "claim T-1 and attach proof", limit: 11 })).body.result!.map((c) => c.tool);
+      expect(tools).not.toContain("claim_task");
+      expect(tools).not.toContain("attach_proof");
+      expect((await ask("pp_w_nope", { intent: "x" })).status).toBe(401);
+      expect((await fetch(`${bridge.url}/route`, { method: "POST", headers: { authorization: `Bearer ${w1}` }, body: "not json" })).status).toBe(400);
+    } finally {
+      await bridge.close();
+    }
+  });
+});
+
+describe("a connect line from before a restart", () => {
+  it("is refused with words that say a restart ended it and where the new line is, and a new token works", async () => {
+    const { ledger, connect: old } = setup();
+    const restarted = new AgentService({ ledger, tokens: new TokenStore() });
+    await expectCode(restarted.call({ token: old }, "hello", { name: "Old line" }), "UNAUTHORIZED", /restarted.*Connect agent/s);
+    const fresh = restarted.tokens.issue({ role: "connect", person: "owner" });
+    await expect(hello(restarted, fresh, "New line")).resolves.toMatchObject({ role: "main" });
   });
 });

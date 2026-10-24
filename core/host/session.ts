@@ -94,6 +94,14 @@ export class PersonSessions {
     return Boolean(cookie && this.sessions.has(digest(cookie)));
   }
 
+  /** A stable id for the claimed window's session (a digest, never the cookie), or null without one. */
+  sessionId(req: IncomingMessage): string | null {
+    const cookie = cookieValue(req);
+    if (!cookie) return null;
+    const id = digest(cookie);
+    return this.sessions.has(id) ? id : null;
+  }
+
   /** True only for a request from a claimed window: cookie, matching CSRF token and the app's Origin. */
   isPerson(req: IncomingMessage): boolean {
     const cookie = cookieValue(req);

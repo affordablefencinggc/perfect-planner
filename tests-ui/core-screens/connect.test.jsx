@@ -1,6 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { CoreAgentConnect } from "../../src/core-screens/CoreAgentConnect.jsx";
+import { resetPersonSession } from "../../src/core-screens/coreApi.js";
 import { ViewModeContext } from "../../src/project/viewMode.js";
 
 // A made-up connect value, assembled so it never reads as a stored secret (core/release push scan).
@@ -169,5 +170,50 @@ describe("CoreAgentConnect", () => {
     const line = screen.getByLabelText("Skill install line");
     expect(line.textContent).toBe(SKILL_LINE);
     expect(line.textContent).not.toMatch(/pp_[cw]_/);
+  });
+
+  test("on a folder with no history it offers Start a new history right here, then lets the person connect", async () => {
+    resetPersonSession();
+    window.sessionStorage.setItem("pp.core.csrf", "csrf-1");
+    let started = false;
+    const fn = routeFetch({
+      "GET /agents": async () => ok(list()),
+      "GET /status": async () => ok({ project: "default", owner: { state: "new", signals: [], started } }),
+      "POST /owner/start": async () => { started = true; return ok({ started: true, signals: [] }); },
+    });
+    renderWith();
+    const notice = await screen.findByRole("region", { name: "Start a new history" });
+    fireEvent.click(within(notice).getByRole("button", { name: "Start a new history for this folder" }));
+    await waitFor(() => expect(fn.mock.calls.some(([url, init]) => String(url).includes("/owner/start") && init?.method === "POST")).toBe(true));
+    await waitFor(() => expect(screen.queryByRole("region", { name: "Start a new history" })).toBeNull());
+    expect(screen.getByRole("button", { name: /Connect agent/ })).toBeTruthy();
+    resetPersonSession();
+  });
+});
+
+describe("Log in to Codex", () => {
+  test("offers the button when Codex is installed and signed out, and shows the sign-in progress", async () => {
+    let state = { installed: true, loggedIn: false, state: "idle" };
+    routeFetch({
+      "GET /agents": async () => ok({ ...list(), waiting: 2 }),
+      "GET /agents/codex-login": async () => ok(state),
+      "POST /agents/codex-login": async () => { state = { installed: true, loggedIn: false, state: "waiting", url: "https://auth.openai.com/oauth/authorize?x=1" }; return ok(state); },
+    });
+    renderWith();
+    expect(await screen.findByText(/2 agents' questions are waiting for your answer/)).toBeTruthy();
+    fireEvent.click(await screen.findByRole("button", { name: /Log in to Codex/ }));
+    expect(await screen.findByText(/Finish signing in with ChatGPT/)).toBeTruthy();
+    expect(screen.getByRole("link", { name: /Open the sign-in page/ }).getAttribute("href")).toMatch(/^https:\/\/auth\.openai\.com\//);
+  });
+
+  test("shows signed in, and shows nothing when Codex is not installed", async () => {
+    routeFetch({ "GET /agents": async () => ok(list()), "GET /agents/codex-login": async () => ok({ installed: true, loggedIn: true, method: "chatgpt", state: "done" }) });
+    renderWith();
+    expect(await screen.findByText(/Codex is signed in with ChatGPT/)).toBeTruthy();
+    cleanup();
+    routeFetch({ "GET /agents": async () => ok(list()), "GET /agents/codex-login": async () => ok({ installed: false, loggedIn: false, state: "idle" }) });
+    renderWith();
+    await screen.findByText("No agents are connected yet.");
+    expect(screen.queryByRole("button", { name: /Log in to Codex/ })).toBeNull();
   });
 });

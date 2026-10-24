@@ -34,6 +34,9 @@ async function runNodeSuite() {
     "--test",
     // A hung test fails by name instead of silently consuming the CI job's time budget.
     "--test-timeout=300000",
+    // Windows runners starve when every git-heavy file runs at once: guarded git then hits its own
+    // 10 s limit (git-driver-config-unverified / MCP_GIT_COMMAND_FAILED) in tests that did not change.
+    ...(process.platform === "win32" ? ["--test-concurrency=2"] : []),
     "--test-reporter=spec", "--test-reporter-destination=stdout",
     `--test-reporter=${pathToFileURL(path.join(root, "scripts/test-summary-reporter.mjs")).href}`, `--test-reporter-destination=${output}`,
     ...(files.length ? files : ["tests/*.test.mjs"]),

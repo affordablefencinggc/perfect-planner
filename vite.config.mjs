@@ -37,6 +37,9 @@ export default defineConfig(({ command }) => ({
   define: { ...agentSetupDefines(command), __PP_SCRIPTED_INTAKE__: JSON.stringify(scriptedIntakeEnabled(command)) },
   build: {
     outDir: "dist/client",
+    // Desktop webviews (WebView2, WebKitGTK) are far newer than Vite's default "modules" target; lowering
+    // class fields and friends for Safari 14 / Chrome 87 cost about 10 KiB gzip.
+    target: ["chrome105", "edge105", "firefox104", "safari15"],
     rollupOptions: {
       output: {
         manualChunks(id) {

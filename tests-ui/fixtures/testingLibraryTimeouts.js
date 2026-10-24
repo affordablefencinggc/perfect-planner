@@ -3,4 +3,4 @@
 // tests on PRs that never touched the UI. Waits still end the moment the element appears.
 import { configure } from "@testing-library/react";
 
-configure({ asyncUtilTimeout: 5000 });
+configure({ asyncUtilTimeout: 15000 });

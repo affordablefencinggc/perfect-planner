@@ -1,6 +1,6 @@
 // GENERATED from core/worktrees/git.ts by core/release/hooks/build-detector.mjs. Do not edit.
 import { execFileSync, spawn } from "node:child_process";
-import { chmodSync, existsSync, lstatSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { gitExecutable, NO_CWD_SEARCH_ENV } from "./git-exec.mjs";
@@ -43,15 +43,7 @@ let hardening;
 export function hooklessPath(program, platform = process.platform) {
     return platform === "win32" ? program : "/dev/null";
 }
-function hardeningFiles(program) {
-    if (hardening)
-        return hardening;
-    const root = mkdtempSync(path.join(os.tmpdir(), "pp-git-"));
-    const hooksPath = hooklessPath(program);
-    const attributesFile = path.join(root, "attributes");
-    writeFileSync(attributesFile, "");
-    const globalConfig = path.join(root, "gitconfig");
-    writeFileSync(globalConfig, "");
+function copyCarriedSettings(program, root, target) {
     for (const key of CARRIED_SETTINGS) {
         for (const scope of ["--system", "--global"]) {
             let values = [];
@@ -62,10 +54,44 @@ function hardeningFiles(program) {
             catch {
             }
             for (const value of values) {
-                execFileSync(program, ["config", "--file", globalConfig, "--add", key, value], { cwd: root, env: { ...process.env, ...NO_CWD_SEARCH_ENV }, stdio: "ignore", windowsHide: true, timeout: 10_000 });
+                execFileSync(program, ["config", "--file", target, "--add", key, value], { cwd: root, env: { ...process.env, ...NO_CWD_SEARCH_ENV }, stdio: "ignore", windowsHide: true, timeout: 10_000 });
             }
         }
     }
+}
+export function refreshCarriedSettings() {
+    if (!hardening)
+        return;
+    const { globalConfig } = hardening;
+    const root = path.dirname(globalConfig);
+    const next = path.join(root, `gitconfig.${process.pid}.next`);
+    try {
+        const program = gitExecutable(root);
+        writeFileSync(next, "");
+        copyCarriedSettings(program, root, next);
+        chmodSync(next, 0o444);
+        chmodSync(globalConfig, 0o644);
+        renameSync(next, globalConfig);
+    }
+    catch {
+        try {
+            rmSync(next, { force: true });
+            chmodSync(globalConfig, 0o444);
+        }
+        catch {
+        }
+    }
+}
+function hardeningFiles(program) {
+    if (hardening)
+        return hardening;
+    const root = mkdtempSync(path.join(os.tmpdir(), "pp-git-"));
+    const hooksPath = hooklessPath(program);
+    const attributesFile = path.join(root, "attributes");
+    writeFileSync(attributesFile, "");
+    const globalConfig = path.join(root, "gitconfig");
+    writeFileSync(globalConfig, "");
+    copyCarriedSettings(program, root, globalConfig);
     chmodSync(attributesFile, 0o444);
     chmodSync(globalConfig, 0o444);
     process.once("exit", () => {

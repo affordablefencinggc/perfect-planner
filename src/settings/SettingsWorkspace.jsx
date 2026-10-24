@@ -2,6 +2,7 @@ import { useEffect, useId, useState } from "react";
 import { ArrowLeftIcon, ArrowRightIcon, CopyIcon, GearSixIcon, KeyIcon } from "@phosphor-icons/react";
 import { useViewMode } from "../project/viewMode.js";
 import {
+  ADVISORY,
   agentDefaultsBrief,
   DOCK_TABS,
   REVIEW_PRESETS,
@@ -49,8 +50,11 @@ const SECTIONS = [
   ["agents", "Agents & Jev"],
   ["index", "Index"],
   ["panels", "Panels & notices"],
+  ["data", "Your data"],
   ["reset", "Reset"],
 ];
+
+const ADVISORY_STATUS = { tone: "amber", label: ADVISORY };
 
 function Row({ title, help, children, status }) {
   const id = useId();
@@ -154,16 +158,16 @@ function JevKeyField({ invoke, onToast }) {
     : current.store === "error"
       ? { tone: "amber", label: "Keychain did not respond" }
       : current.store === "unsupported-os"
-      ? { tone: "amber", label: "Not available yet on this system" }
+      ? { tone: "amber", label: "Windows only today" }
       : !current.available
-      ? { tone: "amber", label: "Desktop app only" }
+      ? { tone: "amber", label: "Windows only today (desktop app)" }
       : current.stored
         ? { tone: "green", label: "Key stored in keychain" }
         : { tone: "muted", label: "No key stored" };
   return (
     <Row
       title="Jev API key"
-      help="Saved only to the Windows keychain (Credential Manager). Perfect Planner never shows it again, never writes it to a file, and never sends it to an agent brief. Once the key is saved, Jev must review each task's test before work on that task starts."
+      help="Windows only today. Saved only to the Windows keychain (Credential Manager). Perfect Planner never shows it again, never writes it to a file, and never sends it to an agent brief. Once the key is saved, Jev must review each task's test before work on that task starts."
       status={statusLabel}
     >
       <form className="settings-key-form" onSubmit={save}>
@@ -182,7 +186,7 @@ function JevKeyField({ invoke, onToast }) {
         <button type="button" className="settings-danger-link" disabled={!current.available || busy || !current.stored} onClick={clear}>Remove</button>
       </form>
       {current.store === "unsupported-os" && !message && (
-        <p className="settings-inline-note" role="status">Saving the key works on Windows today. macOS and Linux keychain support is not available yet, so nothing is stored here.</p>
+        <p className="settings-inline-note" role="status">Windows only today. Linux and macOS cannot save the key yet, so nothing is stored here.</p>
       )}
       {message && <p className="settings-inline-note" role="status">{message}</p>}
     </Row>
@@ -286,12 +290,12 @@ export function SettingsWorkspace({ onWorkspace, onClose, onToast, invoke, jevSt
                 </Row>
               )}
               {stage.id === "build" && (
-                <Row title="Worktree mode" help="Isolated gives each task its own worktree. Shared runs one task at a time in your working copy.">
+                <Row status={ADVISORY_STATUS} title="Worktree mode" help="Isolated gives each task its own worktree. Shared runs one task at a time in your working copy.">
                   <Segmented label="Worktree mode" value={settings.worktreeMode} onChange={(worktreeMode) => update({ worktreeMode })} options={[{ value: "isolated", label: "Isolated per task" }, { value: "shared", label: "Shared, one at a time" }]} />
                 </Row>
               )}
               {stage.id === "prove" && (
-                <Row title="Review preset" help={REVIEW_PRESETS[settings.reviewPreset]}>
+                <Row status={ADVISORY_STATUS} title="Review preset" help={`${REVIEW_PRESETS[settings.reviewPreset]}. The app's own review setting is not changed from here.`}>
                   <Segmented label="Review preset" value={settings.reviewPreset} onChange={(reviewPreset) => update({ reviewPreset })} options={Object.keys(REVIEW_PRESETS).map((preset) => ({ value: preset, label: preset[0].toUpperCase() + preset.slice(1) }))} />
                 </Row>
               )}
@@ -307,10 +311,10 @@ export function SettingsWorkspace({ onWorkspace, onClose, onToast, invoke, jevSt
           ))}
 
           <Section id="agents" title="Agents & Jev" intro="Defaults you hand to a connected agent. They are preferences in the brief you copy, not permissions: Planner gates still decide what may run.">
-            <Row title="Orchestration rounds" help="The most review-and-revise rounds a lead model runs before stopping.">
+            <Row status={ADVISORY_STATUS} title="Orchestration rounds" help="The most review-and-revise rounds a lead model runs before stopping.">
               <Segmented label="Orchestration rounds" value={settings.maxRounds} onChange={(maxRounds) => update({ maxRounds })} options={[1, 2, 3, 4, 5].map((value) => ({ value, label: String(value) }))} />
             </Row>
-            <Row title="Budget cap per run" help="Leave empty for no cap. Agents are told to stop and ask before going over it.">
+            <Row status={ADVISORY_STATUS} title="Budget cap per run" help="Leave empty for no cap. Agents are told to stop and ask before going over it.">
               <label className="settings-number">
                 <span>AUD</span>
                 <input
@@ -325,7 +329,7 @@ export function SettingsWorkspace({ onWorkspace, onClose, onToast, invoke, jevSt
                 />
               </label>
             </Row>
-            <Row title="Use Jev as a reviewer" help="Records that you want Jev as a reviewer and adds that request to the agent brief you copy. Perfect Planner does not run Jev reviews itself yet.">
+            <Row status={ADVISORY_STATUS} title="Use Jev as a reviewer" help="Records that you want Jev as a reviewer and adds that request to the agent brief you copy. Perfect Planner does not run Jev reviews itself yet.">
               <Switch label="Use Jev as a reviewer" checked={settings.jevReviewer} onChange={(jevReviewer) => update({ jevReviewer })} />
             </Row>
             <JevKeyField invoke={invoke} onToast={(message, tone) => { onToast?.(message, tone); readJevKeyStatus({ invoke }).then((status) => setJevStored(status.stored)); }} />
@@ -354,6 +358,12 @@ export function SettingsWorkspace({ onWorkspace, onClose, onToast, invoke, jevSt
             <Row title="Notices stay for" help="How long pop-up notices stay before closing themselves.">
               <Segmented label="Notices stay for" value={settings.toastSeconds} onChange={(toastSeconds) => update({ toastSeconds })} options={TOAST_SECONDS.map((value) => ({ value, label: value ? `${value} s` : "Until closed" }))} />
             </Row>
+          </Section>
+
+          <Section id="data" title="Your data" intro="Uninstalling Perfect Planner keeps your plans, proof and settings on this computer. That is deliberate: the ledger is your record, and a reinstall picks it up again.">
+            <Row title="Where it lives" help="Windows: %LOCALAPPDATA%\com.perfectplanner.desktop. macOS: ~/Library/Application Support/com.perfectplanner.desktop. Linux: ~/.local/share/com.perfectplanner.desktop." />
+            <Row title="Test commands" help="This command runs as you, with your files and network. When you approve a test, Perfect Planner runs it on this computer like any program you start yourself. Only the Tasks screen can say contained: bubblewrap, and that is an opt-in on Linux, off by default, and not available on Windows." />
+            <Row title="To remove it" help="Close Perfect Planner, uninstall it, then delete that folder. This cannot be undone, and it also deletes the signed ledger. Your own project folders are never in it." />
           </Section>
 
           <Section id="reset" title="Reset" intro="Put every setting on this page back to its default. Your projects, plans and proof are not touched, and the Jev key stays in the keychain.">

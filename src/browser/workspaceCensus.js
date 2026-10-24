@@ -1,7 +1,7 @@
 import { validateWorkspaceCensus, validateWorkspaceRegistration } from "../native/workspaceCensus.js";
 import { createImportedProjectId } from "../project/projectIds.js";
 import { findRememberedFolder, folderAccessState, lastRememberedFolder, loadRememberedFolder, rememberFolder, requestRememberedFolder } from "./folderAccess.js";
-import { createLaunchFolderHandle, describeLaunchFolder } from "./launchFolder.js";
+import { chooseTypedFolder, createLaunchFolderHandle, describeLaunchFolder } from "./launchFolder.js";
 import { isSecretFileName } from "../shared/secretFiles.js";
 
 const handles = new Map();
@@ -479,6 +479,13 @@ export const browserWorkspaceAdapter = Object.freeze({
     if (!launch) return unavailable("The local host is not offering a launch folder.");
     try { return await selectDirectoryHandle(createLaunchFolderHandle({ name: launch.name })); }
     catch { return unavailable("The launch folder could not be selected."); }
+  },
+  // A typed or pasted folder path, for windows with no folder picker (Linux, some Windows installs).
+  async selectTypedFolder(typedPath) {
+    const chosen = await chooseTypedFolder(typedPath);
+    if (chosen.error) return unavailable(chosen.error);
+    try { return await selectDirectoryHandle(createLaunchFolderHandle({ name: chosen.name })); }
+    catch { return unavailable("The folder could not be selected."); }
   },
   async lastFolder() {
     return lastRememberedFolder();

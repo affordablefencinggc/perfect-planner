@@ -9,27 +9,43 @@ import { appendNumbered } from "../../numbering/index";
 import {
   AREAS,
   AREA_TITLES,
+  NO_IDEA_LABEL,
   PlanningError,
   PlanningSession,
+  areaHint,
+  areaOrder,
   catchDeferral,
   depthCheck,
   droppedRoadmapTasks,
+  effectiveSkip,
   isPhase,
+  isTemplateDepth,
+  isTemplateId,
   latestByQuestionId,
   openBlockers,
   ownTasks,
   planningAnswers,
   profileRepo,
+  readRepoContext,
   readRepoStack,
   stackForIdea,
+  suggestionFor,
+  templateCards,
   toMermaid,
   type AnswerInput,
   type IdeaProfile,
+  type PlanTemplate,
   type PlanningQuestionState,
+  type TemplateChoice,
+  type TemplateDepth,
+  type TemplateId,
 } from "../../planning/index";
 import type { CoreProject } from "../project";
 import { fingerprintOf, requireFingerprint } from "../fingerprint";
 import { HttpError, type Router } from "../router";
+import { knownRepoNames } from "../repoNames";
+import { groupKey, splitByRepo } from "../../repos/index";
+import { randomUUID } from "node:crypto";
 import { localPerson, localPersonId } from "./people";
 
 const STATE_KEY = "planning";
@@ -85,7 +101,7 @@ function actorFor(project: CoreProject): Actor {
 
 /** The idea label used for the mind map root: the saved idea, or a neutral title. */
 function ideaLabel(state: PlanningState): string {
-  return state.idea ?? "Your idea";
+  return state.idea ?? NO_IDEA_LABEL;
 }
 
 function refuse(error: unknown): never {
@@ -93,9 +109,11 @@ function refuse(error: unknown): never {
     const status =
       error.code === "UNKNOWN_QUESTION" || error.code === "UNKNOWN_TASK"
         ? 404
-        : error.code === "ALREADY_ANSWERED" || error.code === "STILL_OPEN" || error.code === "ROADMAP_WRITTEN" || error.code === "KEEP_RELEASE"
+        : error.code === "ALREADY_ANSWERED" || error.code === "STILL_OPEN" || error.code === "ROADMAP_WRITTEN" || error.code === "KEEP_RELEASE" || error.code === "NO_TEMPLATE"
           ? 409
-          : 422;
+          : error.code === "UNKNOWN_TEMPLATE" || error.code === "BAD_DEPTH"
+            ? 400
+            : 422;
     throw new HttpError(status, error.code, error.message);
   }
   throw error;
@@ -168,6 +186,38 @@ function tasksView(entries: readonly LedgerEntry[]) {
   };
 }
 
+/** What a template suggests for one open question, in the words the screen shows. Never an answer. */
+function suggestionView(template: PlanTemplate | undefined, choice: TemplateChoice | null, q: PlanningQuestionState, signals: readonly string[]) {
+  if (!template || !choice || q.status !== "open") return undefined;
+  const hit = suggestionFor(template, q.id, q.area, signals, choice.context.lang);
+  if (!hit) return undefined;
+  const label = hit.option ? q.options.find((o) => o.id === hit.option)?.label : hit.text;
+  if (!label) return undefined;
+  return { label, ...(hit.option ? { option: hit.option } : { text: hit.text }), why: hit.why, from: template.title };
+}
+
+/** The template in use, as the screens show it. */
+function templateView(state: PlanningState, questions: readonly PlanningQuestionState[]) {
+  const choice = state.session.templateChoice();
+  const template = state.session.template();
+  if (!choice || !template) return null;
+  const signals = state.profile?.signals ?? [];
+  const skip = effectiveSkip(template, signals);
+  return {
+    id: template.id,
+    title: template.title,
+    description: template.description,
+    depth: choice.depth,
+    decision: choice.decision,
+    at: choice.at,
+    askFirst: template.askFirst.map((area) => ({ area, title: AREA_TITLES[area] })),
+    usuallySkip: skip.map((area) => ({ area, title: AREA_TITLES[area] })),
+    /** Open questions in the usually skipped areas: what "skip the usual areas" would answer. */
+    skippable: questions.filter((q) => q.status === "open" && skip.includes(q.area)).length,
+    note: "A starter only suggests. It has answered nothing and approved nothing.",
+  };
+}
+
 function overview(project: CoreProject) {
   const state = planning(project);
   const entries = project.entries();
@@ -180,13 +230,24 @@ function overview(project: CoreProject) {
     if (meta && typeof meta.why === "string") why.set(e.subject, meta.why);
   }
   const open = openBlockers(entries);
-  const areas = AREAS.map((area) => ({
-    area,
-    title: AREA_TITLES[area],
-    questions: questions.filter((q) => q.area === area).map((q) => ({ ...questionView(q, numbers), why: why.get(q.q) ?? "" })),
-  })).filter((a) => a.questions.length > 0);
+  const choice = state.session.templateChoice();
+  const template = state.session.template();
+  const signals = state.profile?.signals ?? [];
+  const areas = (template ? areaOrder(template, signals, AREAS) : AREAS).map((area) => {
+    const hint = template ? areaHint(template, signals, area) : undefined;
+    return {
+      area,
+      title: AREA_TITLES[area],
+      ...(hint ? { hint } : {}),
+      questions: questions.filter((q) => q.area === area).map((q) => {
+        const suggestion = suggestionView(template, choice, q, signals);
+        return { ...questionView(q, numbers), why: why.get(q.q) ?? "", ...(suggestion ? { suggestion } : {}) };
+      }),
+    };
+  }).filter((a) => a.questions.length > 0);
   const answered = questions.filter((q) => q.status !== "open").length;
-  const fingerprint = planFingerprint(state.idea, areas);
+  // A different starter is a different plan to look at: it is part of what an approval is bound to.
+  const fingerprint = planFingerprint(state.idea, areas, choice ? { id: choice.id, depth: choice.depth, context: choice.context } : undefined);
   const approved = approvals(entries);
   // The plan exactly as shown is already approved: approving it again would only add a duplicate P-n.
   const current = approved.length > 0 && approved[approved.length - 1]!.fingerprint === fingerprint;
@@ -200,6 +261,7 @@ function overview(project: CoreProject) {
     progress: { answered, total: questions.length, open: questions.length - answered, blockingOpen: open.length },
     blockers: questions.filter((q) => open.includes(q.q)).map((q) => ({ q: q.q, id: q.id, area: q.area, areaTitle: AREA_TITLES[q.area], text: q.text, recommendation: q.recommendation })),
     areas,
+    template: templateView(state, questions),
     description: descriptionView(state, questions),
     tasks: tasksView(entries),
     approval: {
@@ -215,8 +277,8 @@ function overview(project: CoreProject) {
 }
 
 /** What the person reviews before approving: the idea and every question as shown (see fingerprint.ts). */
-function planFingerprint(idea: unknown, areas: unknown): string {
-  return fingerprintOf({ idea: idea ?? null, areas });
+function planFingerprint(idea: unknown, areas: unknown, template?: unknown): string {
+  return fingerprintOf({ idea: idea ?? null, areas, ...(template ? { template } : {}) });
 }
 
 function mindMapView(project: CoreProject) {
@@ -246,9 +308,14 @@ function roadmapView(project: CoreProject) {
   const written = writtenTasks(entries);
   const number = (key: string) => written.get(key)?.task;
   const own = ownTasks(entries);
+  const seeded = state.session.templateSeed(ideaLabel(state), state.person);
   return {
     written: written.size > 0,
     answered: planningAnswers(entries).length,
+    /** The starter that seeded some of these tasks, and what it left out and why. Its tasks stay "suggested" until the plan is approved. */
+    template: seeded
+      ? { id: seeded.template.id, title: seeded.template.title, depth: seeded.choice.depth, decision: seeded.choice.decision, tasks: seeded.seed.tasks.length, leftOut: seeded.seed.leftOut }
+      : null,
     phases: roadmap.phases.map((p) => ({
       id: p.id,
       title: p.title,
@@ -256,6 +323,7 @@ function roadmapView(project: CoreProject) {
         ...p.tasks.map((t) => ({
           ...t,
           ...(written.get(t.key) ? { task: written.get(t.key)!.task, entry: written.get(t.key)!.entry } : {}),
+          ...(t.template ? { suggested: !written.has(t.key) } : {}),
           dependsOnTasks: t.dependsOn.map((d) => number(d) ?? d),
         })),
         // The person's own tasks are already on the board (T-n), whether or not the plan is approved.
@@ -291,6 +359,37 @@ function text(value: unknown, field: string, max = 4000): string {
   return value;
 }
 
+const TEMPLATE_NOTE = "A starter only suggests where to begin. It answers no question and approves nothing: you still decide, and you approve the plan.";
+const BLANK = { id: "blank", title: "Start blank", description: "No starter. Begin from your idea alone." } as const;
+
+/**
+ * Which template a request asks for: "blank" or one of the eight ids, with an
+ * optional depth. Anything else is refused before any write. Other fields in the
+ * body are ignored: a template cannot be sent answers, an approval or tasks.
+ */
+function templateRequest(body: unknown): { id: TemplateId | null; depth?: TemplateDepth } | undefined {
+  const b = (body && typeof body === "object" ? body : {}) as Record<string, unknown>;
+  if (b.template === undefined || b.template === null) return undefined;
+  if (typeof b.template !== "string") throw new HttpError(400, "INVALID", "template must be the id of a starter, or blank.");
+  if (b.template !== "blank" && !isTemplateId(b.template)) throw new HttpError(400, "INVALID", "That is not one of the starter templates.");
+  if (b.depth !== undefined && b.depth !== null && !isTemplateDepth(b.depth)) throw new HttpError(400, "INVALID", "depth must be quick, standard or thorough.");
+  return { id: b.template === "blank" ? null : (b.template as TemplateId), ...(isTemplateDepth(b.depth) ? { depth: b.depth } : {}) };
+}
+
+/** Records the person's pick, reading the folder as it is now. Nothing else is written. */
+function pickTemplate(project: CoreProject, state: PlanningState, request: NonNullable<ReturnType<typeof templateRequest>>, idea: string) {
+  const stack = stackForIdea(readRepoStack(project.root), idea);
+  try {
+    return state.session.chooseTemplate(actorFor(project), {
+      id: request.id,
+      ...(request.depth ? { depth: request.depth } : {}),
+      ...(request.id ? { context: readRepoContext(project.root, stack, idea) } : {}),
+    });
+  } catch (error) {
+    refuse(error);
+  }
+}
+
 export function registerPlanningRoutes(router: Router): void {
   /** GET /planning: progress, open blockers, questions by area, approval gate. */
   router.get("/planning", ({ project }) => overview(project));
@@ -299,10 +398,13 @@ export function registerPlanningRoutes(router: Router): void {
   router.post("/planning/start", ({ project, body }) => {
     const idea = text((body as { idea?: unknown })?.idea, "idea").trim();
     if (idea.length < 3) throw new HttpError(400, "EMPTY", "Describe your idea in a sentence first.");
+    // A starter template, if the person picked one: checked before anything is written, recorded first.
+    const wanted = templateRequest(body);
     const state = planning(project);
     // What the repo already has (package.json, config files) and what the idea says both count; the idea wins.
     const stack = stackForIdea(readRepoStack(project.root), idea);
     const profile = profileRepo(idea, stack);
+    const picked = wanted ? pickTemplate(project, state, wanted, idea) : undefined;
     let fromRepo: string[] = [];
     try {
       fromRepo = state.session.recordRepoFacts(actorFor(project), profile, stack.facts);
@@ -320,7 +422,37 @@ export function registerPlanningRoutes(router: Router): void {
     state.idea = idea;
     state.profile = profile;
     saveIdea(project, idea);
-    return { asked, described, fromRepo, signals: profile.signals, research: { live: false, note: RESEARCH_NOTE }, overview: overview(project) };
+    return { asked, described, fromRepo, signals: profile.signals, research: { live: false, note: RESEARCH_NOTE }, ...(picked ? { template: { changed: picked.changed, id: picked.choice.id ?? "blank" } } : {}), overview: overview(project) };
+  });
+
+  /** GET /planning/templates: the starter templates, the same for every project and repo, and which one is in use. */
+  router.get("/planning/templates", ({ project }) => {
+    const choice = planning(project).session.templateChoice();
+    return { templates: templateCards(), blank: BLANK, current: choice ? (choice.id ?? "blank") : null, note: TEMPLATE_NOTE };
+  });
+
+  /**
+   * POST /planning/template { template, depth? }: the person picks a starter (or "blank"), now or later.
+   * Recorded as their decision.made (D-n). It answers nothing and approves nothing; answers, their own
+   * tasks and tasks they left out stay as they are. Refused once the roadmap is on the board.
+   */
+  router.post("/planning/template", ({ project, body }) => {
+    const request = templateRequest(body);
+    if (!request) throw new HttpError(400, "EMPTY", "Say which starter to use, or blank.");
+    const state = planning(project);
+    const picked = pickTemplate(project, state, request, state.idea ?? "");
+    return { changed: picked.changed, template: picked.choice.id ?? "blank", decision: picked.choice.decision, overview: overview(project) };
+  });
+
+  /** POST /planning/template/skip: the person's tap on "skip the usual areas" of their starter: each open question there is answered "Not needed for ...", as their decision. */
+  router.post("/planning/template/skip", ({ project }) => {
+    const state = planning(project);
+    try {
+      const skipped = state.session.skipUsual(actorFor(project), state.profile?.signals ?? []);
+      return { skipped, overview: overview(project) };
+    } catch (error) {
+      refuse(error);
+    }
   });
 
   /**
@@ -367,10 +499,23 @@ export function registerPlanningRoutes(router: Router): void {
     if (b.phase !== undefined && b.phase !== null && b.phase !== "" && !isPhase(b.phase)) {
       throw new HttpError(400, "INVALID", "phase must be one of foundation, core, integrations, hardening or release.");
     }
+    // Repos it touches: several make one task per repo, linked as a group (core/repos).
+    let repos: string[] = [];
+    if (b.repos !== undefined && b.repos !== null) {
+      if (!Array.isArray(b.repos) || b.repos.length > 12 || b.repos.some((r) => typeof r !== "string")) throw new HttpError(400, "INVALID", "repos must be a list of repo names.");
+      repos = [...new Set((b.repos as string[]).map((r) => r.trim()).filter(Boolean))];
+      const known = knownRepoNames(project);
+      const unknown = repos.filter((r) => !known.includes(r));
+      if (unknown.length) throw new HttpError(400, "UNKNOWN_REPO", `This project has no repo named ${unknown.map((r) => `"${r.slice(0, 40)}"`).join(", ")}. Its repos: ${known.join(", ")}.`);
+    }
     const state = planning(project);
     try {
-      const added = state.session.addTask(actorFor(project), { title, ...(doneWhen ? { doneWhen } : {}), refs, ...(isPhase(b.phase) ? { phase: b.phase } : {}) });
-      return { ...added, overview: overview(project) };
+      const phase = isPhase(b.phase) ? { phase: b.phase } : {};
+      const group = groupKey(`own-${randomUUID()}`);
+      const parts = splitByRepo(group, title, repos).map((part) =>
+        state.session.addTask(actorFor(project), { title: part.title, ...(doneWhen ? { doneWhen } : {}), refs, ...phase, ...(part.repo ? { repo: part.repo } : {}), ...(part.group ? { group: part.group } : {}) }),
+      );
+      return { ...parts[0]!, ...(parts.length > 1 ? { tasks: parts.map((p) => p.task) } : {}), overview: overview(project) };
     } catch (error) {
       refuse(error);
     }

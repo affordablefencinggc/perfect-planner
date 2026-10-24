@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { ArrowClockwiseIcon, CheckCircleIcon, CopyIcon, PlugsConnectedIcon, SpinnerGapIcon, WarningCircleIcon } from "@phosphor-icons/react";
 import { copyText } from "../project/connectAgentSetup.js";
-import { CoreLoading, ReadOnlyNotice, useAdvanced } from "./CoreScreen.jsx";
+import { CoreLoading, ReadOnlyNotice, StartHistoryNotice, useAdvanced } from "./CoreScreen.jsx";
 import { useCoreResource } from "./coreApi.js";
 import "./coreScreens.css";
 import "./CoreAgentConnect.css";
@@ -40,6 +40,31 @@ export function modelLabel(model) {
 
 function describeAgent(agent) {
   return agent.model ? `${agent.name} (${modelLabel(agent.model)})` : agent.name;
+}
+
+// Sign in to Codex with a ChatGPT account (core/host/routes/codexLogin.ts). Codex keeps the login; no key passes through here.
+function CodexLogin() {
+  const [waiting, setWaiting] = useState(false);
+  const [error, setError] = useState(null);
+  const login = useCoreResource("/agents/codex-login", { isEmpty: () => false, pollMs: waiting ? CONNECT_POLL_MS : 0 });
+  const data = login.status === "ready" ? login.data : null;
+  useEffect(() => { if (data && data.state !== "waiting") setWaiting(false); }, [data]);
+  if (!data?.installed && !waiting) return null;
+  const start = async () => {
+    setError(null);
+    setWaiting(true);
+    try { await login.post("/agents/codex-login", {}); login.reload(); } catch (e) { setError(e); setWaiting(false); }
+  };
+  return (
+    <div className="core-agent-connect-codex" data-codex-login>
+      {data?.loggedIn
+        ? <span className="core-agent-connect-done"><CheckCircleIcon weight="fill" aria-hidden="true" /> Codex is signed in{data.method === "chatgpt" ? " with ChatGPT" : ""}.</span>
+        : <button type="button" className="core-button" onClick={start} disabled={waiting}>{waiting ? <SpinnerGapIcon aria-hidden="true" /> : null} Log in to Codex</button>}
+      {waiting && <p className="core-muted">Finish signing in with ChatGPT in the browser window that opened.{data?.url && <> No window? <a href={data.url} target="_blank" rel="noreferrer noopener">Open the sign-in page</a>.</>}</p>}
+      {data?.state === "failed" && !waiting && <p className="core-agent-connect-warn" role="status">{data.message}</p>}
+      {error && <p className="core-agent-connect-warn" role="status">{error.message}</p>}
+    </div>
+  );
 }
 
 export function CoreAgentConnect() {
@@ -129,6 +154,7 @@ export function CoreAgentConnect() {
 
       {resource.status === "ready" && (
         <>
+          <StartHistoryNotice onStarted={() => { setActionError(null); resource.reload(); }} />
           {!pending && (
             <div className="core-agent-connect-actions">
               <button type="button" className="core-button primary" onClick={connect} disabled={busy}>
@@ -138,6 +164,8 @@ export function CoreAgentConnect() {
           )}
 
           {actionError && <p className="core-agent-connect-warn" role="status">{actionError.message}</p>}
+          <CodexLogin />
+          {data?.waiting > 0 && <p className="core-agent-connect-warn" role="status">{data.waiting === 1 ? "An agent is waiting for your answer." : `${data.waiting} agents' questions are waiting for your answer.`} Answer in Decisions.</p>}
 
           {pending && (
             <div className="core-agent-connect-setup">
@@ -160,6 +188,7 @@ export function CoreAgentConnect() {
                 and installs the Perfect Planner skill for {choice.label} on this computer. Then {choice.start} and say{" "}
                 <strong>check in with Perfect Planner</strong>. Already in {choice.label}? Paste the line into the chat; it shows you the line and runs it only after you say yes.
               </p>
+              {choice.id !== "claude" && <p className="core-muted">Beta. {choice.id === "gemini" ? "Gemini needs Trust folder chosen before the connect line, and its headless shell may be denied." : "Codex allows one connection per computer."}</p>}
               {choice.id === "codex" && <p className="core-muted">Codex keeps one Perfect Planner connection for the whole computer, so this replaces any earlier Codex connection.</p>}
               {pending.warning && <p className="core-agent-connect-warn">{pending.warning}</p>}
               <div className="core-agent-connect-snippet">
@@ -209,6 +238,7 @@ export function CoreAgentConnect() {
                     <strong>{agent.name}</strong>
                     {agent.model && <span className="core-muted"> · {modelLabel(agent.model)}</span>}
                     {agent.task && <span className="core-muted"> · {agent.task}</span>}
+                    {agent.quiet && <span className="core-muted"> · not heard from lately</span>}
                     {advanced && <code className="core-advanced"> {agent.id}</code>}
                   </div>
                   <span className={`core-pill ${agent.role === "main" ? "good" : ""}`}>{ROLE_LABEL[agent.role] ?? agent.role}</span>

@@ -7,6 +7,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { isLocalWindowsPath, isWithin, registeredRoots } from "../exec/index";
+import { extraRepoRoots } from "../repos/index";
 
 const REPO_FILE = "repo.json";
 
@@ -14,9 +15,12 @@ const REPO_FILE = "repo.json";
  * The repo folder the person picked for a project (kept in its .perfect-planner/), read without running
  * anything, so the host can protect it before its first git run. Never a whole drive or the home folder.
  */
-export function chosenRepoRoot(projectRoot: string): string | undefined {
+export function chosenRepoRoot(projectRoot: string, platform: NodeJS.Platform = process.platform): string | undefined {
   try {
     const root = (JSON.parse(fs.readFileSync(path.join(projectRoot, ".perfect-planner", REPO_FILE), "utf8")) as { root?: unknown }).root;
+    // On Windows only a drive-letter path is local: a network path in a hand-edited file is never looked at, since
+    // looking at \\host\share makes Windows talk to that machine.
+    if (typeof root === "string" && platform === "win32" && !isLocalWindowsPath(root)) return undefined;
     return typeof root === "string" && path.isAbsolute(root) && !repoRefusal(root) ? root : undefined;
   } catch {
     return undefined;
@@ -47,6 +51,7 @@ export function protectFor(tokenFile: string | null): string[] {
   if (!tokenFile) return [];
   const project = path.dirname(path.dirname(path.dirname(tokenFile)));
   const repo = chosenRepoRoot(project);
+  const more = extraRepoRoots(project).filter((root) => path.isAbsolute(root) && !repoRefusal(root));
   let recorded: unknown[] = [];
   try {
     const roots = (JSON.parse(fs.readFileSync(rootsFileFor(tokenFile), "utf8")) as { roots?: unknown }).roots;
@@ -54,7 +59,7 @@ export function protectFor(tokenFile: string | null): string[] {
   } catch {
     // an older app wrote no roots file
   }
-  const roots = [project, ...(repo ? [repo] : []), ...recorded].filter((root): root is string => typeof root === "string" && path.isAbsolute(root));
+  const roots = [project, ...(repo ? [repo] : []), ...more, ...recorded].filter((root): root is string => typeof root === "string" && path.isAbsolute(root));
   // A whole drive or the home folder is never a protected root: it would hide ~/.local/bin/claude.
   return [...new Set(roots)].filter((root) => !repoRefusal(root));
 }

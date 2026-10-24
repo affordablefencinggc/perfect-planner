@@ -5,24 +5,28 @@ import os from "node:os";
 import path from "node:path";
 import { FileStore, Ledger, type LedgerEntry } from "../ledger/index";
 import { installClauseRules } from "../lookup/index";
-import { TestGate, gateRule, type GatePolicy } from "../gate/index";
+import { TestGate, appNodeDir, gateRule, resolveCommand, runTestCommand, scrubbedEnv, testEnv, type GatePolicy, type TestRunner } from "../gate/index";
 import { AgentService } from "../mcp/index";
 import type { HostKeys } from "./keys";
 import { hostWitness } from "./witness";
 import { readOwnerPin, rememberedGenesis, rememberFolder, writeOwnerPin, type OwnerPin } from "./owner";
 import { DEFAULT_LOCAL_PERSON } from "./routes/people";
 import { installNumberingRules } from "../numbering/index";
-import { installPeopleRules } from "../people/index";
+import { installPeopleRules, listAgent } from "../people/index";
 import { installPlanningRules } from "../planning/index";
 import { installReleaseRules, protectProject, type CommandRunner, type ProtectionReport } from "../release/index";
+import { extraRepoRoots } from "../repos/index";
 import { ensureRequiredIgnores, PRIVATE_DIR, runGit } from "../worktrees/index";
-import { protectRoots, registeredRoots } from "../exec/index";
+import { containedRunner, protectRoots, registeredRoots } from "../exec/index";
+import type { ProjectWatch } from "./watch";
 
 export interface CoreProject {
   /** Safe key from the client ("default" when none was given). */
   key: string;
   /** Folder whose .perfect-planner/ledger holds this project's ledger. */
   root: string;
+  /** True when `root` is the app's own data folder (the normal case), not a folder the person's project lives in. */
+  appData: boolean;
   ledger: Ledger;
   service: AgentService;
   /**
@@ -44,16 +48,37 @@ export interface CoreProject {
   protectRoots(roots: readonly string[]): void;
   /** Removes this project's protected roots (the host calls it when it closes the project). */
   releaseRoots(): void;
+  /** The git watcher the host started for this project (core/host/watch.ts); the host stops it before the ledger closes. */
+  watch?: ProjectWatch;
   /** Per-screen scratch state that is not ledger truth (e.g. a planning session in progress). */
   state: Map<string, unknown>;
   entries(): readonly LedgerEntry[];
 }
 
 const KEY = /^[a-z0-9][a-z0-9._-]{0,63}$/i;
+/** Names Windows treats as devices (with or without an extension), wherever the folder is made. */
+const DEVICE_NAME = /^(?:con|prn|aux|nul|com[0-9]|lpt[0-9])(?:\..*)?$/i;
+
+/** Whether a (trimmed, non-empty) name may become a project's folder name on every OS the app runs on. */
+function safeFolderName(key: string): boolean {
+  // A trailing dot is dropped by Windows ("beta." would be "beta"); a device name is not a folder there.
+  return KEY.test(key) && !key.endsWith(".") && !DEVICE_NAME.test(key);
+}
 
 export function projectKey(raw: string | null | undefined): string {
   const key = (raw ?? "").trim();
-  return KEY.test(key) ? key : "default";
+  return safeFolderName(key) ? key : "default";
+}
+
+/**
+ * Why a project name sent with a request cannot be used, or undefined when it can. No name (or an empty
+ * one) means the "default" project. A name that is present but unusable is refused, never turned into
+ * "default": two different bad names must not end up sharing one project's ledger.
+ */
+export function projectKeyProblem(raw: string | null | undefined): string | undefined {
+  const key = (raw ?? "").trim();
+  if (!key || safeFolderName(key)) return undefined;
+  return "That project name cannot be used. Use letters, digits, dots, dashes and underscores, start with a letter or digit, stay under 64 characters, do not end with a dot and do not use a name Windows reserves for devices (con, nul, aux, prn, com1, lpt1).";
 }
 
 /**
@@ -142,7 +167,12 @@ export function chosenRepository(root: string): string | null {
 
 /** Folder whose .perfect-planner/ holds a project's ledger. */
 export function projectRootFor(baseRoot: string, key: string, override?: string): string {
-  return override ?? path.join(baseRoot, "projects", key);
+  if (override) return override;
+  const projects = path.join(baseRoot, "projects");
+  const root = path.join(projects, key);
+  // Defence in depth: the host refuses odd names first, but nothing may build a path outside projects/.
+  if (!safeFolderName(key) || path.dirname(root) !== projects) throw new Error(`"${key}" is not a project name that can be a folder.`);
+  return root;
 }
 
 /**
@@ -187,7 +217,7 @@ function ownerPinFor(baseRoot: string, root: string, keys: HostKeys): OwnerPin {
   }
   const principal = `person:${DEFAULT_LOCAL_PERSON}`;
   const ownerKey = keys.ownerKeyFor(principal);
-  if (!ownerKey) return { state: "unavailable", reason: "This device has no key store, so the project has no owner." };
+  if (!ownerKey) return { state: "unavailable", reason: `This device has no key store, so the project has no owner.${keys.state().reason ? ` ${keys.state().reason}` : ""}` };
   return { state: "new", ownerKey, principal, ...(genesis ? { genesis } : {}) };
 }
 
@@ -276,6 +306,27 @@ export function ledgerIntegrity(ledger: Ledger): LedgerIntegrity {
   return { state: "ok", writesStopped: false };
 }
 
+/**
+ * "Contain test commands" (opt-in, PP_CONTAIN_TESTS=1): run the gate's test commands inside the OS
+ * sandbox of core/exec/sandbox.ts. The gate's own runner still does the work inside the wrapper, and the
+ * planted-program checks run first on the command as written. Off, the gate runs tests as before.
+ */
+export function testRunnerFor(env: NodeJS.ProcessEnv = process.env): TestRunner | undefined {
+  if (env.PP_CONTAIN_TESTS !== "1") return undefined;
+  return containedRunner({
+    base: runTestCommand,
+    nodeDir: appNodeDir(),
+    precheck: (command, cwd, options) => {
+      const protect = options.protect ?? [];
+      const resolved = resolveCommand(command, cwd, testEnv(scrubbedEnv(process.env, options.env), { cwd, protect }), protect);
+      if (resolved.kind === "missing") return `command not found: ${resolved.program}`;
+      if (resolved.kind === "inside") return `refused: ${resolved.program} is ${resolved.file}, inside the project or one of its worktrees, so it could be a planted copy that reports a pass without running the test. Start the test with an installed program (node, npm, npx, python), then a script path.`;
+      if (resolved.kind === "unclear") return `refused: Perfect Planner can't tell which program "${resolved.program}" starts. Start the test with a plain program name or path.`;
+      return undefined;
+    },
+  });
+}
+
 export function openCoreProject(baseRoot: string, key: string, override: string | undefined, keys: HostKeys, ownerKeyFor?: OwnerKeySource): CoreProject {
   const root = projectRootFor(baseRoot, key, override);
   fs.mkdirSync(root, { recursive: true });
@@ -292,10 +343,11 @@ export function openCoreProject(baseRoot: string, key: string, override: string 
   // on the current code, and only the gate writes task.done after the test passes on the merge.
   const policy: GatePolicy = { requireJevTestReview: false };
   ledger.addRule(gateRule(policy));
-  const gate = new TestGate({ ledger, requireJevTestReview: policy.requireJevTestReview });
+  const run = testRunnerFor();
+  const gate = new TestGate({ ledger, requireJevTestReview: policy.requireJevTestReview, ...(run ? { run } : {}) });
   // TestGate copies its policy; give it the shared object so the host's switch reaches the gate and the rule together.
   Object.assign(gate, { policy });
-  const service = new AgentService({ ledger, gate });
+  const service = new AgentService({ ledger, gate, onJoin: (agent) => listAgent(ledger, agent.person, agent.id) });
   // Shipping safety on for every project the app opens: the release rules hold before the first
   // review, and the whole-branch secret scan runs before every push (a non-git folder is reported).
   // The host excludes .perfect-planner/ before it opens a project for a request (host.ts openProject);
@@ -323,7 +375,13 @@ export function openCoreProject(baseRoot: string, key: string, override: string 
       guard([chosen]);
       await protectRepository(ledger, chosen).catch(() => undefined);
     }
+    // Each extra repo of the project gets the same pre-push scan (core/repos).
+    for (const extra of extraRepoRoots(root)) {
+      if (!fs.existsSync(extra) || isHomeOrDrive(extra)) continue;
+      guard([extra]);
+      await protectRepository(ledger, extra).catch(() => undefined);
+    }
     return report;
   });
-  return { key, root, ledger, service, policy, owner, ready, protection, protectRoots: guard, releaseRoots, state: new Map(), entries: () => ledger.entries() };
+  return { key, root, appData: override === undefined, ledger, service, policy, owner, ready, protection, protectRoots: guard, releaseRoots, state: new Map(), entries: () => ledger.entries() };
 }

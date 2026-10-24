@@ -19,6 +19,25 @@ A structured planning app: point it at a project folder, get a reviewed plan, an
 
 4. **Connect an agent.** Click **Connect agent** in the header, then **Connect agent** on the card, and paste the one line it shows into a terminal in the folder your agent will work in (on Windows, PowerShell). It registers the agent with Claude Code and installs the Perfect Planner skill; then start Claude Code there and say *check in with Perfect Planner*. The app ships its own Node runtime for this, so there is nothing else to install. For other agents, copy the MCP settings it shows instead.
 
+## Supported computers
+
+Windows and Linux only. macOS is not supported and the app is not notarized, so no macOS build is offered.
+
+## Supported agents
+
+Claude Code is supported. Gemini CLI and Codex CLI are beta, each with one known limitation:
+
+- **Gemini CLI:** choose **Trust folder** before pasting the connect line. Its headless shell may be denied.
+- **Codex CLI:** only one connection per computer; connecting again replaces the earlier one.
+
+## What it does not do yet
+
+- It does not push to a remote.
+- It does not open pull requests.
+- It does not run CI.
+- It does not make a release from the app.
+- It stops at the local merge; everything after that you do yourself in git or GitHub.
+
 ## Run from source
 
 ```sh

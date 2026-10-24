@@ -262,6 +262,16 @@ async function changedTestFiles(cwd: string, pins: Pins): Promise<string[]> {
   return [...changed].sort();
 }
 
+/** The pinned test files whose content in `commit` is still exactly the content that was approved. */
+export async function unalteredPins(cwd: string, commit: string, pins: Pins): Promise<Set<string>> {
+  const same = new Set<string>();
+  for (const [file, hash] of Object.entries(pins)) {
+    const blob = await runGit(cwd, ["cat-file", "blob", `${commit}:${file}`]).catch(() => undefined);
+    if (blob?.code === 0 && contentHash(blob.stdoutBytes) === hash) same.add(file);
+  }
+  return same;
+}
+
 /** Why the merge commit about to land is not exactly the merge of `base` and `approved`, or null when it is. */
 export async function verifyMergeCommit(candidate: string, mergeCommit: string, base: string, approved: string): Promise<string | null> {
   const head = (await runGit(candidate, ["rev-parse", "--verify", "HEAD^{commit}"])).stdout.trim();
@@ -559,11 +569,16 @@ export async function testSupportFiles(repoRoot: string, commits: readonly strin
  * to the person as "touches dependencies, build or CI settings"); the gate also passes the pinned test
  * files and their support files.
  */
-export function sensitiveChanges(changed: readonly string[], pinned: readonly string[] = [], support: ReadonlySet<string> = new Set()): string[] {
+export function sensitiveChanges(changed: readonly string[], pinned: readonly string[] = [], support: ReadonlySet<string> = new Set(), approvedUnchanged: ReadonlySet<string> = new Set()): string[] {
   const pinnedDirs = new Set(pinned.map((file) => path.posix.dirname(file)));
   return changed.filter((file) => {
+    // The one exemption: the approved test file itself, by its exact path, and only while its content is still
+    // exactly what the person approved (`approvedUnchanged`, see unalteredPins). It lifts only the "other test
+    // files" flag below: an edited copy, a renamed copy and every other test-like file stay flagged, and a
+    // dependency, git, CI, build or config file is flagged even if it was pinned.
+    const own = approvedUnchanged.has(file) && pinned.includes(file);
     const base = path.posix.basename(file);
-    if (support.has(file) || DEPENDENCY_FILES.includes(base)) return true;
+    if ((support.has(file) && !own) || DEPENDENCY_FILES.includes(base)) return true;
     // Git and CI behaviour: attributes (filters, diff and merge drivers), submodules, workflows and hooks.
     if (/^\.git(attributes|modules)$/.test(base) || /^\.github\/workflows\//.test(file) || /(^|\/)\.(githooks|husky)\//.test(file)) return true;
     // Other package managers' manifests and build files.
@@ -573,6 +588,7 @@ export function sensitiveChanges(changed: readonly string[], pinned: readonly st
     // Tool and build configuration: vitest.config.ts, tsconfig.json, babel, jest, .mocharc and the like.
     if (/(^|\.)config\.[cm]?[jt]s$|^tsconfig.*\.json$|^\.?(babel|jest|mocha|vitest|vite|eslint|prettier)rc/i.test(base)) return true;
     // Test support: helpers, fixtures, mocks and other tests can change what the approved test sees.
+    if (own) return false;
     if (/(^|\/)(tests?|__tests__|specs?|fixtures|helpers|support|mocks|__mocks__)\//i.test(file) || /\.(test|spec)\.[cm]?[jt]sx?$/i.test(base)) return true;
     // Anything beside a pinned test file (outside the project root) is treated as one of its helpers.
     const dir = path.posix.dirname(file);
@@ -935,7 +951,7 @@ export class TestGate {
     const leaked = [...new Set(privatePaths([...changed, ...lines(history.stdout)]))];
     if (leaked.length) return refuse(privateRefusal(leaked));
     const support = await testSupportFiles(repoRoot, [forkPoint.stdout.trim(), branchTip], Object.keys(approval.pins), definition.command);
-    const sensitive = sensitiveChanges(changed, Object.keys(approval.pins), support);
+    const sensitive = sensitiveChanges(changed, Object.keys(approval.pins), support, await unalteredPins(repoRoot, branchTip, approval.pins));
     if (sensitive.length && !state.diffApproval.byPerson) {
       return refuse(`The diff changes ${sensitive.join(", ")}, which can change what the approved test checks; a person has to approve this diff.`);
     }
@@ -952,6 +968,11 @@ export class TestGate {
     const base = await runGit(repoRoot, ["rev-parse", "--verify", `refs/heads/${integrationBranch}^{commit}`]);
     if (base.code !== 0) return refuse(`Integration branch ${integrationBranch} does not exist.`);
     const oldIntegration = base.stdout.trim();
+
+    // A host killed between the branch move and the ledger writes leaves main holding the approved merge and the task
+    // unfinished. Finish the ledger for that exact merge instead of refusing a merge that has already happened.
+    const landed = await this.landedMerge(repoRoot, integrationBranch, oldIntegration, branchTip);
+    if (landed) return this.finishLanded({ taskId, state, definition, approval, mergeApproval, approver, landed, branch, branchTip, integrationBranch, repoRoot, prepare, entries, refuse });
 
     const parent = realDir(mkdtempSync(path.join(os.tmpdir(), "pp-gate-")));
     const candidate = path.join(parent, "candidate");
@@ -1054,6 +1075,108 @@ export class TestGate {
       rmSync(parent, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
       await runGit(repoRoot, ["worktree", "prune"]);
     }
+  }
+
+  /**
+   * The merge commit already on the integration branch for exactly the approved tip, or undefined. It must be on the
+   * first-parent line, have the tip as its second parent, and hold the tree a clean in-memory merge of its two parents
+   * produces; a merge made any other way is not recognised.
+   */
+  private async landedMerge(repoRoot: string, integrationBranch: string, integrationTip: string, branchTip: string): Promise<{ commit: string; parent: string } | undefined> {
+    if ((await runGit(repoRoot, ["merge-base", "--is-ancestor", branchTip, integrationTip])).code !== 0) return undefined;
+    const log = await runGit(repoRoot, ["rev-list", "--first-parent", "--parents", "-n", "200", `refs/heads/${integrationBranch}`]);
+    for (const line of lines(log.stdout)) {
+      const [commit, first, second, ...rest] = line.trim().split(/\s+/);
+      if (!commit || !first || second !== branchTip || rest.length) continue;
+      const pure = await runGit(repoRoot, ["merge-tree", "--write-tree", "--no-messages", first, branchTip]);
+      const tree = (await runGit(repoRoot, ["rev-parse", `${commit}^{tree}`])).stdout.trim();
+      if (pure.code === 0 && pure.stdout.trim().split(/\r?\n/)[0] === tree) return { commit, parent: first };
+      return undefined;
+    }
+    return undefined;
+  }
+
+  /** Write the ledger entries a killed merge never wrote, once and in order, testing the landed commit first if no pass is recorded. */
+  private async finishLanded(c: {
+    taskId: string;
+    state: GateState;
+    definition: NonNullable<GateState["definition"]>;
+    approval: NonNullable<GateState["approval"]>;
+    mergeApproval: NonNullable<GateState["mergeApproval"]>;
+    approver: Actor;
+    landed: { commit: string; parent: string };
+    branch: string;
+    branchTip: string;
+    integrationBranch: string;
+    repoRoot: string;
+    prepare: MergeOptions["prepare"];
+    entries: LedgerEntry[];
+    refuse: (reason: string, extra?: { output?: string; run?: TestRunResult; mergeCommit?: string }) => Refusal & { entries: LedgerEntry[] };
+  }): Promise<Ok<{ mergeCommit: string; entries: LedgerEntry[]; run: TestRunResult }> | (Refusal & { entries: LedgerEntry[]; output?: string; run?: TestRunResult; mergeCommit?: string })> {
+    const { taskId, state, definition, approval, mergeApproval, approver, landed, branch, branchTip, integrationBranch, repoRoot, prepare, entries, refuse } = c;
+    const mergeCommit = landed.commit;
+    const proof = (run?: TestRunResult) => ({
+      actor: GATE_ACTOR,
+      subject: taskId,
+      evidence: [`test:${definition.command}`, `definition:${definition.n}`, "phase:merge", `commit:${mergeCommit}`, `branch:${branch}`, `integration:${integrationBranch}`, `pin:${approval.pin}`, "recovered:true", ...(run ? runEvidence(run) : [])],
+      data: { test: definition.command, definition: definition.n, phase: "merge", afterMerge: true, commit: mergeCommit, pin: approval.pin, recovered: true },
+    });
+    let run: TestRunResult | undefined;
+    let passedEntry = state.passedCommits.includes(mergeCommit.toLowerCase()) ? this.ledger.entries().find((e) => e.type === "test.passed" && e.subject === taskId && evidenceValue(e, "commit") === mergeCommit && evidenceValue(e, "phase") === "merge") : undefined;
+    if (!state.passedCommits.includes(mergeCommit.toLowerCase())) {
+      const parent = realDir(mkdtempSync(path.join(os.tmpdir(), "pp-gate-")));
+      const candidate = path.join(parent, "candidate");
+      let added = false;
+      let linked: string | undefined;
+      try {
+        await git(repoRoot, ["worktree", "add", "--detach", candidate, mergeCommit]);
+        added = true;
+        const tampered = await changedTestFiles(candidate, approval.pins);
+        if (tampered.length) return refuse(`The approved test is different on ${integrationBranch} (${tampered.join(", ")}); nothing was changed.`, { mergeCommit });
+        if (prepare) await prepare(candidate);
+        else {
+          const deps = await cleanDependencies(repoRoot, integrationBranch, candidate, this.timeoutMs, this.allowInstallScripts);
+          linked = deps.linked;
+          if (deps.failure) return refuse(`${deps.failure} The merge is already on ${integrationBranch}; nothing was changed.`, { mergeCommit });
+        }
+        run = await this.runTest(definition.command, candidate, [repoRoot]);
+        if (!run.passed) {
+          entries.push(this.ledger.append({ ...proof(run), type: "test.failed", summary: `Done-when test for ${taskId} fails on ${integrationBranch}, which already holds the approved merge`, reason: failureReason(run) }));
+          return refuse(`The merge is already on ${integrationBranch}, but the test fails there (${describeRun(run)}); the task was not finished.`, { output: run.outputTail, run, mergeCommit });
+        }
+      } finally {
+        if (linked) unlinkSync(linked);
+        if (added) await runGit(repoRoot, ["worktree", "remove", "--force", candidate]);
+        rmSync(parent, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+        await runGit(repoRoot, ["worktree", "prune"]);
+      }
+      passedEntry = this.ledger.append({ ...proof(run), type: "test.passed", summary: `Done-when test for ${taskId} passes on ${integrationBranch}, which already holds the approved merge` });
+      entries.push(passedEntry);
+    }
+    if (state.merged?.commit.toLowerCase() !== mergeCommit.toLowerCase()) {
+      entries.push(
+        this.ledger.append({
+          type: "merge.done",
+          actor: approver,
+          subject: taskId,
+          summary: `Merged ${branch} into ${integrationBranch} at ${mergeCommit.slice(0, 12)}`,
+          evidence: [`commit:${mergeCommit}`, `from:${landed.parent}`, `branch:${branch}`, `branch-tip:${branchTip}`, `integration:${integrationBranch}`, "recovered:true"],
+          data: { commit: mergeCommit, from: landed.parent, branch, branchTip, integration: integrationBranch, recovered: true },
+        }),
+      );
+    }
+    this.assertCanFinish(taskId, mergeCommit);
+    entries.push(
+      this.ledger.append({
+        type: "task.done",
+        actor: GATE_ACTOR,
+        subject: taskId,
+        summary: `${taskId} is done: its approved test passes on ${integrationBranch} at ${mergeCommit.slice(0, 12)}`,
+        evidence: [`commit:${mergeCommit}`, `test:${definition.command}`, `definition:${definition.n}`, `proof:${passedEntry?.n ?? ""}`, `pin:${approval.pin}`, `approved-by:${approver.kind}:${approver.id}`, `merge-approval:${mergeApproval.n}`],
+        data: { commit: mergeCommit, test: definition.command, pin: approval.pin, approvedBy: approver, mergeApproval: mergeApproval.n },
+      }),
+    );
+    return { ok: true, mergeCommit, entries, run: run ?? ({ passed: true } as TestRunResult) };
   }
 
   /** Fast-forward the integration branch from oldSha to nextSha, through its checkout if it has one. */

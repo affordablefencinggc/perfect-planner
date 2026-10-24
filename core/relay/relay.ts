@@ -52,16 +52,43 @@ export interface SettledAnswerer {
   tryAnswer(question: Question): Promise<SettledAnswer | null>;
 }
 
+/** What a notice is about. */
+export type NoticeKind = "collision" | "collision-cleared" | "stalled" | "moving-again" | "commits" | "problem" | "problem-cleared";
+
+/**
+ * A plain-language fact the app itself saw (the git watcher: two tasks changing one file, a task with no
+ * activity, new commits). It is not a question and nobody needs to answer it. Every person's main chat
+ * receives each notice once, in the digest, whether or not any model remembers to report it.
+ */
+export interface Notice {
+  id: string;
+  seq: number;
+  at: string;
+  kind: NoticeKind;
+  /** The tasks it is about, for example ["T-3", "T-5"]. */
+  tasks: string[];
+  text: string;
+}
+
+export interface NoticeInput {
+  kind: NoticeKind;
+  tasks: string[];
+  text: string;
+  at?: string;
+}
+
 export interface Digest {
   person: string;
   open: number;
   blocking: number;
-  /** One short line per question: open ones (blocking first), then new auto-answered ones. */
+  /** One short line per question: open ones (blocking first), then new auto-answered ones, then new notices. */
   lines: string[];
   /** Open questions, then auto-answered ones the main chat has not seen, each marked. */
   questions: (Question & { autoAnswered: boolean })[];
   /** Questions answered without the main chat (earlier decision or the plan) since its last check. */
   autoAnswered: string[];
+  /** What the app itself saw since this main chat last checked (collisions, stalled tasks, new commits). Each is shown once. */
+  notices: Notice[];
 }
 
 export interface AskResult {
@@ -83,6 +110,10 @@ export function questionKey(question: string, options: readonly string[] = []): 
 const decisionKey = (person: string, key: string) => `${person}\u0000${key}`;
 
 const SYSTEM: Actor = { kind: "system", id: "perfect-planner" };
+
+/** Notices kept for main chats that have not looked yet; older unread ones are counted, never silently lost. */
+export const MAX_NOTICES = 200;
+const MAX_NOTICE_TEXT = 400;
 
 export interface RelayOptions {
   ledger: Ledger;
@@ -108,6 +139,10 @@ export class Relay {
   /** person -> auto-answered Q numbers their main chat has already been shown */
   private readonly shownAuto = new Map<string, Set<string>>();
   private readonly waiters = new Map<string, ((q: Question) => void)[]>();
+  private readonly notices: Notice[] = [];
+  private noticeSeq = 0;
+  /** person -> highest notice number their main chat has been shown */
+  private readonly noticesShown = new Map<string, number>();
   private pausedAll: { reason: string } | null = null;
   /** Tasks Pause all blocked; Resume all unblocks exactly these, owned or not. */
   private pausedTasks = new Set<string>();
@@ -232,6 +267,13 @@ export class Relay {
    * plus each question answered without it (from an earlier decision or the
    * plan) until the main chat has seen it once, marked as auto-answered.
    */
+  /** How many of this person's questions still wait for an answer. Reads only; digest() marks notices as shown. */
+  openFor(person: string): number {
+    let n = 0;
+    for (const q of this.questions.values()) if (q.person === person && q.status === "open") n += 1;
+    return n;
+  }
+
   digest(person: string): Digest {
     const shown = this.shownAuto.get(person) ?? new Set<string>();
     this.shownAuto.set(person, shown);
@@ -241,14 +283,45 @@ export class Relay {
     const auto = mine.filter((q) => q.status === "answered" && q.answeredVia !== "main" && !shown.has(q.q)).sort(byNumber);
     for (const q of auto) shown.add(q.q);
     const autoLines = auto.map((q) => `${q.q} (${q.task}) auto-answered ${q.answeredVia === "decision" ? `from ${q.decision}` : "from the plan"}: ${q.answer}`);
+    const news = this.unseenNotices(person);
     return {
       person,
       open: open.length,
       blocking: open.filter((q) => q.blocking).length,
-      lines: [...open.map((q) => `${q.q} (${q.task}${q.blocking ? ", blocking" : ""}) ${q.question}${q.options.length ? ` Options: ${q.options.join(" | ")}` : ""}`), ...autoLines],
+      lines: [...open.map((q) => `${q.q} (${q.task}${q.blocking ? ", blocking" : ""}) ${q.question}${q.options.length ? ` Options: ${q.options.join(" | ")}` : ""}`), ...autoLines, ...news.map((n) => n.text)],
       questions: [...open.map((q) => ({ ...q, autoAnswered: false })), ...auto.map((q) => ({ ...q, autoAnswered: true }))],
       autoAnswered: autoLines,
+      notices: news,
     };
+  }
+
+  /**
+   * Records something the app itself saw, for every person's main chat (the git watcher's collisions,
+   * stalls and commits). It is kept in memory: the ledger already holds the durable facts, and the
+   * caller decides what counts as new, so a restart never replays old events.
+   */
+  addNotice(input: NoticeInput): Notice {
+    const text = redactSecrets(input.text.replace(/\s+/g, " ").trim()).slice(0, MAX_NOTICE_TEXT);
+    if (!text) throw new Error("A notice needs some words.");
+    this.noticeSeq += 1;
+    const notice: Notice = { id: `N-${this.noticeSeq}`, seq: this.noticeSeq, at: input.at ?? new Date().toISOString(), kind: input.kind, tasks: [...input.tasks], text };
+    this.notices.push(notice);
+    if (this.notices.length > MAX_NOTICES) this.notices.splice(0, this.notices.length - MAX_NOTICES);
+    return { ...notice, tasks: [...notice.tasks] };
+  }
+
+  /** Notices this person's main chat has not been shown yet, oldest first; marks them shown. */
+  private unseenNotices(person: string): Notice[] {
+    const seen = this.noticesShown.get(person) ?? 0;
+    const fresh = this.notices.filter((n) => n.seq > seen).map((n) => ({ ...n, tasks: [...n.tasks] }));
+    // Sequence numbers are contiguous, so what fell off the end unread is the gap before the oldest kept one.
+    const oldest = this.notices[0]?.seq ?? this.noticeSeq + 1;
+    const lost = Math.max(0, oldest - 1 - seen);
+    if (lost > 0) {
+      fresh.unshift({ id: "N-0", seq: 0, at: new Date().toISOString(), kind: "problem", tasks: [], text: `${lost} older notice${lost === 1 ? "" : "s"} about the workers were dropped because nobody read them. The ledger still has the commits and collisions.` });
+    }
+    this.noticesShown.set(person, this.noticeSeq);
+    return fresh;
   }
 
   /**

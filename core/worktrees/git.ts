@@ -1,5 +1,5 @@
 import { execFileSync, spawn } from "node:child_process";
-import { chmodSync, existsSync, lstatSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { gitExecutable, NO_CWD_SEARCH_ENV } from "../exec/index";
@@ -100,16 +100,8 @@ export function hooklessPath(program: string, platform: NodeJS.Platform = proces
   return platform === "win32" ? program : "/dev/null";
 }
 
-/** The app's empty attributes file and private global config, made once per process. */
-function hardeningFiles(program: string): Hardening {
-  if (hardening) return hardening;
-  const root = mkdtempSync(path.join(os.tmpdir(), "pp-git-"));
-  const hooksPath = hooklessPath(program);
-  const attributesFile = path.join(root, "attributes");
-  writeFileSync(attributesFile, "");
-  const globalConfig = path.join(root, "gitconfig");
-  writeFileSync(globalConfig, "");
-  // Read the user's own settings (reading config runs nothing) and copy the needed ones over.
+/** Copy the person's own carried settings (reading config runs nothing) into `target`, which must already exist. */
+function copyCarriedSettings(program: string, root: string, target: string): void {
   for (const key of CARRIED_SETTINGS) {
     for (const scope of ["--system", "--global"]) {
       let values: string[] = [];
@@ -120,10 +112,50 @@ function hardeningFiles(program: string): Hardening {
         // Not set in that scope.
       }
       for (const value of values) {
-        execFileSync(program, ["config", "--file", globalConfig, "--add", key, value], { cwd: root, env: { ...process.env, ...NO_CWD_SEARCH_ENV }, stdio: "ignore", windowsHide: true, timeout: 10_000 });
+        execFileSync(program, ["config", "--file", target, "--add", key, value], { cwd: root, env: { ...process.env, ...NO_CWD_SEARCH_ENV }, stdio: "ignore", windowsHide: true, timeout: 10_000 });
       }
     }
   }
+}
+
+/**
+ * Pick up settings the person changed since this run started, such as the name and email they just set
+ * after being asked to. The app's private config is rebuilt beside the old one and swapped in whole, so a
+ * git process running meanwhile sees either copy, never half of one. Best effort: on failure the old copy stays.
+ */
+export function refreshCarriedSettings(): void {
+  if (!hardening) return;
+  const { globalConfig } = hardening;
+  const root = path.dirname(globalConfig);
+  const next = path.join(root, `gitconfig.${process.pid}.next`);
+  try {
+    const program = gitExecutable(root);
+    writeFileSync(next, "");
+    copyCarriedSettings(program, root, next);
+    chmodSync(next, 0o444);
+    // A read-only file cannot be replaced on Windows.
+    chmodSync(globalConfig, 0o644);
+    renameSync(next, globalConfig);
+  } catch {
+    try {
+      rmSync(next, { force: true });
+      chmodSync(globalConfig, 0o444);
+    } catch {
+      // Nothing more to do; the earlier copy keeps working.
+    }
+  }
+}
+
+/** The app's empty attributes file and private global config, made once per process. */
+function hardeningFiles(program: string): Hardening {
+  if (hardening) return hardening;
+  const root = mkdtempSync(path.join(os.tmpdir(), "pp-git-"));
+  const hooksPath = hooklessPath(program);
+  const attributesFile = path.join(root, "attributes");
+  writeFileSync(attributesFile, "");
+  const globalConfig = path.join(root, "gitconfig");
+  writeFileSync(globalConfig, "");
+  copyCarriedSettings(program, root, globalConfig);
   chmodSync(attributesFile, 0o444);
   chmodSync(globalConfig, 0o444);
   process.once("exit", () => {

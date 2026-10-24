@@ -25,9 +25,13 @@ describe("core host", () => {
     expect(body.result.root).toBeUndefined(); // the folder path is not served (Batch 3)
   });
 
-  it("falls back to the default project for unsafe keys", async () => {
-    const { body } = await hostCall(base, "GET", `/status?project=${encodeURIComponent("../etc")}`);
-    expect(body.result.project).toBe("default");
+  it("uses the default project only when no name is given, and refuses an unsafe name", async () => {
+    expect((await hostCall(base, "GET", "/status")).body.result.project).toBe("default");
+    expect((await hostCall(base, "GET", "/status?project=")).body.result.project).toBe("default");
+    // A bad name used to become "default", so two different bad names shared one project's ledger (core/host/isolation.test.ts).
+    const { status, body } = await hostCall(base, "GET", `/status?project=${encodeURIComponent("../etc")}`);
+    expect(status).toBe(400);
+    expect(body).toMatchObject({ ok: false, code: "INVALID_PROJECT" });
   });
 
   it("answers 404 and 405 in JSON", async () => {

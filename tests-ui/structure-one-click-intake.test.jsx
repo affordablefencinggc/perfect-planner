@@ -138,4 +138,38 @@ describe("folder intake with an adjacent approval", () => {
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(adapter.selectWorkspaceFolder).toHaveBeenCalledTimes(1);
   });
+
+  test("a window with no folder picker opens a typed or pasted folder path and still waits for the adjacent approval", async () => {
+    const user = userEvent.setup();
+    const typed = "browser://notes-app/0123456789abcdef01234567";
+    const adapter = adapterWith({
+      selectWorkspaceFolder: vi.fn(async () => ({ available: false, authoritative: false, reason: "browser-folder-picker-unavailable" })),
+      selectTypedFolder: vi.fn(async () => selected(typed)),
+      launchFolder: vi.fn(async () => ({ name: "notes-app", path: "/home/you/notes-app" })),
+    });
+    const onProjectCaptured = vi.fn();
+    render(<StructureWorkspace workspaceAdapter={adapter} onProjectCaptured={onProjectCaptured} />);
+    await user.click(screen.getByRole("button", { name: "Choose app folder" }));
+    expect(await screen.findByText(/no folder picker. Type or paste the folder path below/)).toBeTruthy();
+    await user.type(await screen.findByLabelText(/type or paste the folder path/i), "/home/you/notes-app");
+    await user.click(screen.getByRole("button", { name: "Use this folder" }));
+    expect(adapter.selectTypedFolder).toHaveBeenCalledWith("/home/you/notes-app");
+    expect(adapter.registerWorkspaceReadOnly).not.toHaveBeenCalled();
+    await user.click(await screen.findByRole("button", { name: "Approve read-only scan" }));
+    await waitFor(() => expect(onProjectCaptured).toHaveBeenCalledTimes(1));
+    expect(adapter.registerWorkspaceReadOnly).toHaveBeenCalledWith(expect.objectContaining({ rootPath: typed, explicitUserApproval: true }));
+  });
+
+  test("a typed path the service refuses says why and reads nothing", async () => {
+    const user = userEvent.setup();
+    const adapter = adapterWith({
+      selectTypedFolder: vi.fn(async () => ({ available: false, authoritative: false, reason: "That is your home folder. Choose your app's own folder." })),
+      launchFolder: vi.fn(async () => ({ name: "x", path: "/x" })),
+    });
+    render(<StructureWorkspace workspaceAdapter={adapter} />);
+    await user.type(await screen.findByLabelText(/type or paste the folder path/i), "/home/you");
+    await user.click(screen.getByRole("button", { name: "Use this folder" }));
+    expect(await screen.findByText(/That is your home folder/)).toBeTruthy();
+    expect(adapter.registerWorkspaceReadOnly).not.toHaveBeenCalled();
+  });
 });

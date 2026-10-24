@@ -5,14 +5,14 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { bridgeCall } from "../../mcp/index";
 import { isAuthoritative } from "../../ledger/index";
 import { appendNumbered } from "../../numbering/index";
 import { asPersonRequest } from "../keys";
 import { hostCall, startTestHost } from "../testing";
 import { icaclsPath } from "../tokenFile";
-import { quoteFor, repoRefusal, withOutputTail, workerCommands } from "./tasks";
+import { gitIdentityRefusal, quoteFor, repoRefusal, withOutputTail, workerCommands } from "./tasks";
 
 const git = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, encoding: "utf8", env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t.invalid", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t.invalid" } }).trim();
 const write = (dir: string, file: string, text: string) => {
@@ -126,8 +126,8 @@ describe("tasks routes", () => {
     expect(checked.body.result).toMatchObject({ passed: true, commit: head });
     const diff = (await hostCall(ctx.base, "GET", `/tasks/T-1/diff${q}`)).body.result;
     expect(diff.files).toEqual([".github/workflows/ci.yml", "package.json", "src/save.js", "tests/save.check.mjs"]);
-    // The gate's own list: the proposed test file counts too, since a change there changes what is checked.
-    expect(diff.sensitive).toEqual([".github/workflows/ci.yml", "package.json", "tests/save.check.mjs"]);
+    // The gate's own list, minus the approved test file: it passed unchanged at this tip, and the person read it when approving the test.
+    expect(diff.sensitive).toEqual([".github/workflows/ci.yml", "package.json"]);
     expect(diff.text).toContain("export const save");
     expect((await tasks()).tasks[0]).toMatchObject({ stage: "review-diff" });
     // A program planted in the repo's config (a filter git would run on diff) is a plain refusal, never a crash.
@@ -155,6 +155,16 @@ describe("tasks routes", () => {
     expect((await post("/tasks/T-1/approve-diff", { commit: diff.commit, confirmSensitive: diff.sensitive })).status).toBe(200);
     expect((await tasks()).tasks[0]).toMatchObject({ stage: "ready-to-merge" });
     expect((await post("/tasks/T-1/merge", { commit: "0".repeat(40) })).body.code).toBe("STALE");
+    // No usable git identity (an empty name is refused by git): plain message, nothing signed, nothing merged.
+    git(repo, "config", "user.name", "");
+    const noName = await post("/tasks/T-1/merge", { commit: head });
+    expect(noName.status).toBe(409);
+    expect(noName.body.code).toBe("GIT_IDENTITY_MISSING");
+    expect(noName.body.message).toContain('git config --global user.email "you@example.com"');
+    expect(noName.body.message).not.toMatch(/conflict|Committer identity unknown/i);
+    expect(ctx.host.project("loop").entries().some((entry: any) => entry.type === "merge.done")).toBe(false);
+    git(repo, "config", "user.name", "Owner");
+    // With an identity the merge takes its normal path.
     const merged = await post("/tasks/T-1/merge", { commit: head });
     expect(merged.status, JSON.stringify(merged.body)).toBe(200);
     // The worker is finished: its token no longer works and its token file is gone.
@@ -187,6 +197,16 @@ describe("tasks routes", () => {
     expect(rejected.body.result).toMatchObject({ reopenedAs: "T-1.a2" });
     expect(fs.existsSync(d.tokenFile)).toBe(false);
     expect((await tasks()).tasks[0]).toMatchObject({ id: "T-1", attempt: 2, label: "T-1.a2", status: "open" });
+  }, 60_000);
+
+  it("B1: never suggests the host's own data folder as the git folder", async () => {
+    await ctx.stop();
+    ctx = await startTestHost();
+    const view = await tasks();
+    expect(view.repo.ok).toBe(false);
+    expect(view.repo.suggested).toBeUndefined();
+    await ctx.stop();
+    ctx = await startTestHost({ projectRootOverride: repo });
   }, 60_000);
 
   it("says plainly when the project folder is not a git repository", async () => {
@@ -317,6 +337,12 @@ describe("worker commands", () => {
     const posix = workerCommands({ worktree: "/w/$(x)", bridgeUrl: "http://127.0.0.1:1", tokenFile: "/t/T-1.token", entry: "/a/agent.mjs", briefFile: "/b/`x`.md", platform: "linux" });
     expect(posix.setup).toBe("cd '/w/$(x)' && node '/a/connect.mjs' --agent claude http://127.0.0.1:1 '/t/T-1.token'");
     expect(posix.start).toBe("claude \"$(cat '/b/`x`.md')\"");
+    expect(posix.agents.gemini.setup).toBe("cd '/w/$(x)' && node '/a/connect.mjs' --agent gemini http://127.0.0.1:1 '/t/T-1.token'");
+    expect(posix.agents.gemini.start).toBe("gemini --approval-mode auto_edit -i \"$(cat '/b/`x`.md')\"");
+    expect(posix.agents.codex.setup).toContain("--agent codex");
+    expect(posix.agents.codex.start).toBe("codex -s workspace-write -a on-request \"$(cat '/b/`x`.md')\"");
+    // Never an approve-everything flag, for any agent.
+    for (const a of Object.values(posix.agents)) expect(a.start).not.toMatch(/yolo|danger|bypass|full-auto/);
     expect(workerCommands({ worktree: "C:\\w", bridgeUrl: "http://127.0.0.1:1", tokenFile: "C:\\t", entry: "C:\\a", briefFile: "C:\\b.md", platform: "win32" }).start).toBe("claude (Get-Content -Raw 'C:\\b.md')");
   });
 });
@@ -361,5 +387,54 @@ describe("a refused merge shows why the test failed", () => {
     expect(text).toContain("line 40");
     expect(text).not.toContain("line 20\n");
     expect(withOutputTail("refused", "")).toBe("refused");
+  });
+});
+
+describe("a computer whose git has no name and email", () => {
+  const keep = { ...process.env };
+  afterEach(() => {
+    for (const key of ["HOME", "USERPROFILE", "XDG_CONFIG_HOME", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM"]) {
+      if (keep[key] === undefined) delete process.env[key];
+      else process.env[key] = keep[key];
+    }
+  });
+
+  it("gets a plain message with the two commands, and nothing in git config is changed", async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "pp-nohome-"));
+    const bare = fs.mkdtempSync(path.join(os.tmpdir(), "pp-noident-"));
+    try {
+      execFileSync("git", ["init", "-q", "-b", "main", bare]);
+      Object.assign(process.env, { HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: path.join(home, "xdg"), GIT_CONFIG_NOSYSTEM: "1" });
+      const personal = path.join(home, "gitconfig");
+      process.env.GIT_CONFIG_GLOBAL = personal;
+      // Git may guess an email from the host name; refuse the guess so this matches a beginner's machine.
+      execFileSync("git", ["config", "user.useConfigOnly", "true"], { cwd: bare });
+      // The app copies the person's git settings once per process; load it fresh, as on a computer with none.
+      vi.resetModules();
+      const fresh = await import("./tasks");
+      const text = await fresh.gitIdentityRefusal(bare);
+      expect(text).toContain('git config --global user.name "Your Name"');
+      expect(text).toContain('git config --global user.email "you@example.com"');
+      expect(text).not.toMatch(/Committer identity unknown|conflict/i);
+      // The person runs the two commands while the app stays open: the next try passes, no restart.
+      execFileSync("git", ["config", "--file", personal, "user.name", "Pat"]);
+      execFileSync("git", ["config", "--file", personal, "user.email", "pat@example.invalid"]);
+      expect(await fresh.gitIdentityRefusal(bare)).toBeNull();
+      expect(fs.existsSync(path.join(home, ".gitconfig"))).toBe(false);
+      expect(execFileSync("git", ["config", "--local", "--list"], { cwd: bare, encoding: "utf8" })).not.toMatch(/user\.(name|email)/);
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+      fs.rmSync(bare, { recursive: true, force: true });
+    }
+  });
+
+  it("does not blame the identity when git itself fails", async () => {
+    const text = await gitIdentityRefusal(path.join(os.tmpdir(), "pp-no-such-folder-for-git"));
+    expect(text).toContain("Git did not answer");
+    expect(text).not.toContain("user.name");
+  });
+
+  it("is not in the way when git has an identity", async () => {
+    expect(await gitIdentityRefusal(repo)).toBeNull();
   });
 });

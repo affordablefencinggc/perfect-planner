@@ -1,6 +1,7 @@
 // Shared shapes for deep planning ("Deep planning: the hard questions first").
 // Everything here is plain data so the app, the MCP tools and Jev can read it.
 import type { DescriptionFact, RuledOut } from "./description";
+import type { TemplateTask } from "./templates";
 
 /** The ten areas whose decisions sink projects when they come late. */
 export const AREAS = [
@@ -149,6 +150,10 @@ export interface RoadmapTask {
   node: string;
   change: "fix" | "feature" | "breaking";
   dependsOn: string[];
+  /** Repos this task touches (names from the project's repos). Several make one task per repo, linked as a group. */
+  repos?: string[];
+  /** Set on a task a plan template suggested (see templates.ts). Its own block: the contract fields live elsewhere. */
+  template?: TemplateTask;
 }
 
 export interface RoadmapPhase {

@@ -1,1 +1,1 @@
-export { Relay, questionKey, trustedEntry, type AskResult, type Digest, type Question, type QuestionInput, type RelayOptions, type SettledAnswer, type SettledAnswerer } from "./relay";
+export { Relay, MAX_NOTICES, questionKey, trustedEntry, type AskResult, type Digest, type Notice, type NoticeInput, type NoticeKind, type Question, type QuestionInput, type RelayOptions, type SettledAnswer, type SettledAnswerer } from "./relay";
