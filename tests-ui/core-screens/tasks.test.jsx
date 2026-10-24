@@ -476,4 +476,24 @@ describe("TasksScreen queue and batch", () => {
     const notice = await screen.findByText(/main was left untouched/);
     expect(notice.textContent).toContain("expected 2 got 3");
   });
+
+  describe("containment disclosure", () => {
+    const proposed = () => task({ stage: "test-proposed", worktree: { path: "/w", branch: "pp/T-1", base: "main", port: 5200 }, test: { command: "node t.mjs", files: ["t.mjs"], entry: "L-000007", by: { kind: "agent", id: "w", model: "m" } } });
+    test.each([["no containment field (older host / Windows)", undefined], ["not contained", { contained: false }]])("%s: approve-test card and screen say NOT contained", async (_n, containment) => {
+      routeFetch({ "GET /tasks": async () => ok({ ...view([proposed()]), ...(containment ? { containment } : {}) }) });
+      renderScreen();
+      const c = await card("T-1 Save notes");
+      expect(within(c).getByText("This command runs as you, with your files and network.")).toBeTruthy();
+      expect(screen.getAllByText("NOT contained").length).toBeGreaterThan(0);
+      expect(screen.queryByText("contained: bubblewrap")).toBeNull();
+    });
+    test("contained: shows the bubblewrap pill and not the runs-as-you sentence", async () => {
+      routeFetch({ "GET /tasks": async () => ok({ ...view([proposed()]), containment: { contained: true, by: "bubblewrap" } }) });
+      renderScreen();
+      await card("T-1 Save notes");
+      expect(screen.getByText("contained: bubblewrap")).toBeTruthy();
+      expect(screen.queryByText("NOT contained")).toBeNull();
+      expect(screen.queryByText("This command runs as you, with your files and network.")).toBeNull();
+    });
+  });
 });

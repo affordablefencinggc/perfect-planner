@@ -23,6 +23,7 @@ import { AGENT_SERVER_NAME, agentEntryPath, connectLine, nodeBinary, quoteFor, t
 export { quoteFor };
 import { localPerson, localPersonId } from "./people";
 import { PRIMARY_REPO, readRepos } from "../../repos/index";
+import { sandboxStatus } from "../../exec/index";
 import { replayRoster } from "../../people/index";
 import { protectRepository } from "../project";
 import { chosenRepoRoot, repoRefusal } from "../protectedRoots";
@@ -371,13 +372,23 @@ async function allRepos(project: CoreProject): Promise<{ repos: RepoState[]; wor
   return { repos, worktrees: lists.flat() };
 }
 
+/**
+ * Whether approved test commands run inside the OS sandbox. True only when the person opted in
+ * (PP_CONTAIN_TESTS=1, the same switch testRunnerFor reads), this is Linux and bubblewrap works.
+ * Never true on Windows or macOS. Anything else is "not contained", and the screen says so.
+ */
+export async function containmentView(env: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform): Promise<{ contained: boolean; by?: "bubblewrap" }> {
+  if (env.PP_CONTAIN_TESTS !== "1" || platform !== "linux") return { contained: false };
+  return (await sandboxStatus(platform, env)).kind === "bubblewrap" ? { contained: true, by: "bubblewrap" } : { contained: false };
+}
+
 export async function overview(project: CoreProject) {
   const { repos, worktrees } = await allRepos(project);
   const board = project.service.board();
   const assignments = replayRoster(project.entries(), project.ledger.owner).assignments;
   const tasks = [...board.values()].map((task) => viewTask(project, task, worktrees, board, assignments));
   const settings = taskSettings(project);
-  return { repo: repos[0]!, settings, queue: queueOf(tasks, settings.limit), repos: repos.map((repo) => ({ ...repo, worktrees: worktrees.filter((w) => (w.repo ?? PRIMARY_REPO) === repo.name).length })), tasks, groups: taskGroups(tasks) };
+  return { repo: repos[0]!, containment: await containmentView(), settings, queue: queueOf(tasks, settings.limit), repos: repos.map((repo) => ({ ...repo, worktrees: worktrees.filter((w) => (w.repo ?? PRIMARY_REPO) === repo.name).length })), tasks, groups: taskGroups(tasks) };
 }
 
 /** Tasks split from one plan task over several repos, in task order, with whether every part is ready to merge. */
