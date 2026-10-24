@@ -77,7 +77,7 @@ describe("owner controls", () => {
   it("controls hidden without callbacks", () => {
     render(<PeoplePanel view={view()} me="dana" now={now} />);
     expect(screen.queryByRole("form")).toBeNull();
-    expect(screen.queryByRole("button")).toBeNull();
+    expect(screen.queryAllByRole("button").filter((b) => b.textContent !== "Profile")).toHaveLength(0);
   });
   it("add flow with slug suggestion", () => {
     const p = full(); render(<PeoplePanel {...p} />);

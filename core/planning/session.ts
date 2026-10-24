@@ -39,6 +39,9 @@ export interface OwnTaskInput {
   refs?: string[];
   /** Roadmap phase; "core" when left out. */
   phase?: PhaseId;
+  /** The repo it is for, and the group key tying it to the same task in other repos (the route splits). */
+  repo?: string;
+  group?: string;
 }
 
 export class PlanningError extends Error {
@@ -234,6 +237,8 @@ export class PlanningSession {
         phase: input.phase ?? "core",
         owner: this.person,
         ...(doneWhen ? { doneWhen } : {}),
+        ...(input.repo ? { repo: input.repo } : {}),
+        ...(input.group ? { group: input.group } : {}),
         source: OWN_TASK_SOURCE,
       },
     });

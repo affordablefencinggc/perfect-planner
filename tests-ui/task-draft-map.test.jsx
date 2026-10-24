@@ -95,3 +95,13 @@ test('map says the approval check failed, not "approved by you", when the task d
   expect(screen.getByRole('status').textContent).not.toContain('approved by you');
  }finally{digest.mockRestore();localStorage.clear();}
 });
+test('map does not crash when the plan was approved in Deep planning and this device has no saved approval record',async()=>{
+ localStorage.clear();
+ const ledger=updateTaskDraft(emptyTaskDraftLedger(binding),task);
+ const records={sections:{},corePlan:{approved:true,tasks:[],latest:{plan:'P-1',entry:'L-000010',at:'2026-10-17T09:00:00.000Z',by:'owner',source:'planning'}}};
+ const {ProjectContext}=await import('../src/project/ProjectProvider.jsx');
+ render(<ProjectContext.Provider value={{planStatuses:{[project.projectId]:{state:'unavailable'}}}}><TaskDraftMap project={project} records={records} store={withMemoryTaskSaveIntents({read:async()=>ledger})}/></ProjectContext.Provider>);
+ expect(await screen.findByRole('button',{name:'Open T0001: Keep local changes in Ledger'})).toBeTruthy();
+ await act(async()=>{await new Promise(r=>setTimeout(r,300));});
+ expect(screen.getByLabelText('Map planning approval')).toBeTruthy();
+});

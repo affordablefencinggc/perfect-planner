@@ -126,8 +126,11 @@ export async function checkReadiness(task: { proofs: unknown[]; worktree: { path
 }
 
 export interface CareContext {
-  requireRepo(project: CoreProject): Promise<string>;
-  manager(project: CoreProject, root: string): WorktreeManager;
+  requireRepo(project: CoreProject, name?: string | null): Promise<string>;
+  manager(project: CoreProject, root: string, name?: string | null): WorktreeManager;
+  /** The repo names of the project, the first repo first (null), and the repo a task folder belongs to. */
+  repoNames(project: CoreProject): (string | null)[];
+  repoOf(project: CoreProject, label: string): string | null;
   dispatched(project: CoreProject): ReadonlyMap<string, unknown>;
   findTask(project: CoreProject, id: string): TaskView;
   overview(project: CoreProject): Promise<unknown>;
@@ -146,32 +149,48 @@ function row(project: CoreProject, item: Leftover) {
 export function registerWorktreeCareRoutes(router: Router, ctx: CareContext): void {
   /** GET /worktrees: the folders nobody is working in, with owner, size and why each is kept. Reads only. */
   router.get("/worktrees", async ({ project }) => {
-    const root = await ctx.requireRepo(project);
-    const worktrees = ctx.manager(project, root);
     const classify = classifyFolder(project, ctx.dispatched(project));
-    const [{ kept }, { untracked }] = await Promise.all([worktrees.sweep({ classify, dryRun: true }), worktrees.reconcileWithDisk()]);
-    return { folders: kept.map((item) => row(project, item)), untracked };
+    const folders: ReturnType<typeof row>[] = [];
+    const untrackedAll: unknown[] = [];
+    for (const name of ctx.repoNames(project)) {
+      // The first repo must be set; a later repo whose folder is gone is skipped here (the Tasks screen says so).
+      const root = name === null ? await ctx.requireRepo(project) : await ctx.requireRepo(project, name).catch(() => null);
+      if (!root) continue;
+      const worktrees = ctx.manager(project, root, name);
+      const [{ kept }, { untracked }] = await Promise.all([worktrees.sweep({ classify, dryRun: true }), worktrees.reconcileWithDisk()]);
+      folders.push(...kept.map((item) => row(project, item)));
+      untrackedAll.push(...untracked);
+    }
+    return { folders, untracked: untrackedAll };
   });
 
   /** POST /worktrees/clean: the safe sweep. Removes only finished or released folders with nothing to lose. */
   router.post("/worktrees/clean", ({ project }) =>
     withHygieneLock(project, async () => {
-      const root = await ctx.requireRepo(project);
-      const worktrees = ctx.manager(project, root);
-      await worktrees.reconcileWithDisk({ forget: true });
-      const result = await worktrees.sweep({ classify: classifyFolder(project, ctx.dispatched(project)), actor: localPerson(project) });
-      return { removed: result.removed.map((item) => ({ task: item.taskId, path: item.path, branchDeleted: item.branchDeleted, ...(item.branchKeptReason ? { branchKept: item.branchKeptReason } : {}) })), folders: result.kept.map((item) => row(project, item)) };
+      const removed: { task: string; path: string; branchDeleted: boolean; branchKept?: string }[] = [];
+      const folders: ReturnType<typeof row>[] = [];
+      for (const name of ctx.repoNames(project)) {
+        const root = name === null ? await ctx.requireRepo(project) : await ctx.requireRepo(project, name).catch(() => null);
+        if (!root) continue;
+        const worktrees = ctx.manager(project, root, name);
+        await worktrees.reconcileWithDisk({ forget: true });
+        const result = await worktrees.sweep({ classify: classifyFolder(project, ctx.dispatched(project)), actor: localPerson(project) });
+        removed.push(...result.removed.map((item) => ({ task: item.taskId, path: item.path, branchDeleted: item.branchDeleted, ...(item.branchKeptReason ? { branchKept: item.branchKeptReason } : {}) })));
+        folders.push(...result.kept.map((item) => row(project, item)));
+      }
+      return { removed, folders };
     }).catch(asHttp),
   );
 
   /** POST /worktrees/:id/remove: the person's own choice to remove a kept folder. Refuses anything with work that would be lost. */
   router.post("/worktrees/:id/remove", ({ project, params }) =>
     withHygieneLock(project, async () => {
-      const root = await ctx.requireRepo(project);
       const label = params.id!;
+      const repo = ctx.repoOf(project, label);
+      const root = await ctx.requireRepo(project, repo);
       const classify = classifyFolder(project, ctx.dispatched(project));
       return ctx
-        .manager(project, root)
+        .manager(project, root, repo)
         .removeChecked(label, localPerson(project), (info) => {
           const kind = classify(info);
           if (kind === "active") return { refuse: `${label} is still being worked on. Release its claim first.` };
@@ -184,9 +203,10 @@ export function registerWorktreeCareRoutes(router: Router, ctx: CareContext): vo
   /** POST /tasks/:id/recreate-folder: bring a deleted task folder back from its branch, work and all. */
   router.post("/tasks/:id/recreate-folder", ({ project, params }) =>
     withHygieneLock(project, async () => {
-      const root = await ctx.requireRepo(project);
-      const label = attemptLabel(ctx.findTask(project, params.id!));
-      const result = await ctx.manager(project, root).recreate(label, localPerson(project));
+      const task = ctx.findTask(project, params.id!);
+      const label = attemptLabel(task);
+      const root = await ctx.requireRepo(project, task.repo ?? null);
+      const result = await ctx.manager(project, root, task.repo ?? null).recreate(label, localPerson(project));
       return { recreated: label, branch: result.info.branch, ...(result.ledgerNote ? { ledgerNote: result.ledgerNote } : {}), ...((await ctx.overview(project)) as object) };
     }).catch(asHttp),
   );

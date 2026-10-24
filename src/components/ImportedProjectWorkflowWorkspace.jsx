@@ -17,6 +17,8 @@ import { usePlanTaskDriftWatch } from "../project/usePlanApproval.js";
 import { focusRequirementTarget } from "./focusRequirementTarget.js";
 import { ProjectTruthGate } from "./ProjectTruthGate.jsx";
 const TaskDraftLedger = lazy(() => import("./TaskDraftLedger.jsx").then(module => ({ default: module.TaskDraftLedger })));
+const CoreSpine = lazy(() => import("../core-screens/CoreSpine.jsx"));
+const CorePlanSpine = lazy(() => import("../core-screens/CorePlanSpine.jsx"));
 const TaskDraftMap = lazy(() => import("./TaskDraftMap.jsx").then(module => ({ default: module.TaskDraftMap })));
 import "./ImportedProjectWorkflowWorkspace.css";
 
@@ -133,6 +135,7 @@ export function ImportedProjectWorkflowWorkspace({
     [activeProject, workspace, records],
   );
   const [query, setQuery] = useState("");
+  const [coreTasks, setCoreTasks] = useState(0); // tasks on the core ledger: the spine replaces the older proof panel when there are some
   const firstOpen = model.requirements.find((item) => item.state !== "recorded") ?? null;
   const showSearch = workspace === "ledger" || (workspace === "index" && !workspacePanels.index);
   const handleNext = (event) => {
@@ -181,9 +184,11 @@ export function ImportedProjectWorkflowWorkspace({
     </header>
 
     {workspace === "ledger" && <Suspense fallback={<p role="status">Opening task drafts…</p>}><TaskDraftLedger project={activeProject} /></Suspense>}
+    {workspace === "plan" && <Suspense fallback={null}><CorePlanSpine onWorkspace={onWorkspace} onCount={setCoreTasks} /></Suspense>}
     {workspace === "plan" && <Suspense fallback={<p role="status">Opening the saved task map…</p>}><TaskDraftMap project={activeProject} records={records} onWorkspace={onWorkspace} /></Suspense>}
 
-    {workspacePanels[workspace] && (() => { const FeaturePanel = workspacePanels[workspace]; return <Suspense fallback={<p role="status">Opening this step…</p>}><FeaturePanel project={activeProject} records={records} onWorkspace={onWorkspace} onSelect={onSelect} /></Suspense>; })()}
+    {(workspace === "evidence" || workspace === "build") && <Suspense fallback={<p role="status">Opening the task spine…</p>}><CoreSpine onWorkspace={onWorkspace} onCount={setCoreTasks} actions={workspace === "build"} /></Suspense>}
+    {workspacePanels[workspace] && !((workspace === "evidence" || workspace === "build") && coreTasks > 0) && (() => { const FeaturePanel = workspacePanels[workspace]; return <Suspense fallback={<p role="status">Opening this step…</p>}><FeaturePanel project={activeProject} records={records} onWorkspace={onWorkspace} onSelect={onSelect} /></Suspense>; })()}
 
     <section className="imported-workflow-context" aria-label="Workspace contract">
       <article><small>PURPOSE</small><span>{model.copy.purpose}</span></article>
