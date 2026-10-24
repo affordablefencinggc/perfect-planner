@@ -1588,7 +1588,7 @@ function demoInspectorFacts(selected, mustHaves) {
   return [
     ["Repository", selected.repository, true],
     ["Branch", selected.branch],
-    ["Owner / agent", selected.owner],
+    ["Owner / agent", selected.owner ? <span className="inspector-owner"><OwnerBadge owner={selected.owner} /> {selected.owner}</span> : null],
     ["Worktree", selected.worktree, true],
     ["Contract", `${mustHaves} must-haves`],
     ["File scope", files ? `${files} file${files === 1 ? "" : "s"}` : null],
