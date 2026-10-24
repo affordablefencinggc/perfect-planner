@@ -1,0 +1,3 @@
+{"label":"fedora-rpm","name":"install","pass":true,"seen":"dnf installed PerfectPlanner-dry-run-v0.1.0-c4bc42a-linux-x64.rpm; /usr/bin/perfect-planner-desktop /usr/bin/planner-agent-helper /usr/share/applications/Perfect Planner.desktop"}
+{"label":"fedora-rpm","name":"shared libraries","pass":true,"seen":"ldd: all resolved on Fedora 41"}
+{"label":"fedora-rpm","name":"uninstall program files","pass":true,"seen":"dnf remove ok; nothing left"}
