@@ -622,7 +622,7 @@ export class Ledger {
   /** Why writes are stopped: a save that failed (full disk) is fixed by restarting, not by acknowledging a tampered entry. */
   private stoppedMessage(): string {
     if (this.chain.ok) return "writes are stopped";
-    if (this.chain.problem === "write") return `writes are stopped because saving ${this.chain.firstBad} failed (${this.chain.detail ?? "write error"}); free the space or fix the folder, then restart the app`;
+    if (this.chain.problem === "write") return `disk full or not writable: saving ${this.chain.firstBad} failed (${this.chain.detail ?? "write error"}); the saved history is intact. Free the space, then reopen the app`;
     return `writes are stopped: ${this.chain.firstBad} failed the fingerprint check (${this.chain.problem}); acknowledge it first`;
   }
 
@@ -662,7 +662,7 @@ export class Ledger {
     } catch (error) {
       // The line may or may not have reached disk; stop rather than risk a reused number or a fork.
       this.chain = { ok: false, firstBad: entry.n, problem: "write", detail: (error as Error).message };
-      throw new LedgerError("CHAIN_BROKEN", `writing ${entry.n} failed (${(error as Error).message}); writes are stopped until the ledger is reopened`);
+      throw new LedgerError("CHAIN_BROKEN", `disk full or not writable: saving ${entry.n} failed (${(error as Error).message}); the saved history is intact. Free the space, then reopen the app`);
     }
     this.index.set(entry.n, this.list.length);
     this.list.push(entry);

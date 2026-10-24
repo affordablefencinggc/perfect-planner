@@ -117,6 +117,7 @@ d("a full disk under the ledger", () => {
       expect(refusal, "the disk never filled").toBeDefined();
       expect(refusal!.status, "a full disk must be a plain refusal, not a crash").toBeLessThan(600);
       expect(String(refusal!.body?.message ?? ""), "the refusal must say what happened").toMatch(/space|disk|full|write|save/i);
+      expect(String(refusal!.body?.message ?? ""), "a full disk is not tampering").not.toMatch(/fingerprint|acknowledge|tamper/i);
       // reads still work and the chain is intact
       expect((await win.call("GET", `/tasks${q}`)).status).toBe(200);
       const files = fs.readdirSync(ledgerDir).filter((f) => f.endsWith(".jsonl"));

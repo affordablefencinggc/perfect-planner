@@ -69,7 +69,10 @@ describe("pure helpers", () => {
 });
 
 const status = process.platform === "linux" ? await sandboxStatus() : { kind: "none" as const, reason: "Linux only" };
-describe.skipIf(status.kind !== "bubblewrap")("a real contained run", () => {
+// Where bubblewrap is absent (or cannot start) the real runs cannot happen: skip, and say why in the test name and the log.
+const skipReason = status.kind === "bubblewrap" ? "" : `SKIPPED (${"reason" in status && status.reason ? status.reason : "bubblewrap unavailable"})`;
+if (skipReason) console.log(`sandbox.test: real contained runs ${skipReason}`);
+describe.skipIf(status.kind !== "bubblewrap")(`a real contained run${skipReason ? ` ${skipReason}` : ""}`, () => {
   const dir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "pp-sb-run-")));
   afterAll(() => fs.rmSync(dir, { recursive: true, force: true }));
   const run = containedRunner({ base: runTestCommand, nodeDir: path.dirname(process.execPath) });

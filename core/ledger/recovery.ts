@@ -242,16 +242,20 @@ export function checkRecoveryCode(entries: readonly LedgerEntry[], typed: string
   }
 }
 
-// The answer depends only on the entry's own (frozen) content, so it is remembered per entry object: ownerChain runs on every
-// person-signed write and used to re-verify every earlier person signature each time (F6 of the soak trial).
-const selfSignedMemo = new WeakMap<LedgerEntry, boolean>();
+// A person-signed write re-checks every earlier person signature (ownerChain), which grew with the ledger (F6 of the soak
+// trial). An answer is remembered per entry object, and only for a frozen entry. It is reused only while the hash, the
+// signature and the signer's public key still equal what was verified, so a copy with any of the three changed is
+// verified again from scratch and a forged or tampered entry is never accepted from the memo.
+const selfSignedMemo = new WeakMap<LedgerEntry, { hash: string; value: string; pub: string; ok: boolean }>();
 
 function selfSigned(entry: LedgerEntry): boolean {
-  const known = selfSignedMemo.get(entry);
-  if (known !== undefined) return known;
   const sig = entry.sig;
+  const known = selfSignedMemo.get(entry);
+  if (known && sig && known.hash === entry.hash && known.value === sig.value && known.pub === sig.pub) return known.ok;
   const ok = !!sig && typeof sig.pub === "string" && typeof sig.value === "string" && keyIdOf(sig.pub) === sig.key && verifies(sig.pub, signedBytes(entry), sig.value);
-  if (Object.isFrozen(entry)) selfSignedMemo.set(entry, ok);
+  if (sig && Object.isFrozen(entry) && Object.isFrozen(sig) && Object.isFrozen(entry.data)) {
+    selfSignedMemo.set(entry, { hash: entry.hash, value: sig.value, pub: sig.pub, ok });
+  }
   return ok;
 }
 

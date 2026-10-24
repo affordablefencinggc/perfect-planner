@@ -148,9 +148,12 @@ describe("the chain cannot corrupt itself or reuse a number", () => {
       realAppend(entry); // the line reaches disk...
       throw new Error("disk full while writing HEAD"); // ...but the write reports failure
     };
-    expect(() => ledger.append(draft({ summary: "half written" }))).toThrow();
+    expect(() => ledger.append(draft({ summary: "half written" }))).toThrow(/disk full.*reopen/);
     store.append = realAppend;
     expect(code(() => ledger.append(draft({ summary: "would reuse L-000002" })))).toBe("CHAIN_BROKEN");
+    // a failed save is not tampering: the words must not say so (F5)
+    expect(() => ledger.append(draft({ summary: "again" }))).toThrow(/disk full.*reopen/);
+    expect(() => ledger.append(draft({ summary: "again" }))).not.toThrow(/fingerprint|acknowledge|tamper/);
     ledger.close();
     const reopened = Ledger.openSync(store, { keys });
     const numbers = reopened.entries().map((e) => e.n);
