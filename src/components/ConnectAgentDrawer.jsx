@@ -1,8 +1,11 @@
-import { useEffect, useRef } from "react";
+import { lazy, Suspense, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { ArrowRightIcon, RobotIcon, XIcon } from "@phosphor-icons/react";
 import { CoreAgentConnect } from "../core-screens/CoreAgentConnect.jsx";
 import "./ConnectAgentDrawer.css";
+
+// Loaded only when the drawer opens, so the main bundle does not carry the terminal.
+const CoreTerminal = lazy(() => import("../core-screens/CoreTerminal.jsx"));
 
 const FOCUSABLE = 'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 // Connect agent: the live check-in panel (CoreAgentConnect), whose lines come from the running host,
@@ -51,6 +54,7 @@ export function ConnectAgentDrawer({ open, onClose, onWorkspace, hasProject = tr
 
         <div className="connect-agent-scroll">
           <CoreAgentConnect />
+          {hasProject && <Suspense fallback={null}><CoreTerminal /></Suspense>}
           <section className="connect-agent-section" aria-label="Hand your plan to the agent">
             <h3>Hand your plan to the agent</h3>
             <p>Once your plan is approved, open Build and use <strong>Copy brief</strong> to paste the current task into your agent's chat.</p>

@@ -13,6 +13,7 @@ import path from "node:path";
 import { randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import type { AgentRecord, AgentService } from "../../mcp/index";
+import type { CoreHost } from "../host";
 import type { CoreProject } from "../project";
 import { AGENT_KINDS, type AgentKind } from "../agentKinds";
 import { HttpError, type Router } from "../router";
@@ -116,7 +117,7 @@ export function agentEntryPath(from: string = fileURLToPath(import.meta.url)): {
 export const quoteFor = (windows: boolean) => (value: string) =>
   windows ? `'${value.replaceAll("'", "''")}'` : `'${value.replaceAll("'", `'\\''`)}'`;
 
-const connectProgram = (entry: string) => entry.replace(/agent\.mjs$/, "connect.mjs");
+export const connectProgram = (entry: string) => entry.replace(/agent\.mjs$/, "connect.mjs");
 
 /**
  * The Node that runs connect.mjs and agent.mjs. The desktop app ships its own Node and sets
@@ -227,6 +228,37 @@ function viewAgents(project: CoreProject): { agents: AgentView[]; connections: C
   return { agents, connections: views };
 }
 
+export async function issueConnection(project: CoreProject, host: CoreHost, body: unknown) {
+  if (!host.bridgeEnabled) throw new HttpError(503, "BRIDGE_OFF", "Agent connections are turned off for this app, so there is nothing for an agent to connect to.");
+  const raw = (body as { person?: unknown } | null)?.person;
+  const person = raw === undefined || raw === null || raw === "" ? localPersonId(project) : String(raw).trim();
+  if (!PERSON.test(person)) throw new HttpError(400, "INVALID", "Pick a person by their short name, such as owner.");
+  const bridge = await host.bridge(project);
+  project.state.set(BRIDGE_URL, bridge.url);
+  const token = project.service.tokens.issue({ role: "connect", person });
+  const id = `C-${randomBytes(4).toString("hex")}`;
+  // The repo git finds for the project folder (when none was picked) is protected too.
+  const repo = await repoState(project).catch(() => null);
+  const tokenFile = writeTokenFile(project, `connect-${id}`, token, [repo?.ok ? repo.root : undefined]);
+  const conn: Connection = { id, person, issuedAt: new Date().toISOString(), token, tokenFile, revoked: false };
+  connections(project).set(conn.id, conn);
+  const entry = agentEntryPath();
+  const setup = setupFor(bridge.url, tokenFile, entry.path);
+  return {
+    connection: conn.id,
+    person,
+    bridgeUrl: bridge.url,
+    tokenFile,
+    serverName: AGENT_SERVER_NAME,
+    agentPath: entry.path,
+    agentBuilt: entry.built,
+    claudeCode: setup.claudeCode,
+    lines: setup.lines,
+    json: setup.json,
+    ...(entry.built ? {} : { warning: "The agent program is not built yet. Run npm run build:core-host in the Perfect Planner folder before pasting this." }),
+  };
+}
+
 export function registerAgentRoutes(router: Router): void {
   router.get("/agents", ({ project, host }) => {
     const url = project.state.get(BRIDGE_URL) as string | undefined;
@@ -234,36 +266,7 @@ export function registerAgentRoutes(router: Router): void {
     return { bridge: { enabled: host.bridgeEnabled, ...(url ? { url } : {}) }, skillLine: skillLine(entry.path), agentBuilt: entry.built, waiting: waitingQuestions(project), ...viewAgents(project) };
   });
 
-  router.post("/agents/connect", async ({ project, host, body }) => {
-    if (!host.bridgeEnabled) throw new HttpError(503, "BRIDGE_OFF", "Agent connections are turned off for this app, so there is nothing for an agent to connect to.");
-    const raw = (body as { person?: unknown } | null)?.person;
-    const person = raw === undefined || raw === null || raw === "" ? localPersonId(project) : String(raw).trim();
-    if (!PERSON.test(person)) throw new HttpError(400, "INVALID", "Pick a person by their short name, such as owner.");
-    const bridge = await host.bridge(project);
-    project.state.set(BRIDGE_URL, bridge.url);
-    const token = project.service.tokens.issue({ role: "connect", person });
-    const id = `C-${randomBytes(4).toString("hex")}`;
-    // The repo git finds for the project folder (when none was picked) is protected too.
-    const repo = await repoState(project).catch(() => null);
-    const tokenFile = writeTokenFile(project, `connect-${id}`, token, [repo?.ok ? repo.root : undefined]);
-    const conn: Connection = { id, person, issuedAt: new Date().toISOString(), token, tokenFile, revoked: false };
-    connections(project).set(conn.id, conn);
-    const entry = agentEntryPath();
-    const setup = setupFor(bridge.url, tokenFile, entry.path);
-    return {
-      connection: conn.id,
-      person,
-      bridgeUrl: bridge.url,
-      tokenFile,
-      serverName: AGENT_SERVER_NAME,
-      agentPath: entry.path,
-      agentBuilt: entry.built,
-      claudeCode: setup.claudeCode,
-      lines: setup.lines,
-      json: setup.json,
-      ...(entry.built ? {} : { warning: "The agent program is not built yet. Run npm run build:core-host in the Perfect Planner folder before pasting this." }),
-    };
-  });
+  router.post("/agents/connect", ({ project, host, body }) => issueConnection(project, host, body));
 
   router.post("/agents/revoke", ({ project, body }) => {
     const { connection, agent } = (body ?? {}) as { connection?: unknown; agent?: unknown };

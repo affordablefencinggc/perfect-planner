@@ -13,6 +13,7 @@ import { registerSearchRoutes } from "./search";
 import { registerRepoRoutes } from "./repos";
 import { registerTaskRoutes } from "./tasks";
 import { registerSummaryRoutes } from "./summary";
+import { registerTerminalRoutes } from "./terminal";
 
 export function registerRoutes(router: Router): void {
   registerPlanningRoutes(router);
@@ -28,4 +29,5 @@ export function registerRoutes(router: Router): void {
   registerPlanRoutes(router);
   registerKeyRoutes(router);
   registerSummaryRoutes(router);
+  registerTerminalRoutes(router);
 }
