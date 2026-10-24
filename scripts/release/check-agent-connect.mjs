@@ -68,7 +68,7 @@ export function parseConnectLine(line) {
  * laid out like an npm install (claude.cmd + node_modules/@anthropic-ai/claude-code/cli.js), which
  * connect.mjs runs directly with its own Node, no shell.
  */
-function fakeClaude(bin, record) {
+export function fakeClaude(bin, record) {
   const program = `import { appendFileSync } from "node:fs";\nappendFileSync(${JSON.stringify(record)}, JSON.stringify(process.argv.slice(2)) + "\\n");\n`;
   const cli = path.join(bin, "node_modules", "@anthropic-ai", "claude-code", "cli.js");
   mkdirSync(path.dirname(cli), { recursive: true });
