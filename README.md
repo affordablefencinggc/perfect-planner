@@ -17,7 +17,7 @@ A structured planning app: point it at a project folder, get a reviewed plan, an
 
 3. **Choose a folder.** Click **Add project**, then choose your project's folder. Nothing is read until you approve the analysis, and nothing in the folder is changed.
 
-4. **Connect an agent.** Click **Connect agent** in the header, then **Connect agent** on the card, and paste the one line it shows into a terminal in the folder your agent will work in (on Windows, PowerShell). It registers the agent with Claude Code and installs the Perfect Planner skill; then start Claude Code there and say *check in with Perfect Planner*. The app ships its own Node runtime for this, so there is nothing else to install. For other agents, copy the MCP settings it shows instead.
+4. **Connect an agent.** Click **Connect agent** in the header, then **Connect agent** on the card, and paste the one line it shows into a terminal in the folder your agent will work in (on Windows, PowerShell). It registers the agent with Claude Code and installs the Perfect Planner skill; then it starts Claude Code there and tells it to check in, so you type nothing more (add `--no-start` to the line to only connect). Pasted into an agent's chat instead, you say *check in with Perfect Planner* yourself. The app ships its own Node runtime for this, so there is nothing else to install. For other agents, copy the MCP settings it shows instead.
 
 ## Supported computers
 
