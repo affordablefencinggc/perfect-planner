@@ -231,6 +231,9 @@ async function main() {
     const dialogs = [...document.querySelectorAll("[role=dialog], aside, .side-drawer")].filter((d) => d.getAttribute("aria-hidden") !== "true" && /connect|agent/i.test(d.innerText || ""));
     const d = dialogs.pop(); if (!d) return null;
     if (arguments[0]) {
+      // A folder nobody has written to first asks the person to start its history; then the drawer's Connect agent button appears.
+      const start = [...d.querySelectorAll("button")].find((b) => /^start a new history for this folder$/i.test((b.innerText || "").trim()) && !b.disabled);
+      if (start) { start.click(); return { text: d.innerText.trim(), code: [] }; }
       const inner = [...d.querySelectorAll("button")].find((b) => /^connect agent$/i.test((b.innerText || "").trim()) && !b.disabled);
       if (inner) inner.click();
     }
@@ -240,8 +243,13 @@ async function main() {
   let panel = connect ? await waitFor(() => run(READ_DRAWER, false), 15_000) : null;
   if (panel) {
     const before = panel.code.length;
-    await run(READ_DRAWER, true).catch(() => null);
-    panel = (await waitFor(async () => { const p = await run(READ_DRAWER, false); return p && p.code.length > before ? p : null; }, 15_000)) || (await run(READ_DRAWER, false));
+    // Press whatever the drawer offers (start history, then Connect agent) until a line shows.
+    panel = await waitFor(async () => {
+      await run(READ_DRAWER, true).catch(() => null);
+      await new Promise((r) => setTimeout(r, 1500));
+      const p = await run(READ_DRAWER, false);
+      return p && p.code.length > before ? p : null;
+    }, 45_000) || (await run(READ_DRAWER, false));
   }
   await shot("04-connect-agent");
   const lines = panel?.code || [];
