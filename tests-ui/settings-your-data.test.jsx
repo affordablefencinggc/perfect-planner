@@ -7,6 +7,6 @@ test('Settings says uninstall keeps data, where it lives on each OS, and how to 
  render(<SettingsWorkspace onWorkspace={()=>{}} onClose={()=>{}} invoke={async()=>({stored:false})} jevStatusOverride={{stored:false}}/>);
  expect(screen.getByRole('heading',{name:'Your data'})).toBeTruthy();
  expect(screen.getByText(/Uninstalling Perfect Planner keeps your plans/)).toBeTruthy();
- for(const where of [/LOCALAPPDATA%\\com\.perfectplanner\.desktop/,/Library\/Application Support\/com\.perfectplanner\.desktop/,/\.local\/share\/com\.perfectplanner\.desktop/])expect(screen.getByText(where)).toBeTruthy();
+ for(const where of [/ledger and settings are in %APPDATA%\\com\.perfectplanner\.desktop/,/browser data is in %LOCALAPPDATA%\\com\.perfectplanner\.desktop/,/Library\/Application Support\/com\.perfectplanner\.desktop/,/\.local\/share\/com\.perfectplanner\.desktop/])expect(screen.getByText(where)).toBeTruthy();
  expect(screen.getByText(/delete that folder/)).toBeTruthy();
 });
