@@ -13,6 +13,7 @@ import * as path from "node:path";
 import { readDescription, withoutNegations } from "./description";
 import { profileIdea } from "./profile";
 import { FINAL_TASK_KEY } from "./roadmap";
+import { contractFlags, draftContract, normalizeContract } from "./contract";
 import { readRepoStack, type RepoStack } from "./repo";
 import {
   DEPTH_TIER,
@@ -405,12 +406,20 @@ export function seedTemplate(template: PlanTemplate, context: RepoContext, idea:
     .filter((x) => kept.has(x.step))
     .map((x) => {
       const info: TemplateTask = { id: template.id, step: x.step, size: x.size, tier: x.tier, files: [...new Set(x.files.map((r) => filePattern(r, context)))] };
+      const doneWhen = x.doneWhen.replaceAll("{test}", test);
+      const title = fillTitle(x.title, subject);
+      // Every task carries a contract. A starter's step names the files it usually touches: those are the allowed files.
+      const drafted = draftContract({ kind: "component", label: title, parts: [], doneWhen });
+      const own = info.files.length ? normalizeContract({ ...drafted.contract, allowedFiles: info.files }) : null;
+      const contract = own && own.ok ? own.contract : drafted.contract;
       return {
         key: templateTaskKey(template, x.step),
-        title: fillTitle(x.title, subject),
+        title,
         phase: x.phase,
         owner,
-        doneWhen: x.doneWhen.replaceAll("{test}", test),
+        doneWhen,
+        contract,
+        contractFlags: own && own.ok ? contractFlags(contract) : drafted.flags,
         node: "root",
         change: x.change ?? "feature",
         dependsOn: [...new Set((x.after ?? []).flatMap((a) => reach(a)).filter((s) => s !== x.step))].map((s) => templateTaskKey(template, s)),
@@ -443,7 +452,7 @@ export function applyTemplate(roadmap: Roadmap, template: PlanTemplate, seed: Se
     tasks: [
       ...seed.tasks.filter((x) => x.phase === phase.id),
       ...phase.tasks.map((x) =>
-        x.key === FINAL_TASK_KEY ? { ...x, ...(finish ?? {}), dependsOn: [...new Set([...keys, ...x.dependsOn])] } : x,
+        x.key === FINAL_TASK_KEY ? { ...x, ...(finish ?? {}), ...(finish ? { contract: { ...x.contract, doneWhen: finish.doneWhen } } : {}), dependsOn: [...new Set([...keys, ...x.dependsOn])] } : x,
       ),
     ],
   }));

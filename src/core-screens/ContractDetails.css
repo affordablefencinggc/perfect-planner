@@ -1,0 +1,10 @@
+/* A task's contract, collapsed under the task on the Tasks and Plan screens. */
+.core-contract { font-size: var(--text-sm); }
+.core-contract > summary { cursor: pointer; font-weight: 600; }
+.core-contract > summary .core-muted { font-weight: 400; }
+.core-contract > :not(summary) { margin: var(--space-2) 0 0; overflow-wrap: anywhere; }
+.core-contract ul { padding-left: var(--space-5); }
+.core-contract code { font-family: var(--mono); font-size: var(--text-xs); }
+.core-contract .core-contract-label { font-size: var(--text-xs); font-weight: 600; color: var(--muted); }
+.core-contract .core-contract-warn { color: var(--amber-text); }
+.core-contract .core-contract-good { color: var(--green); }

@@ -78,7 +78,7 @@ describe("splitting a plan task over repos", () => {
 
 describe("a roadmap with a task over two repos", () => {
   const person: Actor = { kind: "person", id: "owner" };
-  const task = (key: string, extra: Partial<RoadmapTask> = {}): RoadmapTask => ({ key, title: key.toUpperCase(), phase: "core", owner: "owner", doneWhen: "a test passes", node: key, change: "feature", dependsOn: [], ...extra });
+  const task = (key: string, extra: Partial<RoadmapTask> = {}): RoadmapTask => ({ key, title: key.toUpperCase(), phase: "core", owner: "owner", doneWhen: "a test passes", node: key, change: "feature", dependsOn: [], contract: { clauses: ["It works."], allowedFiles: ["src/**"], doneWhen: "a test passes", sizeCap: { maxFiles: 8, maxLines: 400 } }, ...extra });
 
   it("writes one task per repo with a shared group, and what waited on it waits on every part", () => {
     const ledger = Ledger.openSync(new MemoryStore(), { now: () => new Date("2026-10-23T05:00:00Z") });

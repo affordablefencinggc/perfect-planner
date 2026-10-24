@@ -1,4 +1,4 @@
-import { useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import {
   CheckCircleIcon,
   FlagIcon,
@@ -9,6 +9,9 @@ import {
   WarningIcon,
 } from "@phosphor-icons/react";
 import { AdvancedOnly, ConfidenceMeter, CoreError, CoreLoading, CoreScreen, useAdvanced } from "./CoreScreen.jsx";
+import ContractDetails from "./ContractDetails.jsx";
+import { useOptionalProject } from "../project/ProjectProvider.jsx";
+import { projectFolderFor } from "../project/projectFolders.js";
 import { useCoreResource } from "./coreApi.js";
 import "./DeepPlanningScreen.css";
 
@@ -73,6 +76,13 @@ function IdeaStart({ resource }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const [template, setTemplate] = useState("blank");
+  const repo = useCoreResource("/planning/repo");
+  const repoKnown = repo.status === "ready" && repo.data.known;
+  const [chosen, setChosen] = useState(false);
+  // A repo that was read starts as "add a feature to an existing app", until the person picks something else.
+  useEffect(() => {
+    if (repoKnown && !chosen && repo.data.suggestedTemplate) setTemplate(repo.data.suggestedTemplate);
+  }, [repoKnown, chosen, repo.data?.suggestedTemplate]);
   const id = useId();
   const submit = async (event) => {
     event.preventDefault();
@@ -89,22 +99,70 @@ function IdeaStart({ resource }) {
   return (
     <form className="planning-start" onSubmit={submit}>
       <LightbulbIcon aria-hidden="true" className="planning-start-icon" />
-      <strong>Start with your idea</strong>
-      <p>Describe what you want to build in a sentence or two. Perfect Planner turns it into the questions that need an answer before any code is written, with a recommendation for each.</p>
+      <strong>{repoKnown ? `What do you want to do in ${repo.data.name}?` : "Start with your idea"}</strong>
+      {repo.status === "ready" && <RepoRead repo={repo} />}
+      <p>{repoKnown ? "Say what to add, fix or change. " : "Describe what you want to build in a sentence or two. "} Perfect Planner turns it into the questions that need an answer before any code is written, with a recommendation for each.</p>
       <label htmlFor={`${id}-idea`} className="planning-label">Your idea</label>
       <textarea
         id={`${id}-idea`}
         rows={3}
         value={idea}
         onChange={(e) => setIdea(e.target.value)}
-        placeholder="For example: a desktop invoice app with Stripe payments that works offline"
+        placeholder={repoKnown ? "For example: add CSV export to the reports page" : "For example: a desktop invoice app with Stripe payments that works offline"}
       />
-      <TemplatePicker value={template} onChange={setTemplate} />
+      <TemplatePicker value={template} onChange={(t) => { setChosen(true); setTemplate(t); }} />
       <p className="core-muted planning-note">Recommendations come from built-in question packs. Live web research is off because it needs a research key, so no sources are attached yet.</p>
       {error && <p className="planning-refusal" role="alert">{error}</p>}
       <button type="submit" className="core-button primary" disabled={busy || idea.trim().length < 3}>
         {busy ? "Starting…" : "Start planning"}
       </button>
+    </form>
+  );
+}
+
+// What planning read from the project's folder before any idea is typed, or a box to point it at the repo.
+function RepoRead({ repo }) {
+  const [path, setPath] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const tried = useRef(null);
+  const id = useId();
+  const data = repo.data;
+  // The folder the person scanned in Structure is the repo: hand it to planning once, without asking them to paste it.
+  const scanned = useOptionalProject()?.activeProject?.name;
+  const folder = data.known ? null : projectFolderFor(scanned);
+  useEffect(() => {
+    if (!folder || tried.current === folder) return;
+    tried.current = folder;
+    repo.post("/planning/repo", { path: folder }).catch((e) => setError(e.message));
+  }, [folder, repo]);
+  const point = async (event) => {
+    event.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      await repo.post("/planning/repo", { path: path.trim() });
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  if (data.known) {
+    const facts = data.facts.map((f) => f.text);
+    return (
+      <p className="core-card planning-repo" role="status">
+        Read your repo <strong>{data.name}</strong>: {data.fileCount}{data.truncated ? "+" : ""} files{facts.length ? `, ${facts.join(", ")}` : ""}{data.tests ? `, tests run with ${data.tests}` : ", no tests found"}. Questions it already answers are not asked.
+      </p>
+    );
+  }
+  return (
+    <form className="core-card planning-repo" onSubmit={point}>
+      <label htmlFor={`${id}-repo`} className="planning-label">Plan from your existing repo (optional)</label>
+      <input id={`${id}-repo`} value={path} onChange={(e) => setPath(e.target.value)} placeholder="C:\repos\my-app" autoComplete="off" />
+      <p className="core-muted planning-note">Perfect Planner only reads file names and a few config files. Nothing is run or changed.</p>
+      {error && <p className="planning-refusal" role="alert">{error}</p>}
+      <button type="submit" className="core-button" disabled={busy || !path.trim()}>Read this folder</button>
     </form>
   );
 }
@@ -205,14 +263,18 @@ function ApprovePanel({ data, resource }) {
   const [busy, setBusy] = useState(false);
   const [refusal, setRefusal] = useState(null);
   const [done, setDone] = useState(null);
+  const [acceptedFor, setAcceptedFor] = useState(null);
   const approved = data.approval.approved;
   const latest = approved[approved.length - 1];
+  // Tasks the plan marks "split this" are approved only when the person ticks that they read them.
+  const flagged = data.approval.flagged ?? [];
+  const accepted = acceptedFor === data.fingerprint;
   const approve = async () => {
     setBusy(true);
     setRefusal(null);
     setDone(null);
     try {
-      const result = await resource.post("/planning/approve", { fingerprint: data.fingerprint });
+      const result = await resource.post("/planning/approve", { fingerprint: data.fingerprint, ...(flagged.length ? { acceptFlagged: flagged.map((f) => f.key) } : {}) });
       const count = Object.keys(result.tasks ?? {}).length;
       setDone(count ? `Plan approved. ${count} roadmap tasks were added.` : "The changed plan is approved. The roadmap tasks were already added.");
     } catch (e) {
@@ -231,10 +293,17 @@ function ApprovePanel({ data, resource }) {
             Last approved {new Date(latest.at).toLocaleString()} by {latest.by}. <AdvancedOnly>{latest.plan} · {latest.entry}</AdvancedOnly>
           </p>
         )}
+        {flagged.length > 0 && !(data.approval.current ?? data.approval.upToDate) && (
+          <div className="planning-flagged">
+            <p><strong>{flagged.length === 1 ? "1 task needs a closer look" : `${flagged.length} tasks need a closer look`}</strong> before the plan is approved:</p>
+            <ul>{flagged.map((f) => <li key={f.key}><strong>{f.title}.</strong> {f.flags.map((x) => x.message).join(" ")}</li>)}</ul>
+            <label><input type="checkbox" checked={accepted} onChange={(e) => setAcceptedFor(e.target.checked ? data.fingerprint : null)} /> I have read {flagged.length === 1 ? "this" : "these"} and accept {flagged.length === 1 ? "it" : "them"} as {flagged.length === 1 ? "it is" : "they are"}</label>
+          </div>
+        )}
         {refusal && <p className="planning-refusal" role="alert">{refusal}</p>}
         {done && <p className="planning-done" role="status">{done}</p>}
       </div>
-      <button type="button" className="core-button primary" onClick={approve} disabled={busy || (data.approval.current ?? data.approval.upToDate)}>
+      <button type="button" className="core-button primary" onClick={approve} disabled={busy || (data.approval.current ?? data.approval.upToDate) || (flagged.length > 0 && !accepted)}>
         <SealCheckIcon aria-hidden="true" /> {busy ? "Approving…" : (data.approval.current ?? data.approval.upToDate) ? "Plan approved" : latest ? "Approve changed plan" : "Approve plan"}
       </button>
     </div>
@@ -622,6 +691,16 @@ function RoadmapView() {
                     <AdvancedOnly as="span">
                       {t.task ?? t.key}{t.entry ? ` · ${t.entry}` : ""}{t.dependsOnTasks.length ? ` · after ${t.dependsOnTasks.join(", ")}` : ""}{t.template ? ` · ${t.template.size} · ${t.template.files.join(", ")}` : ""}
                     </AdvancedOnly>
+                    {t.contract && (
+                      <ContractDetails
+                        contract={{
+                          files: t.contract.allowedFiles,
+                          sizeCap: t.contract.sizeCap,
+                          clauses: t.contract.clauses,
+                          warnings: [...(t.contractFlags ?? []).map((f) => f.message), ...(t.contractState && t.contractState.status !== "signed" ? [t.contractState.problem ?? "This contract is not the one you approved."] : [])],
+                        }}
+                      />
+                    )}
                     {!written && !t.own && t.key !== FINAL_TASK_KEY && (
                       <RoadmapAction resource={resource} path="/planning/roadmap/drop" taskKey={t.key} label={`Leave out: ${t.title}`}>Leave out</RoadmapAction>
                     )}

@@ -9,6 +9,7 @@ export * from "./state";
 export * from "./rules";
 export * from "./mindmap";
 export * from "./roadmap";
+export * from "./contract";
 export * from "./templates";
 export * from "./seed";
 export * from "./depth";

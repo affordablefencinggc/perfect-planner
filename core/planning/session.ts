@@ -22,7 +22,7 @@ import { depthCheck, type DepthFinding } from "./depth";
 import { findQuestion, questionsFor } from "./packs";
 import { EMPTY_CONTEXT, NO_IDEA_LABEL, applyTemplate, coerceContext, sameContext, seedTemplate, type RepoContext, type SeedResult } from "./seed";
 import { effectiveSkip, isTemplateDepth, isTemplateId, skipText, templateById, type PlanTemplate, type TemplateDepth, type TemplateId } from "./templates";
-import type { RepoFact } from "./repo";
+import type { RepoFact, RepoIndex } from "./repo";
 import { researchQuestion, type ResearchedQuestion, type ResearchProvider } from "./research";
 import { latestByQuestionId, openBlockers, planningAnswers, planningQuestions, type PlanningQuestionState } from "./state";
 import { AREA_TITLES, type IdeaProfile, type MindMap, type PhaseId, type PlanningQuestion, type Roadmap } from "./types";
@@ -520,9 +520,9 @@ export class PlanningSession {
     return depthCheck(this.mindMap(idea), planningAnswers(this.entries));
   }
 
-  /** The draft roadmap, without the tasks the person left out. */
-  roadmap(idea: string, owner?: string): Roadmap {
-    return withoutTasks(this.withTemplate(buildRoadmap(this.mindMap(idea), owner ? { owner } : {}), idea, owner), this.droppedRoadmapKeys());
+  /** The draft roadmap, without the tasks the person left out. `repo` is the repo's file list: contracts guess each task's files from it. */
+  roadmap(idea: string, owner?: string, repo?: RepoIndex): Roadmap {
+    return withoutTasks(this.withTemplate(buildRoadmap(this.mindMap(idea), { ...(owner ? { owner } : {}), ...(repo ? { repo } : {}) }), idea, owner), this.droppedRoadmapKeys());
   }
 
   /** Writes the roadmap's tasks; refused while blockers are open, since tasks built on open questions get rebuilt. */
