@@ -1,0 +1,38 @@
+{
+  "label": "windows-msi",
+  "app": "C:\\Users\\runneradmin\\AppData\\Local\\Perfect Planner\\perfect-planner-desktop.exe",
+  "platform": "win32",
+  "checks": [
+    {
+      "name": "launch",
+      "pass": true,
+      "seen": "WebDriver session up after 88 ms"
+    },
+    {
+      "name": "first-run screen",
+      "pass": true,
+      "seen": "\"PP Perfect Planner v0.1 clean-room · Saturday 24 October 2026 Home 01Define 02Coordinate 03Build 04Prove 05Release Index / Connect agent No project selected PURPOSE Choose a local app folder without inventing project fac\""
+    },
+    {
+      "name": "settings opens",
+      "pass": true,
+      "seen": "opened via \"Settings\": \"Settings Fine-tune every stage and feature. Changes apply immediately and are saved on this device. Safety rules (collision gates, proof, review) are never rel\""
+    },
+    {
+      "name": "open project folder",
+      "pass": true,
+      "seen": "dialog: typed the folder path (dialog-not-found); pressed Use this folder; app shows: \"TYPE OR PASTE THE FOLDER PATH Use this folder Ready to scan trial-sample-app. The scan only reads files; nothing is run or moved. App discovery map Empty until a folder is indexed \""
+    },
+    {
+      "name": "connect agent shows a line",
+      "pass": true,
+      "seen": "first line: \"& 'C:\\\\Users\\\\runneradmin\\\\AppData\\\\Local\\\\Perfect Planner\\\\desktop-host\\\\node.exe' 'C:\\\\Users\\\\runneradmin\\\\AppData\\\\Local\\\\Perfect Planner\\\\desktop-host\\\\core-host\\\\connect.mjs' --agent claude http://127.0.0.1:58532 'C:\\\\Users\\\\runneradmin\\\\AppData\\\\Roaming\""
+    },
+    {
+      "name": "connect lines runnable as copied",
+      "pass": true,
+      "seen": "1 copyable block(s); none has placeholders"
+    }
+  ],
+  "fatal": null
+}
