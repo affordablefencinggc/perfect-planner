@@ -169,6 +169,14 @@ describe("keychain helpers are started by full path", () => {
     expect(asked).toEqual(["secret-tool"]);
   });
 
+  it("names the install command for apt and dnf when secret-tool is missing", () => {
+    const store = osSecretStore("perfect-planner-test", "linux", () => null);
+    const state = store.state();
+    expect(state.available).toBe(false);
+    expect(state.reason).toContain("sudo apt install libsecret-tools");
+    expect(state.reason).toContain("sudo dnf install libsecret");
+  });
+
   it.skipIf(process.platform === "win32")("runs exactly the path the locator gives", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pp-keytool-"));
     try {

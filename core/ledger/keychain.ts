@@ -80,10 +80,17 @@ abstract class ProbedStore implements SecretStore {
         this.remove("probe");
         this.probed = back === probe ? { available: true } : { available: false, reason: `${this.description} did not return what was stored` };
       } catch (error) {
-        this.probed = { available: false, reason: `${this.description} is not usable here: ${firstLine((error as Error).message)}` };
+        const message = firstLine((error as Error).message);
+        const help = / is not installed$/.test(message) ? this.missingHelp() : "";
+        this.probed = { available: false, reason: `${this.description} is not usable here: ${message}${help}` };
       }
     }
     return this.probed;
+  }
+
+  /** Plain-words next step, appended when the helper program is missing. */
+  protected missingHelp(): string {
+    return "";
   }
 
   abstract get(account: string): string | undefined;
@@ -124,6 +131,9 @@ class MacKeychain extends ProbedStore {
   }
 }
 
+/** The exact commands that install `secret-tool` (Debian/Ubuntu libsecret-tools; Fedora libsecret). */
+export const SECRET_TOOL_INSTALL = { apt: "sudo apt install libsecret-tools", dnf: "sudo dnf install libsecret" } as const;
+
 class SecretTool extends ProbedStore {
   readonly description = "the Secret Service (secret-tool)";
   constructor(
@@ -131,6 +141,10 @@ class SecretTool extends ProbedStore {
     private readonly run: Tool,
   ) {
     super();
+  }
+
+  protected missingHelp(): string {
+    return ` To fix it, install it and restart Perfect Planner. Ubuntu or Debian: ${SECRET_TOOL_INSTALL.apt}. Fedora: ${SECRET_TOOL_INSTALL.dnf}.`;
   }
 
   get(name: string): string | undefined {
