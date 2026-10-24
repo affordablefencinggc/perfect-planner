@@ -475,6 +475,22 @@ test("a scan past a ceiling refuses by default, and with allowPartial keeps what
   }
 });
 
+test("a big docs folder cannot use up the file budget before src is reached, and build output is skipped", async () => {
+  const { runBoundedMcpOperation, scanWorkspaceSnapshot } = await import("../mcp/boundedWorkspaceScan.mjs");
+  const root = await mkdtemp(path.join(tmpdir(), "pp-priority-"));
+  try {
+    for (const dir of ["docs", "src", "out", ".wrangler"]) await mkdir(path.join(root, dir), { recursive: true });
+    for (const name of ["a", "b", "c", "d"]) await writeFile(path.join(root, "docs", `${name}.md`), `# ${name}\n`);
+    for (const name of ["x", "y"]) await writeFile(path.join(root, "src", `${name}.js`), `export const ${name} = 1;\n`);
+    await writeFile(path.join(root, "out", "bundle.js"), "x\n");
+    await writeFile(path.join(root, ".wrangler", "state.json"), "{}\n");
+    const { census } = await runBoundedMcpOperation({}, (operation) => scanWorkspaceSnapshot(root, { maxFiles: 2, allowPartial: true }, operation));
+    assert.deepEqual(census.files.map((file) => file.path), ["src/x.js", "src/y.js"]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("map_workspace returns a partial map with its notice instead of refusing a big repo", async () => {
   const { base, registryRoot, workspaceRoot } = await fixture();
   try {
