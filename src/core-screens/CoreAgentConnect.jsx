@@ -42,6 +42,31 @@ function describeAgent(agent) {
   return agent.model ? `${agent.name} (${modelLabel(agent.model)})` : agent.name;
 }
 
+// Sign in to Codex with a ChatGPT account (core/host/routes/codexLogin.ts). Codex keeps the login; no key passes through here.
+function CodexLogin() {
+  const [waiting, setWaiting] = useState(false);
+  const [error, setError] = useState(null);
+  const login = useCoreResource("/agents/codex-login", { isEmpty: () => false, pollMs: waiting ? CONNECT_POLL_MS : 0 });
+  const data = login.status === "ready" ? login.data : null;
+  useEffect(() => { if (data && data.state !== "waiting") setWaiting(false); }, [data]);
+  if (!data?.installed && !waiting) return null;
+  const start = async () => {
+    setError(null);
+    setWaiting(true);
+    try { await login.post("/agents/codex-login", {}); login.reload(); } catch (e) { setError(e); setWaiting(false); }
+  };
+  return (
+    <div className="core-agent-connect-codex" data-codex-login>
+      {data?.loggedIn
+        ? <span className="core-agent-connect-done"><CheckCircleIcon weight="fill" aria-hidden="true" /> Codex is signed in{data.method === "chatgpt" ? " with ChatGPT" : ""}.</span>
+        : <button type="button" className="core-button" onClick={start} disabled={waiting}>{waiting ? <SpinnerGapIcon aria-hidden="true" /> : null} Log in to Codex</button>}
+      {waiting && <p className="core-muted">Finish signing in with ChatGPT in the browser window that opened.{data?.url && <> No window? <a href={data.url} target="_blank" rel="noreferrer noopener">Open the sign-in page</a>.</>}</p>}
+      {data?.state === "failed" && !waiting && <p className="core-agent-connect-warn" role="status">{data.message}</p>}
+      {error && <p className="core-agent-connect-warn" role="status">{error.message}</p>}
+    </div>
+  );
+}
+
 export function CoreAgentConnect() {
   const advanced = useAdvanced();
   const [pending, setPending] = useState(null); // the connect response (no token in it)
@@ -139,6 +164,8 @@ export function CoreAgentConnect() {
           )}
 
           {actionError && <p className="core-agent-connect-warn" role="status">{actionError.message}</p>}
+          <CodexLogin />
+          {data?.waiting > 0 && <p className="core-agent-connect-warn" role="status">{data.waiting === 1 ? "An agent is waiting for your answer." : `${data.waiting} agents' questions are waiting for your answer.`} Answer in Decisions.</p>}
 
           {pending && (
             <div className="core-agent-connect-setup">

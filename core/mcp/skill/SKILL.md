@@ -155,7 +155,7 @@ Then, in order:
    `claim_task({ task })`. Claim only the task your token covers. If the claim
    is refused, read the message, do what it says, and do not retry in a loop.
 4. **Build in small commits.** After each meaningful step, call
-   `report_progress({ task, text })` with one plain line.
+   `report_progress({ task, text, usage? })` with one plain line. If you know what the work since your last report used, add `usage: { inputTokens, outputTokens, cacheReadTokens?, costUsd? }` (whole token counts, dollars). Perfect Planner shows it as reported by you, never as checked.
 5. **Questions go through the relay, never around it.** When you need a
    decision, call `ask_main({ task, question, options?, blocking? })`. Use
    `blocking: true` only when you cannot continue without the answer; that
