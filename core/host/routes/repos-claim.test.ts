@@ -1,5 +1,5 @@
-// One git folder, one project - also for a project's extra repos: a second project cannot take a repo the
-// first still lists, and can once the first stopped using it.
+// Several projects may share a git folder - also a project's extra repos: a second project gets a namespace
+// of its own beside the first (core/host/repoClaim.ts) instead of being refused.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -36,21 +36,19 @@ afterEach(async () => {
 const post = (project: string, route: string, body: unknown) => hostCall(ctx.base, "POST", `${route}?project=${project}`, body);
 
 describe("a repo another project registered", () => {
-  it("is refused to a second project (as its first repo or as an extra) until the first lets go", async () => {
+  it("is shared with a second project as its own ledger (as its first repo or as an extra), and the first lets go without disturbing it", async () => {
     expect((await post("alpha", "/tasks/repo", { root: x })).status).toBe(200);
     expect((await post("alpha", "/repos", { name: "svc", root: y })).status).toBe(200);
-    // alpha's first repo is x, so only repos.json says it still uses y: this is the case the claim check must see.
+    // alpha's first repo is x, so only repos.json says it uses y: the claim check must see that and give beta a namespace.
     const asFirst = await post("beta", "/tasks/repo", { root: y });
-    expect(asFirst.status, JSON.stringify(asFirst.body)).toBe(409);
-    expect(asFirst.body.code).toBe("REPO_IN_USE");
-    expect(asFirst.body.message).toContain("alpha");
+    expect(asFirst.status, JSON.stringify(asFirst.body)).toBe(200);
+    const records = fs.readdirSync(path.join(y, ".git", "perfect-planner", "projects"));
+    expect(records).toHaveLength(1);
+    expect(JSON.parse(fs.readFileSync(path.join(y, ".git", "perfect-planner", "projects", records[0]!), "utf8"))).toMatchObject({ key: "beta" });
     expect((await post("beta", "/tasks/repo", { root: z })).status).toBe(200);
-    const asExtra = await post("beta", "/repos", { name: "svc", root: y });
-    expect(asExtra.body.code).toBe("REPO_IN_USE");
-    // alpha stops using y: beta may have it.
-    expect((await post("alpha", "/repos/remove", { name: "svc" })).status).toBe(200);
     expect((await post("beta", "/repos", { name: "svc", root: y })).status).toBe(200);
-    // ... and now alpha is the one refused.
-    expect((await post("alpha", "/repos", { name: "svc", root: y })).body.code).toBe("REPO_IN_USE");
+    // alpha stops using y: nothing changes for beta, and alpha may take it back as another ledger.
+    expect((await post("alpha", "/repos/remove", { name: "svc" })).status).toBe(200);
+    expect((await post("alpha", "/repos", { name: "svc", root: y })).status).toBe(200);
   }, 60_000);
 });

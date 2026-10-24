@@ -262,6 +262,16 @@ async function changedTestFiles(cwd: string, pins: Pins): Promise<string[]> {
   return [...changed].sort();
 }
 
+/** The pinned test files whose content in `commit` is still exactly the content that was approved. */
+export async function unalteredPins(cwd: string, commit: string, pins: Pins): Promise<Set<string>> {
+  const same = new Set<string>();
+  for (const [file, hash] of Object.entries(pins)) {
+    const blob = await runGit(cwd, ["cat-file", "blob", `${commit}:${file}`]).catch(() => undefined);
+    if (blob?.code === 0 && contentHash(blob.stdoutBytes) === hash) same.add(file);
+  }
+  return same;
+}
+
 /** Why the merge commit about to land is not exactly the merge of `base` and `approved`, or null when it is. */
 export async function verifyMergeCommit(candidate: string, mergeCommit: string, base: string, approved: string): Promise<string | null> {
   const head = (await runGit(candidate, ["rev-parse", "--verify", "HEAD^{commit}"])).stdout.trim();
@@ -559,11 +569,16 @@ export async function testSupportFiles(repoRoot: string, commits: readonly strin
  * to the person as "touches dependencies, build or CI settings"); the gate also passes the pinned test
  * files and their support files.
  */
-export function sensitiveChanges(changed: readonly string[], pinned: readonly string[] = [], support: ReadonlySet<string> = new Set()): string[] {
+export function sensitiveChanges(changed: readonly string[], pinned: readonly string[] = [], support: ReadonlySet<string> = new Set(), approvedUnchanged: ReadonlySet<string> = new Set()): string[] {
   const pinnedDirs = new Set(pinned.map((file) => path.posix.dirname(file)));
   return changed.filter((file) => {
+    // The one exemption: the approved test file itself, by its exact path, and only while its content is still
+    // exactly what the person approved (`approvedUnchanged`, see unalteredPins). It lifts only the "other test
+    // files" flag below: an edited copy, a renamed copy and every other test-like file stay flagged, and a
+    // dependency, git, CI, build or config file is flagged even if it was pinned.
+    const own = approvedUnchanged.has(file) && pinned.includes(file);
     const base = path.posix.basename(file);
-    if (support.has(file) || DEPENDENCY_FILES.includes(base)) return true;
+    if ((support.has(file) && !own) || DEPENDENCY_FILES.includes(base)) return true;
     // Git and CI behaviour: attributes (filters, diff and merge drivers), submodules, workflows and hooks.
     if (/^\.git(attributes|modules)$/.test(base) || /^\.github\/workflows\//.test(file) || /(^|\/)\.(githooks|husky)\//.test(file)) return true;
     // Other package managers' manifests and build files.
@@ -573,6 +588,7 @@ export function sensitiveChanges(changed: readonly string[], pinned: readonly st
     // Tool and build configuration: vitest.config.ts, tsconfig.json, babel, jest, .mocharc and the like.
     if (/(^|\.)config\.[cm]?[jt]s$|^tsconfig.*\.json$|^\.?(babel|jest|mocha|vitest|vite|eslint|prettier)rc/i.test(base)) return true;
     // Test support: helpers, fixtures, mocks and other tests can change what the approved test sees.
+    if (own) return false;
     if (/(^|\/)(tests?|__tests__|specs?|fixtures|helpers|support|mocks|__mocks__)\//i.test(file) || /\.(test|spec)\.[cm]?[jt]sx?$/i.test(base)) return true;
     // Anything beside a pinned test file (outside the project root) is treated as one of its helpers.
     const dir = path.posix.dirname(file);
@@ -935,7 +951,7 @@ export class TestGate {
     const leaked = [...new Set(privatePaths([...changed, ...lines(history.stdout)]))];
     if (leaked.length) return refuse(privateRefusal(leaked));
     const support = await testSupportFiles(repoRoot, [forkPoint.stdout.trim(), branchTip], Object.keys(approval.pins), definition.command);
-    const sensitive = sensitiveChanges(changed, Object.keys(approval.pins), support);
+    const sensitive = sensitiveChanges(changed, Object.keys(approval.pins), support, await unalteredPins(repoRoot, branchTip, approval.pins));
     if (sensitive.length && !state.diffApproval.byPerson) {
       return refuse(`The diff changes ${sensitive.join(", ")}, which can change what the approved test checks; a person has to approve this diff.`);
     }
