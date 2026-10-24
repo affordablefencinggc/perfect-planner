@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { PrivateKeyMemory, PublicAccountCache } from "./keychain";
+import { PrivateKeyMemory, PublicAccountCache, powershellError } from "./keychain";
 import { FileStore, KeychainKeyProvider, Ledger, LedgerError, isAuthoritative, osSecretStore, type SecretStore } from "./index";
 
 /** A SecretStore in memory, so the provider's own logic is tested on every machine. */
@@ -182,6 +182,107 @@ describe("keychain helpers are started by full path", () => {
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+/**
+ * Linux stand-ins for Windows PowerShell. They only imitate how powershell.exe ends (exit code, stdout,
+ * stderr) and read the real script it is given; they cannot run the WinRT Credential Locker. The
+ * windows-latest keychain-ci job is the real proof.
+ */
+describe("the Windows vault through a stand-in powershell", () => {
+  const clixml = (text: string) => `#< CLIXML\n<Objs Version="1.1.0.1" xmlns="http://schemas.microsoft.com/powershell/2004/04"><Obj S="progress" RefId="0"><TN RefId="0"><T>System.Management.Automation.PSCustomObject</T></TN><MS><I64 N="SourceId">1</I64></MS></Obj><S S="Error">${text}</S></Objs>`;
+
+  /** mode "ok": a working vault kept in a file; "missing-key": get finds nothing; otherwise exit 1 with `stderr`. */
+  function standIn(behaviour: { exit?: number; stderr?: string; okNoise?: string }) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pp-ps-"));
+    const tool = path.join(dir, "powershell");
+    const data = path.join(dir, "secret");
+    const scripts = path.join(dir, "scripts");
+    fs.writeFileSync(
+      tool,
+      `#!${process.execPath}
+const fs = require("fs");
+const b = ${JSON.stringify(behaviour)};
+const script = Buffer.from(process.argv[process.argv.indexOf("-EncodedCommand") + 1], "base64").toString("utf16le");
+fs.appendFileSync(${JSON.stringify(scripts)}, script + "\\n=====\\n");
+const input = fs.readFileSync(0, "utf8");
+if (b.exit) { process.stderr.write(b.stderr || ""); process.exit(b.exit); }
+if (b.okNoise) process.stderr.write(b.okNoise);
+if (script.includes("RetrievePassword")) process.stdout.write(fs.existsSync(${JSON.stringify(data)}) ? "found:" + fs.readFileSync(${JSON.stringify(data)}, "utf8") : "missing");
+else if (script.includes("Vault.Add") || script.includes("vault.Add")) fs.writeFileSync(${JSON.stringify(data)}, input.trim());
+else if (fs.existsSync(${JSON.stringify(data)})) fs.unlinkSync(${JSON.stringify(data)});
+`,
+    );
+    fs.chmodSync(tool, 0o755);
+    return {
+      store: osSecretStore("perfect-planner-test", "win32", () => tool),
+      scripts: () => fs.readFileSync(scripts, "utf8"),
+      cleanup: () => fs.rmSync(dir, { recursive: true, force: true }),
+    };
+  }
+
+  it.skipIf(process.platform === "win32")("shows the decoded error, not '#< CLIXML', when PowerShell exits 1", () => {
+    const t = standIn({ exit: 1, stderr: clixml("Element not found._x000D__x000A_") });
+    try {
+      const state = t.store.state();
+      expect(state).toMatchObject({ available: false, reason: expect.stringContaining("Element not found") });
+      expect((state as { reason: string }).reason).not.toContain("CLIXML");
+      expect(() => t.store.get("k")).toThrow(/Element not found/);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it.skipIf(process.platform === "win32")("tolerates stderr noise when PowerShell exits 0", () => {
+    const t = standIn({ okNoise: clixml("ignored") });
+    try {
+      expect(t.store.state()).toEqual({ available: true });
+      t.store.set("k", "v");
+      expect(t.store.get("k")).toBe("v");
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it.skipIf(process.platform === "win32")("treats a never-saved key as missing while the vault stays available", () => {
+    const t = standIn({});
+    try {
+      expect(t.store.get("never-saved")).toBeUndefined();
+      expect(t.store.state()).toEqual({ available: true });
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it.skipIf(process.platform === "win32")("sends a script that looks for not-found down the inner-exception chain and silences progress", () => {
+    const t = standIn({});
+    try {
+      t.store.get("k");
+      const script = t.scripts();
+      expect(script).toContain("$ProgressPreference = 'SilentlyContinue'");
+      expect(script).toContain("-2147023728");
+      expect(script).toContain("$e = $e.InnerException");
+      expect(script).toContain("if (Test-NotFound $_.Exception) { $null } else { throw }");
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it.skipIf(process.platform === "win32")("reads any other failure as unavailable, never as a missing key", () => {
+    const t = standIn({ exit: 1, stderr: clixml("Access is denied._x000D__x000A_") });
+    try {
+      expect(t.store.state()).toMatchObject({ available: false, reason: expect.stringContaining("Access is denied") });
+      expect(() => t.store.get("k")).toThrow();
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it("powershellError decodes CLIXML error text and passes plain text through", () => {
+    expect(powershellError(clixml("a &lt;b&gt; &amp; c_x000D__x000A_d"))).toBe("a <b> & c\nd");
+    expect(powershellError("plain failure")).toBe("plain failure");
+    expect(powershellError("#< CLIXML\n<Objs></Objs>")).toBe("PowerShell reported an error");
   });
 });
 
