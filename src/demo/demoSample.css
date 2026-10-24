@@ -1,7 +1,7 @@
 .demo-sample-badge {
   position: fixed;
   left: 16px;
-  bottom: 64px;
+  bottom: 108px;
   z-index: 60;
   display: inline-flex;
   align-items: center;
@@ -17,6 +17,8 @@
   box-shadow: 0 2px 8px rgb(39 48 43 / 0.14);
   pointer-events: auto;
 }
+
+.ops-is-open .demo-sample-badge { bottom: 318px; }
 
 .demo-sample-badge svg { color: var(--amber); }
 

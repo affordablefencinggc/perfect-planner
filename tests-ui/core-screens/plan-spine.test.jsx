@@ -140,6 +140,10 @@ describe("CorePlanSpine", () => {
     expect(cards[0].querySelector(".perimeter-worker.running img").getAttribute("src")).toContain("running-right/anthropic-claude.svg");
     expect(cards[0].querySelector("img.core-owner-photo").getAttribute("src")).toBe("data:image/png;base64,AAAA");
     expect(within(cards[0]).getByText("It saves")).toBeTruthy();
+    // The card being built right now stands out and says so.
+    expect(cards[0].className).toContain("core-working");
+    expect(cards[0].querySelector(".core-working-badge").textContent).toBe("Claude is building this now");
+    expect(cards[1].querySelector(".core-working-badge")).toBeNull();
     // T-2: merged, robot parked with the green outline, diff and proof counted.
     expect(cards[1].querySelector(".perimeter-worker.running")).toBeNull();
     expect(cards[1].querySelector(".perimeter-success-trail.complete")).not.toBeNull();

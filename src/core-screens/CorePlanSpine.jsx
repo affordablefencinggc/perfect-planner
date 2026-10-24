@@ -90,9 +90,11 @@ function Vertebra({ task, side, owner, via, agents, onOpen, onPerson, people, on
   const shots = (task.proofs ?? []).length;
   const clauses = task.clauses?.length ? task.clauses : [];
   const you = NEEDS_YOU.has(task.stage);
+  const building = isWorking(task, worker);
   return (
-    <article className={`plan-node core-vertebra${you ? " core-needs-you" : ""}`} aria-label={`${task.label} ${task.title}`} data-stage={task.stage} data-side={side} tabIndex={0} onClick={() => onOpen(task)} onKeyDown={(event) => { if (event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); onOpen(task); } }}>
+    <article className={`plan-node core-vertebra${you ? " core-needs-you" : ""}${building ? " core-working" : ""}`} aria-label={`${task.label} ${task.title}`} data-stage={task.stage} data-side={side} tabIndex={0} onClick={() => onOpen(task)} onKeyDown={(event) => { if (event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); onOpen(task); } }}>
       <Robot task={task} worker={worker} />
+      {building && <span className="core-working-badge">{family ? `${family.name} is` : "A model is"} building this now</span>}
       <span className="node-header">
         <code>{task.label}</code>
         <span className="node-branch-ref" title={task.worktree?.branch ? `Branch: ${task.worktree.branch}` : "No branch yet"}><GitBranchIcon /></span>
