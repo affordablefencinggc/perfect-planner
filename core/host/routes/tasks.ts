@@ -10,7 +10,7 @@
 // this screen. Agents never reach these routes; they use the MCP tools.
 import fs from "node:fs";
 import path from "node:path";
-import { deriveState, sensitiveChanges, testSupportFiles, type GateState } from "../../gate/index";
+import { deriveState, sensitiveChanges, testSupportFiles, unalteredPins, type GateState } from "../../gate/index";
 import type { Actor } from "../../ledger/index";
 import type { AgentKind } from "../agentKinds";
 import type { ContractView } from "../../planning/index";
@@ -24,13 +24,15 @@ import { AGENT_SERVER_NAME, agentEntryPath, connectLine, nodeBinary, quoteFor, t
 
 export { quoteFor };
 import { localPerson, localPersonId } from "./people";
+import { annotate, checkReadiness, prepareForDispatch, quietLabels, registerWorktreeCareRoutes, tidy, withHygieneLock } from "./worktreeCare";
 import { PRIMARY_REPO, readRepos } from "../../repos/index";
+import { sandboxStatus } from "../../exec/index";
 import { replayRoster } from "../../people/index";
 import { protectRepository } from "../project";
 import { chosenRepoRoot, repoRefusal } from "../protectedRoots";
 import { syncJevPolicy } from "./decisions";
 import { jevActor, jevApprovedDiff, jevView, reviewDiffWithJev, reviewTestWithJev, sendBackNotes, type JevLine } from "./jev-review";
-import { repoClaimRefusal } from "../repoClaim";
+import { repoClaimRefusal, repoNamespaceFor } from "../repoClaim";
 import { isNetworkPath } from "../tokenFile";
 
 // Kept here too for older imports; they live in ../protectedRoots so connect.mjs can use them without the routes.
@@ -111,7 +113,8 @@ export async function repoState(project: CoreProject, name: string | null = null
       chosen = undefined;
     }
   }
-  const candidate = typeof chosen === "string" && chosen ? chosen : project.root;
+  // The app's own data folder is never a project's repo, and never offered as one (it would send workers there).
+  const candidate = typeof chosen === "string" && chosen ? chosen : project.appData ? "" : project.root;
   const top = await gitTop(candidate);
   // git found the repo by walking up from the folder: a whole drive or the home folder (a dotfiles repo)
   // is never the project's repo, so it is neither used nor protected.
@@ -124,7 +127,7 @@ export async function repoState(project: CoreProject, name: string | null = null
   // The host's own folder for this project (<app data>/projects/<key>) is never a suggestion: the person's
   // imported folder is offered by the screen instead.
   const ownData = path.basename(path.dirname(project.root)) === "projects";
-  const suggested = extra || ownData || repoRefusal(project.root) ? undefined : project.root;
+  const suggested = extra || ownData || project.appData || repoRefusal(project.root) ? undefined : project.root;
   if (refusal) return { name: repoName, ok: false, reason: refusal, suggested };
   return {
     name: repoName,
@@ -177,17 +180,20 @@ function repoOfLabel(project: CoreProject, label: string): string | null {
   return project.service.board().get(label.replace(/\.a\d+$/, ""))?.repo ?? null;
 }
 
-function manager(project: CoreProject, root: string, name: string | null = null): WorktreeManager {
+/** The worktree manager for one repo of the project. Ledgers that share a git folder each get their own (see repoClaim.ts). */
+async function manager(project: CoreProject, root: string, name: string | null = null): Promise<WorktreeManager> {
   const real = fs.realpathSync(root);
+  const namespace = await repoNamespaceFor(project, real);
   let all = project.state.get(MANAGERS) as Map<string, WorktreeManager> | undefined;
   if (!all) {
     all = new Map();
     project.state.set(MANAGERS, all);
   }
-  let current = all.get(real);
+  const key = namespace ? `${real}#${namespace}` : real;
+  let current = all.get(key);
   if (!current) {
-    current = new WorktreeManager({ repoRoot: root, ledger: project.ledger, maxParallel: parallelCap() });
-    all.set(real, current);
+    current = new WorktreeManager({ repoRoot: root, ledger: project.ledger, maxParallel: parallelCap(), ...(namespace ? { namespace } : {}) });
+    all.set(key, current);
     project.protectRoots([current.repoRoot, current.worktreeRoot]);
   }
   // The first repo's manager stays where older readers (the connect roots, tests) look for it.
@@ -206,11 +212,13 @@ function dispatches(project: CoreProject): Map<string, Dispatch> {
 
 /** The worktrees the git watcher should read, or the plain reason it cannot see any. Errors are not swallowed: an unreadable list is not an empty one. */
 export async function worktreesForWatcher(project: CoreProject): Promise<{ repo: RepoState; list: WorktreeInfo[] }> {
-  const { repos, worktrees } = await allRepos(project);
+  const { repos, worktrees } = await allRepos(project, { tidyFolders: false });
   const repo = repos[0]!;
-  // A done task's folder is about to be removed (or waits for its clean-up): a git process of ours inside it would keep Windows from removing it.
+  // A done task's folder is about to be removed (or waits for its clean-up), and a clean-up may be removing others right now:
+  // a git process of ours inside one would keep Windows from removing it.
   const board = project.service.board();
-  return { repo, list: worktrees.filter((tree) => board.get(tree.taskId.replace(/\.a\d+$/, ""))?.status !== "done") };
+  const quiet = quietLabels(project);
+  return { repo, list: worktrees.filter((tree) => !quiet.has(tree.taskId) && board.get(tree.taskId.replace(/\.a\d+$/, ""))?.status !== "done") };
 }
 
 /**
@@ -305,7 +313,9 @@ function personSummary(actor: Actor | undefined) {
   return actor ? { kind: actor.kind, id: actor.id, ...(actor.model ? { model: actor.model } : {}) } : undefined;
 }
 
-function viewTask(project: CoreProject, task: TaskView, worktrees: WorktreeInfo[], board: ReadonlyMap<string, TaskView>, assignments: ReadonlyMap<string, string>) {
+type FolderInfo = WorktreeInfo & { state?: string; note?: string };
+
+function viewTask(project: CoreProject, task: TaskView, worktrees: FolderInfo[], board: ReadonlyMap<string, TaskView>, assignments: ReadonlyMap<string, string>) {
   const label = attemptLabel(task);
   const gate = deriveState(project.entries(), label);
   const tree = worktrees.find((w) => w.taskId === label);
@@ -344,7 +354,7 @@ function viewTask(project: CoreProject, task: TaskView, worktrees: WorktreeInfo[
     check: gate.worktree ? { passed: gate.worktree.passed, commit: gate.worktree.commit, entry: gate.worktree.n } : null,
     diffApproval: gate.diffApproval ? { commit: gate.diffApproval.commit, by: personSummary(gate.diffApproval.reviewer), entry: gate.diffApproval.n } : null,
     merged: gate.merged ?? null,
-    worktree: tree ? { path: tree.path, branch: tree.branch, base: tree.baseRef, port: tree.port } : null,
+    worktree: tree ? { path: tree.path, branch: tree.branch, base: tree.baseRef, port: tree.port, state: tree.state ?? "ok", ...(tree.note ? { note: tree.note } : {}) } : null,
     dispatch: dispatch ? { issuedAt: dispatch.issuedAt, ...(dispatch.model ? { model: dispatch.model } : {}) } : null,
     // Why this task cannot start yet (dispatch refuses it for the same reason), in plain words; null when nothing blocks it.
     waitingFor: unmet.length ? { tasks: unmet.map((d) => d.id), message: waitingMessage(label, unmet) } : null,
@@ -356,19 +366,33 @@ function viewTask(project: CoreProject, task: TaskView, worktrees: WorktreeInfo[
   };
 }
 
-async function listWorktrees(project: CoreProject, repo: RepoState): Promise<WorktreeInfo[]> {
+async function listWorktrees(project: CoreProject, repo: RepoState, { tidyFolders = true } = {}): Promise<FolderInfo[]> {
   if (!repo.ok || !repo.root) return [];
-  const list = await manager(project, repo.root, repo.name).list().catch(() => []);
+  const worktrees = await manager(project, repo.root, repo.name);
+  // On the first look after the app starts (and when a task finishes) stale records and safe leftovers are tidied; see worktreeCare.
+  // The git watcher's look does not tidy: a clean-up waits for the watcher's pass, so the pass must never wait for the clean-up.
+  if (tidyFolders) await tidy(project, worktrees, dispatches(project));
+  const list = await annotate(worktrees, await worktrees.list().catch(() => []));
   // Only other repos are tagged: the first repo's worktrees look exactly as they always did.
   return repo.name === PRIMARY_REPO ? list : list.map((info) => ({ ...info, repo: repo.name }));
 }
 
 /** Every repo of the project (the first one, then the extra ones) with the worktrees in each. A repo that cannot be read has its reason and no worktrees. */
-async function allRepos(project: CoreProject): Promise<{ repos: RepoState[]; worktrees: WorktreeInfo[] }> {
+async function allRepos(project: CoreProject, options: { tidyFolders?: boolean } = {}): Promise<{ repos: RepoState[]; worktrees: WorktreeInfo[] }> {
   const names = [PRIMARY_REPO, ...readRepos(project.root).repos.map((repo) => repo.name)];
   const repos = await Promise.all(names.map((name) => repoState(project, name)));
-  const lists = await Promise.all(repos.map((repo) => listWorktrees(project, repo)));
+  const lists = await Promise.all(repos.map((repo) => listWorktrees(project, repo, options)));
   return { repos, worktrees: lists.flat() };
+}
+
+/**
+ * Whether approved test commands run inside the OS sandbox. True only when the person opted in
+ * (PP_CONTAIN_TESTS=1, the same switch testRunnerFor reads), this is Linux and bubblewrap works.
+ * Never true on Windows or macOS. Anything else is "not contained", and the screen says so.
+ */
+export async function containmentView(env: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform): Promise<{ contained: boolean; by?: "bubblewrap" }> {
+  if (env.PP_CONTAIN_TESTS !== "1" || platform !== "linux") return { contained: false };
+  return (await sandboxStatus(platform, env)).kind === "bubblewrap" ? { contained: true, by: "bubblewrap" } : { contained: false };
 }
 
 export async function overview(project: CoreProject) {
@@ -376,8 +400,10 @@ export async function overview(project: CoreProject) {
   const board = project.service.board();
   const assignments = replayRoster(project.entries(), project.ledger.owner).assignments;
   const tasks = [...board.values()].map((task) => viewTask(project, task, worktrees, board, assignments));
+  // What is missing before "Check the work" can run, in plain words (only while a task is being built).
+  await Promise.all(tasks.filter((task) => task.stage === "building" && task.worktree).map(async (task) => Object.assign(task, { checkReady: await checkReadiness({ proofs: task.proofs, worktree: task.worktree! }) })));
   const settings = taskSettings(project);
-  return { repo: repos[0]!, settings, queue: queueOf(tasks, settings.limit), repos: repos.map((repo) => ({ ...repo, worktrees: worktrees.filter((w) => (w.repo ?? PRIMARY_REPO) === repo.name).length })), tasks, groups: taskGroups(tasks) };
+  return { repo: repos[0]!, containment: await containmentView(), settings, queue: queueOf(tasks, settings.limit), repos: repos.map((repo) => ({ ...repo, worktrees: worktrees.filter((w) => (w.repo ?? PRIMARY_REPO) === repo.name).length })), tasks, groups: taskGroups(tasks) };
 }
 
 /** Tasks split from one plan task over several repos, in task order, with whether every part is ready to merge. */
@@ -429,8 +455,9 @@ function refuse(result: { ok: boolean; reason?: string }): void {
 async function worktreeFor(project: CoreProject, label: string): Promise<WorktreeInfo> {
   const name = repoOfLabel(project, label);
   const root = await requireRepo(project, name);
-  const tree = await manager(project, root, name).get(label);
+  const tree = await (await manager(project, root, name)).get(label);
   if (!tree) throw new HttpError(409, "NO_WORKTREE", `${label} has no worktree yet. Start a worker on it first.`);
+  if (!fs.existsSync(tree.path)) throw new HttpError(409, "WORKTREE_MISSING", `The folder for ${label} was deleted outside Perfect Planner. Its work is safe on the branch ${tree.branch}; press "Recreate the folder" on this task first.`);
   return tree;
 }
 
@@ -516,7 +543,8 @@ async function dispatch(project: CoreProject, host: CoreHost, id: string, body: 
   const label = attemptLabel(task);
   // A task under contract starts only from the contract the owner signed, and claims its files.
   const contract = signedContract(project.entries(), task.id);
-  const worktrees = manager(project, root, repoName);
+  const worktrees = await manager(project, root, repoName);
+  await prepareForDispatch(worktrees, label);
   let tree = await worktrees.get(label);
   if (!tree) {
     try {
@@ -579,7 +607,7 @@ async function updateFromMain(project: CoreProject, id: string) {
   await worktreeFor(project, label);
   let result;
   try {
-    result = await manager(project, root, repoName).updateFromMain(label);
+    result = await (await manager(project, root, repoName)).updateFromMain(label);
   } catch (error) {
     if (error instanceof WorktreeError) throw new HttpError(409, "NO_WORKTREE", error.message);
     throw error;
@@ -624,7 +652,7 @@ async function releaseFileClaims(project: CoreProject, id: string, body: Record<
   if (!/^T-\d+(?:\.a\d+)?$/.test(id)) throw new HttpError(400, "INVALID", `"${id}" is not a task number like T-14.`);
   const repoName = repoOfLabel(project, id);
   const root = await requireRepo(project, repoName);
-  const tree = await manager(project, root, repoName).get(id);
+  const tree = await (await manager(project, root, repoName)).get(id);
   if (!tree) throw new HttpError(409, "NO_WORKTREE", `${id} has no worktree, so it holds no file claims.`);
   if (!tree.claims.length) return { released: [], message: `${id} holds no file claims.`, ...(await overview(project)) };
   const stale = staleClaimReason(project, tree, project.service.board());
@@ -648,7 +676,7 @@ async function releaseFileClaims(project: CoreProject, id: string, body: Record<
     refs: [],
     data: { claimsReleased: files, stale, by: "person" },
   });
-  const done = await manager(project, root, repoName).releaseClaims(id, files);
+  const done = await (await manager(project, root, repoName)).releaseClaims(id, files);
   return { released: done.released, remaining: done.remaining, stale, message: `Released ${done.released.join(", ")}. Other tasks can claim ${done.released.length === 1 ? "it" : "them"} now.`, ...(await overview(project)) };
 }
 
@@ -693,11 +721,8 @@ async function changedFiles(project: CoreProject, label: string, tree: { path: s
   const state = deriveState(project.entries(), label);
   const pinned = Object.keys(state.approval?.pins ?? {});
   const support = state.definition ? await testSupportFiles(tree.path, [tree.baseSha, tip], pinned, state.definition.command) : new Set<string>();
-  // The approved test files themselves are not flagged once the test has passed at this very tip: the gate refuses a
-  // pinned file that differs from what the person approved (on disk and in the commit), so they are byte for byte
-  // the ones already read at approval. Their helpers, imports and anything else beside them stay flagged.
-  const unchanged = state.worktree?.passed && state.worktree.commit?.toLowerCase() === tip.toLowerCase() ? new Set(pinned) : new Set<string>();
-  return { files, sensitive: sensitiveChanges(files, pinned, support).filter((file) => !unchanged.has(file)).sort() };
+  const unchanged = state.approval ? await unalteredPins(tree.path, tip, state.approval.pins) : new Set<string>();
+  return { files, sensitive: sensitiveChanges(files, pinned, support, unchanged).sort() };
 }
 
 /** A refusal plus the end of the test's own output, so the person sees why the test failed. */
@@ -747,7 +772,7 @@ export function registerTaskRoutes(router: Router): void {
   });
 
   /** POST /tasks/:id/dispatch { model? }: worktree, worker token for this task, brief and command. */
-  router.post("/tasks/:id/dispatch", ({ project, host, params, body }) => dispatch(project, host, params.id!, bodyOf(body)));
+  router.post("/tasks/:id/dispatch", ({ project, host, params, body }) => withHygieneLock(project, () => dispatch(project, host, params.id!, bodyOf(body))));
 
   /** POST /tasks/:id/test { command, files }: the person writes the done-when test themselves. */
   router.post("/tasks/:id/test", ({ project, params, body }) => {
@@ -823,7 +848,7 @@ export function registerTaskRoutes(router: Router): void {
     // Under contract, the diff is measured first; work that breaks it is never run.
     const contract = signedContract(project.entries(), task.id);
     if (contract) {
-      const measured = await checkWork(project, label, tree, contract, await manager(project, await requireRepo(project)).list());
+      const measured = await checkWork(project, label, tree, contract, await (await manager(project, await requireRepo(project), task.repo ?? null)).list());
       if (!measured.ok) return { passed: false, contractRefused: true, commit: measured.tip, reason: measured.reason, ...(await overview(project)) };
     }
     const run = await project.service.gate.prove(label, tree.path);
@@ -921,7 +946,7 @@ export function registerTaskRoutes(router: Router): void {
   router.post("/tasks/:id/widen", async ({ project, params, body }) => {
     const task = findTask(project, params.id!);
     const repo = await repoState(project);
-    const widened = await widenTask(project, task, attemptLabel(task), repo.ok && repo.root ? manager(project, repo.root) : undefined, bodyOf(body));
+    const widened = await widenTask(project, task, attemptLabel(task), repo.ok && repo.root ? await manager(project, repo.root, task.repo ?? null) : undefined, bodyOf(body));
     return { widened, ...(await overview(project)) };
   });
 
@@ -954,7 +979,7 @@ export function registerTaskRoutes(router: Router): void {
     dispatches(project).delete(label);
     // A watcher pass that began before the task was done may still have git running in its folder, which Windows will not remove.
     await project.watch?.tick();
-    const removed = await manager(project, root, task.repo).remove(label, WORKTREES_ACTOR).catch((error: Error) => ({ error: error.message }));
+    const removed = await (await manager(project, root, task.repo)).remove(label, WORKTREES_ACTOR).catch((error: Error) => ({ error: error.message }));
     return { merged: true, commit: merged.mergeCommit, into: tree.baseRef, removed, ...(await overview(project)) };
   };
   router.post("/tasks/:id/merge", ({ project, params, body }) => mergeTask(project, params.id!, body));
@@ -1093,4 +1118,6 @@ export function registerTaskRoutes(router: Router): void {
     }
     return { results, ...(await overview(project)) };
   });
+
+  registerWorktreeCareRoutes(router, { requireRepo, manager, repoNames: (project) => [null, ...readRepos(project.root).repos.map((repo) => repo.name)], repoOf: repoOfLabel, dispatched: dispatches, findTask, overview });
 }

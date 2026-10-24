@@ -1,4 +1,4 @@
-import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -6,10 +6,11 @@ import { surfacesOverlap } from "../../src/engine/collisionEngine.js";
 import { ensureRequiredIgnores, privatePaths } from "./ignores";
 import { INSTALL_SCRIPTS_HINT, NPM_CONFIG_HINT, runNpm } from "./npm";
 import { git, GitError, runGit } from "./git";
+import { directorySize, folderNote, isListed, keepReasons, parseWorktreeList, readFacts, type FolderState, type FolderStatus, type ListedWorktree, type Reconciled, type WorktreeFacts } from "./hygiene";
 import { isWithin, lines, realDir, samePath, toRepoPath } from "./platform";
 import { type Actor, type LedgerPort, WORKTREES_ACTOR } from "./ports";
 import { copyLocalSettings, placeholderSecrets } from "./settings";
-import { branchFor, TASK_ID, type WorktreeInfo } from "./types";
+import { branchFor, LEDGER_NAMESPACE, TASK_ID, type WorktreeInfo } from "./types";
 
 export type Installer = (worktreePath: string) => Promise<void>;
 
@@ -18,6 +19,12 @@ export interface WorktreeManagerOptions {
   ledger: LedgerPort;
   /** Worktrees live here, relative to the repo root (spec 5.3). */
   worktreeDir?: string;
+  /**
+   * Set when another ledger shares this git repo (core/host/repoClaim.ts). This ledger then keeps its branches
+   * (pp/<namespace>/T-n), folders (<worktreeDir>/<namespace>/T-n), registry and ports apart from the others.
+   * Unset for the repo's first ledger, whose names stay as they always were.
+   */
+  namespace?: string;
   /** Cap on parallel worktrees to protect disk and CPU (spec 5.6). */
   maxParallel?: number;
   /** Inclusive dev-server port range handed out one per worktree. */
@@ -57,6 +64,43 @@ export interface RemoveResult {
   branchKeptReason?: string;
 }
 
+/** What a sweep asks about each registered task folder: is its task still being worked on, finished or released, or unclear. */
+export type FolderClass = "active" | "finished" | "released" | { keep: string };
+
+export interface SweepOptions {
+  classify: (info: WorktreeInfo) => FolderClass;
+  actor?: Actor;
+  /** Only report what a sweep would do; remove nothing. */
+  dryRun?: boolean;
+}
+
+/** A task folder that is still on disk (or missing) although nobody is working in it. */
+export interface Leftover {
+  taskId: string;
+  branch: string;
+  path: string;
+  state: FolderState;
+  /** Who started the folder (a ledger actor id). */
+  launchedBy: string;
+  sizeBytes: number;
+  sizeApproximate: boolean;
+  /** Plain-words reasons it is kept. */
+  why: string[];
+  /** The person may choose to remove it: nothing uncommitted, nothing that would be lost with the folder. */
+  removable: boolean;
+}
+
+export interface SweepResult {
+  removed: (RemoveResult & { path: string })[];
+  kept: Leftover[];
+}
+
+export interface RecreateResult {
+  info: WorktreeInfo;
+  /** Set when the ledger refused or could not take the entry; the folder is back all the same. */
+  ledgerNote?: string;
+}
+
 export type UpdateRefusal = "dirty" | "conflict" | "unfinished" | "folder-missing" | "wrong-branch" | "base-missing" | "would-overwrite" | "identity" | "git-too-old" | "failed";
 
 /** What bringing a task up to date with its integration branch did. Nothing is thrown for a refusal: the folder was left as it was. */
@@ -80,6 +124,20 @@ export interface UpdateFromMainResult {
   commits?: number;
   /** updated: true when the branch only moved forward (it had no commits of its own the integration branch lacked). */
   fastForward?: boolean;
+}
+
+interface OtherLedgers {
+  worktrees: WorktreeInfo[];
+  branches: Set<string>;
+  paths: string[];
+  ports: Set<number>;
+}
+
+interface OtherLedgers {
+  worktrees: WorktreeInfo[];
+  branches: Set<string>;
+  paths: string[];
+  ports: Set<number>;
 }
 
 interface Registry {
@@ -113,6 +171,7 @@ const PORT_LEASES = new Map<number, string>();
 export class WorktreeManager {
   readonly repoRoot: string;
   readonly worktreeRoot: string;
+  readonly namespace: string | null;
   private readonly ledger: LedgerPort;
   private readonly maxParallel: number;
   private readonly portRange: [number, number];
@@ -125,8 +184,10 @@ export class WorktreeManager {
   private queue: Promise<unknown> = Promise.resolve();
 
   constructor(options: WorktreeManagerOptions) {
+    if (options.namespace !== undefined && !LEDGER_NAMESPACE.test(options.namespace)) throw new WorktreeError(`"${options.namespace}" is not a ledger namespace.`);
+    this.namespace = options.namespace ?? null;
     this.repoRoot = realDir(options.repoRoot);
-    this.worktreeRoot = path.join(this.repoRoot, ...(options.worktreeDir ?? ".perfect-planner/worktrees").split("/"));
+    this.worktreeRoot = path.join(this.repoRoot, ...(options.worktreeDir ?? ".perfect-planner/worktrees").split("/"), ...(this.namespace ? [this.namespace] : []));
     this.ledger = options.ledger;
     this.maxParallel = options.maxParallel ?? 4;
     this.portRange = options.ports ?? [5200, 5999];
@@ -159,10 +220,11 @@ export class WorktreeManager {
   private async createNow({ taskId, actor, baseRef, claims = [] }: CreateOptions): Promise<WorktreeInfo> {
     if (!TASK_ID.test(taskId)) throw new WorktreeError(`"${taskId}" is not a task id like T-14 or T-14.a2.`);
     const registry = await this.readRegistry();
+    const others = await this.otherLedgers();
     if (registry.worktrees.some((info) => info.taskId === taskId)) throw new WorktreeError(`${taskId} already has a worktree.`);
     if (registry.worktrees.length >= this.maxParallel) throw new WorktreeError(`${this.maxParallel} worktrees are already running; finish or remove one first.`);
 
-    const branch = branchFor(taskId);
+    const branch = branchFor(taskId, this.namespace);
     const worktreePath = path.join(this.worktreeRoot, taskId);
     const base = baseRef ?? (await git(this.repoRoot, ["symbolic-ref", "--short", "HEAD"]));
     const baseSha = await git(this.repoRoot, ["rev-parse", "--verify", `${base}^{commit}`]).catch(() => {
@@ -173,7 +235,10 @@ export class WorktreeManager {
       throw new WorktreeError(`Branch ${branch} already exists. Use the next attempt id instead of reusing it.`);
     }
     if (existsSync(worktreePath)) throw new WorktreeError(`${toRepoPath(path.relative(this.repoRoot, worktreePath))} already exists on disk.`);
-    const conflicts = this.conflictsWith(registry.worktrees, taskId, claims);
+    // Collision guard: another ledger on this repo must not hold the branch or the folder we are about to make.
+    if (others.branches.has(branch)) throw new WorktreeError(`Branch ${branch} already belongs to another ledger on this repo; nothing was created.`);
+    if (others.paths.some((item) => samePath(item, worktreePath))) throw new WorktreeError(`${toRepoPath(path.relative(this.repoRoot, worktreePath))} already belongs to another ledger on this repo; nothing was created.`);
+    const conflicts = this.conflictsWith([...registry.worktrees, ...others.worktrees], taskId, claims);
     if (conflicts.length) throw new WorktreeError(`${taskId} claims files already claimed: ${conflicts.map((c) => `${c.mine} (${c.taskId})`).join(", ")}.`);
 
     await this.excludeWorktreeDir();
@@ -191,7 +256,7 @@ export class WorktreeManager {
     try {
       const realPath = realDir(worktreePath);
       if (!isWithin(realDir(this.worktreeRoot), realPath)) throw new WorktreeError("Worktree folder was redirected outside .perfect-planner/worktrees.");
-      const port = await this.freePort(registry.worktrees);
+      const port = await this.freePort(registry.worktrees, others);
       const tracked = new Set(lines(await git(this.repoRoot, ["ls-files", "--", ".env*"])));
       const settings = copyLocalSettings(this.repoRoot, realPath, tracked);
       if (this.secretScan) await this.installSecretScan(realPath);
@@ -418,42 +483,45 @@ export class WorktreeManager {
    * The branch is deleted only when it is fully merged into its base; otherwise it is kept.
    */
   remove(taskId: string, actor: Actor = WORKTREES_ACTOR): Promise<RemoveResult> {
-    return this.serial(async () => {
-      const registry = await this.readRegistry();
-      const info = registry.worktrees.find((item) => item.taskId === taskId);
-      if (!info) throw new WorktreeError(`${taskId} has no worktree.`);
-      if (existsSync(info.path)) {
-        const dirty = await git(info.path, ["status", "--porcelain=v1", "--untracked-files=all"]);
-        if (dirty) throw new WorktreeError(`${taskId} has uncommitted changes; commit or move them before removing the worktree.`);
-        // git worktree remove also deletes ignored files, which can be real work (notes, data, edited settings).
-        const kept = await this.ignoredWork(info.path);
-        if (kept.length) throw new WorktreeError(`${taskId} has ignored files that would be deleted with the worktree; move them first: ${kept.slice(0, 10).join(", ")}`);
-        await git(this.repoRoot, ["worktree", "remove", info.path]);
-      } else {
-        await git(this.repoRoot, ["worktree", "prune"]);
-      }
-      let branchDeleted = false;
-      let branchKeptReason: string | undefined;
-      const merged = await runGit(this.repoRoot, ["merge-base", "--is-ancestor", info.branch, info.baseRef]);
-      if (merged.code === 0) {
-        await git(this.repoRoot, ["branch", "-D", info.branch]);
-        branchDeleted = true;
-      } else {
-        branchKeptReason = `${info.branch} is not merged into ${info.baseRef}, so it was kept.`;
-      }
-      registry.worktrees = registry.worktrees.filter((item) => item.taskId !== taskId);
-      await this.writeRegistry(registry);
-      this.ledger.append({
-        type: "worktree.removed",
-        actor: WORKTREES_ACTOR,
-        subject: taskId,
-        summary: branchDeleted ? `Removed worktree and merged branch ${info.branch}` : `Removed worktree; kept unmerged branch ${info.branch}`,
-        reason: branchKeptReason,
-        evidence: [`branch:${info.branch}`, `port:${info.port}`],
-        data: { removedBy: actor, branch: info.branch, branchDeleted },
-      });
-      return { taskId, branchDeleted, branchKeptReason };
+    return this.serial(() => this.removeNow(taskId, actor));
+  }
+
+  /** The body of remove(), for callers that already hold the one-at-a-time slot (the sweep). */
+  private async removeNow(taskId: string, actor: Actor): Promise<RemoveResult> {
+    const registry = await this.readRegistry();
+    const info = registry.worktrees.find((item) => item.taskId === taskId);
+    if (!info) throw new WorktreeError(`${taskId} has no worktree.`);
+    if (existsSync(info.path)) {
+      const dirty = await git(info.path, ["status", "--porcelain=v1", "--untracked-files=all"]);
+      if (dirty) throw new WorktreeError(`${taskId} has uncommitted changes; commit or move them before removing the worktree.`);
+      // git worktree remove also deletes ignored files, which can be real work (notes, data, edited settings).
+      const kept = await this.ignoredWork(info.path);
+      if (kept.length) throw new WorktreeError(`${taskId} has ignored files that would be deleted with the worktree; move them first: ${kept.slice(0, 10).join(", ")}`);
+      await git(this.repoRoot, ["worktree", "remove", info.path]);
+    } else {
+      await git(this.repoRoot, ["worktree", "prune"]);
+    }
+    let branchDeleted = false;
+    let branchKeptReason: string | undefined;
+    const merged = await runGit(this.repoRoot, ["merge-base", "--is-ancestor", info.branch, info.baseRef]);
+    if (merged.code === 0) {
+      await git(this.repoRoot, ["branch", "-D", info.branch]);
+      branchDeleted = true;
+    } else {
+      branchKeptReason = `${info.branch} is not merged into ${info.baseRef}, so it was kept.`;
+    }
+    registry.worktrees = registry.worktrees.filter((item) => item.taskId !== taskId);
+    await this.writeRegistry(registry);
+    this.ledger.append({
+      type: "worktree.removed",
+      actor: WORKTREES_ACTOR,
+      subject: taskId,
+      summary: branchDeleted ? `Removed worktree and merged branch ${info.branch}` : `Removed worktree; kept unmerged branch ${info.branch}`,
+      reason: branchKeptReason,
+      evidence: [`branch:${info.branch}`, `port:${info.port}`],
+      data: { removedBy: actor, branch: info.branch, branchDeleted },
     });
+    return { taskId, branchDeleted, branchKeptReason };
   }
 
   /**
@@ -482,9 +550,205 @@ export class WorktreeManager {
     const missing = registry.worktrees.filter((info) => !listed.some((item) => samePath(item, info.path))).map((info) => info.taskId);
     const untracked = listed
       .filter((item) => isWithin(this.worktreeRoot, path.resolve(item)) || isWithin(realDir(this.worktreeRoot), path.resolve(item)))
+      // Only folders directly under our root are ours: another ledger's live below its own namespace folder.
+      .filter((item) => samePath(path.dirname(path.resolve(item)), this.worktreeRoot) || samePath(path.dirname(path.resolve(item)), realDir(this.worktreeRoot)))
       .filter((item) => !registry.worktrees.some((info) => samePath(item, info.path)))
       .map((item) => path.basename(item));
     return { missing, untracked };
+  }
+
+  // ---- keeping the registry, git and the disk in step (lane L10). New methods; reconcile() above keeps its older shape. ----
+
+  /**
+   * Compares the registry with git's worktree list and the disk. Each registered folder is "ok", "missing"
+   * (deleted outside the app, branch still there: can be recreated), "gone" (folder and branch both deleted:
+   * only a stale record is left) or "unlinked" (folder there, git does not track it: never touched). pp
+   * worktrees git lists under our folder that the registry lacks come back as `untracked`. With `forget`, the
+   * stale record of a "gone" folder is dropped (bookkeeping only; there is nothing left to preserve). Never
+   * deletes a folder or a branch.
+   */
+  async reconcileWithDisk(options: { forget?: boolean; actor?: Actor } = {}): Promise<Reconciled> {
+    const run = async (): Promise<Reconciled> => {
+      const registry = await this.readRegistry();
+      const listed = parseWorktreeList(await git(this.repoRoot, ["worktree", "list", "--porcelain"]));
+      const folders: FolderStatus[] = [];
+      for (const info of registry.worktrees) folders.push(await this.statusOf(info, listed));
+      const untracked = listed
+        .filter((item) => this.underWorktreeRoot(item.path) && !registry.worktrees.some((info) => samePath(item.path, info.path)))
+        .map((item) => ({ name: path.basename(item.path), path: item.path, ...(item.branch ? { branch: item.branch } : {}) }));
+      const forgotten: string[] = [];
+      if (options.forget) {
+        const stale = folders.filter((item) => item.state === "gone").map((item) => registry.worktrees.find((info) => info.taskId === item.taskId)!);
+        if (stale.length) {
+          registry.worktrees = registry.worktrees.filter((info) => !stale.includes(info));
+          await this.writeRegistry(registry);
+          for (const info of stale) {
+            forgotten.push(info.taskId);
+            this.ledger.append({
+              type: "worktree.removed",
+              actor: WORKTREES_ACTOR,
+              subject: info.taskId,
+              summary: `Forgot the record of ${info.taskId}'s folder: the folder and ${info.branch} were both deleted outside Perfect Planner`,
+              evidence: [`branch:${info.branch}`, `port:${info.port}`],
+              data: { removedBy: options.actor ?? WORKTREES_ACTOR, branch: info.branch, branchDeleted: false, forgotten: true },
+            });
+          }
+        }
+      }
+      return { folders, untracked, forgotten };
+    };
+    return options.forget ? this.serial(run) : run();
+  }
+
+  /** Is this path inside the planner's own worktree folder (as written or as a real path)? */
+  private underWorktreeRoot(folder: string): boolean {
+    const resolved = path.resolve(folder);
+    return isWithin(this.worktreeRoot, resolved) || isWithin(realDir(this.worktreeRoot), resolved);
+  }
+
+  private async statusOf(info: WorktreeInfo, listed: ListedWorktree[]): Promise<FolderStatus> {
+    const make = (state: FolderState, outside = false): FolderStatus => ({ taskId: info.taskId, branch: info.branch, path: info.path, state, note: folderNote(state, info.taskId, info.branch, info.path, outside) });
+    // The registry lives in .git, which any program on this PC can write: a record naming some other folder is never acted on.
+    if (!this.underWorktreeRoot(info.path)) return make("unlinked", true);
+    if (existsSync(info.path)) return make(isListed(listed, info.path) ? "ok" : "unlinked");
+    const branch = await runGit(this.repoRoot, ["show-ref", "--verify", "--quiet", `refs/heads/${info.branch}`]);
+    return make(branch.code === 0 ? "missing" : "gone");
+  }
+
+  /**
+   * Brings back a folder that was deleted outside the app, from its branch pp/T-n, with every commit on it.
+   * Only for a "missing" folder (record present, folder gone, branch present). Never creates or deletes a
+   * branch, never overwrites a folder that exists. If setting the folder up fails, the fresh checkout (committed
+   * files only) is taken away again and the branch is left exactly as it was.
+   */
+  recreate(taskId: string, actor: Actor = WORKTREES_ACTOR): Promise<RecreateResult> {
+    return this.serial(async () => {
+      const registry = await this.readRegistry();
+      const info = registry.worktrees.find((item) => item.taskId === taskId);
+      if (!info) throw new WorktreeError(`${taskId} has no worktree record.`);
+      const listed = parseWorktreeList(await git(this.repoRoot, ["worktree", "list", "--porcelain"]));
+      const status = await this.statusOf(info, listed);
+      if (status.state === "ok") throw new WorktreeError(`${taskId}'s folder is already there; nothing to recreate.`);
+      if (status.state !== "missing") throw new WorktreeError(status.note);
+      const target = path.join(this.worktreeRoot, taskId);
+      if (existsSync(target)) throw new WorktreeError(`${toRepoPath(path.relative(this.repoRoot, target))} already exists on disk.`);
+      const holder = listed.find((item) => item.branch === info.branch && !samePath(item.path, target) && existsSync(item.path));
+      if (holder) throw new WorktreeError(`${info.branch} is already checked out in ${holder.path}.`);
+      await this.excludeWorktreeDir();
+      mkdirSync(this.worktreeRoot, { recursive: true });
+      // --force only steps over git's note that this very folder was registered and then deleted; the holder check above stands in for its other guard.
+      await git(this.repoRoot, ["worktree", "add", "--force", target, info.branch]);
+      try {
+        const realPath = realDir(target);
+        if (!isWithin(realDir(this.worktreeRoot), realPath)) throw new WorktreeError("Worktree folder was redirected outside .perfect-planner/worktrees.");
+        const others = registry.worktrees.filter((item) => item.taskId !== taskId);
+        // Ports another ledger on this repo holds are not ours to hand out again.
+        const foreign = await this.otherLedgers();
+        const port = !others.some((item) => item.port === info.port) && !foreign.ports.has(info.port) && (await portIsFree(info.port)) ? info.port : await this.freePort(others, foreign);
+        const tracked = new Set(lines(await git(this.repoRoot, ["ls-files", "--", ".env*"])));
+        const settings = copyLocalSettings(this.repoRoot, realPath, tracked);
+        if (this.secretScan) await this.installSecretScan(realPath);
+        await this.installDependencies(realPath);
+        info.path = realPath;
+        info.port = port;
+        await this.writeRegistry(registry);
+        const where = toRepoPath(path.relative(this.repoRoot, realPath));
+        let ledgerNote: string | undefined;
+        try {
+          this.ledger.append({
+            type: "worktree.created",
+            actor: WORKTREES_ACTOR,
+            subject: taskId,
+            summary: `Recreated the folder for ${taskId} from ${info.branch}, port ${port}`,
+            data: { launchedBy: actor, recreated: true, branch: info.branch, baseRef: info.baseRef, baseSha: info.baseSha, port, path: where, claims: info.claims },
+            evidence: [`branch:${info.branch}`, `base:${info.baseRef}`, `commit:${info.baseSha}`, `port:${port}`, `path:${where}`, ...settings.map((name) => `settings:${name}`), ...info.claims.map((file) => `claim:${file}`)],
+          });
+        } catch (error) {
+          // The folder is back and registered; a ledger rule (for example the month's budget) refusing a new-run entry must not undo that.
+          ledgerNote = (error as Error).message;
+        }
+        return { info, ...(ledgerNote ? { ledgerNote } : {}) };
+      } catch (error) {
+        // Only committed files were checked out, so nothing in this folder is anyone's work. The branch is never touched.
+        await runGit(this.repoRoot, ["worktree", "remove", "--force", target]);
+        throw error;
+      }
+    });
+  }
+
+  /** Facts about one task folder: what stands between it and a safe removal. Only reads. */
+  async assess(info: WorktreeInfo, listed?: ListedWorktree[]): Promise<WorktreeFacts> {
+    const known = listed ?? parseWorktreeList(await git(this.repoRoot, ["worktree", "list", "--porcelain"]));
+    return readFacts({ repoRoot: this.repoRoot, folder: info.path, branch: info.branch, baseRef: info.baseRef, locked: Boolean(isListed(known, info.path)?.locked), ignoredWork: (folder) => this.ignoredWork(folder) });
+  }
+
+  /**
+   * The safe sweep. `classify` says, per folder, whether its task is still being worked on ("active": left alone and not
+   * listed), finished or released, or unclear (`{ keep }`: listed, never removed by the sweep). A finished or released
+   * folder is removed only when nothing in it can be lost: tree clean (no uncommitted, untracked or ignored work), every
+   * commit merged into its base or pushed to a remote, git not holding it locked. A released task's folder also needs its
+   * branch merged, because the branch goes with it and a branch is used once. Everything else comes back in `kept`
+   * with the reasons, its owner and its disk size, for the person to decide. Branches are only ever deleted by the
+   * same rule as remove(): fully merged. One at a time with every other change, so a dispatch cannot interleave.
+   */
+  sweep(options: SweepOptions): Promise<SweepResult> {
+    return options.dryRun ? this.sweepNow(options) : this.serial(() => this.sweepNow(options));
+  }
+
+  private async sweepNow({ classify, actor = WORKTREES_ACTOR, dryRun = false }: SweepOptions): Promise<SweepResult> {
+    const registry = await this.readRegistry();
+    const listed = parseWorktreeList(await git(this.repoRoot, ["worktree", "list", "--porcelain"]));
+    const result: SweepResult = { removed: [], kept: [] };
+    for (const info of [...registry.worktrees]) {
+      const kind = classify(info);
+      if (kind === "active") continue;
+      const status = await this.statusOf(info, listed);
+      if (status.state !== "ok") {
+        result.kept.push(await this.leftover(info, status.state, [status.note], false));
+        continue;
+      }
+      const facts = await this.assess(info, listed);
+      const { hard, soft } = keepReasons(facts, info.branch, info.baseRef, { needMerged: kind !== "finished" });
+      const why = typeof kind === "object" ? [kind.keep, ...hard, ...soft] : [...hard, ...soft];
+      if (typeof kind === "string" && !why.length && !dryRun) {
+        try {
+          result.removed.push({ ...(await this.removeNow(info.taskId, actor)), path: info.path });
+        } catch (error) {
+          result.kept.push(await this.leftover(info, "ok", [(error as Error).message], false));
+        }
+        continue;
+      }
+      result.kept.push(await this.leftover(info, "ok", why.length ? why : ["Finished, and nothing in it would be lost: the next clean-up removes it."], hard.length === 0));
+    }
+    return result;
+  }
+
+  private async leftover(info: WorktreeInfo, state: FolderState, why: string[], removable: boolean): Promise<Leftover> {
+    const size = state === "missing" || state === "gone" || !existsSync(info.path) ? { bytes: 0, approximate: false } : await directorySize(info.path);
+    return { taskId: info.taskId, branch: info.branch, path: info.path, state, launchedBy: info.actor, sizeBytes: size.bytes, sizeApproximate: size.approximate, why, removable };
+  }
+
+  /**
+   * The person's own choice to remove a folder the sweep kept. Checked again, and removed, in one step:
+   * `decide` (the caller's view of the task) may refuse outright, or say the task is still open
+   * (`needMerged`: the branch goes with the folder, so it must be fully merged); the hard reasons from
+   * keepReasons stop it with a plain message. Commits only on the branch stay there; the branch is
+   * deleted only when fully merged (remove()'s rule).
+   */
+  removeChecked(taskId: string, actor: Actor, decide: (info: WorktreeInfo) => { refuse?: string; needMerged?: boolean }): Promise<RemoveResult> {
+    return this.serial(async () => {
+      const registry = await this.readRegistry();
+      const info = registry.worktrees.find((item) => item.taskId === taskId);
+      if (!info) throw new WorktreeError(`${taskId} has no worktree.`);
+      const verdict = decide(info);
+      if (verdict.refuse) throw new WorktreeError(verdict.refuse);
+      const listed = parseWorktreeList(await git(this.repoRoot, ["worktree", "list", "--porcelain"]));
+      const status = await this.statusOf(info, listed);
+      if (status.state !== "ok") throw new WorktreeError(status.note);
+      const { hard } = keepReasons(await this.assess(info, listed), info.branch, info.baseRef, { needMerged: verdict.needMerged });
+      if (hard.length) throw new WorktreeError(`${taskId} was not removed: ${hard.join(" ")}`);
+      return this.removeNow(taskId, actor);
+    });
   }
 
   private async gitCommonDir(): Promise<string> {
@@ -493,7 +757,43 @@ export class WorktreeManager {
   }
 
   private async registryFile(): Promise<string> {
-    return path.join(await this.gitCommonDir(), "perfect-planner", "worktrees.json");
+    return path.join(await this.gitCommonDir(), "perfect-planner", this.namespace ? `worktrees.${this.namespace}.json` : "worktrees.json");
+  }
+
+  /**
+   * What the other ledgers sharing this git repo hold (their registries sit beside ours in the repo's git folder).
+   * Their branches, folders, ports and file claims are off limits to this ledger: a worktree that would land on
+   * any of them is refused instead of created.
+   */
+  private async otherLedgers(): Promise<OtherLedgers> {
+    const own = path.basename(await this.registryFile());
+    const dir = path.join(await this.gitCommonDir(), "perfect-planner");
+    const out: OtherLedgers = { worktrees: [], branches: new Set(), paths: [], ports: new Set() };
+    let names: string[] = [];
+    try {
+      names = readdirSync(dir);
+    } catch {
+      return out;
+    }
+    for (const name of names) {
+      if (name === own || !/^worktrees(?:\.l-[0-9a-f]{8})?\.json$/.test(name)) continue;
+      let parsed: Registry;
+      try {
+        parsed = JSON.parse(readFileSync(path.join(dir, name), "utf8")) as Registry;
+      } catch {
+        // An unreadable neighbour cannot be checked, so nothing is created beside it.
+        throw new WorktreeError(`${name} (another ledger's worktree list in this repo) cannot be read, so no worktree was created. Fix or move that file, then try again.`);
+      }
+      if (!Array.isArray(parsed.worktrees)) continue;
+      const tag = name === "worktrees.json" ? "the first ledger" : `ledger ${name.slice("worktrees.".length, -".json".length)}`;
+      for (const info of parsed.worktrees) {
+        out.worktrees.push({ ...info, taskId: `${info.taskId} of ${tag}` });
+        out.branches.add(info.branch);
+        out.paths.push(info.path);
+        out.ports.add(info.port);
+      }
+    }
+    return out;
   }
 
   private async readRegistry(): Promise<Registry> {
@@ -534,16 +834,21 @@ export class WorktreeManager {
   /** Keeps this repo's leases equal to the ports its registry holds; a lease with no worktree behind it is dropped. */
   private syncLeases(registry: Registry): void {
     const held = new Set(registry.worktrees.map((info) => info.port));
-    for (const [port, holder] of PORT_LEASES) if (holder === this.repoRoot && !held.has(port)) PORT_LEASES.delete(port);
-    for (const port of held) PORT_LEASES.set(port, this.repoRoot);
+    for (const [port, holder] of PORT_LEASES) if (holder === this.leaseKey && !held.has(port)) PORT_LEASES.delete(port);
+    for (const port of held) PORT_LEASES.set(port, this.leaseKey);
   }
 
-  private async freePort(taken: WorktreeInfo[]): Promise<number> {
+  /** Who holds this manager's dev-server ports in this process: the repo, and the ledger within it when several share it. */
+  private get leaseKey(): string {
+    return this.namespace ? `${this.repoRoot}#${this.namespace}` : this.repoRoot;
+  }
+
+  private async freePort(taken: WorktreeInfo[], others: OtherLedgers): Promise<number> {
     const used = new Set(taken.map((info) => info.port));
     for (let port = this.portRange[0]; port <= this.portRange[1]; port += 1) {
       const holder = PORT_LEASES.get(port);
-      if (!used.has(port) && (!holder || holder === this.repoRoot) && (await portIsFree(port))) {
-        PORT_LEASES.set(port, this.repoRoot);
+      if (!used.has(port) && (!holder || holder === this.leaseKey) && !others.ports.has(port) && (await portIsFree(port))) {
+        PORT_LEASES.set(port, this.leaseKey);
         return port;
       }
     }

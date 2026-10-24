@@ -25,6 +25,8 @@ export interface CoreProject {
   key: string;
   /** Folder whose .perfect-planner/ledger holds this project's ledger. */
   root: string;
+  /** True when `root` is the app's own data folder (the normal case), not a folder the person's project lives in. */
+  appData: boolean;
   ledger: Ledger;
   service: AgentService;
   /**
@@ -215,7 +217,7 @@ function ownerPinFor(baseRoot: string, root: string, keys: HostKeys): OwnerPin {
   }
   const principal = `person:${DEFAULT_LOCAL_PERSON}`;
   const ownerKey = keys.ownerKeyFor(principal);
-  if (!ownerKey) return { state: "unavailable", reason: "This device has no key store, so the project has no owner." };
+  if (!ownerKey) return { state: "unavailable", reason: `This device has no key store, so the project has no owner.${keys.state().reason ? ` ${keys.state().reason}` : ""}` };
   return { state: "new", ownerKey, principal, ...(genesis ? { genesis } : {}) };
 }
 
@@ -384,5 +386,5 @@ export function openCoreProject(baseRoot: string, key: string, override: string 
     }
     return report;
   });
-  return { key, root, ledger, service, policy, owner, ready, protection, protectRoots: guard, releaseRoots, state: new Map(), entries: () => ledger.entries() };
+  return { key, root, appData: override === undefined, ledger, service, policy, owner, ready, protection, protectRoots: guard, releaseRoots, state: new Map(), entries: () => ledger.entries() };
 }

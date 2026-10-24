@@ -19,6 +19,10 @@ export interface WorktreeInfo {
 
 export const TASK_ID = /^T-[1-9]\d{0,6}(?:\.a[2-9]\d{0,3})?$/;
 
-export function branchFor(taskId: string): string {
-  return `pp/${taskId}`;
+/** A ledger sharing a git repo with another one gets its own namespace, e.g. "l-1a2b3c4d" (see core/host/repoClaim.ts). */
+export const LEDGER_NAMESPACE = /^l-[0-9a-f]{8}$/;
+
+/** Branch for a task: pp/T-n, or pp/<namespace>/T-n when the repo is shared by several ledgers. */
+export function branchFor(taskId: string, namespace?: string | null): string {
+  return namespace ? `pp/${namespace}/${taskId}` : `pp/${taskId}`;
 }

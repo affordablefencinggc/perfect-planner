@@ -67,6 +67,23 @@ approved again. Status calls use `--no-optional-locks` so they never take `index
 
 State lives in `<git common dir>/perfect-planner/worktrees.json`, so it survives restarts and is shared by every worktree.
 
+## A task folder that is gone, and folders nobody works in (hygiene.ts)
+
+These are all new calls next to `reconcile()` (which keeps its old meaning); none of them deletes a branch.
+
+| Call | Does |
+|---|---|
+| `reconcileWithDisk({ forget? })` | Registry against git against disk, per task: `ok`; `missing` (folder deleted, branch still there: can be recreated); `gone` (folder and branch both deleted: a stale record, dropped only when `forget` is set, with a `worktree.removed` entry marked `forgotten`); `unlinked` (a folder is there but git does not track it, or the record names a folder outside the planner's own worktree folder: never touched). Also lists pp worktrees nobody tracks. Only reads, apart from forgetting `gone` records. |
+| `recreate(taskId, actor)` | For a `missing` folder only: `git worktree add --force <folder> pp/T-n` from the existing branch, so the committed work is back. Refuses if the folder exists or another worktree holds the branch. Restores the launch steps (settings, secret scan, install), keeps the port, writes `worktree.created` with `recreated: true`. If it fails it removes only the folder it just made. |
+| `sweep({ classify, actor, dryRun })` | The safe clean-up. The caller says what each task is (`active`, `finished`, `released` or `{ keep: reason }`). A folder is removed only if its task is `finished` or `released` and nothing in it can be lost (`keepReasons` in `hygiene.ts`: no uncommitted, untracked or ignored work; its HEAD is on a branch; no commit that is neither merged into the base nor on a remote; not locked; a released task's branch must be fully merged, because the branch goes with the folder and a new worker could not otherwise start). Everything else is kept and returned with its owner, disk size and the reasons. `active` tasks are never listed or touched. `dryRun` only lists. |
+| `removeChecked(taskId, actor, decide)` | The person's own choice to remove a folder the sweep kept: checked again at that moment, refused when work would be lost. Commits only on the branch stay on the branch. |
+
+The host (`core/host/routes/worktreeCare.ts`) runs `reconcileWithDisk` and the sweep on the first Tasks
+request after the app starts (and when a task is finished), `reconcileWithDisk` before every dispatch, and
+serialises dispatch, the sweep, recreate and a chosen removal so they never interleave. Routes:
+`GET /worktrees` (the list for the Advanced view), `POST /worktrees/clean`, `POST /worktrees/:id/remove`,
+`POST /tasks/:id/recreate-folder`.
+
 ## Ledger entries written
 
 | type | subject | data |

@@ -44,6 +44,12 @@
 .core-screen-tasks .core-tasks-repo p { flex-basis: 100%; margin: 0; }
 .core-screen-tasks .core-tasks-repo input { width: min(100%, 32em); }
 .core-screen-tasks .core-tasks-repo-line { margin: 0; font-size: var(--text-sm); }
+.core-screen-tasks .core-tasks-notice button { margin-left: var(--space-2); }
+.core-screen-tasks .core-tasks-folders { display: grid; gap: var(--space-2); }
+.core-screen-tasks .core-tasks-folders h3,
+.core-screen-tasks .core-tasks-folders p { margin: 0; }
+.core-screen-tasks .core-tasks-folders ul { margin: var(--space-1) 0; padding-left: var(--space-4); display: grid; gap: var(--space-2); font-size: var(--text-sm); }
+.core-screen-tasks .core-tasks-folders > button { justify-self: start; }
 .core-screen-tasks .core-tasks-repos ul,
 .core-screen-tasks .core-tasks-cost ul { margin: 0 0 var(--space-2); padding-left: 1.2em; display: grid; gap: var(--space-1); font-size: var(--text-sm); overflow-wrap: anywhere; }
 .core-screen-tasks .core-tasks-repos li { list-style: none; margin-left: -1.2em; }
