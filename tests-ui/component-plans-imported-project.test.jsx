@@ -72,7 +72,7 @@ describe("ComponentPlansWorkspace imported-project catalog start", () => {
     expect(screen.getByRole("heading", { name: "Component contracts" })).toBeTruthy();
     expect(screen.getAllByText("Imported Product")).toHaveLength(2);
     expect(screen.getByText("12 files")).toBeTruthy();
-    expect(screen.getByText(/digest 111111111111/)).toBeTruthy();
+    expect(screen.queryByText(/digest 111111111111/)).toBeNull();
     expect(screen.queryByRole("heading", { name: "No component contracts have been generated" })).toBeNull();
     expect(screen.getByRole("button", { name: "Add component" })).toBeTruthy();
     expect(screen.getAllByText("Unavailable").length).toBeGreaterThanOrEqual(8);

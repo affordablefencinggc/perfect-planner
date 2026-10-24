@@ -18,9 +18,10 @@ afterEach(()=>{cleanup();vi.restoreAllMocks();});
 async function openForm(context){
  readComponentContext.mockResolvedValue(context);
  render(<ComponentDraftPanel projectId="one"/>);
- await screen.findByText(/Saved planning: /);
+ await waitFor(()=>expect(screen.queryByText(/Checking your saved planning/)).toBeNull());
  await waitFor(()=>expect(screen.getByRole('button',{name:'Refresh saved planning'}).disabled).toBe(false));
  fireEvent.click(screen.getByRole('button',{name:'Add component'}));
+ fireEvent.change(screen.getByLabelText('Name'),{target:{value:'First part'}});
  fireEvent.click(screen.getByRole('button',{name:'Add component'}));
  // Open every section so all controls are rendered and inspectable.
  for(const details of document.querySelectorAll('details'))details.open=true;
@@ -58,7 +59,7 @@ test('with no architecture every disabled action shows the real missing prerequi
   const holder=document.getElementById(control.getAttribute('aria-describedby').split(/\s+/)[0]);
   expect(holder.hidden).toBe(false);
  }
- expect(reasonFor(screen.getByRole('button',{name:'Rebind to current saved parents'}))).toMatch(/Publish the Blueprint architecture first/);
+ expect(reasonFor(screen.getByRole('button',{name:'Update to latest approved plan'}))).toMatch(/Publish the Blueprint architecture first/);
  expect(reasonFor(screen.getByRole('button',{name:'Load saved catalog'}))).toMatch(/No component catalog has been published/);
  expect(reasonFor(screen.getByRole('button',{name:'Publish component catalog'}))).toMatch(/Publish the Blueprint architecture first/);
 });
@@ -73,7 +74,7 @@ test('reviewing with no architecture names the missing architecture instead of a
 
 test('with no folder plan the reasons name the folder plan',async()=>{
  await openForm(noFolder);
- expect(reasonFor(screen.getByRole('button',{name:'Rebind to current saved parents'}))).toMatch(/folder plan/i);
+ expect(reasonFor(screen.getByRole('button',{name:'Update to latest approved plan'}))).toMatch(/folder plan/i);
  fireEvent.click(screen.getByRole('button',{name:'Review component draft'}));
  const alert=await screen.findByRole('alert');
  expect(alert.textContent).toMatch(/folder plan/i);
@@ -93,7 +94,7 @@ test('a brand-new draft binds itself on first review instead of demanding a rebi
  fireEvent.click(screen.getByRole('button',{name:'Review component draft'}));
  await screen.findByRole('region',{name:'Component review'});
  expect(screen.queryByText(/Explicitly rebind/i)).toBeNull();
- expect(screen.getByRole('status').textContent).toMatch(/bound to saved architecture revision 3 and folder plan revision 2/);
+ expect(screen.getByRole('status').textContent).toMatch(/follows your latest approved plan/);
  expect(JSON.parse(localStorage.getItem('perfect-planner:component-draft:v1:one')??'null')?.folderRevision??2).toBe(2);
 });
 test('Simple view lists review issues as sentences; Advanced keeps the exact engine text',async()=>{
@@ -101,14 +102,14 @@ test('Simple view lists review issues as sentences; Advanced keeps the exact eng
  fireEvent.click(screen.getByRole('button',{name:'Review component draft'}));
  const review=await screen.findByRole('region',{name:'Component review'});
  expect(review.textContent).not.toMatch(/inventory\[\d\]|definitiveOutcome|estimateHours|taskId/);
- expect(review.textContent).toMatch(/Component 1: give it a name\./);
+ expect(review.textContent).toMatch(/Component 2: give it a name\./);
  expect(review.textContent).toMatch(/fill in owner, reviewer and task ID/);
  cleanup();
  readComponentContext.mockResolvedValue(readyContext);
  render(<ViewModeContext.Provider value={{mode:'advanced',isAdvanced:true,setMode:()=>{}}}><ComponentDraftPanel projectId="one"/></ViewModeContext.Provider>);
  await waitFor(()=>expect(screen.getByRole('button',{name:'Review component draft'}).disabled).toBe(false));
  fireEvent.click(screen.getByRole('button',{name:'Review component draft'}));
- expect((await screen.findByRole('region',{name:'Component review'})).textContent).toMatch(/inventory\[0\]\.name is required\./);
+ expect((await screen.findByRole('region',{name:'Component review'})).textContent).toMatch(/inventory\[1\]\.name is required\./);
 });
 test('form labels read as words and one-line answers use one-line inputs',async()=>{
  await openForm(noArchitecture);
@@ -125,4 +126,26 @@ test('plainComponentBlocker turns field paths into words and leaves known senten
  expect(plainComponentBlocker('C001.fileNaming requires safe allowed roots.')).toBe('C001 file naming requires safe allowed roots.');
  expect(plainComponentBlocker('inventory[1] requires positive definition and notThis boundary.')).toBe('Component 2 requires positive definition and not this boundary.');
  expect(plainComponentBlocker('Component references an unknown approved folder.')).toBe('Component references an unknown approved folder.');
+});
+
+test('Add component reuses an empty draft instead of piling up unnamed ones, and empties can be cleared',async()=>{
+ await openForm(readyContext);
+ fireEvent.click(screen.getByRole('button',{name:'Add component'}));
+ fireEvent.click(screen.getByRole('button',{name:'Add component'}));
+ expect(screen.getAllByRole('button',{name:/Unnamed component/})).toHaveLength(1);
+});
+
+test('next step says what to do first in plain words and offers folders when ready',async()=>{
+ const onOpenStructure=vi.fn();
+ readComponentContext.mockResolvedValue(noFolder);
+ const {unmount}=render(<ComponentDraftPanel projectId="one" onOpenStructure={onOpenStructure}/>);
+ await screen.findByText('Approve the folder layout first.');
+ fireEvent.click(screen.getByRole('button',{name:'Open Structure & Connections'}));
+ expect(onOpenStructure).toHaveBeenCalled();
+ expect(screen.queryByText(/architecture-missing|digest|Bounded/)).toBeNull();
+ unmount();
+ readComponentContext.mockResolvedValue(readyContext);
+ render(<ComponentDraftPanel projectId="one"/>);
+ fireEvent.click(await screen.findByRole('button',{name:'Start from my folders'}));
+ expect(screen.getByLabelText('Name').value).toBe('Src');
 });

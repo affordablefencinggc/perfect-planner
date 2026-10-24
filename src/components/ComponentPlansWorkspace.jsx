@@ -6,6 +6,7 @@ import { workspaceDiscoveryCategories } from "../engine/workspaceDiscoveryEngine
 import { boundedFetch } from "../runtime/boundedFetch.js";
 import { ComponentDraftPanel } from "./ComponentDraftPanel.jsx";
 import { useOptionalProject } from "../project/ProjectProvider.jsx";
+import { useViewMode } from "../project/viewMode.js";
 import atlasSource from "../../docs/architecture/maps/00-map-atlas.md?mermaid";
 import productSource from "../../docs/architecture/maps/01-product-workspaces.md?mermaid";
 import componentSource from "../../docs/architecture/maps/02-component-contracts.md?mermaid";
@@ -83,6 +84,7 @@ function ImportedComponentCatalogStart({ activeProject, onOpenStructure, onToast
     }
     onToast?.('Component planning approval saved. App verification and execution remain separate.');
   };
+  const { isAdvanced } = useViewMode();
   const census = project?.census ?? null;
   const discovery = project?.discovery ?? null;
   const status = catalogStatus(project, discovery);
@@ -106,11 +108,11 @@ function ImportedComponentCatalogStart({ activeProject, onOpenStructure, onToast
     <section className="component-intake-facts" aria-label="Available project facts">
       <article><small>ACTIVE PROJECT</small><strong>{project?.name ?? "No project selected"}</strong><span>{project?.projectId ?? "Project identity unavailable"}</span></article>
       <article><small>REGISTERED FOLDER</small><strong>{registration?.rootLabel ?? "Unavailable"}</strong><span>{registration ? `${registration.adapter} · revision ${registration.registryRevision}` : "No redacted registration receipt"}</span></article>
-      <article><small>BOUNDED CENSUS</small><strong>{census ? `${census.fileCount} files` : "Unavailable"}</strong><span>{census ? `${census.skippedCount} skipped · digest ${census.digest.slice(0, 12)}` : "No census receipt"}</span></article>
+      <article><small>{isAdvanced ? "BOUNDED CENSUS" : "FILES FOUND"}</small><strong>{census ? `${census.fileCount} files` : "Unavailable"}</strong><span>{census ? `${census.skippedCount} skipped${isAdvanced ? ` · digest ${census.digest.slice(0, 12)}` : ""}` : isAdvanced ? "No census receipt" : "Not scanned yet"}</span></article>
       <article><small>DISCOVERY SNAPSHOT</small><strong>{discovery ? `${discovery.counts.observed} observed · ${discovery.counts.signals} review` : "Unavailable"}</strong><span>{discovery ? `${discovery.counts.unanswered} unanswered · ${readableTime(discovery.generatedAt)}` : "Run discovery from Structure"}</span></article>
     </section>
 
-    {project?.projectId ? <ComponentDraftPanel key={`${project.projectId}:${registration?.rootIdentity ?? 'unregistered'}`} projectId={project.projectId} onPublished={onPublished} /> : <p>Select a project before writing its component contracts.</p>}
+    {project?.projectId ? <ComponentDraftPanel key={`${project.projectId}:${registration?.rootIdentity ?? 'unregistered'}`} projectId={project.projectId} onPublished={onPublished} onOpenStructure={onOpenStructure} /> : <p>Select a project before writing its component contracts.</p>}
     <details className="component-discovery-reference">
       <summary>Reference · folder intake and discovery evidence</summary>
       <p>A file count or framework signal is not a component boundary. Use the recorded evidence to answer the draft; review uncertain findings before approval.</p>
