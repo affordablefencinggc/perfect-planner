@@ -1422,11 +1422,15 @@
   grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
   gap: 40px 30px;
 }
+.workspace-tree-node.root > details > .workspace-tree-children {
+  /* Trim only the sides, so a wrapped row's joining line stops at its outer cards. */
+  clip-path: inset(-120px 0 -120px 0);
+}
 .workspace-tree-node.root > details > .workspace-tree-children::before {
   top: 0;
   left: 50%;
   bottom: auto;
-  height: 32px;
+  height: 82px;
 }
 .workspace-tree-node.root
   > details
@@ -1438,6 +1442,39 @@
   height: 33px;
   border-top: 0;
   border-left: 1px solid #89928e;
+}
+/* Horizontal line joining the cards in a row, running behind them at mid-height; the first and last card only
+   reach in from their centre, so the line never dangles past either end. */
+.workspace-tree-node.root
+  > details
+  > .workspace-tree-children
+  > .workspace-tree-node::after {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  top: 50px;
+  left: calc(var(--tree-gap, 30px) / -2);
+  right: calc(var(--tree-gap, 30px) / -2);
+  border-top: 1px solid #89928e;
+  pointer-events: none;
+}
+.workspace-tree-node.root
+  > details
+  > .workspace-tree-children
+  > .workspace-tree-node:first-child::after {
+  left: 50%;
+}
+.workspace-tree-node.root
+  > details
+  > .workspace-tree-children
+  > .workspace-tree-node:last-child::after {
+  right: 50%;
+}
+.workspace-tree-node.root
+  > details
+  > .workspace-tree-children
+  > .workspace-tree-node:only-child::after {
+  display: none;
 }
 .empty-folder {
   margin-top: 10px;

@@ -125,6 +125,22 @@ function projectTreeForRendering(root, limit) {
   return result;
 }
 
+const countLabel = (count, one, many) => `${count} ${count === 1 ? one : many}`;
+
+// "2 folders · 5 files", dropping a zero part so no card says "0 folders".
+export function treeCountsLabel(folderCount, fileCount, prefix = "") {
+  const parts = [];
+  if (folderCount > 0) parts.push(countLabel(folderCount, `${prefix}folder`, `${prefix}folders`));
+  if (fileCount > 0) parts.push(countLabel(fileCount, `${prefix}file`, `${prefix}files`));
+  return parts.length ? parts.join(" · ") : "empty";
+}
+
+// Short button text: no repeated number when everything left is shown at once.
+export function showMoreLabel(step, hiddenCount, anyVisible) {
+  if (step >= hiddenCount) return anyVisible ? `Show ${hiddenCount} more` : `Show ${countLabel(hiddenCount, "file", "files")}`;
+  return `Show ${step} more · ${hiddenCount - step} left`;
+}
+
 function DiscoveryTreeNode({ node, revealIndex, revealCount }) {
   const initialFileCount =
     node.kind === "root" ? Math.min(node.files.length, 12) : 0;
@@ -145,12 +161,12 @@ function DiscoveryTreeNode({ node, revealIndex, revealCount }) {
               <strong>{node.name}</strong>
               <small>
                 {node.kind === "root"
-                  ? `${node.children.length} root folders · ${node.files.length} root files`
-                  : node.path}
+                  ? treeCountsLabel(node.children.length, node.files.length, "root ")
+                  : node.path !== node.name ? node.path : null}
               </small>
             </span>
             <em>
-              {node.children.length} folders · {node.files.length} files
+              {treeCountsLabel(node.children.length, node.files.length)}
             </em>
           </span>
         </summary>
@@ -184,8 +200,7 @@ function DiscoveryTreeNode({ node, revealIndex, revealCount }) {
                   }
                   aria-label={`Show ${Math.min(hiddenFileCount, visibleFileCount ? 48 : 24)} more files in ${nodeLabel}`}
                 >
-                  Show {Math.min(hiddenFileCount, visibleFileCount ? 48 : 24)}{" "}
-                  more · {hiddenFileCount} hidden
+                  {showMoreLabel(visibleFileCount ? 48 : 24, hiddenFileCount, visibleFileCount > 0)}
                 </button>
               )}
               {visibleFileCount > 0 && (
