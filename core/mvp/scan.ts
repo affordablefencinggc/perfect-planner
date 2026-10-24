@@ -39,6 +39,8 @@ export interface Classification {
 const SKIP_DIRS = new Set(["node_modules", ".git", "dist", "target", ".perfect-planner"]);
 const MAX_SCAN_BYTES = 1024 * 1024;
 const MAX_MARKERS_PER_FILE = 5;
+/** At this many src/features folders the repo is organised by feature, so src/components is not listed file by file. */
+const MANY_FEATURE_FOLDERS = 8;
 const SOURCE_EXT = /\.(jsx|tsx|js|ts|vue|svelte)$/i;
 const NO_MARKER_EXT = /\.(md|markdown|json|txt|lock|csv|svg)$/i;
 
@@ -471,11 +473,22 @@ export function folderSource(): FeatureSource {
         for (let n = 2; out.has(id); n++) id = `${f.id}-${n}`;
         out.set(id, { ...f, id });
       };
-      const testsFor = (stems: Set<string>): string[] =>
-        // Foo.pricing.test.tsx covers Foo as well as Foo.test.tsx does.
-        testFiles.filter((t) => stems.has(slugify(stemOf(t))) || stems.has(slugify(stemOf(t).split(".")[0])));
+      // Foo.pricing.test.tsx covers Foo as well as Foo.test.tsx does. Indexed once so a repo with
+      // thousands of tests is not re-read for every feature.
+      const testsByStem = new Map<string, string[]>();
+      for (const t of testFiles) {
+        for (const key of new Set([slugify(stemOf(t)), slugify(stemOf(t).split(".")[0])])) testsByStem.set(key, [...(testsByStem.get(key) ?? []), t]);
+      }
+      const testsFor = (stems: Set<string>): string[] => unique([...stems].flatMap((s) => testsByStem.get(s) ?? []));
       const isSource = (f: string): boolean => SOURCE_EXT.test(f) || /\.(vue|svelte)$/.test(f);
+      // A repo organised by src/features/<name>/ has its features there. Its src/components is then
+      // shared building blocks, not features: one card per component file would bury the real ones.
+      const featureFolders = present.includes("src/features")
+        ? fs.readdirSync(path.join(root, "src", "features"), { withFileTypes: true }).filter((e) => e.isDirectory() && !SKIP_DIRS.has(e.name)).length
+        : 0;
+      const hasFeatureFolders = featureFolders >= MANY_FEATURE_FOLDERS;
       for (const r of present) {
+        if (r === "src/components" && hasFeatureFolders) continue;
         if (r === "src/features") {
           const dirs = fs.readdirSync(path.join(root, "src", "features"), { withFileTypes: true })
             .filter((e) => e.isDirectory() && !SKIP_DIRS.has(e.name)).map((e) => e.name).sort();

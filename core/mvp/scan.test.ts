@@ -130,6 +130,13 @@ describe("folderSource", () => {
     expect(r.features.find((f) => f.id === "view-mode-toggle")?.status).toBe("done");
     expect(r.features.find((f) => f.id === "home")?.status).toBe("partial");
   });
+  it("lists feature folders, not every component, when the repo is organised by feature", () => {
+    const files: Record<string, string> = { "src/pages/Home.tsx": "export default 1;" };
+    for (let i = 0; i < 9; i++) files[`src/features/f${i}/index.ts`] = "export {};";
+    for (let i = 0; i < 30; i++) files[`src/components/Widget${i}.tsx`] = "export default 1;";
+    const list = folderSource().load(tmp(files)) as DeclaredFeature[];
+    expect(list.map((f) => f.id).sort()).toEqual(["f0", "f1", "f2", "f3", "f4", "f5", "f6", "f7", "f8", "home"]);
+  });
   it("counts co-located and dotted tests anywhere under src", () => {
     // Found on Looplet: 2,018 tests live beside the code, so 580 features read as untested.
     const root = tmp({
