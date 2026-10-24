@@ -10,6 +10,8 @@ import {
 } from "@phosphor-icons/react";
 import { AdvancedOnly, ConfidenceMeter, CoreError, CoreLoading, CoreScreen, useAdvanced } from "./CoreScreen.jsx";
 import ContractDetails from "./ContractDetails.jsx";
+import { useOptionalProject } from "../project/ProjectProvider.jsx";
+import { projectFolderFor } from "../project/projectFolders.js";
 import { useCoreResource } from "./coreApi.js";
 import "./DeepPlanningScreen.css";
 
@@ -123,8 +125,17 @@ function RepoRead({ repo }) {
   const [path, setPath] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
+  const tried = useRef(null);
   const id = useId();
   const data = repo.data;
+  // The folder the person scanned in Structure is the repo: hand it to planning once, without asking them to paste it.
+  const scanned = useOptionalProject()?.activeProject?.name;
+  const folder = data.known ? null : projectFolderFor(scanned);
+  useEffect(() => {
+    if (!folder || tried.current === folder) return;
+    tried.current = folder;
+    repo.post("/planning/repo", { path: folder }).catch((e) => setError(e.message));
+  }, [folder, repo]);
   const point = async (event) => {
     event.preventDefault();
     setBusy(true);

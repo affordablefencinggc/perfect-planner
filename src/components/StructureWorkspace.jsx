@@ -33,6 +33,7 @@ import { createStableProjectId } from "../project/projectIds.js";
 import { projectLabelFromRoot, projectRegistrationLabelFromRoot } from "../project/projectLabel.js";
 import { boundedFetch } from "../runtime/boundedFetch.js";
 import { defaultWorkspaceAdapter } from "../runtime/workspaceAdapter.js";
+import { rememberProjectFolder } from "../project/projectFolders.js";
 import { inspectArchitecture } from "../runtime/architectureClient.js";
 import { useOptionalProject } from "../project/ProjectProvider.jsx";
 import "./StructureWorkspace.css";
@@ -731,6 +732,7 @@ export function StructureWorkspace({
         rememberCensusPaths(census);
         if (workspaceAdapter.mode !== "browser") {
           try { localStorage.setItem(LAST_NATIVE_FOLDER_KEY, JSON.stringify({ path: path.trim(), name: runLabel })); } catch { /* remembering is optional */ }
+          rememberProjectFolder(runLabel, path);
         }
         refreshLastFolder();
         globalThis.requestAnimationFrame?.(() => discoveryPanelRef.current?.scrollIntoView?.({ behavior: "smooth", block: "start" }));

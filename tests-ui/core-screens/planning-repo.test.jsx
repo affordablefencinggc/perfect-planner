@@ -72,3 +72,26 @@ describe("Deep planning with a repo", () => {
     expect(calls.find((c) => c.method === "POST" && c.path === "/planning/repo").body).toEqual({ path: "/r/needle-main" });
   });
 });
+
+describe("the folder scanned in Structure", () => {
+  it("is handed to planning by itself when the project's name has a remembered folder", async () => {
+    const { rememberProjectFolder } = await import("../../src/project/projectFolders.js");
+    rememberProjectFolder("needle-main", "C:\\repos\\needle-main");
+    let pointed = false;
+    const calls = mockApi({
+      "GET /planning": () => ok(notStarted),
+      "GET /planning/templates": () => ok(LIST),
+      "GET /planning/repo": () => ok(pointed ? READ : { ...READ, known: false, root: null, suggestedTemplate: null }),
+      "POST /planning/repo": () => { pointed = true; return ok({ root: "C:\\repos\\needle-main" }); },
+    });
+    vi.doMock("../../src/project/ProjectProvider.jsx", async (orig) => ({ ...(await orig()), useOptionalProject: () => ({ activeProject: { name: "needle-main" }, activeProjectId: "p1" }) }));
+    vi.resetModules();
+    const { default: Screen } = await import("../../src/core-screens/DeepPlanningScreen.jsx");
+    const { ViewModeProvider: VMP } = await import("../../src/project/viewMode.js");
+    window.localStorage.setItem(VIEW_MODE_STORAGE_KEY, "simple");
+    render(<VMP><Screen /></VMP>);
+    expect(await screen.findByText(/Read your repo/)).toBeTruthy();
+    expect(calls.find((c) => c.method === "POST" && c.path === "/planning/repo").body).toEqual({ path: "C:\\repos\\needle-main" });
+    vi.doUnmock("../../src/project/ProjectProvider.jsx");
+  });
+});
