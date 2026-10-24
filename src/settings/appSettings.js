@@ -19,11 +19,14 @@ export const START_PAGES = Object.freeze(["home", "last"]);
 export const DOCK_TABS = Object.freeze(["logs", "errors", "mcp", "branches", "merge", "delivery", "guards"]);
 export const TOAST_SECONDS = Object.freeze([3, 6, 10, 0]);
 export const WORKTREE_MODES = Object.freeze(["isolated", "shared"]);
+// Names and meanings match core/release/presets.ts. This page only writes the choice into the brief.
 export const REVIEW_PRESETS = Object.freeze({
-  quick: "Quick: one reviewer, checks must pass",
-  standard: "Standard: one reviewer, checks and screenshot proof",
-  strict: "Strict: two reviewers, checks, screenshot proof and a clean collision record",
+  cheap: "Cheap: deep review only on sensitive areas, full tests once per batch of merges",
+  balanced: "Balanced: deep review on sensitive areas and anything rated medium or high",
+  thorough: "Thorough: deep review on every change, full tests on every merge",
 });
+const OLD_PRESETS = Object.freeze({ quick: "cheap", standard: "balanced", strict: "thorough" });
+export const ADVISORY = "advisory: written into the agent's brief";
 
 export const DEFAULT_SETTINGS = Object.freeze({
   theme: "warm",
@@ -37,7 +40,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   developerNotesVisible: true,
   toastSeconds: 6,
   worktreeMode: "isolated",
-  reviewPreset: "standard",
+  reviewPreset: "balanced",
   maxRounds: 2,
   budgetCapAud: null,
   jevReviewer: false,
@@ -65,7 +68,7 @@ export function normalizeSettings(raw) {
     developerNotesVisible: input.developerNotesVisible !== false,
     toastSeconds: pick(Number(input.toastSeconds), TOAST_SECONDS, DEFAULT_SETTINGS.toastSeconds),
     worktreeMode: pick(input.worktreeMode, WORKTREE_MODES, DEFAULT_SETTINGS.worktreeMode),
-    reviewPreset: pick(input.reviewPreset, Object.keys(REVIEW_PRESETS), DEFAULT_SETTINGS.reviewPreset),
+    reviewPreset: pick(OLD_PRESETS[input.reviewPreset] ?? input.reviewPreset, Object.keys(REVIEW_PRESETS), DEFAULT_SETTINGS.reviewPreset),
     maxRounds: rounds >= 1 && rounds <= 5 ? rounds : DEFAULT_SETTINGS.maxRounds,
     budgetCapAud: input.budgetCapAud != null && input.budgetCapAud !== "" && Number.isFinite(budget) && budget > 0 ? Math.round(budget * 100) / 100 : null,
     jevReviewer: input.jevReviewer === true,
@@ -103,7 +106,7 @@ export function writeStoredSettings(settings, storage = defaultStorage()) {
 export function agentDefaultsBrief(settings, { jevKeyStored = false } = {}) {
   const s = normalizeSettings(settings);
   return [
-    "Perfect Planner agent defaults (user preferences, not permissions):",
+    "Perfect Planner agent defaults (advisory: user preferences, not permissions; the app does not enforce them):",
     `- Worktree mode: ${s.worktreeMode === "isolated" ? "one isolated worktree per task" : "shared working copy, one task at a time"}`,
     `- Review preset: ${REVIEW_PRESETS[s.reviewPreset]}`,
     `- Orchestration rounds: at most ${s.maxRounds}`,
