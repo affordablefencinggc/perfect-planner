@@ -8,6 +8,7 @@
 // `cargo metadata` (normal dependencies for the Windows and Linux targets),
 // and scripts/desktop-node-runtime.json (the bundled Node runtime licence,
 // downloaded and checked against the pinned sha256).
+// Optional: --node-license-out <file> also writes the Node licence text (for the installer bundle).
 // Needs network for cargo (first run) and the Node licence text. Anything it
 // cannot resolve is listed in the file under "Not resolved".
 import { readFileSync, writeFileSync } from "node:fs";
@@ -79,7 +80,7 @@ try {
   if (createHash("sha256").update(buf).digest("hex") !== rt.license.sha256) throw new Error("sha256 mismatch");
   nodeText = buf.toString("utf8").trimEnd();
 } catch (e) {
-  unresolved.push(`Node ${rt.version} licence text not included (${e.message}); see ${rt.license.url}`);
+  if (process.argv.includes("--node-license-out")) unresolved.push(`Node ${rt.version} licence text not fetched (${e.message}); see ${rt.license.url}`);
 }
 
 const row = (p) => `| ${p.name.replace(/\|/g, "\\|")} | ${p.version} | ${p.license.replace(/\|/g, "\\|")} |`;
@@ -103,7 +104,7 @@ out.push(
   "",
   `## Node.js runtime ${rt.version}`,
   "",
-  `The installer bundles the Node.js runtime ${rt.version} (from ${rt.baseUrl}). Its licence text is at the end of this file, as published at ${rt.license.url}.`,
+  `The installer bundles the Node.js runtime ${rt.version} (from ${rt.baseUrl}). Its licence text is published at ${rt.license.url} (sha256 ${rt.license.sha256}). The full text is not kept in this file because it is large: the release build writes it next to the installer with \`node scripts/generate-third-party-notices.mjs --node-license-out <file>\`.`,
   "",
   `## npm packages (${npm.length})`,
   "",
@@ -121,10 +122,11 @@ out.push(
   "|---|---|---|",
   ...crates.map(row),
   "",
-  `## Node.js ${rt.version} licence text`,
-  "",
-  ...(nodeText ? ["```text", nodeText, "```"] : [`Not included. See ${rt.license.url}`]),
-  "",
 );
+const flag = process.argv.indexOf("--node-license-out");
+if (flag > 0 && process.argv[flag + 1]) {
+  if (!nodeText) { console.error("Node licence text could not be fetched"); process.exit(1); }
+  writeFileSync(process.argv[flag + 1], nodeText + "\n");
+}
 writeFileSync(join(root, "THIRD-PARTY-NOTICES.md"), out.join("\n"));
 console.log(`THIRD-PARTY-NOTICES.md: ${npm.length} npm, ${crates.length} crates, ${unresolved.length} unresolved`);
