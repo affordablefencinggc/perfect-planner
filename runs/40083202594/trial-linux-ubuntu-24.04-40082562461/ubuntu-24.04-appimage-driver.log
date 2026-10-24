@@ -1,0 +1,40 @@
+
+(perfect-planner-desktop:6653): dbind-WARNING **: 09:48:22.587: AT-SPI: Error retrieving accessibility bus address: org.freedesktop.DBus.Error.ServiceUnknown: The name org.a11y.Bus was not provided by any .service files
+libEGL warning: DRI3 error: Could not get DRI3 device
+libEGL warning: Ensure your X server supports DRI3 to get accelerated rendering
+/lib/x86_64-linux-gnu/libcurl-gnutls.so.4: undefined symbol: nghttp2_option_set_no_rfc9113_leading_and_trailing_ws_validation
+Failed to load module: /usr/lib/x86_64-linux-gnu/gio/modules/libgiolibproxy.so
+/usr/lib/x86_64-linux-gnu/gio/modules/libdconfsettings.so: undefined symbol: g_assertion_message_cmpint
+Failed to load module: /usr/lib/x86_64-linux-gnu/gio/modules/libdconfsettings.so
+/lib/x86_64-linux-gnu/libcurl-gnutls.so.4: undefined symbol: nghttp2_option_set_no_rfc9113_leading_and_trailing_ws_validation
+Failed to load module: /usr/lib/x86_64-linux-gnu/gio/modules/libgiolibproxy.so
+/usr/lib/x86_64-linux-gnu/gio/modules/libdconfsettings.so: undefined symbol: g_assertion_message_cmpint
+Failed to load module: /usr/lib/x86_64-linux-gnu/gio/modules/libdconfsettings.so
+/lib/x86_64-linux-gnu/libcurl-gnutls.so.4: undefined symbol: nghttp2_option_set_no_rfc9113_leading_and_trailing_ws_validation
+Failed to load module: /usr/lib/x86_64-linux-gnu/gio/modules/libgiolibproxy.so
+/usr/lib/x86_64-linux-gnu/gio/modules/libdconfsettings.so: undefined symbol: g_assertion_message_cmpint
+Failed to load module: /usr/lib/x86_64-linux-gnu/gio/modules/libdconfsettings.so
+/lib/x86_64-linux-gnu/libcurl-gnutls.so.4: undefined symbol: nghttp2_option_set_no_rfc9113_leading_and_trailing_ws_validation
+Failed to load module: /usr/lib/x86_64-linux-gnu/gio/modules/libgiolibproxy.so
+/usr/lib/x86_64-linux-gnu/gio/modules/libdconfsettings.so: undefined symbol: g_assertion_message_cmpint
+Failed to load module: /usr/lib/x86_64-linux-gnu/gio/modules/libdconfsettings.so
+
+(perfect-planner-desktop:7167): dbind-WARNING **: 09:49:19.397: AT-SPI: Error retrieving accessibility bus address: org.freedesktop.DBus.Error.ServiceUnknown: The name org.a11y.Bus was not provided by any .service files
+libEGL warning: DRI3 error: Could not get DRI3 device
+libEGL warning: Ensure your X server supports DRI3 to get accelerated rendering
+/lib/x86_64-linux-gnu/libcurl-gnutls.so.4: undefined symbol: nghttp2_option_set_no_rfc9113_leading_and_trailing_ws_validation
+Failed to load module: /usr/lib/x86_64-linux-gnu/gio/modules/libgiolibproxy.so
+/usr/lib/x86_64-linux-gnu/gio/modules/libdconfsettings.so: undefined symbol: g_assertion_message_cmpint
+Failed to load module: /usr/lib/x86_64-linux-gnu/gio/modules/libdconfsettings.so
+/lib/x86_64-linux-gnu/libcurl-gnutls.so.4: undefined symbol: nghttp2_option_set_no_rfc9113_leading_and_trailing_ws_validation
+Failed to load module: /usr/lib/x86_64-linux-gnu/gio/modules/libgiolibproxy.so
+/usr/lib/x86_64-linux-gnu/gio/modules/libdconfsettings.so: undefined symbol: g_assertion_message_cmpint
+Failed to load module: /usr/lib/x86_64-linux-gnu/gio/modules/libdconfsettings.so
+/lib/x86_64-linux-gnu/libcurl-gnutls.so.4: undefined symbol: nghttp2_option_set_no_rfc9113_leading_and_trailing_ws_validation
+Failed to load module: /usr/lib/x86_64-linux-gnu/gio/modules/libgiolibproxy.so
+/usr/lib/x86_64-linux-gnu/gio/modules/libdconfsettings.so: undefined symbol: g_assertion_message_cmpint
+Failed to load module: /usr/lib/x86_64-linux-gnu/gio/modules/libdconfsettings.so
+/lib/x86_64-linux-gnu/libcurl-gnutls.so.4: undefined symbol: nghttp2_option_set_no_rfc9113_leading_and_trailing_ws_validation
+Failed to load module: /usr/lib/x86_64-linux-gnu/gio/modules/libgiolibproxy.so
+/usr/lib/x86_64-linux-gnu/gio/modules/libdconfsettings.so: undefined symbol: g_assertion_message_cmpint
+Failed to load module: /usr/lib/x86_64-linux-gnu/gio/modules/libdconfsettings.so

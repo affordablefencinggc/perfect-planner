@@ -1,0 +1,60 @@
+{
+  "label": "ubuntu-22.04-appimage",
+  "checks": [
+    {
+      "name": "plan: idea and recommended answers",
+      "pass": true,
+      "seen": "25 recommendations used; no blocking questions; 25 answers saved, 19 ms each on average, slowest 54 ms"
+    },
+    {
+      "name": "plan: approve",
+      "pass": true,
+      "seen": "Plan approved"
+    },
+    {
+      "name": "open git folder in Tasks",
+      "pass": true,
+      "seen": "Workers branch from /home/runner/work/_temp/loop-repo-ubuntu-22.04-appimage"
+    },
+    {
+      "name": "connect agent: line runs as copied, agent checks in",
+      "pass": true,
+      "seen": "checked in as main; line on the app's own Node"
+    },
+    {
+      "name": "start worker on T-1 (window gives the set-up command)",
+      "pass": true,
+      "seen": "set-up command shown (408 chars, private key not logged)"
+    },
+    {
+      "name": "stand-in worker checks in over MCP and proposes a test",
+      "pass": true,
+      "seen": "trial-worker-8967e861 checked in as worker on T-1; window shows \"Test to approve\""
+    },
+    {
+      "name": "approve test in the window (it fails first)",
+      "pass": true,
+      "seen": "T-1 | Build App shell | Waiting for the worker to claim | Done-when test | node tests/notes.check.mjs | tests/notes.check.mjs · Proposed by trial-worker-8967e861 (claude-trial) · approved by you (owner) · fails on today's code"
+    },
+    {
+      "name": "stand-in worker builds, commits, attaches proof",
+      "pass": true,
+      "seen": "proof attached at e47f29800e3e"
+    },
+    {
+      "name": "check the work in the window",
+      "pass": true,
+      "seen": "check passed"
+    },
+    {
+      "name": "read the diff and approve it",
+      "pass": true,
+      "seen": "diff approved"
+    },
+    {
+      "name": "merge into main",
+      "pass": true,
+      "seen": "main now holds src/notes.mjs (5af4fe3 Merge pp/T-1 (T-1) into main)"
+    }
+  ]
+}
