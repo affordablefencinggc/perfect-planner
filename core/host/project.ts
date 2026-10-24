@@ -215,7 +215,7 @@ function ownerPinFor(baseRoot: string, root: string, keys: HostKeys): OwnerPin {
   }
   const principal = `person:${DEFAULT_LOCAL_PERSON}`;
   const ownerKey = keys.ownerKeyFor(principal);
-  if (!ownerKey) return { state: "unavailable", reason: "This device has no key store, so the project has no owner." };
+  if (!ownerKey) return { state: "unavailable", reason: `This device has no key store, so the project has no owner.${keys.state().reason ? ` ${keys.state().reason}` : ""}` };
   return { state: "new", ownerKey, principal, ...(genesis ? { genesis } : {}) };
 }
 
