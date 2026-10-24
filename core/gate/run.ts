@@ -157,7 +157,7 @@ export function isConclusiveFailure(run: TestRunResult): boolean {
 }
 
 /** Output that means the project has no test tooling yet, not that a test failed. */
-const NO_TOOLING_OUTPUT = /ENOENT[\s\S]{0,200}package\.json|Could not read package\.json|Cannot find module '[^./'][^']*'|no package\.json/i;
+const NO_TOOLING_OUTPUT = /ENOENT[\s\S]{0,200}package\.json|Could not read package\.json|Cannot find module '(?![A-Za-z]:[\\/])[^./\\'][^']*'|no package\.json/i;
 
 const SHELL_BUILTINS = new Set(isWindows
   ? ["assoc", "break", "call", "cd", "chdir", "cls", "color", "copy", "date", "del", "dir", "echo", "endlocal", "erase", "exit", "for", "ftype", "goto", "if", "md", "mkdir", "mklink", "move", "path", "popd", "prompt", "pushd", "rd", "rem", "ren", "rename", "rmdir", "set", "setlocal", "shift", "start", "time", "title", "type", "ver", "verify", "vol"]

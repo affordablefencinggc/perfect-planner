@@ -716,6 +716,8 @@ describe("runTestCommand", () => {
     expect(isConclusiveFailure({ ...base, exitCode: 1, outputTail: "npm error code ENOENT\nnpm error path /x/package.json" })).toBe(false);
     expect(isConclusiveFailure({ ...base, exitCode: 1, outputTail: "Error: Cannot find module 'vitest'" })).toBe(false);
     expect(isConclusiveFailure({ ...base, exitCode: 1, outputTail: "Error: Cannot find module './add'" })).toBe(true);
+    expect(isConclusiveFailure({ ...base, exitCode: 1, outputTail: "Error: Cannot find module 'D:\\a\\repo\\nope.js'" })).toBe(true);
+    expect(isConclusiveFailure({ ...base, exitCode: 1, outputTail: "Error: Cannot find module '/tmp/repo/nope.js'" })).toBe(true);
     expect(isConclusiveFailure({ ...base, exitCode: 1, outputTail: "FAIL  add.test.js\nAssertionError: expected 1 to be 2" })).toBe(true);
   });
 
