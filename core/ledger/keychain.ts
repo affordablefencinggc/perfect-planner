@@ -80,10 +80,17 @@ abstract class ProbedStore implements SecretStore {
         this.remove("probe");
         this.probed = back === probe ? { available: true } : { available: false, reason: `${this.description} did not return what was stored` };
       } catch (error) {
-        this.probed = { available: false, reason: `${this.description} is not usable here: ${firstLine((error as Error).message)}` };
+        const message = firstLine((error as Error).message);
+        const help = / is not installed$/.test(message) ? this.missingHelp() : "";
+        this.probed = { available: false, reason: `${this.description} is not usable here: ${message}${help}` };
       }
     }
     return this.probed;
+  }
+
+  /** Plain-words next step, appended when the helper program is missing. */
+  protected missingHelp(): string {
+    return "";
   }
 
   abstract get(account: string): string | undefined;
@@ -93,6 +100,26 @@ abstract class ProbedStore implements SecretStore {
 
 function firstLine(text: string): string {
   return String(text).trim().split(/\r?\n/)[0].slice(0, 200);
+}
+
+/**
+ * Windows PowerShell reports a failure on a redirected stderr as CLIXML ("#< CLIXML" then an XML
+ * object stream), so the first line says nothing. Pull the readable text out of the <S S="Error">
+ * elements. Exit status, not this text, still decides success: this only makes the reason legible.
+ */
+export function powershellError(stderr: string): string {
+  if (!stderr.includes("#< CLIXML")) return stderr;
+  const texts = [...stderr.matchAll(/<S S="Error">([\s\S]*?)<\/S>/g)].map((m) =>
+    m[1]
+      .replace(/_x000D__x000A_/g, "\n")
+      .replace(/_x[0-9A-Fa-f]{4}_/g, " ")
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/&quot;/g, '"')
+      .replace(/&amp;/g, "&"),
+  );
+  const text = texts.join("").trim();
+  return text || "PowerShell reported an error";
 }
 
 class MacKeychain extends ProbedStore {
@@ -124,6 +151,9 @@ class MacKeychain extends ProbedStore {
   }
 }
 
+/** The exact commands that install `secret-tool` (Debian/Ubuntu libsecret-tools; Fedora libsecret). */
+export const SECRET_TOOL_INSTALL = { apt: "sudo apt install libsecret-tools", dnf: "sudo dnf install libsecret" } as const;
+
 class SecretTool extends ProbedStore {
   readonly description = "the Secret Service (secret-tool)";
   constructor(
@@ -131,6 +161,10 @@ class SecretTool extends ProbedStore {
     private readonly run: Tool,
   ) {
     super();
+  }
+
+  protected missingHelp(): string {
+    return ` To fix it, install it and restart Perfect Planner. Ubuntu or Debian: ${SECRET_TOOL_INSTALL.apt}. Fedora: ${SECRET_TOOL_INSTALL.dnf}.`;
   }
 
   get(name: string): string | undefined {
@@ -173,9 +207,14 @@ class WindowsVault extends ProbedStore {
   private ps(body: string, name: string, input?: string): string {
     const script = [
       "$ErrorActionPreference = 'Stop'",
+      "$ProgressPreference = 'SilentlyContinue'",
       "[void][Windows.Security.Credentials.PasswordVault, Windows.Security.Credentials, ContentType = WindowsRuntime]",
       "$vault = New-Object Windows.Security.Credentials.PasswordVault",
-      "function Find-Item { try { @($vault.FindAllByResource($env:PP_RESOURCE)) | Where-Object { $_.UserName -eq $env:PP_ACCOUNT } | Select-Object -First 1 } catch { if ($_.Exception.HResult -eq -2147023728) { $null } else { throw } } }",
+      // PowerShell wraps a WinRT failure in a MethodInvocationException, so the "no such credential"
+      // HResult (ERROR_NOT_FOUND, -2147023728) sits on an inner exception: walk the chain. Anything
+      // else still throws and reads as "unavailable", never "missing".
+      "function Test-NotFound($e) { while ($e) { if ($e.HResult -eq -2147023728) { return $true }; $e = $e.InnerException }; $false }",
+      "function Find-Item { try { @($vault.FindAllByResource($env:PP_RESOURCE)) | Where-Object { $_.UserName -eq $env:PP_ACCOUNT } | Select-Object -First 1 } catch { if (Test-NotFound $_.Exception) { $null } else { throw } } }",
       body,
     ].join("\n");
     const encoded = Buffer.from(script, "utf16le").toString("base64");
@@ -183,7 +222,7 @@ class WindowsVault extends ProbedStore {
       input,
       env: { PP_RESOURCE: this.service, PP_ACCOUNT: account(name) },
     });
-    if (result.status !== 0) throw new Error(firstLine(result.stderr) || "PowerShell failed");
+    if (result.status !== 0) throw new Error(firstLine(powershellError(result.stderr)) || "PowerShell failed");
     return result.stdout;
   }
 

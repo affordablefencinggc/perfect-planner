@@ -79,6 +79,10 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "linux": {
+      "deb": { "depends": ["libsecret-tools"] },
+      "rpm": { "depends": ["libsecret"] }
+    },
     "macOS": {
       "signingIdentity": "-"
     },

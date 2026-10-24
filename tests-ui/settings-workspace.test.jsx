@@ -68,9 +68,9 @@ describe("settings model", () => {
   });
 
   test("agent brief states preferences and never contains a key", () => {
-    const brief = agentDefaultsBrief({ worktreeMode: "shared", reviewPreset: "strict", maxRounds: 3, budgetCapAud: 12.5, jevReviewer: true }, { jevKeyStored: true });
+    const brief = agentDefaultsBrief({ worktreeMode: "shared", reviewPreset: "thorough", maxRounds: 3, budgetCapAud: 12.5, jevReviewer: true }, { jevKeyStored: true });
     expect(brief).toContain("shared working copy");
-    expect(brief).toContain("Strict");
+    expect(brief).toContain("Thorough");
     expect(brief).toContain("at most 3");
     expect(brief).toContain("AUD 12.50");
     expect(brief).toContain("a key is held in the OS keychain");
@@ -90,7 +90,7 @@ describe("Settings page", () => {
     fireEvent.click(within(screen.getByRole("radiogroup", { name: "Define button opens" })).getByRole("radio", { name: "Components" }));
     fireEvent.click(within(screen.getByRole("radiogroup", { name: "Prove button opens" })).getByRole("radio", { name: "Evidence" }));
     fireEvent.click(screen.getByRole("radio", { name: "Shared, one at a time" }));
-    fireEvent.click(screen.getByRole("radio", { name: "Strict" }));
+    fireEvent.click(screen.getByRole("radio", { name: "Thorough" }));
     fireEvent.click(within(screen.getByRole("radiogroup", { name: "Orchestration rounds" })).getByRole("radio", { name: "4" }));
     fireEvent.change(screen.getByRole("spinbutton", { name: "Budget cap per run in AUD" }), { target: { value: "25" } });
     fireEvent.click(screen.getByRole("switch", { name: "Use Jev as a reviewer" }));
@@ -106,7 +106,7 @@ describe("Settings page", () => {
       startPage: "last",
       stageEntry: { define: "components", coordinate: "allocation", prove: "evidence" },
       worktreeMode: "shared",
-      reviewPreset: "strict",
+      reviewPreset: "thorough",
       maxRounds: 4,
       budgetCapAud: 25,
       jevReviewer: true,
@@ -117,7 +117,7 @@ describe("Settings page", () => {
     });
     expect(window.localStorage.getItem(VIEW_MODE_STORAGE_KEY)).toBe("advanced");
     expect(screen.getByLabelText("Agent defaults preview").textContent).toContain("AUD 25.00");
-    await waitFor(() => expect(screen.getByText("Desktop app only")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("Windows only today (desktop app)")).toBeTruthy());
   });
 
   test("dark theme is visibly not available yet", () => {
@@ -181,13 +181,35 @@ describe("Settings page", () => {
     const userAgent = vi.spyOn(navigator, "userAgent", "get").mockReturnValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0)");
     const denied = vi.fn(async () => { throw "Command jev_key_status not allowed by ACL"; });
     renderSettings({ invoke: denied });
-    await waitFor(() => expect(screen.getByText("Not available yet on this system")).toBeTruthy());
-    expect(screen.getByText(/macOS and Linux keychain support is not available yet/)).toBeTruthy();
+    await waitFor(() => expect(screen.getByText("Windows only today")).toBeTruthy());
+    expect(screen.getByText(/Linux and macOS cannot save the key yet/)).toBeTruthy();
     expect(screen.getByLabelText("Jev API key", { selector: "input" }).disabled).toBe(true);
     const result = await saveJevKey("sk-should-not-store", { invoke: denied });
     expect(result).toMatchObject({ ok: false, message: expect.stringContaining("not available yet on this operating system") });
     expect(JSON.stringify(window.localStorage)).not.toContain("sk-should-not-store");
     platform.mockRestore(); userAgent.mockRestore();
+  });
+
+  test("every control that only edits the agent brief says it is advisory; no preset name absent from core", () => {
+    renderSettings();
+    for (const name of ["Worktree mode", "Review preset", "Orchestration rounds", "Budget cap per run", "Use Jev as a reviewer"]) {
+      const row = screen.getByText(name, { selector: "strong" }).closest(".settings-row");
+      expect(within(row).getByText("advisory: written into the agent's brief"), name).toBeTruthy();
+    }
+    for (const name of ["Cheap", "Balanced", "Thorough"]) expect(screen.getByRole("radio", { name })).toBeTruthy();
+    for (const name of ["Quick", "Strict"]) expect(screen.queryByRole("radio", { name })).toBeNull();
+    expect(normalizeSettings({ reviewPreset: "strict" }).reviewPreset).toBe("thorough");
+  });
+
+  test("Your data says test commands run as you", () => {
+    renderSettings();
+    expect(screen.getByText(/This command runs as you, with your files and network\./)).toBeTruthy();
+  });
+
+  test("Jev key field says Windows only today in the browser", async () => {
+    renderSettings();
+    expect(await screen.findByText("Windows only today (desktop app)")).toBeTruthy();
+    expect(screen.getByText(/^Windows only today\. Saved only to the Windows keychain/)).toBeTruthy();
   });
 
   test("Jev reviewer help says what is true today", () => {
