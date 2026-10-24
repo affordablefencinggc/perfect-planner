@@ -8,3 +8,4 @@
 .work-header-facts dd { margin: 2px 0 0; font: 9px/1.35 var(--mono, monospace); overflow-wrap: anywhere; }
 .work-header-facts dd.empty { color: var(--muted, #6b6f6a); }
 .inspector-drawer.drawer-right .drawer-action { padding-bottom: 70px; }
+.work-header-facts .inspector-owner { display: inline-flex; align-items: center; gap: 6px; }
