@@ -190,6 +190,8 @@ export interface ContainedRunnerOptions<O extends { env?: Record<string, string>
   nodeDir?: string;
   /** A reason to refuse the command before it starts (a planted program, shell syntax we cannot judge). */
   precheck?: (command: string, cwd: string, options: O) => string | undefined;
+  /** Tests only: where bubblewrap is (default: looked up on PATH). */
+  bwrap?: string;
   /** Tests only. */
   status?: () => Promise<SandboxStatus>;
   platform?: NodeJS.Platform;
@@ -209,7 +211,7 @@ export function containedRunner<O extends { env?: Record<string, string>; protec
     // The command's own refusals come first and do not need bubblewrap, so they read the same on every machine.
     const refusal = options.precheck?.(command, cwd, runOptions);
     if (refusal) return { passed: false, exitCode: null, timedOut: false, durationMs: 0, outputTail: `${CONTAINED_HEADER}\n[perfect-planner] ${refusal}\n` };
-    const bwrap = bwrapPath(env);
+    const bwrap = options.bwrap ?? bwrapPath(env);
     if (!bwrap) return notRun(cwd, "Not run: this computer cannot contain test commands (bubblewrap is not installed).");
     const worktree = real(cwd) ?? path.resolve(cwd);
     const policy: SandboxPolicy = {

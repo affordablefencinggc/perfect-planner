@@ -40,13 +40,17 @@ export async function startBridge(service: AgentService, port = 0): Promise<Brid
       res.writeHead(status, { "content-type": "application/json", "cache-control": "no-store" });
       res.end(JSON.stringify(body));
     };
-    if (req.method !== "POST" || req.url !== "/call") return send(404, { ok: false, code: "NOT_FOUND", message: "POST /call only." });
+    if (req.method !== "POST" || (req.url !== "/call" && req.url !== "/route")) return send(404, { ok: false, code: "NOT_FOUND", message: "POST /call or /route only." });
     const auth = req.headers.authorization ?? "";
     const token = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
     try {
       const parsed: unknown = JSON.parse(await readBody(req));
       if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) throw new ToolError("INVALID", "Body must be a JSON object with a tool and its args.");
-      const body = parsed as { tool?: unknown; args?: unknown; agent?: unknown };
+      const body = parsed as { tool?: unknown; args?: unknown; agent?: unknown; intent?: unknown; limit?: unknown };
+      if (req.url === "/route") {
+        const caller = { token, ...(typeof body.agent === "string" ? { agent: body.agent } : {}) };
+        return send(200, { ok: true, result: service.suggest(caller, typeof body.intent === "string" ? body.intent : "", typeof body.limit === "number" ? body.limit : 3) });
+      }
       const result = await service.call({ token, ...(typeof body.agent === "string" ? { agent: body.agent } : {}) }, String(body.tool ?? ""), body.args ?? {});
       send(200, { ok: true, result });
     } catch (error) {

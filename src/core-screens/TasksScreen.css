@@ -51,3 +51,10 @@
 .core-screen-tasks .core-tasks-cost form { display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--space-2); margin-top: var(--space-2); }
 .core-screen-tasks .core-tasks-group { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin: 0; }
 .core-screen-tasks .core-tasks-repo-pill { margin-left: var(--space-2); }
+.core-screen-tasks .core-tasks-queue { display: grid; gap: var(--space-3); }
+.core-screen-tasks .core-tasks-queue > header { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-1) var(--space-4); }
+.core-screen-tasks .core-tasks-queue h3 { margin: 0; font-size: var(--text-lg); }
+.core-screen-tasks .core-tasks-queue ul { margin: 0; padding-left: 1.4em; font-size: var(--text-sm); }
+.core-screen-tasks .core-tasks-batch { display: grid; gap: var(--space-2); justify-items: start; padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.core-screen-tasks .core-tasks-switch input { min-height: 0; }
+.core-screen-tasks select { min-height: 34px; padding: var(--space-1) var(--space-2); border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--surface); color: var(--ink); font: inherit; font-size: var(--text-sm); }

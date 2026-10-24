@@ -3163,7 +3163,8 @@ code {
 .primary-button:hover {
   background: #427d59;
 }
-.primary-button:disabled {
+.primary-button:disabled,
+.primary-button[aria-disabled="true"] {
   cursor: not-allowed;
   background: #8d8f8c;
   color: #f2f2ef;

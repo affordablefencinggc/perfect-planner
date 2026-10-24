@@ -71,7 +71,8 @@ interface Probe {
  * It reads, writes and connects to places that belong to other things, and reports what happened.
  */
 async function runHostileTest(contained = false) {
-  if (contained) vi.stubEnv("PP_CONTAIN_TESTS", "1");
+  // The default suite is hermetic: a PP_CONTAIN_TESTS in the caller's environment must not change it.
+  vi.stubEnv("PP_CONTAIN_TESTS", contained ? "1" : "");
   vi.stubEnv("ANTHROPIC_API_KEY", "fake-value-for-anthropic");
   vi.stubEnv("GITHUB_TOKEN", "fake-value-for-github");
   const { ctx, alpha, beta } = await twoProjects();

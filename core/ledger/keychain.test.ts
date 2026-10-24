@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { PublicAccountCache } from "./keychain";
+import { PrivateKeyMemory, PublicAccountCache } from "./keychain";
 import { FileStore, KeychainKeyProvider, Ledger, LedgerError, isAuthoritative, osSecretStore, type SecretStore } from "./index";
 
 /** A SecretStore in memory, so the provider's own logic is tested on every machine. */
@@ -186,7 +186,7 @@ describe("keychain helpers are started by full path", () => {
 });
 
 describe("PublicAccountCache", () => {
-  it("keeps keychain reads per signed write constant: one private-key read, no public reads", () => {
+  it("reads the keychain once per key, not once per signed write", () => {
     const secrets = new CountingSecrets();
     const keys = new KeychainKeyProvider(secrets);
     keys.ensureKey("person:owner");
@@ -197,12 +197,12 @@ describe("PublicAccountCache", () => {
     secrets.reads = [];
     for (let i = 2; i <= 11; i++) ledger.append({ actor: owner, type: "task.created", subject: `T-${i}`, summary: "Task" });
     ledger.close();
-    expect(secrets.reads.filter((a) => a.startsWith("private."))).toHaveLength(10);
+    expect(secrets.reads).toEqual([]);
     expect(secrets.reads.filter((a) => !a.startsWith("private."))).toEqual([]);
     fs.rmSync(root, { recursive: true, force: true });
   });
 
-  it("never remembers a private key", () => {
+  it("the public cache itself never remembers a private key", () => {
     const secrets = new CountingSecrets();
     const cache = new PublicAccountCache(secrets);
     secrets.set("private.system", "k");
@@ -255,5 +255,42 @@ describe("PublicAccountCache", () => {
     expect(() => cache.get("pins")).toThrow("PowerShell failed");
     fail = false;
     expect(cache.get("pins")).toBe("[]");
+  });
+
+  it("after this instance rotates, it signs with the new key and a matching id", () => {
+    const keys = new KeychainKeyProvider(new FakeSecrets());
+    keys.ensureKey("person:owner");
+    keys.sign("person:owner", Buffer.from("x")); // remembers the first private key
+    const rotated = keys.rotateKey("person:owner");
+    expect(keys.sign("person:owner", Buffer.from("y")).keyId).toBe(rotated.keyId);
+  });
+});
+
+describe("PrivateKeyMemory", () => {
+  it("reads a private key once, and drops it on its own write, remove or forget; other accounts pass through", () => {
+    const secrets = new CountingSecrets();
+    const memory = new PrivateKeyMemory(secrets);
+    secrets.set("private.system", "k1");
+    secrets.set("pins", "[]");
+    expect(memory.get("private.system")).toBe("k1");
+    expect(memory.get("private.system")).toBe("k1");
+    expect(secrets.reads).toEqual(["private.system"]);
+    memory.set("private.system", "k2");
+    expect(memory.get("private.system")).toBe("k2");
+    memory.forget("private.system");
+    memory.get("private.system");
+    memory.remove("private.system");
+    expect(memory.get("private.system")).toBeUndefined();
+    memory.get("pins");
+    memory.get("pins");
+    expect(secrets.reads.filter((a) => a === "pins")).toHaveLength(2);
+  });
+
+  it("does not remember a missing key", () => {
+    const secrets = new CountingSecrets();
+    const memory = new PrivateKeyMemory(secrets);
+    expect(memory.get("private.system")).toBeUndefined();
+    secrets.values.set("private.system", "late");
+    expect(memory.get("private.system")).toBe("late");
   });
 });
