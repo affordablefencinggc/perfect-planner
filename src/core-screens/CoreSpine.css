@@ -50,6 +50,15 @@
 .core-plan-spine .plan-node { min-height: 0; cursor: pointer; }
 .core-plan-spine .core-needs-you { box-shadow: inset 0 0 0 1px #e6ebf0, 0 0 0 2px var(--amber), 0 7px 16px rgba(54, 66, 82, 0.13); }
 .core-plan-spine .perimeter-worker.running { animation-iteration-count: infinite; }
+/* The card an agent is building right now: a blue glow, a bigger robot and "Building now" in place of the stage, so it reads at a glance. */
+.core-plan-spine .core-working { box-shadow: 0 0 0 2px var(--blue-focus), 0 0 18px rgba(60, 110, 232, 0.45); animation: core-working-glow 2.4s ease-in-out infinite; }
+.core-plan-spine .core-working .perimeter-worker { top: -38px; width: 52px; height: 52px; }
+.core-plan-spine .core-working .perimeter-worker img.model-worker-image { width: 52px; height: 52px; }
+.core-plan-spine .core-working-text { color: #2a52b8; font-weight: 700; }
+/* Card outlines on the real spine are blue (the owner's choice); the Demo keeps its own. */
+.core-plan-spine .trail-side { background: var(--blue-focus); box-shadow: 0 0 4px rgba(60, 110, 232, 0.35); }
+@keyframes core-working-glow { 50% { box-shadow: 0 0 0 2px var(--blue-focus), 0 0 8px rgba(60, 110, 232, 0.2); } }
+@media (prefers-reduced-motion: reduce) { .core-plan-spine .core-working { animation: none; } }
 .core-plan-spine .owner-avatar.profile-avatar::after { display: none; }
 .core-plan-spine .core-owner-photo { width: 100%; height: 100%; object-fit: cover; }
 .core-plan-spine .owner-avatar > span { font: 700 12px var(--mono); }

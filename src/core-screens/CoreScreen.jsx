@@ -50,7 +50,7 @@ export function useCoreSession() {
   return state;
 }
 
-const HOW_TO_OPEN = "press Enter in the terminal running Perfect Planner (l and Enter with npm run dev), or restart it, then open the link it prints.";
+const HOW_TO_OPEN = "Go to the terminal where Perfect Planner is running and press Enter (with npm run dev, type l then Enter) to print a new link, or restart it. Then open that link.";
 
 export function ReadOnlyNotice() {
   const { person, readAccess } = useCoreSession();
@@ -61,8 +61,8 @@ export function ReadOnlyNotice() {
     <p className="core-readonly" role="note" data-session={canRead ? "read-only" : "none"}>
       <LockSimpleIcon aria-hidden="true" />{" "}
       {canRead
-        ? <>This window can only read. To make changes, open a new one-time link: {HOW_TO_OPEN}</>
-        : <>This window cannot show or change anything until it is opened from a one-time link. To get one, {HOW_TO_OPEN}</>}
+        ? <>You can look but not change anything in this window. For a window that can make changes: {HOW_TO_OPEN}</>
+        : <>This window is not connected to Perfect Planner yet, so it cannot show your project. It has to be opened from a one-time link. {HOW_TO_OPEN}</>}
     </p>
   );
 }

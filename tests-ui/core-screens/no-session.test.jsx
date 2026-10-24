@@ -28,7 +28,7 @@ describe("a window without a session", () => {
       </ViewModeContext.Provider>,
     );
     await waitFor(() => expect(document.querySelector("[data-core-screen]")?.getAttribute("data-state")).toBe("no-session"));
-    expect(screen.getByRole("note").textContent).toMatch(/cannot show or change anything until it is opened from a one-time link/);
+    expect(screen.getByRole("note").textContent).toMatch(/not connected to Perfect Planner yet.*one-time link/);
     expect(screen.queryByRole("alert")).toBeNull();
     expect(screen.queryByText("This screen could not load.")).toBeNull();
     expect(screen.queryByRole("status", { name: /Loading/ })).toBeNull();
@@ -46,7 +46,7 @@ describe("a window without a session", () => {
 
   test("coreGet rejects with the plain no-session message", async () => {
     const fetchImpl = vi.fn(async () => noSession());
-    await expect(coreGet("/status", "p", { fetchImpl })).rejects.toMatchObject({ code: "PERSON_REQUIRED", message: expect.stringMatching(/cannot show or change anything/) });
+    await expect(coreGet("/status", "p", { fetchImpl })).rejects.toMatchObject({ code: "PERSON_REQUIRED", message: expect.stringMatching(/not connected to Perfect Planner yet/) });
   });
 
   test("claims the launch secret from the address bar before the first read", async () => {

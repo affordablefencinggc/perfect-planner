@@ -133,8 +133,8 @@ export async function newWindowLink(project, options) {
   return `${globalThis.location?.origin ?? ""}/#pp-launch=${launch}`;
 }
 
-export const NO_SESSION_MESSAGE = "This window cannot show or change anything until it is opened from a one-time link. Get one from the terminal running Perfect Planner (press Enter there for a new one, l and Enter with npm run dev, or restart it).";
-const READ_ONLY_MESSAGE = "This window can only read. To make changes, open a one-time link from the terminal running Perfect Planner (press Enter there for a new one, l and Enter with npm run dev, or restart it).";
+export const NO_SESSION_MESSAGE = "This window is not connected to Perfect Planner yet, so it cannot show your project. Open it from a one-time link: in the terminal where Perfect Planner is running press Enter (l then Enter with npm run dev) for a new one, or restart it.";
+const READ_ONLY_MESSAGE = "You can look but not change anything in this window. To make changes, open a one-time link: in the terminal where Perfect Planner is running press Enter (l then Enter with npm run dev) for a new one, or restart it.";
 
 async function call(path, project, options = {}) {
   const { method = "GET", fetchImpl = globalThis.fetch } = options;
