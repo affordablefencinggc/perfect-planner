@@ -237,7 +237,7 @@ jobs:
     if: always()
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
       actions: read
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -254,20 +254,5 @@ jobs:
           cat evidence/SUMMARY.md >> "$GITHUB_STEP_SUMMARY"
           cat evidence/SUMMARY.md
           echo "TRIAL_STATUS=$status" >> "$GITHUB_ENV"
-      # Keep screenshots readable without downloading artifacts: commit them to an evidence-only branch.
-      - name: Publish evidence to the installer-trial-evidence branch
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          mkdir pub && cd pub && git init -q
-          git config user.name "github-actions[bot]"
-          git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
-          git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
-          if git fetch -q --depth 1 origin installer-trial-evidence; then git checkout -q -b installer-trial-evidence FETCH_HEAD; else git checkout -q --orphan installer-trial-evidence; fi
-          mkdir -p "runs/${{ github.run_id }}"
-          cp -R ../evidence/. "runs/${{ github.run_id }}/"
-          git add runs
-          git commit -qm "Installer trial evidence for run ${{ github.run_id }}"
-          git push -q origin HEAD:installer-trial-evidence
       - name: Fail if any check failed
         run: exit "$TRIAL_STATUS"
