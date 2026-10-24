@@ -22,7 +22,7 @@ import { AGENT_SERVER_NAME, agentEntryPath, connectLine, nodeBinary, quoteFor, t
 
 export { quoteFor };
 import { localPerson, localPersonId } from "./people";
-import { annotate, checkReadiness, prepareForDispatch, registerWorktreeCareRoutes, tidy, withHygieneLock } from "./worktreeCare";
+import { annotate, checkReadiness, prepareForDispatch, quietLabels, registerWorktreeCareRoutes, tidy, withHygieneLock } from "./worktreeCare";
 import { PRIMARY_REPO, readRepos } from "../../repos/index";
 import { sandboxStatus } from "../../exec/index";
 import { replayRoster } from "../../people/index";
@@ -210,11 +210,13 @@ function dispatches(project: CoreProject): Map<string, Dispatch> {
 
 /** The worktrees the git watcher should read, or the plain reason it cannot see any. Errors are not swallowed: an unreadable list is not an empty one. */
 export async function worktreesForWatcher(project: CoreProject): Promise<{ repo: RepoState; list: WorktreeInfo[] }> {
-  const { repos, worktrees } = await allRepos(project);
+  const { repos, worktrees } = await allRepos(project, { tidyFolders: false });
   const repo = repos[0]!;
-  // A done task's folder is about to be removed (or waits for its clean-up): a git process of ours inside it would keep Windows from removing it.
+  // A done task's folder is about to be removed (or waits for its clean-up), and a clean-up may be removing others right now:
+  // a git process of ours inside one would keep Windows from removing it.
   const board = project.service.board();
-  return { repo, list: worktrees.filter((tree) => board.get(tree.taskId.replace(/\.a\d+$/, ""))?.status !== "done") };
+  const quiet = quietLabels(project);
+  return { repo, list: worktrees.filter((tree) => !quiet.has(tree.taskId) && board.get(tree.taskId.replace(/\.a\d+$/, ""))?.status !== "done") };
 }
 
 /**
@@ -361,21 +363,22 @@ function viewTask(project: CoreProject, task: TaskView, worktrees: FolderInfo[],
   };
 }
 
-async function listWorktrees(project: CoreProject, repo: RepoState): Promise<FolderInfo[]> {
+async function listWorktrees(project: CoreProject, repo: RepoState, { tidyFolders = true } = {}): Promise<FolderInfo[]> {
   if (!repo.ok || !repo.root) return [];
   const worktrees = await manager(project, repo.root, repo.name);
   // On the first look after the app starts (and when a task finishes) stale records and safe leftovers are tidied; see worktreeCare.
-  await tidy(project, worktrees, dispatches(project));
+  // The git watcher's look does not tidy: a clean-up waits for the watcher's pass, so the pass must never wait for the clean-up.
+  if (tidyFolders) await tidy(project, worktrees, dispatches(project));
   const list = await annotate(worktrees, await worktrees.list().catch(() => []));
   // Only other repos are tagged: the first repo's worktrees look exactly as they always did.
   return repo.name === PRIMARY_REPO ? list : list.map((info) => ({ ...info, repo: repo.name }));
 }
 
 /** Every repo of the project (the first one, then the extra ones) with the worktrees in each. A repo that cannot be read has its reason and no worktrees. */
-async function allRepos(project: CoreProject): Promise<{ repos: RepoState[]; worktrees: WorktreeInfo[] }> {
+async function allRepos(project: CoreProject, options: { tidyFolders?: boolean } = {}): Promise<{ repos: RepoState[]; worktrees: WorktreeInfo[] }> {
   const names = [PRIMARY_REPO, ...readRepos(project.root).repos.map((repo) => repo.name)];
   const repos = await Promise.all(names.map((name) => repoState(project, name)));
-  const lists = await Promise.all(repos.map((repo) => listWorktrees(project, repo)));
+  const lists = await Promise.all(repos.map((repo) => listWorktrees(project, repo, options)));
   return { repos, worktrees: lists.flat() };
 }
 

@@ -29,6 +29,31 @@ export function withHygieneLock<T>(project: CoreProject, work: () => Promise<T>)
   return next;
 }
 
+const QUIET = "tasks.watcherQuiet";
+
+/** Task folders the git watcher stays out of right now because a clean-up is removing them. */
+export function quietLabels(project: CoreProject): ReadonlySet<string> {
+  return (project.state.get(QUIET) as Set<string> | undefined) ?? new Set();
+}
+
+/**
+ * Runs a removal with the git watcher kept out of `labels`. Windows will not finish deleting a folder while a git
+ * process has it open: the folder lingers, no longer tracked by git, and the next dispatch for the task refuses it.
+ * A watcher pass already running is waited for first; a later one skips these folders. Callers hold the hygiene lock,
+ * and the watcher never takes it (its listing does not tidy), so the wait cannot deadlock.
+ */
+export async function withWatcherAway<T>(project: CoreProject, labels: readonly string[], work: () => Promise<T>): Promise<T> {
+  const quiet = (project.state.get(QUIET) as Set<string> | undefined) ?? new Set<string>();
+  project.state.set(QUIET, quiet);
+  for (const label of labels) quiet.add(label);
+  try {
+    await project.watch?.tick().catch(() => undefined);
+    return await work();
+  } finally {
+    for (const label of labels) quiet.delete(label);
+  }
+}
+
 export type CareMode = "change" | "start" | "manual";
 
 /** Plain-words state of a task for the clean-up: being worked on, finished, released, or not clear. */
@@ -93,8 +118,11 @@ export async function tidy(project: CoreProject, worktrees: WorktreeManager, dis
   if (!first && SEEN.get(worktrees) === fingerprint) return;
   if (!infos.length && !first) return;
   await withHygieneLock(project, async () => {
-    await worktrees.reconcileWithDisk({ forget: first });
-    await worktrees.sweep({ classify });
+    const labels = (await worktrees.list().catch(() => [])).filter((info) => classify(info) !== "active").map((info) => info.taskId);
+    await withWatcherAway(project, labels, async () => {
+      await worktrees.reconcileWithDisk({ forget: first });
+      await worktrees.sweep({ classify });
+    });
   }).catch(() => undefined);
   SEEN.set(worktrees, (await worktrees.list().catch(() => [])).map((info) => `${info.taskId}:${typeof classify(info) === "string" ? classify(info) : "keep"}`).sort().join("|"));
 }
@@ -173,8 +201,12 @@ export function registerWorktreeCareRoutes(router: Router, ctx: CareContext): vo
         const root = name === null ? await ctx.requireRepo(project) : await ctx.requireRepo(project, name).catch(() => null);
         if (!root) continue;
         const worktrees = await ctx.manager(project, root, name);
-        await worktrees.reconcileWithDisk({ forget: true });
-        const result = await worktrees.sweep({ classify: classifyFolder(project, ctx.dispatched(project)), actor: localPerson(project) });
+        const classify = classifyFolder(project, ctx.dispatched(project));
+        const labels = (await worktrees.list().catch(() => [])).filter((info) => classify(info) !== "active").map((info) => info.taskId);
+        const result = await withWatcherAway(project, labels, async () => {
+          await worktrees.reconcileWithDisk({ forget: true });
+          return worktrees.sweep({ classify, actor: localPerson(project) });
+        });
         removed.push(...result.removed.map((item) => ({ task: item.taskId, path: item.path, branchDeleted: item.branchDeleted, ...(item.branchKeptReason ? { branchKept: item.branchKeptReason } : {}) })));
         folders.push(...result.kept.map((item) => row(project, item)));
       }
@@ -189,13 +221,14 @@ export function registerWorktreeCareRoutes(router: Router, ctx: CareContext): vo
       const repo = ctx.repoOf(project, label);
       const root = await ctx.requireRepo(project, repo);
       const classify = classifyFolder(project, ctx.dispatched(project));
-      return (await ctx.manager(project, root, repo))
-        .removeChecked(label, localPerson(project), (info) => {
+      const worktrees = await ctx.manager(project, root, repo);
+      return withWatcherAway(project, [label], () =>
+        worktrees.removeChecked(label, localPerson(project), (info) => {
           const kind = classify(info);
           if (kind === "active") return { refuse: `${label} is still being worked on. Release its claim first.` };
           return { needMerged: kind !== "finished" };
-        })
-        .then(async (removed) => ({ task: label, branchDeleted: removed.branchDeleted, ...(removed.branchKeptReason ? { branchKept: removed.branchKeptReason } : {}) }));
+        }),
+      ).then((removed) => ({ task: label, branchDeleted: removed.branchDeleted, ...(removed.branchKeptReason ? { branchKept: removed.branchKeptReason } : {}) }));
     }).catch(asHttp),
   );
 

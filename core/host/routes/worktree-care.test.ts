@@ -11,6 +11,8 @@ import { bridgeCall } from "../../mcp/index";
 import { appendNumbered } from "../../numbering/index";
 import { asPersonRequest } from "../keys";
 import { hostCall, startTestHost } from "../testing";
+import { worktreesForWatcher } from "./tasks";
+import { withHygieneLock, withWatcherAway } from "./worktreeCare";
 
 const IDENT = { GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t.invalid", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t.invalid" };
 const git = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, encoding: "utf8", env: { ...process.env, ...IDENT } }).trim();
@@ -319,6 +321,18 @@ describe("5. leftover folders: a safe sweep, and a list for the person to decide
     expect(d2.worktree).not.toBe(d.worktree);
     expect((await post("/worktrees/T-1.a2/remove", {})).status).toBe(409);
     expect(fs.existsSync(d2.worktree)).toBe(true);
+  }, SLOW);
+
+  it("the git watcher stays out of the folders a clean-up is removing (Windows cannot delete a folder git has open), and never waits for the clean-up", async () => {
+    await dispatch();
+    const project = ctx.host.project("loop");
+    const names = async () => (await worktreesForWatcher(project)).list.map((info) => info.taskId);
+    expect(await names()).toContain("T-1");
+    expect(await withWatcherAway(project, ["T-1"], names)).not.toContain("T-1");
+    expect(await names()).toContain("T-1");
+    // Its listing does not tidy, so a pass that a clean-up is waiting for cannot be waiting for that clean-up.
+    const listed = await withHygieneLock(project, () => Promise.race([names(), new Promise<string[]>((resolve) => setTimeout(() => resolve(["stuck"]), 8000))]));
+    expect(listed).toContain("T-1");
   }, SLOW);
 
   it("a sweep and a dispatch at the same moment never leave the person a command for a folder that is not there", async () => {
