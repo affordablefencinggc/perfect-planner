@@ -10,7 +10,7 @@
 // this screen. Agents never reach these routes; they use the MCP tools.
 import fs from "node:fs";
 import path from "node:path";
-import { deriveState, sensitiveChanges, testSupportFiles, type GateState } from "../../gate/index";
+import { deriveState, sensitiveChanges, testSupportFiles, unalteredPins, type GateState } from "../../gate/index";
 import type { Actor } from "../../ledger/index";
 import type { AgentKind } from "../agentKinds";
 import { attemptLabel, unmetDependencies, waitingMessage, type TaskView } from "../../mcp/index";
@@ -689,11 +689,8 @@ async function changedFiles(project: CoreProject, label: string, tree: { path: s
   const state = deriveState(project.entries(), label);
   const pinned = Object.keys(state.approval?.pins ?? {});
   const support = state.definition ? await testSupportFiles(tree.path, [tree.baseSha, tip], pinned, state.definition.command) : new Set<string>();
-  // The approved test files themselves are not flagged once the test has passed at this very tip: the gate refuses a
-  // pinned file that differs from what the person approved (on disk and in the commit), so they are byte for byte
-  // the ones already read at approval. Their helpers, imports and anything else beside them stay flagged.
-  const unchanged = state.worktree?.passed && state.worktree.commit?.toLowerCase() === tip.toLowerCase() ? new Set(pinned) : new Set<string>();
-  return { files, sensitive: sensitiveChanges(files, pinned, support).filter((file) => !unchanged.has(file)).sort() };
+  const unchanged = state.approval ? await unalteredPins(tree.path, tip, state.approval.pins) : new Set<string>();
+  return { files, sensitive: sensitiveChanges(files, pinned, support, unchanged).sort() };
 }
 
 /** A refusal plus the end of the test's own output, so the person sees why the test failed. */
