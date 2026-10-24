@@ -5704,6 +5704,9 @@ code {
   width: 430px !important;
   min-height: 108px !important;
 }
+.workspace-tree-node.root > details > .workspace-tree-children::before {
+  height: 88px !important;
+}
 .workspace-tree-children {
   --tree-gap: 42px;
   gap: 42px !important;

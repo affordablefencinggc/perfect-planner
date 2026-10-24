@@ -1430,20 +1430,20 @@
   top: 0;
   left: 50%;
   bottom: auto;
-  height: 32px;
+  height: 82px;
 }
 .workspace-tree-node.root
   > details
   > .workspace-tree-children
   > .workspace-tree-node::before {
-  top: -16px;
+  top: -1px;
   left: 50%;
   width: 1px;
-  height: 16px;
+  height: 33px;
   border-top: 0;
   border-left: 1px solid #89928e;
 }
-/* Horizontal line joining the cards in a row; the first and last card only
+/* Horizontal line joining the cards in a row, running behind them at mid-height; the first and last card only
    reach in from their centre, so the line never dangles past either end. */
 .workspace-tree-node.root
   > details
@@ -1451,7 +1451,8 @@
   > .workspace-tree-node::after {
   content: "";
   position: absolute;
-  top: -16px;
+  z-index: -1;
+  top: 50px;
   left: calc(var(--tree-gap, 30px) / -2);
   right: calc(var(--tree-gap, 30px) / -2);
   border-top: 1px solid #89928e;
