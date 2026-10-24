@@ -280,7 +280,7 @@ function TaskCard({ contained, task, repoRoot, project, act, busy, notice, dispa
           </button>
         )}
         {task.stage === "building" && (
-          <button type="button" className="core-button primary" onClick={() => run("check", `/tasks/${id}/check`)} disabled={working}>Check the work</button>
+          <button type="button" className="core-button primary" onClick={() => run("check", `/tasks/${id}/check`)} disabled={working} title={working ? "Another step on this task is still running." : undefined}>Check the work</button>
         )}
         {(task.stage === "review-diff" || task.stage === "ready-to-merge") && (
           <>
@@ -298,6 +298,7 @@ function TaskCard({ contained, task, repoRoot, project, act, busy, notice, dispa
             )}
           </>
         )}
+        {canRelease && task.stalled && <span className="core-pill warn">stalled</span>}
         {canRelease && !releasing && (
           <button type="button" className="core-button" onClick={() => setReleasing(true)} disabled={working}>Release claim</button>
         )}
