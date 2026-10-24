@@ -49,6 +49,7 @@ const SECTIONS = [
   ["agents", "Agents & Jev"],
   ["index", "Index"],
   ["panels", "Panels & notices"],
+  ["data", "Your data"],
   ["reset", "Reset"],
 ];
 
@@ -354,6 +355,11 @@ export function SettingsWorkspace({ onWorkspace, onClose, onToast, invoke, jevSt
             <Row title="Notices stay for" help="How long pop-up notices stay before closing themselves.">
               <Segmented label="Notices stay for" value={settings.toastSeconds} onChange={(toastSeconds) => update({ toastSeconds })} options={TOAST_SECONDS.map((value) => ({ value, label: value ? `${value} s` : "Until closed" }))} />
             </Row>
+          </Section>
+
+          <Section id="data" title="Your data" intro="Uninstalling Perfect Planner keeps your plans, proof and settings on this computer. That is deliberate: the ledger is your record, and a reinstall picks it up again.">
+            <Row title="Where it lives" help="Windows: %LOCALAPPDATA%\com.perfectplanner.desktop. macOS: ~/Library/Application Support/com.perfectplanner.desktop. Linux: ~/.local/share/com.perfectplanner.desktop." />
+            <Row title="To remove it" help="Close Perfect Planner, uninstall it, then delete that folder. This cannot be undone, and it also deletes the signed ledger. Your own project folders are never in it." />
           </Section>
 
           <Section id="reset" title="Reset" intro="Put every setting on this page back to its default. Your projects, plans and proof are not touched, and the Jev key stays in the keychain.">

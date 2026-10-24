@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 // Runs the review bot on one pull request.
-//   node scripts/review-bot.mjs --repo owner/name --pr 63 [--sizes] [--post]
+//   node scripts/review-bot.mjs --repo owner/name --pr 63 [--sizes] [--post] [--skip-checks --ci]
 // Reads GITHUB_TOKEN from the environment (never from arguments). Without --post it only prints,
 // and a public repo can be read with no token.
+// --skip-checks leaves the other checks out (CI runs beside them); --ci exits 1 unless GO and writes the job summary.
 // --sizes measures dist/client (run `npm run build` first) with the performance-budget scanner.
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { appendFileSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -63,10 +64,19 @@ try {
     extra.budgets = perf.PERFORMANCE_BUDGETS;
     extra.sizes = measureClientSizes(path.join(root, "dist/client"));
   }
-  const review = bot.reviewPullRequest(await github.facts(number, extra));
-  process.stdout.write(bot.renderReview(review));
+  const facts = await github.facts(number, extra);
+  if (flag("skip-checks")) {
+    facts.checks = [];
+    delete facts.expectedGreen;
+  }
+  const review = bot.reviewPullRequest(facts);
+  if (flag("skip-checks")) review.notes.push("The other checks were not judged here; this check runs beside them.");
+  const text = bot.renderReview(review);
+  process.stdout.write(text);
+  if (flag("ci") && process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, text);
   if (flag("post")) console.error(`Comment ${await github.post(review)}.`);
-  process.exitCode = review.verdict === "GO" ? 0 : review.verdict === "NO-GO" ? 1 : 3;
+  // In CI the check is red unless GO. By hand, 0 GO, 1 NO-GO, 3 HOLD or WAIT (0 with --post).
+  process.exitCode = flag("ci") ? (review.verdict === "GO" ? 0 : 1) : flag("post") ? 0 : review.verdict === "GO" ? 0 : review.verdict === "NO-GO" ? 1 : 3;
 } finally {
   rmSync(work, { recursive: true, force: true });
 }

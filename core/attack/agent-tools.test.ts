@@ -7,6 +7,10 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { bridgeCall, TOOL_NAMES } from "../mcp/index";
 import { verifyChain } from "../ledger/index";
 import { addTask, cleanTemp, dispatchAndApproveTest, makeRepo, startWindow, tempDir, type Dispatched, type Window } from "./helpers";
+// These suites test the host's own logic (concurrency, routes, bridge), which does not change with the OS, and
+// Linux CI runs them in full. Windows core CI is already close to its 15-minute limit, so there they are skipped
+// unless PP_ATTACK_ALL=1 (set it to run them on a Windows machine).
+const runHere = process.platform !== "win32" || process.env.PP_ATTACK_ALL === "1";
 
 afterAll(cleanTemp);
 const q = "?project=p";
@@ -18,6 +22,7 @@ let mainAgent = "";
 let bridgeUrl = "";
 
 beforeAll(async () => {
+  if (!runHere) return;
   const repo = makeRepo();
   const dir = tempDir();
   win = await startWindow({ data: dir, project: repo, secrets: path.join(dir, "secrets.json") });
@@ -28,7 +33,9 @@ beforeAll(async () => {
   mainCall = bridgeCall(connect.body.result.bridgeUrl, fs.readFileSync(connect.body.result.tokenFile, "utf8"));
   mainAgent = ((await mainCall({ tool: "hello", args: { name: "Main chat" } })) as { agent: string }).agent;
 }, 120_000);
-afterAll(async () => win.stop());
+afterAll(async () => {
+  if (runHere) await win.stop();
+});
 
 const STRANGE: unknown[] = [
   undefined, null, "", " ", 0, -1, 1e308, 2 ** 53, 1.5, true, [], {}, "T-1", "T-99999999999999999999", "Q-1", "Q-99999999999999999999", "D-1",
@@ -61,7 +68,7 @@ async function fire(who: string, call: ReturnType<typeof bridgeCall>, tool: stri
   }
 }
 
-describe("every agent tool survives garbage from every kind of caller", () => {
+describe.skipIf(!runHere)("every agent tool survives garbage from every kind of caller", () => {
   it("covers all tools", () => {
     expect(TOOL_NAMES.length).toBeGreaterThanOrEqual(11);
   });

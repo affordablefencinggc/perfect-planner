@@ -190,3 +190,30 @@ describe("CoreAgentConnect", () => {
     resetPersonSession();
   });
 });
+
+describe("Log in to Codex", () => {
+  test("offers the button when Codex is installed and signed out, and shows the sign-in progress", async () => {
+    let state = { installed: true, loggedIn: false, state: "idle" };
+    routeFetch({
+      "GET /agents": async () => ok({ ...list(), waiting: 2 }),
+      "GET /agents/codex-login": async () => ok(state),
+      "POST /agents/codex-login": async () => { state = { installed: true, loggedIn: false, state: "waiting", url: "https://auth.openai.com/oauth/authorize?x=1" }; return ok(state); },
+    });
+    renderWith();
+    expect(await screen.findByText(/2 agents' questions are waiting for your answer/)).toBeTruthy();
+    fireEvent.click(await screen.findByRole("button", { name: /Log in to Codex/ }));
+    expect(await screen.findByText(/Finish signing in with ChatGPT/)).toBeTruthy();
+    expect(screen.getByRole("link", { name: /Open the sign-in page/ }).getAttribute("href")).toMatch(/^https:\/\/auth\.openai\.com\//);
+  });
+
+  test("shows signed in, and shows nothing when Codex is not installed", async () => {
+    routeFetch({ "GET /agents": async () => ok(list()), "GET /agents/codex-login": async () => ok({ installed: true, loggedIn: true, method: "chatgpt", state: "done" }) });
+    renderWith();
+    expect(await screen.findByText(/Codex is signed in with ChatGPT/)).toBeTruthy();
+    cleanup();
+    routeFetch({ "GET /agents": async () => ok(list()), "GET /agents/codex-login": async () => ok({ installed: false, loggedIn: false, state: "idle" }) });
+    renderWith();
+    await screen.findByText("No agents are connected yet.");
+    expect(screen.queryByRole("button", { name: /Log in to Codex/ })).toBeNull();
+  });
+});

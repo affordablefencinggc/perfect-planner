@@ -267,6 +267,13 @@ export class Relay {
    * plus each question answered without it (from an earlier decision or the
    * plan) until the main chat has seen it once, marked as auto-answered.
    */
+  /** How many of this person's questions still wait for an answer. Reads only; digest() marks notices as shown. */
+  openFor(person: string): number {
+    let n = 0;
+    for (const q of this.questions.values()) if (q.person === person && q.status === "open") n += 1;
+    return n;
+  }
+
   digest(person: string): Digest {
     const shown = this.shownAuto.get(person) ?? new Set<string>();
     this.shownAuto.set(person, shown);

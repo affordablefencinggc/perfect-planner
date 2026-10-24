@@ -30,7 +30,7 @@ describe("fails closed", () => {
 
   it("refuses a precheck failure before anything starts", async () => {
     const base = vi.fn(async () => ok);
-    const run = containedRunner({ base, status: async () => ({ kind: "bubblewrap" }), precheck: () => "refused: planted" });
+    const run = containedRunner({ base, bwrap: "/usr/bin/bwrap", status: async () => ({ kind: "bubblewrap" }), precheck: () => "refused: planted" });
     const result = await run("./node -v", os.tmpdir(), {});
     expect(base).not.toHaveBeenCalled();
     expect(result.exitCode).toBeNull();

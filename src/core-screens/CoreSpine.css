@@ -1,0 +1,88 @@
+/* Task spine: a vertical line with one node per real task; the model working on a task orbits its symbol. */
+.core-spine { display: grid; gap: var(--space-3); margin-bottom: var(--space-4); }
+.core-spine > header h3 { margin: 0; font-size: var(--text-lg); }
+.core-spine > header p { margin: var(--space-1) 0 0; font-size: var(--text-sm); }
+.core-spine .spine-list { position: relative; list-style: none; margin: 0; padding: 0 0 0 var(--space-6); display: grid; gap: var(--space-4); }
+.core-spine .spine-list::before { content: ""; position: absolute; left: 9px; top: 6px; bottom: 6px; width: 2px; background: var(--border-strong); }
+.core-spine .spine-node { position: relative; }
+.core-spine .spine-dot { position: absolute; left: calc(-1 * var(--space-6) + 3px); top: 8px; width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--border-strong); background: var(--surface); }
+.core-spine .spine-stage-done .spine-dot { background: var(--green); border-color: var(--green); }
+.core-spine .spine-stage-building .spine-dot { background: var(--amber); border-color: var(--amber); }
+.core-spine .spine-node[data-working="true"] .spine-dot { animation: spine-pulse 1.6s ease-in-out infinite; }
+.core-spine article { display: grid; gap: var(--space-2); padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); }
+.core-spine article > header { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+.core-spine article h3 { margin: 0; font-size: var(--text-base); flex: 1 1 12em; overflow-wrap: anywhere; }
+.core-spine .spine-id { font-family: var(--mono); font-size: var(--text-xs); color: var(--muted); }
+.core-spine .spine-state { margin: 0; font-size: var(--text-sm); }
+.core-spine .spine-you { color: var(--amber-text); }
+.core-spine .spine-stations { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: var(--space-1); }
+.core-spine .spine-stations li { padding: 2px var(--space-2); border-radius: 999px; font-size: var(--text-xs); border: 1px solid var(--border); color: var(--muted); }
+.core-spine .spine-stations li[data-state="done"] { background: var(--green-soft); border-color: var(--green); color: var(--ink); }
+.core-spine .spine-stations li[data-state="next"] { background: var(--amber-soft); border-color: var(--amber); color: var(--ink); }
+.core-spine .spine-progress, .core-spine .spine-meta { margin: 0; font-size: var(--text-xs); overflow-wrap: anywhere; }
+
+/* The model symbol: a letter in a circle; while its worker is building, a small dot circles it. */
+.core-spine .spine-model { position: relative; display: inline-grid; place-items: center; width: 30px; height: 30px; border-radius: 50%; font-weight: 700; font-size: var(--text-sm); color: #fff; background: var(--muted); flex: none; }
+.core-spine .spine-model-claude { background: #b4561f; }
+.core-spine .spine-model-gemini { background: #2f5fd0; }
+.core-spine .spine-model-codex { background: #1f7a4d; }
+.core-spine .spine-model-unknown { background: var(--muted); }
+.core-spine .spine-model-orbit { position: absolute; inset: -7px; border-radius: 50%; border: 1px dashed var(--border-strong); animation: spine-orbit 3s linear infinite; }
+.core-spine .spine-model-orbit i { position: absolute; top: -3px; left: calc(50% - 3px); width: 6px; height: 6px; border-radius: 50%; background: var(--amber); }
+@keyframes spine-orbit { to { transform: rotate(360deg); } }
+@keyframes spine-pulse { 50% { box-shadow: 0 0 0 5px var(--amber-soft); } }
+@media (prefers-reduced-motion: reduce) {
+  .core-spine .spine-model-orbit, .core-spine .spine-node[data-working="true"] .spine-dot { animation: none; }
+}
+
+.core-spine .spine-filters { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.core-spine .spine-filters button[aria-pressed="true"] { background: var(--ink); color: var(--surface); }
+.core-spine .spine-idle article { padding: var(--space-2) var(--space-3); grid-template-columns: auto 1fr; align-items: center; column-gap: var(--space-3); }
+.core-spine .spine-idle article > header { display: contents; }
+.core-spine .spine-idle .spine-state { grid-column: 2; color: var(--muted); }
+.core-spine .spine-idle .spine-id { grid-column: 1; }
+.core-spine .spine-idle h3 { grid-column: 2; font-size: var(--text-sm); }
+.core-spine .spine-act { justify-self: start; }
+
+/* The Plan page's real-data vertebrae spine reuses the Demo's classes (src/styles.css); only what a live project needs differs. */
+.core-plan-spine { overflow: visible; background: none; }
+.core-plan-spine .plan-canvas { padding-top: 24px; }
+.core-plan-spine .plan-node { min-height: 0; cursor: pointer; }
+.core-plan-spine .core-needs-you { box-shadow: inset 0 0 0 1px #e6ebf0, 0 0 0 2px var(--amber), 0 7px 16px rgba(54, 66, 82, 0.13); }
+.core-plan-spine .perimeter-worker.running { animation-iteration-count: infinite; }
+.core-plan-spine .owner-avatar.profile-avatar::after { display: none; }
+.core-plan-spine .core-owner-photo { width: 100%; height: 100%; object-fit: cover; }
+.core-plan-spine .owner-avatar > span { font: 700 12px var(--mono); }
+.core-plan-spine button.owner-badge { padding: 0; border: 0; background: none; cursor: pointer; border-radius: 50%; }
+.core-plan-spine button.owner-badge:hover .owner-avatar, .core-plan-spine button.owner-badge:focus-visible .owner-avatar { box-shadow: 0 0 0 3px var(--amber); }
+.core-plan-spine .proof-counter { font: 700 9px var(--mono); }
+.core-plan-spine .core-vertebra-note { display: block; margin: 8px 22px 0; font: 11px/1.4 system-ui, sans-serif; color: #5b605c; overflow-wrap: anywhere; }
+.core-plan-spine .core-waiting { color: #8a5a12; }
+.core-plan-spine .node-items { margin-bottom: 4px; }
+
+/* People along the top of the main spine, and one person's head above their own spine. */
+.core-people-strip { list-style: none; margin: 0 0 var(--space-3); padding: 0; display: flex; flex-wrap: wrap; justify-content: center; gap: var(--space-3); }
+.core-person-card { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-2) var(--space-4) var(--space-2) var(--space-2); border: 1px solid var(--border-strong); border-radius: 999px; background: var(--surface); cursor: pointer; text-align: left; font: inherit; color: var(--ink); }
+.core-person-card:hover, .core-person-card:focus-visible { border-color: var(--amber); box-shadow: 0 0 0 2px var(--amber-soft); }
+.core-person-card .owner-avatar { width: 44px; height: 44px; }
+.core-person-card strong { display: block; font-size: var(--text-base); }
+.core-person-card small { color: var(--muted); font-size: var(--text-xs); }
+.core-plan-count { text-align: center; margin: 0; }
+.core-person-head { position: relative; display: grid; justify-items: center; gap: var(--space-1); padding-bottom: 36px; }
+.core-person-head > button { justify-self: start; }
+.core-person-head h2 { margin: 0; font-size: var(--text-lg); }
+.core-person-head p { margin: 0; font-size: var(--text-sm); text-align: center; }
+.core-person-head::after { content: ""; position: absolute; bottom: 0; left: 50%; width: 4px; height: 36px; transform: translateX(-50%); background: #bfc3c5; }
+.core-plan-spine .owner-avatar.core-face-big { width: 104px; height: 104px; border-width: 3px; }
+.core-plan-spine .owner-avatar.core-face-big > span { font-size: 40px; }
+.core-person-canvas { padding-top: 0 !important; }
+.core-person-canvas .spine-line { top: 0; }
+
+/* Models running down a person's spine, in parallel: one runner per task being built, sliding from its vertebra to the next. */
+.core-plan-spine .spine-junction { overflow: visible; }
+.spine-runner { position: absolute; left: 50%; top: 0; width: 34px; height: 34px; margin-left: -17px; z-index: 6; pointer-events: auto; animation: spine-run 3.2s ease-in-out infinite; }
+.spine-runner img { width: 34px; height: 34px; }
+@keyframes spine-run { 0% { transform: translateY(-8px); opacity: 0; } 15% { opacity: 1; } 85% { opacity: 1; } 100% { transform: translateY(150px); opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .core-plan-spine .perimeter-worker.running .spine-runner { animation: none; opacity: 1; } }
+.core-plan-spine .core-assign { display: flex; align-items: center; gap: 8px; margin: 8px 22px 0; font: 11px system-ui, sans-serif; color: #5b605c; }
+.core-plan-spine .core-assign select { font: inherit; padding: 2px 6px; border: 1px solid var(--border-strong); border-radius: 6px; background: #fff; color: var(--ink); }
