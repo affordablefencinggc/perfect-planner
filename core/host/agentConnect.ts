@@ -18,7 +18,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { findExecutable, NO_CWD_SEARCH_ENV } from "../exec/index";
 import { agentLaunch } from "./agentLaunch";
-import { AGENT_KINDS, AGENTS, type AgentKind } from "./agentKinds";
+import { AGENT_KINDS, AGENTS, CHECK_IN_PROMPT, type AgentKind } from "./agentKinds";
 import { childEnv, protectFor } from "./protectedRoots";
 import { isNetworkPath } from "./tokenFile";
 
@@ -160,6 +160,10 @@ export interface ConnectIo {
   err(text: string): void;
   /** How long one agent CLI call may take before connect gives up on it (default 30 s). */
   timeoutMs?: number;
+  /** True when a person is at this terminal (stdin and stdout are a TTY): connect then starts the agent for them. */
+  interactive?: boolean;
+  /** Starts the agent with the terminal attached and returns its exit code; null when it could not start. Defaults to a real spawn. */
+  startAgent?: (agent: AgentKind, tokenFile: string, io: ConnectIo) => number | null;
 }
 
 const CLI_TIMEOUT_MS = 30_000;
@@ -184,6 +188,19 @@ function run(agent: AgentKind, args: string[], tokenFile: string | null, io: Con
     timeout: cliTimeout(io),
     killSignal: "SIGKILL",
   });
+}
+
+/** Starts the agent in this terminal, in this folder, already told to check in; same finder and protected folders as the connect calls. */
+function startAgent(agent: AgentKind, tokenFile: string, io: ConnectIo): number | null {
+  const protect = protectFor(tokenFile);
+  const launch = agentLaunch(agent, [...AGENTS[agent].promptArgs, CHECK_IN_PROMPT], io.env, io.cwd, protect);
+  if (!launch) return null;
+  const started = spawnSync(launch.command, launch.args, {
+    cwd: io.cwd,
+    stdio: "inherit",
+    env: { ...childEnv(io.env, { cwd: io.cwd, protect }), ...NO_CWD_SEARCH_ENV },
+  });
+  return started.error ? null : (started.status ?? 0);
 }
 
 /** The last of a CLI's output, with anything key-shaped or naming the token file removed. */
@@ -248,7 +265,8 @@ export function parseArgs(argv: string[]): { agent?: string; rest: string[] } {
 /** connect.mjs itself: `[--agent claude|gemini|codex] <bridge url> <token file>`, or `--skill-only`. Returns the exit code. */
 export function runConnect(all: string[], io: ConnectIo): number {
   const { here } = io;
-  const { agent: picked, rest: argv } = parseArgs(all);
+  const noStart = all.includes("--no-start");
+  const { agent: picked, rest: argv } = parseArgs(all.filter((arg) => arg !== "--no-start"));
   if (picked !== undefined && !AGENT_KINDS.includes(picked as AgentKind)) {
     io.err(`Perfect Planner: --agent must be one of ${AGENT_KINDS.join(", ")}.\n`);
     return 2;
@@ -309,18 +327,22 @@ export function runConnect(all: string[], io: ConnectIo): number {
     return 1;
   }
   const ignored = agent === "gemini" && keepOutOfGit(io.cwd, io.env, protectFor(tokenFile));
+  const start = io.interactive && !noStart;
   io.out(
     [
       agent === "codex" ? "Connected Codex CLI to Perfect Planner (Codex keeps one connection for this computer)." : `Connected ${label} in this folder (${io.cwd}) to Perfect Planner.`,
       ignored ? "Kept .gemini/settings.json out of git; it belongs to this computer." : "",
       skill ? `Installed the ${SKILL} skill for ${label} on this computer.` : "",
-      agent === "gemini"
-        ? "Next: start Gemini CLI in this folder, choose Trust folder if it asks, and say: check in with Perfect Planner"
-        : `Next: start ${label} in this folder and say: check in with Perfect Planner`,
+      start
+        ? `Starting ${label} now; it will check in with Perfect Planner by itself.${agent === "gemini" ? " Choose Trust folder if it asks." : ""}`
+        : agent === "gemini"
+          ? "Next: start Gemini CLI in this folder, choose Trust folder if it asks, and say: check in with Perfect Planner"
+          : `Next: start ${label} in this folder and say: check in with Perfect Planner`,
     ]
       .filter(Boolean)
       .join("\n") + "\n",
   );
+  if (start && (io.startAgent ?? startAgent)(agent, tokenFile, io) === null) io.err(`Perfect Planner: connected, but could not start ${label}. Start it in this folder and say: ${CHECK_IN_PROMPT}\n`);
   return 0;
 }
 
@@ -332,6 +354,7 @@ function main(argv: string[]): number {
     here: path.dirname(fileURLToPath(import.meta.url)),
     out: (text) => process.stdout.write(text),
     err: (text) => process.stderr.write(text),
+    interactive: Boolean(process.stdin.isTTY && process.stdout.isTTY),
   });
 }
 

@@ -311,6 +311,39 @@ describe("finding Claude Code", () => {
     }
   });
 
+  it("starts the agent already told to check in when a person is at the terminal, and only then", () => {
+    const outside = temp();
+    const project = temp();
+    const tokenFile = path.join(project, ".perfect-planner", "tokens", "C-1.token");
+    fs.mkdirSync(path.dirname(tokenFile), { recursive: true });
+    fs.writeFileSync(tokenFile, "");
+    const cli = path.join(outside, "bin", "node_modules", "@anthropic-ai", "claude-code", "cli.js");
+    fs.mkdirSync(path.dirname(cli), { recursive: true });
+    fs.writeFileSync(cli, "#!/usr/bin/env node\n", { mode: 0o755 });
+    if (windows) fs.writeFileSync(path.join(outside, "bin", "claude.cmd"), "@echo off\r\n");
+    else fs.symlinkSync(cli, path.join(outside, "bin", "claude"));
+    const PATH = [path.join(outside, "bin"), process.env.PATH ?? ""].join(sep);
+    const run = (extra: string[], interactive: boolean) => {
+      const started: string[] = [];
+      const output: string[] = [];
+      const code = runConnect(["--agent", "claude", ...extra, "http://127.0.0.1:5555", tokenFile], {
+        cwd: project, env: { ...process.env, PATH, Path: PATH }, home: temp(), here: path.join(outside, "core-host"),
+        out: (t) => output.push(t), err: (t) => output.push(t), interactive,
+        startAgent: (agent) => (started.push(agent), 0),
+      });
+      return { code, started, text: output.join("") };
+    };
+    const person = run([], true);
+    expect(person.code, person.text).toBe(0);
+    expect(person.started).toEqual(["claude"]);
+    expect(person.text).toContain("Starting Claude Code now");
+    const skill = run([], false); // run from an agent's chat: no terminal to hand over
+    expect(skill.started).toEqual([]);
+    expect(skill.text).toContain("Next: start Claude Code");
+    const optOut = run(["--no-start"], true);
+    expect(optOut.started).toEqual([]);
+  });
+
   it("connect.mjs started from a task worktree or from repo/src never runs a claude reached through a PATH link into the repo or the worktree", () => {
     // Claude Code's npm layout, whose package entry runs under this Node on every OS.
     const npmClaude = (dir: string, body: string) => {
