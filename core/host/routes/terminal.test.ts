@@ -69,9 +69,15 @@ describe("script pane", () => {
     expect(done.output).toContain("got ••••");
   });
 
-  it.skipIf(process.platform === "win32")("stops a running script and says when a program is missing", async () => {
+  it.skipIf(process.platform === "win32")("stops a running script", async () => {
     await call("POST", "/terminal/run", { script: "aws-configure" });
     expect((await call("POST", "/terminal/stop")).body.result.state).toBe("stopped");
+  });
+
+  it.skipIf(process.platform === "win32")("says plainly when a program is missing", async () => {
+    // Only an empty folder on the path, so a real az on this computer cannot answer.
+    fs.mkdirSync(path.join(home, "empty"));
+    process.env.PATH = path.join(home, "empty");
     const missing = await call("POST", "/terminal/run", { script: "azure-login" });
     expect(missing.status).toBe(404);
     expect(missing.body.message).toMatch(/not installed/);
