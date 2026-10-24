@@ -709,6 +709,16 @@ describe("runTestCommand", () => {
     expect(isConclusiveFailure({ ...base, passed: true, exitCode: 0 })).toBe(false);
   });
 
+  it("a missing package.json or module is not a failing test", () => {
+    const base = { passed: false, timedOut: false, durationMs: 1, outputTail: "" };
+    expect(isConclusiveFailure({ ...base, exitCode: 254, outputTail: "npm error enoent Could not read package.json" })).toBe(false);
+    expect(isConclusiveFailure({ ...base, exitCode: 254 })).toBe(false);
+    expect(isConclusiveFailure({ ...base, exitCode: 1, outputTail: "npm error code ENOENT\nnpm error path /x/package.json" })).toBe(false);
+    expect(isConclusiveFailure({ ...base, exitCode: 1, outputTail: "Error: Cannot find module 'vitest'" })).toBe(false);
+    expect(isConclusiveFailure({ ...base, exitCode: 1, outputTail: "Error: Cannot find module './add'" })).toBe(true);
+    expect(isConclusiveFailure({ ...base, exitCode: 1, outputTail: "FAIL  add.test.js\nAssertionError: expected 1 to be 2" })).toBe(true);
+  });
+
   it("finds a missing program before running it, whatever language the shell speaks", async () => {
     const dir = scratch();
     const env = scrubbedEnv(process.env);

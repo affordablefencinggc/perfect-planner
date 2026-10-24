@@ -148,9 +148,16 @@ export function isConclusiveFailure(run: TestRunResult): boolean {
   if (run.passed || run.timedOut || run.exitCode === null) return false;
   // Shell "cannot execute" / "command not found" (POSIX) and "not recognized" (cmd.exe) mean the test never ran.
   // cmd.exe under `cmd /d /s /c` can report exit 1 for a missing command, so the message is checked too.
-  if (isWindows) return run.exitCode !== 9009 && !/is not recognized as an internal or external command/i.test(run.outputTail);
-  return run.exitCode !== 126 && run.exitCode !== 127;
+  if (isWindows) {
+    if (run.exitCode === 9009 || /is not recognized as an internal or external command/i.test(run.outputTail)) return false;
+  } else if (run.exitCode === 126 || run.exitCode === 127) return false;
+  // The test tooling is missing (a fresh repo with no package.json): npm exits 254 and says so. Nothing ran.
+  if (run.exitCode === 254 || NO_TOOLING_OUTPUT.test(run.outputTail)) return false;
+  return true;
 }
+
+/** Output that means the project has no test tooling yet, not that a test failed. */
+const NO_TOOLING_OUTPUT = /ENOENT[\s\S]{0,200}package\.json|Could not read package\.json|Cannot find module '[^./'][^']*'|no package\.json/i;
 
 const SHELL_BUILTINS = new Set(isWindows
   ? ["assoc", "break", "call", "cd", "chdir", "cls", "color", "copy", "date", "del", "dir", "echo", "endlocal", "erase", "exit", "for", "ftype", "goto", "if", "md", "mkdir", "mklink", "move", "path", "popd", "prompt", "pushd", "rd", "rem", "ren", "rename", "rmdir", "set", "setlocal", "shift", "start", "time", "title", "type", "ver", "verify", "vol"]
