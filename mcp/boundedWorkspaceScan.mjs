@@ -15,7 +15,18 @@ const DEFAULT_IGNORED = new Set([
   ".turbo",
   "coverage",
   "generated",
+  // Build output and platform caches: big, generated, and never where a task lives.
+  "out",
+  ".next",
+  ".nuxt",
+  ".wrangler",
+  ".gradle",
+  "Pods",
+  ".vite",
 ]);
+// Notes, audits and agent scratch folders at the top of a repo. They are scanned after the code,
+// so a repo with 10,000+ files of docs cannot use up the file budget before src/ is reached.
+const LOW_PRIORITY_TOP = new Set(["docs", "doc", "audit", "audits", "artifacts", "archive", "proof", ".agents", ".claude", ".codex", ".cursor", ".gemini", ".grok", ".sisyphus", ".ledger"]);
 const DEFAULT_EXTENSIONS = new Set([
   ".md",
   ".txt",
@@ -314,7 +325,8 @@ export async function scanWorkspaceSnapshot(rootPath, options, operation) {
   const skipped = [];
   const directorySnapshots = [];
   const fileSnapshots = [];
-  const queue = [{ absolutePath: root, depth: 0 }];
+  const queue = [{ absolutePath: root, depth: 0, low: false }];
+  const lowQueue = [];
   let visitedEntries = 0;
 
   const rootStats = await lstat(root, { bigint: false });
@@ -324,7 +336,8 @@ export async function scanWorkspaceSnapshot(rootPath, options, operation) {
   const rootRealPath = await realpath(root);
   operation.check();
 
-  walk: while (queue.length) {
+  walk: while (queue.length || lowQueue.length) {
+    if (!queue.length) queue.push(...lowQueue.splice(0));
     if (directorySnapshots.length >= maxDirectories) {
       if (allowPartial) {
         truncated ??= "directories";
@@ -384,7 +397,8 @@ export async function scanWorkspaceSnapshot(rootPath, options, operation) {
           }
           throw operationError("MCP_DEPTH_LIMIT", `Workspace scan exceeded ${maxDepth} directory levels.`);
         }
-        queue.push({ absolutePath, depth: current.depth + 1 });
+        const low = current.low || (current.depth === 0 && LOW_PRIORITY_TOP.has(entry.name));
+        (low ? lowQueue : queue).push({ absolutePath, depth: current.depth + 1, low });
         continue;
       }
       const extension = path.extname(entry.name).toLowerCase();
