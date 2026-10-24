@@ -1452,8 +1452,8 @@
   content: "";
   position: absolute;
   top: -16px;
-  left: -15px;
-  right: -15px;
+  left: calc(var(--tree-gap, 30px) / -2);
+  right: calc(var(--tree-gap, 30px) / -2);
   border-top: 1px solid #89928e;
   pointer-events: none;
 }

@@ -5705,6 +5705,7 @@ code {
   min-height: 108px !important;
 }
 .workspace-tree-children {
+  --tree-gap: 42px;
   gap: 42px !important;
   margin-top: 38px !important;
   padding-top: 38px !important;
