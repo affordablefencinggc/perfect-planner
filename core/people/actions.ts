@@ -1,7 +1,7 @@
 import type { Actor, Ledger, LedgerEntry } from "../ledger/index";
 import { appendNumbered } from "../numbering/index";
 import { assertPerson, isSlug, PeopleError } from "./errors";
-import { isDocPath, replayRoster } from "./model";
+import { isDocPath, ownerOf, replayRoster } from "./model";
 import { photoFile, validatePhoto, type PhotoStore } from "./photos";
 import { installPeopleRules } from "./rules";
 import type { Approval, PeopleEvent, Role } from "./types";
@@ -141,4 +141,31 @@ export function removeDoc(ledger: Ledger, actor: Actor, doc: string, reason?: st
   const title = replayRoster(ledger.entries(), ledger.owner).docs.get(doc)?.title ?? doc;
   const summary = `${title} is no longer shared`;
   return record(ledger, actor, { op: "doc.removed", doc }, summary, reason ?? summary);
+}
+
+/** The owner gives a task (T-n) to a member. Giving it to someone else later replaces it. */
+export function assignTask(ledger: Ledger, actor: Actor, task: string, person: string, reason?: string): LedgerEntry {
+  assertPerson(person);
+  const name = replayRoster(ledger.entries(), ledger.owner).members.get(person)?.name ?? person;
+  const summary = `${task} goes to ${name}`;
+  return record(ledger, actor, { op: "task.assigned", task, person }, summary, reason ?? summary);
+}
+
+/** Most agent ids a member lists; older ones drop off first (an agent that old has long finished). */
+export const LISTED_AGENTS_MAX = 50;
+
+/**
+ * Lists an agent under the member whose token it came in on, so the roster rule lets it write. Done in the
+ * owner's name and visible in the ledger ("Sam has 3 agents"). Does nothing without a roster, for a person
+ * who is not on it, or for an agent already listed. Returns true when the agent is listed afterwards.
+ */
+export function listAgent(ledger: Ledger, person: string, agent: string): boolean {
+  const roster = replayRoster(ledger.entries(), ledger.owner);
+  const member = roster.members.get(person);
+  const owner = ownerOf(roster);
+  if (!member || !owner) return false;
+  if (member.agents.includes(agent)) return true;
+  const agents = [...member.agents, agent].slice(-LISTED_AGENTS_MAX);
+  changeMember(ledger, { kind: "person", id: owner.person }, person, { agents }, `${member.name} connected an agent`);
+  return true;
 }

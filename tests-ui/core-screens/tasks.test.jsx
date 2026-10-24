@@ -54,7 +54,30 @@ describe("TasksScreen", () => {
     fireEvent.change(screen.getByLabelText("Git folder"), { target: { value: "/work/notes" } });
     fireEvent.click(screen.getByRole("button", { name: "Use this folder" }));
     await waitFor(() => expect(fetch.mock.calls.some(([u, i]) => String(u).includes("/tasks/repo") && i?.method === "POST")).toBe(true));
-    expect(await screen.findByText("/work/notes")).toBeTruthy();
+    expect((await screen.findAllByText("/work/notes")).length).toBeGreaterThan(0);
+  });
+
+  test("B1: with no folder suggested by the host, the box starts with the folder the person imported, and never one they typed over", async () => {
+    routeFetch({
+      "GET /tasks": async () => ok(view([task()], { ok: false, reason: "Choose it below." })),
+      "GET /api/launch-folder": async () => ({ ok: true, status: 200, json: async () => ({ available: true, name: "old", path: "/work/old" }) }),
+    });
+    renderScreen();
+    await waitFor(() => expect(screen.getByLabelText("Git folder").value).toBe("/work/old"));
+  });
+
+  test("B1: a folder the person already typed is not replaced by the imported folder", async () => {
+    let release;
+    const gate = new Promise((resolve) => { release = resolve; });
+    routeFetch({
+      "GET /tasks": async () => ok(view([task()], { ok: false, reason: "Choose it below." })),
+      "GET /api/launch-folder": async () => { await gate; return { ok: true, status: 200, json: async () => ({ available: true, name: "old", path: "/work/old" }) }; },
+    });
+    renderScreen();
+    fireEvent.change(await screen.findByLabelText("Git folder"), { target: { value: "/mine" } });
+    release();
+    await new Promise((r) => setTimeout(r, 30));
+    expect(screen.getByLabelText("Git folder").value).toBe("/mine");
   });
 
   test("the git folder box starts with the folder already imported", async () => {
@@ -70,7 +93,7 @@ describe("TasksScreen", () => {
       "POST /tasks/T-1/dispatch": async (init) => {
         expect(JSON.parse(init.body)).toEqual({ model: "claude-sonnet-4-5" });
         tasks = [task({ worktree: { path: "/work/notes/.perfect-planner/worktrees/T-1", branch: "pp/T-1", base: "main", port: 5200 }, dispatch: { issuedAt: "now", model: "claude-sonnet-4-5" } })];
-        return ok({ task: "T-1", title: "Save notes", worktree: "/work/notes/.perfect-planner/worktrees/T-1", branch: "pp/T-1", tokenFile: "/p/.perfect-planner/tokens/T-1.token", brief: "You are a Perfect Planner worker on T-1: Save notes.\n2. Test first: … propose_test", setup: `cd "/w" && claude mcp add perfect-planner-core --env 'PP_AGENT_TOKEN_FILE=/p/.perfect-planner/tokens/T-1.token' -- node '/a'`, start: 'claude "$(cat "/b/T-1.md")"', json: "{}", shell: "Terminal", agentBuilt: true });
+        return ok({ task: "T-1", title: "Save notes", worktree: "/work/notes/.perfect-planner/worktrees/T-1", branch: "pp/T-1", tokenFile: "/p/.perfect-planner/tokens/T-1.token", brief: "You are a Perfect Planner worker on T-1: Save notes.\n2. Test first: … propose_test", setup: `cd "/w" && claude mcp add perfect-planner-core --env 'PP_AGENT_TOKEN_FILE=/p/.perfect-planner/tokens/T-1.token' -- node '/a'`, start: 'claude "$(cat "/b/T-1.md")"', json: "{}", agents: { gemini: { setup: "cd /w && node connect.mjs --agent gemini", start: "gemini --approval-mode auto_edit -i brief", note: "Choose Trust folder first." }, codex: { setup: "cd /w && node connect.mjs --agent codex", start: "codex -s workspace-write -a on-request brief", note: "One connection per computer." } }, shell: "Terminal", agentBuilt: true });
       },
     });
     renderScreen();
@@ -83,6 +106,8 @@ describe("TasksScreen", () => {
     expect(document.body.textContent).not.toContain(TOKEN);
     expect(screen.getByLabelText("Brief for T-1").textContent).toContain("propose_test");
     expect(screen.getByLabelText("Start command for T-1").textContent).toContain("claude");
+    expect(screen.getByLabelText("gemini start for T-1").textContent).toContain("auto_edit");
+    expect(screen.getByLabelText("codex set-up for T-1").textContent).toContain("--agent codex");
     expect(fetch.mock.calls.filter(([u]) => String(u).includes("/dispatch"))).toHaveLength(1);
     fireEvent.click(screen.getByRole("button", { name: "Hide command" }));
     expect(screen.queryByLabelText("Set-up command for T-1")).toBeNull();
@@ -228,6 +253,212 @@ describe("TasksScreen", () => {
     expect(within(after).getByRole("button", { name: "Start worker" })).toBeTruthy();
   });
 
+  describe("small bugs and task folders (lane L10)", () => {
+    const launch = (value) => ({ "GET /api/launch-folder": async () => ({ ok: true, status: 200, json: async () => value }) });
+    const tree = { path: "/w/T-1", branch: "pp/T-1", base: "main", port: 5200 };
+    const building = (over = {}) => task({ status: "claimed", owner: "worker-1", stage: "building", worktree: tree, ...over });
+
+    test("the git folder box starts with the folder this window was opened for, never the app's own data folder", async () => {
+      routeFetch({ "GET /tasks": async () => ok(view([task()], { ok: false, reason: "Choose it below." })), ...launch({ available: true, name: "notes", path: "/work/notes" }) });
+      renderScreen();
+      await waitFor(() => expect(screen.getByLabelText("Git folder").value).toBe("/work/notes"));
+    });
+
+    test("the git folder box stays empty when no folder is known, and never overwrites what the person typed", async () => {
+      routeFetch({ "GET /tasks": async () => ok(view([task()], { ok: false, reason: "Choose it below." })), "GET /api/launch-folder": async () => { throw new Error("no local host"); } });
+      renderScreen();
+      expect((await screen.findByLabelText("Git folder")).value).toBe("");
+      cleanup();
+      let answer;
+      routeFetch({ "GET /tasks": async () => ok(view([task()], { ok: false, reason: "Choose it below." })), "GET /api/launch-folder": () => new Promise((resolve) => { answer = () => resolve({ ok: true, status: 200, json: async () => ({ available: true, name: "x", path: "/work/launch" }) }); }) });
+      renderScreen();
+      fireEvent.change(await screen.findByLabelText("Git folder"), { target: { value: "/work/typed" } });
+      await waitFor(() => expect(answer).toBeTypeOf("function"));
+      answer();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(screen.getByLabelText("Git folder").value).toBe("/work/typed");
+    });
+
+    test("a deleted task folder says so in plain words and offers to recreate it from its branch", async () => {
+      const note = "The folder for T-1 was deleted outside Perfect Planner. Its work is safe on the branch pp/T-1; recreate the folder from that branch to carry on.";
+      const waiting = (worktree) => task({ stage: "ready-to-claim", worktree, dispatch: { issuedAt: "now", model: "claude-sonnet-4-5" } });
+      let tasks = [waiting({ ...tree, state: "missing", note })];
+      const fetch = routeFetch({
+        "GET /tasks": async () => ok(view(tasks)),
+        "POST /tasks/T-1/dispatch": async () => refused(`${note} Press "Recreate the folder" on this task, then start the worker.`),
+        "POST /tasks/T-1/recreate-folder": async () => { tasks = [waiting(tree)]; return ok({ recreated: "T-1", branch: "pp/T-1", ...view(tasks) }); },
+      });
+      renderScreen();
+      const t1 = await card("T-1 Save notes");
+      expect(within(t1).getByText(/was deleted outside Perfect Planner\. Its work is safe on the branch pp\/T-1/)).toBeTruthy();
+      // Starting a worker on it is refused with the same explanation; it is not printed twice.
+      fireEvent.click(within(t1).getByRole("button", { name: "Start worker again" }));
+      await waitFor(() => expect(fetch.mock.calls.some(([u, i]) => String(u).includes("/tasks/T-1/dispatch") && i?.method === "POST")).toBe(true));
+      expect(within(t1).getAllByText(/was deleted outside Perfect Planner/)).toHaveLength(1);
+      fireEvent.click(within(t1).getByRole("button", { name: "Recreate the folder" }));
+      expect(await screen.findByText(/Recreated the folder for T-1 from its branch pp\/T-1/)).toBeTruthy();
+      expect(fetch.mock.calls.some(([u, i]) => String(u).includes("/tasks/T-1/recreate-folder") && i?.method === "POST")).toBe(true);
+      await waitFor(() => expect(within(screen.getByRole("article", { name: "T-1 Save notes" })).queryByRole("button", { name: "Recreate the folder" })).toBeNull());
+    });
+
+    test("a folder git no longer tracks is explained, with nothing offered that could change it", async () => {
+      routeFetch({ "GET /tasks": async () => ok(view([building({ worktree: { ...tree, state: "unlinked", note: "The folder for T-1 is still there (/w/T-1), but git no longer tracks it as a task folder. Perfect Planner has not changed it and will not remove it; your files are untouched." } })])) });
+      renderScreen();
+      const t1 = await card("T-1 Save notes");
+      expect(within(t1).getByText(/will not remove it; your files are untouched/)).toBeTruthy();
+      expect(within(t1).queryByRole("button", { name: "Recreate the folder" })).toBeNull();
+    });
+
+    test("Check the work, when it cannot run, is greyed with the reason in plain words", async () => {
+      routeFetch({ "GET /tasks": async () => ok(view([building({ checkReady: { ok: false, note: "The worker has unsaved changes in 1 file (scratch.txt). The check only counts saved (committed) work: ask the worker to commit them, then check again." } })])) });
+      renderScreen();
+      const t1 = await card("T-1 Save notes");
+      const button = within(t1).getByRole("button", { name: "Check the work" });
+      expect(button.disabled).toBe(true);
+      const why = document.getElementById(button.getAttribute("aria-describedby"));
+      expect(why.textContent).toMatch(/unsaved changes in 1 file \(scratch\.txt\)\. The check only counts saved \(committed\) work/);
+    });
+
+    test("Check the work, while the test runs, says it is checking and why the button is greyed", async () => {
+      let finish;
+      routeFetch({
+        "GET /tasks": async () => ok(view([building({ checkReady: { ok: true, note: "The worker has not said it is done yet (it has not attached its commit). You can still check what it has saved so far." } })])),
+        "POST /tasks/T-1/check": () => new Promise((resolve) => { finish = () => resolve(ok({ passed: false, reason: "The test failed.", output: "boom", ...view([building()]) })); }),
+      });
+      renderScreen();
+      const t1 = await card("T-1 Save notes");
+      expect(within(t1).getByText(/has not said it is done yet/)).toBeTruthy();
+      expect(within(t1).getByRole("button", { name: "Check the work" }).disabled).toBe(false);
+      fireEvent.click(within(t1).getByRole("button", { name: "Check the work" }));
+      const running = await within(t1).findByRole("button", { name: /Checking/ });
+      expect(running.disabled).toBe(true);
+      expect(document.getElementById(running.getAttribute("aria-describedby")).textContent).toMatch(/Running the approved test in the worker's folder\. This can take a minute or more\./);
+      finish();
+      expect(await screen.findByText(/The test failed\. boom/)).toBeTruthy();
+      expect(within(t1).getByRole("button", { name: "Check the work" }).disabled).toBe(false);
+    });
+
+    test("Advanced view lists the folders nobody works in with owner, size and why each is kept, and the person chooses", async () => {
+      let folders = [
+        { task: "T-1", state: "ok", branch: "pp/T-1", path: "/w/T-1", owner: "you", launchedBy: "owner", sizeBytes: 12345, sizeApproximate: false, why: ["Has 2 commits not merged into main or pushed anywhere (they are on pp/T-1)."], removable: true },
+        { task: "T-2", state: "ok", branch: "pp/T-2", path: "/w/T-2", owner: "worker-2", launchedBy: "worker-2", sizeBytes: 3400000, sizeApproximate: true, why: ["Has 1 uncommitted or untracked file (draft.txt)."], removable: false },
+      ];
+      const fetch = routeFetch({
+        "GET /tasks": async () => ok(view([task()])),
+        "GET /worktrees": async () => ok({ folders, untracked: [] }),
+        "POST /worktrees/T-1/remove": async () => { folders = folders.slice(1); return ok({ task: "T-1", branchDeleted: false }); },
+        "POST /worktrees/clean": async () => ok({ removed: [], folders }),
+      });
+      renderScreen("advanced");
+      const panel = await screen.findByRole("region", { name: "Folders nobody is working in" });
+      expect(within(panel).getByText(/Owner: you · 12 KB/)).toBeTruthy();
+      expect(within(panel).getByText(/Owner: worker-2 · over 3\.4 MB/)).toBeTruthy();
+      expect(within(panel).getByText(/Has 1 uncommitted or untracked file \(draft\.txt\)/)).toBeTruthy();
+      expect(within(panel).getByText(/Has 2 commits not merged into main or pushed anywhere/)).toBeTruthy();
+      // Only the folder with nothing that would be lost can be removed from here.
+      expect(within(panel).queryByRole("button", { name: "Remove folder for T-2" })).toBeNull();
+      fireEvent.click(within(panel).getByRole("button", { name: "Clean up safe folders" }));
+      expect(await within(panel).findByText("Nothing was safe to remove.")).toBeTruthy();
+      fireEvent.click(within(panel).getByRole("button", { name: "Remove folder for T-1" }));
+      expect(await within(panel).findByText("Removed the folder for T-1. Its work stays on pp/T-1.")).toBeTruthy();
+      await waitFor(() => expect(within(screen.getByRole("region", { name: "Folders nobody is working in" })).queryByRole("button", { name: "Remove folder for T-1" })).toBeNull());
+      expect(fetch.mock.calls.some(([u, i]) => String(u).includes("/worktrees/T-1/remove") && i?.method === "POST")).toBe(true);
+    });
+
+    test("Simple view never asks for the folder list", async () => {
+      const fetch = routeFetch({ "GET /tasks": async () => ok(view([task()])) });
+      renderScreen("simple");
+      await card("T-1 Save notes");
+      expect(fetch.mock.calls.some(([u]) => String(u).includes("/worktrees"))).toBe(false);
+    });
+  });
+
+  test("a stalled worker's task shows the stalled flag beside the Release button", async () => {
+    const tree = { path: "/w", branch: "pp/T-1", base: "main", port: 5200 };
+    routeFetch({ "GET /tasks": async () => ok(view([task({ status: "claimed", owner: "worker-1", stage: "building", worktree: tree, stalled: true })])) });
+    renderScreen();
+    const t1 = await card("T-1 Save notes");
+    const flag = within(t1).getByText("stalled");
+    const release = within(t1).getByRole("button", { name: "Release claim" });
+    expect(flag.nextElementSibling).toBe(release);
+  });
+
+  const jevTree = { path: "/w", branch: "pp/T-1", base: "main", port: 5200 };
+  const jevTest = { entry: "L-000007", command: "npm test", files: ["save.test.js"], by: "worker-1" };
+
+  test("with a Jev key saved, a task waiting on Jev says so and Ask Jev again asks it about the same test", async () => {
+    let tasks = [task({
+      status: "open", stage: "waiting-for-jev", worktree: jevTree, test: jevTest, approval: { by: "you" }, baseline: { passed: false },
+      jev: { required: true, test: { state: "unavailable", message: "Jev could not be reached, so nothing was approved.", reasons: [], canRetry: true }, diff: null },
+    })];
+    let sent = null;
+    routeFetch({
+      "GET /tasks": async () => ok(view(tasks)),
+      "POST /tasks/T-1/approve-test": async (init) => {
+        sent = JSON.parse(init.body);
+        const line = { state: "approved", message: "Jev read the test and found no gaps.", reasons: [], canRetry: false };
+        tasks = [{ ...tasks[0], stage: "ready-to-claim", jev: { required: true, test: line, diff: null } }];
+        return ok({ failsFirst: true, jev: line, ...view(tasks) });
+      },
+    });
+    renderScreen();
+    const t1 = await card("T-1 Save notes");
+    expect(within(t1).getByText("Waiting for Jev")).toBeTruthy();
+    expect(within(t1).getByText(/Jev could not be reached, so nothing was approved/)).toBeTruthy();
+    fireEvent.click(within(t1).getByRole("button", { name: "Ask Jev again" }));
+    expect(await screen.findByText(/Jev found no gaps, so the worker can claim the task now/)).toBeTruthy();
+    expect(sent).toEqual({ test: "L-000007" });
+    const after = await card("T-1 Save notes");
+    expect(within(after).queryByRole("button", { name: "Ask Jev again" })).toBeNull();
+    expect(within(after).getByText(/Jev read the test and found no gaps/)).toBeTruthy();
+  });
+
+  test("when Jev finds gaps in the test, the reasons are shown to the person with no retry button", async () => {
+    routeFetch({
+      "GET /tasks": async () => ok(view([task({
+        stage: "jev-found-gaps", worktree: jevTree, test: jevTest, approval: { by: "you" }, baseline: { passed: false },
+        jev: { required: true, test: { state: "gaps", message: "Jev found gaps in the test.", reasons: ["It never checks the saved file contents."], canRetry: false }, diff: null },
+      })])),
+    });
+    renderScreen();
+    const t1 = await card("T-1 Save notes");
+    expect(within(t1).getByText("Jev found gaps")).toBeTruthy();
+    expect(within(t1).getByText("It never checks the saved file contents.")).toBeTruthy();
+    expect(within(t1).queryByRole("button", { name: "Ask Jev again" })).toBeNull();
+  });
+
+  test("a diff Jev sends back is not approved: the person is told why and the task shows as reopened", async () => {
+    let tasks = [task({
+      status: "claimed", owner: "worker-1", stage: "review-diff", worktree: jevTree, check: { passed: true, commit: "abc123" },
+      jev: { required: true, test: { state: "approved", message: "Jev read the test and found no gaps.", reasons: [], canRetry: false }, diff: null },
+    })];
+    routeFetch({
+      "GET /tasks": async () => ok(view(tasks)),
+      "GET /tasks/T-1/diff": async () => ok({ task: "T-1", files: ["src/save.js"], sensitive: [], text: "+export const save = 1;", commit: "abc123" }),
+      "POST /tasks/T-1/approve-diff": async () => {
+        tasks = [{ ...tasks[0], status: "open", owner: null, stage: "ready-to-claim", attempt: 2, label: "T-1.a2", worktree: null }];
+        return ok({ approved: false, reopenedAs: "T-1.a2", jev: { state: "gaps", message: "Jev found problems in the change.", reasons: ["It writes outside the notes folder."], canRetry: false }, ...view(tasks) });
+      },
+    });
+    renderScreen();
+    fireEvent.click(within(await card("T-1 Save notes")).getByRole("button", { name: "Show diff" }));
+    expect(await screen.findByText("+export const save = 1;")).toBeTruthy();
+    fireEvent.click(within(await card("T-1 Save notes")).getByRole("button", { name: "Approve diff at abc123" }));
+    const note = await screen.findByText(/Jev sent the change back, so it was not approved/);
+    expect(note.textContent).toMatch(/It writes outside the notes folder\./);
+    expect(note.textContent).toMatch(/Reopened as T-1\.a2/);
+    // The sent-back change is no longer on the card.
+    expect(screen.queryByText("+export const save = 1;")).toBeNull();
+  });
+
+  test("without a Jev key nothing about Jev is shown", async () => {
+    routeFetch({ "GET /tasks": async () => ok(view([task({ stage: "ready-to-claim", worktree: jevTree, test: jevTest, approval: { by: "you" }, baseline: { passed: false }, jev: null })])) });
+    renderScreen();
+    const t1 = await card("T-1 Save notes");
+    expect(within(t1).queryByText(/Jev/)).toBeNull();
+    expect(within(t1).queryByRole("button", { name: /Jev/ })).toBeNull();
+  });
+
   describe("the contract", () => {
     const contract = (over = {}) => ({
       status: "signed",
@@ -307,6 +538,174 @@ describe("TasksScreen", () => {
       const t1 = await card("T-1 Save notes");
       fireEvent.click(within(t1).getByRole("button", { name: "Check the work" }));
       expect(await screen.findByText(/not on its list: src\/other\/other\.js/, { selector: "p.core-tasks-notice" })).toBeTruthy();
+    });
+  });
+});
+
+describe("TasksScreen: waiting on other tasks, updating from main, releasing file claims", () => {
+  const tree = { path: "/w", branch: "pp/T-2", base: "main", port: 5201 };
+
+  test("a task that waits for another says why and cannot be started", async () => {
+    const message = "T-2 cannot start yet because it needs another task finished and merged first: T-1 (Save notes) is not started. Start it once that one is done.";
+    routeFetch({ "GET /tasks": async () => ok(view([task({ id: "T-2", label: "T-2", title: "Export notes", waitingFor: { tasks: ["T-1"], message } }), task({ title: "Save notes" })])) });
+    renderScreen();
+    const t2 = await card("T-2 Export notes");
+    expect(within(t2).getByText(message)).toBeTruthy();
+    expect(within(t2).getByRole("button", { name: "Start worker" }).disabled).toBe(true);
+    expect(within(await card("T-1 Save notes")).getByRole("button", { name: "Start worker" }).disabled).toBe(false);
+  });
+
+  test("Bring this task up to date with main is offered with a worktree, sends nothing else, and shows the plain answer", async () => {
+    let calls = 0;
+    const fetch = routeFetch({
+      "GET /tasks": async () => ok(view([task({ id: "T-2", label: "T-2", title: "Export notes", stage: "building", status: "claimed", owner: "w", worktree: tree }), task({ title: "Save notes" })])),
+      "POST /tasks/T-2/update-from-main": async (init) => {
+        calls += 1;
+        expect(JSON.parse(init.body)).toEqual({});
+        return ok({ updated: true, message: "T-2 now has the 2 new changes from main, merged with its own work. Its own files were not touched. The work changed, so run Check the work again and approve the diff again.", tasks: [] });
+      },
+    });
+    renderScreen();
+    const t2 = await card("T-2 Export notes");
+    expect(within(await card("T-1 Save notes")).queryByRole("button", { name: /up to date with/ })).toBeNull();
+    fireEvent.click(within(t2).getByRole("button", { name: "Bring this task up to date with main" }));
+    expect(await screen.findByText(/T-2 now has the 2 new changes from main/)).toBeTruthy();
+    expect(calls).toBe(1);
+    expect(fetch.mock.calls.filter(([u, i]) => i?.method === "POST").length).toBe(1);
+  });
+
+  test("a refused update shows the reason in plain words", async () => {
+    routeFetch({
+      "GET /tasks": async () => ok(view([task({ id: "T-2", label: "T-2", title: "Export notes", stage: "building", status: "claimed", owner: "w", worktree: tree })])),
+      "POST /tasks/T-2/update-from-main": async () => refused("T-2 has changes that are not committed yet (src/a.ts). Let the worker commit them, or move them aside, then update again. Nothing in T-2's folder was changed."),
+    });
+    renderScreen();
+    const t2 = await card("T-2 Export notes");
+    fireEvent.click(within(t2).getByRole("button", { name: "Bring this task up to date with main" }));
+    expect(await screen.findByText(/not committed yet \(src\/a\.ts\)\. .* Nothing in T-2's folder was changed\./)).toBeTruthy();
+  });
+
+  test("Release file claims appears only for stale claims, names the reason, and posts once", async () => {
+    let tasks = [
+      task({ id: "T-2", label: "T-2", title: "Export notes", worktree: tree, claims: ["src/a.ts", "docs/**"], staleClaims: "T-2 has no worker on it" }),
+      task({ title: "Save notes", worktree: { ...tree, branch: "pp/T-1" }, claims: ["src/b.ts"], staleClaims: null }),
+    ];
+    const fetch = routeFetch({
+      "GET /tasks": async () => ok(view(tasks)),
+      "POST /tasks/T-2/release-claims": async () => {
+        tasks = [{ ...tasks[0], claims: [], staleClaims: null }, tasks[1]];
+        return ok({ released: ["src/a.ts", "docs/**"], message: "Released src/a.ts, docs/**. Other tasks can claim them now.", ...view(tasks) });
+      },
+    });
+    renderScreen();
+    const t2 = await card("T-2 Export notes");
+    expect(within(t2).getByText(/src\/a\.ts, docs\/\*\* \(T-2 has no worker on it, so these can be released\)/)).toBeTruthy();
+    expect(within(await card("T-1 Save notes")).queryByRole("button", { name: "Release file claims" })).toBeNull();
+    fireEvent.click(within(t2).getByRole("button", { name: "Release file claims" }));
+    expect(await screen.findByText(/Other tasks can claim them now/)).toBeTruthy();
+    expect(fetch.mock.calls.filter(([u, i]) => String(u).includes("release-claims") && i?.method === "POST").length).toBe(1);
+    await waitFor(() => expect(within(t2).queryByRole("button", { name: "Release file claims" })).toBeNull());
+  });
+});
+
+describe("TasksScreen queue and batch", () => {
+  const queueOf = (over) => ({ limit: 2, running: [], notStarted: [], waitingForYou: [], readyToMerge: [], done: 0, ...over });
+  const withQueue = (tasks, queue, settings = { limit: 2, autoMerge: false }) => ({ repo: REPO, tasks, queue, settings });
+  const diffOf = (id, commit, files, sensitive = []) => ({ task: id, base: "b", commit, files, sensitive, text: "+x", truncated: false });
+
+  test("shows the line: running of limit, what waits and why, and Start all starts only what can start", async () => {
+    let started = false;
+    const fetch = routeFetch({
+      "GET /tasks": async () => ok(withQueue([task({ id: "T-1", label: "T-1" }), task({ id: "T-2", label: "T-2", title: "Share" }), task({ id: "T-3", label: "T-3", title: "Export" })], queueOf({ notStarted: [{ id: "T-1", why: "Can start now." }, { id: "T-2", why: "Waiting for a free worker (limit 2)." }, { id: "T-3", why: "T-3 cannot start yet because it needs T-1." }] }))),
+      "POST /tasks/start-all": async (init) => {
+        started = true;
+        expect(JSON.parse(init.body)).toEqual({ model: "claude-sonnet-4-5" });
+        return ok({ ...withQueue([task()], queueOf()), started: [{ task: "T-1", title: "Save notes", worktree: "/w", branch: "pp/T-1", tokenFile: "/t", brief: "b", setup: "cd /w", start: "claude x", json: "{}", shell: "Terminal" }], refused: [] });
+      },
+    });
+    renderScreen();
+    const queue = await screen.findByRole("region", { name: "Worker queue" });
+    expect(within(queue).getByText(/0 of 2 workers running · 3 not started/)).toBeTruthy();
+    expect(within(queue).getByText("Waiting for a free worker (limit 2).")).toBeTruthy();
+    expect(within(queue).getByText(/cannot start yet/)).toBeTruthy();
+    fireEvent.click(within(queue).getByRole("button", { name: /Start all \(1\)/ }));
+    await waitFor(() => expect(started).toBe(true));
+    expect(await within(queue).findByText(/Started 1 worker; the commands are on each card/)).toBeTruthy();
+    expect(fetch.mock.calls.some(([u]) => String(u).includes("/tasks/start-all"))).toBe(true);
+  });
+
+  test("changing the limit and the auto-merge switch are saved", async () => {
+    const bodies = [];
+    routeFetch({
+      "GET /tasks": async () => ok(withQueue([task()], queueOf())),
+      "POST /tasks/settings": async (init) => { bodies.push(JSON.parse(init.body)); return ok(withQueue([task()], queueOf())); },
+    });
+    renderScreen();
+    const queue = await screen.findByRole("region", { name: "Worker queue" });
+    fireEvent.change(within(queue).getByLabelText("Workers at once"), { target: { value: "5" } });
+    await waitFor(() => expect(bodies).toEqual([{ limit: 5 }]));
+    fireEvent.click(within(queue).getByLabelText(/Merge right after I approve a diff with no flagged files/));
+    await waitFor(() => expect(bodies[1]).toEqual({ autoMerge: true }));
+  });
+
+  test("batch: clean diffs are offered together, a flagged one is only listed, and the result says what happened per task", async () => {
+    const t = (n, stage, extra = {}) => task({ id: `T-${n}`, label: `T-${n}`, title: `Task ${n}`, stage, status: "claimed", ...extra });
+    const tasks = [t(1, "review-diff"), t(2, "review-diff"), t(3, "review-diff"), t(4, "ready-to-merge", { diffApproval: { commit: "d".repeat(40) } })];
+    let sent;
+    routeFetch({
+      "GET /tasks": async () => ok(withQueue(tasks, queueOf({ waitingForYou: ["T-1", "T-2", "T-3"], readyToMerge: ["T-4"] }))),
+      "GET /tasks/T-1/diff": async () => ok(diffOf("T-1", "a".repeat(40), ["src/a.js", "tests/a.test.js"])),
+      "GET /tasks/T-2/diff": async () => ok(diffOf("T-2", "b".repeat(40), ["src/b.js"])),
+      "GET /tasks/T-3/diff": async () => ok(diffOf("T-3", "c".repeat(40), ["package.json"], ["package.json"])),
+      "POST /tasks/batch": async (init) => {
+        sent = JSON.parse(init.body);
+        return ok({ ...withQueue([], queueOf()), results: [{ id: "T-1", outcome: "merged", message: "Approved and merged." }, { id: "T-2", outcome: "failed", message: "The test fails after the merge (exit code 1).\n\nEnd of the test output:\nexpected 2 got 3" }, { id: "T-4", outcome: "merged", message: "Merged." }] });
+      },
+    });
+    renderScreen();
+    fireEvent.click(await screen.findByRole("button", { name: "Review 4 finished tasks together" }));
+    const panel = await screen.findByRole("region", { name: "Approve together" });
+    expect(within(panel).getByText("3 with no flagged files")).toBeTruthy();
+    expect(within(panel).getByText("1 to read yourself")).toBeTruthy();
+    expect(within(panel).getByText(/flagged: package.json/)).toBeTruthy();
+    fireEvent.click(within(panel).getByRole("button", { name: "Approve and merge these 3" }));
+    await waitFor(() => expect(sent).toBeTruthy());
+    expect(sent.items).toEqual([{ id: "T-1", commit: "a".repeat(40) }, { id: "T-2", commit: "b".repeat(40) }, { id: "T-4", commit: "d".repeat(40) }]);
+    const result = await screen.findByRole("status", { name: "Batch result" });
+    expect(within(result).getByText(/T-1 Merged\./)).toBeTruthy();
+    expect(within(result).getByText(/T-2 Failed\./)).toBeTruthy();
+    expect(result.textContent).toContain("expected 2 got 3");
+  });
+
+  test("a merge refused after the test failed shows the end of the test output", async () => {
+    const t = task({ id: "T-1", label: "T-1", stage: "ready-to-merge", status: "claimed", diffApproval: { commit: "a".repeat(40) }, worktree: { path: "/w", branch: "pp/T-1", base: "main", port: 5200 } });
+    routeFetch({
+      "GET /tasks": async () => ok(view([t])),
+      "POST /tasks/T-1/merge": async () => refused("The test fails after the merge (exit code 1); main was left untouched.\n\nEnd of the test output:\nexpected 2 got 3"),
+    });
+    renderScreen();
+    fireEvent.click(await screen.findByRole("button", { name: /Merge into main/ }));
+    const notice = await screen.findByText(/main was left untouched/);
+    expect(notice.textContent).toContain("expected 2 got 3");
+  });
+
+  describe("containment disclosure", () => {
+    const proposed = () => task({ stage: "test-proposed", worktree: { path: "/w", branch: "pp/T-1", base: "main", port: 5200 }, test: { command: "node t.mjs", files: ["t.mjs"], entry: "L-000007", by: { kind: "agent", id: "w", model: "m" } } });
+    test.each([["no containment field (older host / Windows)", undefined], ["not contained", { contained: false }]])("%s: approve-test card and screen say NOT contained", async (_n, containment) => {
+      routeFetch({ "GET /tasks": async () => ok({ ...view([proposed()]), ...(containment ? { containment } : {}) }) });
+      renderScreen();
+      const c = await card("T-1 Save notes");
+      expect(within(c).getByText("This command runs as you, with your files and network.")).toBeTruthy();
+      expect(screen.getAllByText("NOT contained").length).toBeGreaterThan(0);
+      expect(screen.queryByText("contained: bubblewrap")).toBeNull();
+    });
+    test("contained: shows the bubblewrap pill and not the runs-as-you sentence", async () => {
+      routeFetch({ "GET /tasks": async () => ok({ ...view([proposed()]), containment: { contained: true, by: "bubblewrap" } }) });
+      renderScreen();
+      await card("T-1 Save notes");
+      expect(screen.getByText("contained: bubblewrap")).toBeTruthy();
+      expect(screen.queryByText("NOT contained")).toBeNull();
+      expect(screen.queryByText("This command runs as you, with your files and network.")).toBeNull();
     });
   });
 });

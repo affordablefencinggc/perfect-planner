@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { realpathSync, statSync } from "node:fs";
 import path from "node:path";
-import { isLocalWindowsPath, isWithin, NO_CWD_SEARCH_ENV } from "../exec/index";
+import { isLocalWindowsPath, isWithin, NO_CWD_SEARCH_ENV, system32Tool, systemRoot } from "../exec/index";
 
 export interface TestRunOptions {
   /** Kill the whole process tree after this long. Default 10 minutes. */
@@ -148,9 +148,16 @@ export function isConclusiveFailure(run: TestRunResult): boolean {
   if (run.passed || run.timedOut || run.exitCode === null) return false;
   // Shell "cannot execute" / "command not found" (POSIX) and "not recognized" (cmd.exe) mean the test never ran.
   // cmd.exe under `cmd /d /s /c` can report exit 1 for a missing command, so the message is checked too.
-  if (isWindows) return run.exitCode !== 9009 && !/is not recognized as an internal or external command/i.test(run.outputTail);
-  return run.exitCode !== 126 && run.exitCode !== 127;
+  if (isWindows) {
+    if (run.exitCode === 9009 || /is not recognized as an internal or external command/i.test(run.outputTail)) return false;
+  } else if (run.exitCode === 126 || run.exitCode === 127) return false;
+  // The test tooling is missing (a fresh repo with no package.json): npm exits 254 and says so. Nothing ran.
+  if (run.exitCode === 254 || NO_TOOLING_OUTPUT.test(run.outputTail)) return false;
+  return true;
 }
+
+/** Output that means the project has no test tooling yet, not that a test failed. */
+const NO_TOOLING_OUTPUT = /ENOENT[\s\S]{0,200}package\.json|Could not read package\.json|Cannot find module '(?![A-Za-z]:[\\/])[^./\\'][^']*'|no package\.json/i;
 
 const SHELL_BUILTINS = new Set(isWindows
   ? ["assoc", "break", "call", "cd", "chdir", "cls", "color", "copy", "date", "del", "dir", "echo", "endlocal", "erase", "exit", "for", "ftype", "goto", "if", "md", "mkdir", "mklink", "move", "path", "popd", "prompt", "pushd", "rd", "rem", "ren", "rename", "rmdir", "set", "setlocal", "shift", "start", "time", "title", "type", "ver", "verify", "vol"]
@@ -236,22 +243,38 @@ export function commandExists(command: string, cwd: string, env: NodeJS.ProcessE
 }
 
 /**
+ * Windows: end the whole tree with the system's own taskkill, found through the shared SystemRoot rule (a SystemRoot
+ * that is not a local drive-letter path is ignored). taskkill gets SystemRoot in its own environment, because it
+ * does not start without it, and any exit other than "done" or "already gone" (128) falls back to killing the child
+ * itself. Exported for tests, which pass a stand-in spawn.
+ */
+export function killWindowsTree(child: ChildProcess, spawnImpl: typeof spawn = spawn, env: NodeJS.ProcessEnv = process.env): Promise<void> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = (kill: boolean) => {
+      if (settled) return;
+      settled = true;
+      if (kill) child.kill();
+      resolve();
+    };
+    try {
+      const killer = spawnImpl(system32Tool("taskkill.exe", env), ["/pid", String(child.pid), "/T", "/F"], { windowsHide: true, shell: false, stdio: "ignore", env: { ...env, SystemRoot: systemRoot(env) } });
+      killer.on("error", () => done(true));
+      killer.on("exit", (code) => done(code !== 0 && code !== 128));
+    } catch {
+      done(true);
+    }
+  });
+}
+
+/**
  * Kill the child and everything it started. Resolves once the kill has been carried out (on Windows,
  * when taskkill exits), so a caller can wait before removing the folder the tree was running in.
  */
 export function killTree(child: ChildProcess): Promise<void> {
   const pid = child.pid;
   if (pid === undefined) return Promise.resolve();
-  if (isWindows) {
-    return new Promise((resolve) => {
-      const killer = spawn(path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "taskkill.exe"), ["/pid", String(pid), "/T", "/F"], { windowsHide: true, shell: false, stdio: "ignore" });
-      killer.on("error", () => {
-        child.kill();
-        resolve();
-      });
-      killer.on("exit", () => resolve());
-    });
-  }
+  if (isWindows) return killWindowsTree(child);
   try {
     // The child was spawned detached, so it leads its own process group.
     process.kill(-pid, "SIGKILL");

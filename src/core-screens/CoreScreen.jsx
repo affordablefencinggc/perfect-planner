@@ -116,7 +116,7 @@ export function OwnerNotice() {
       <div>
         <strong>{problem}</strong>
         <p>{OWNER_NEXT[owner.state] ?? OWNER_NEXT.default}</p>
-        {owner.reason && <AdvancedOnly as="p">{owner.reason}</AdvancedOnly>}
+        {owner.reason && (owner.state === "unavailable" ? <p>{owner.reason}</p> : <AdvancedOnly as="p">{owner.reason}</AdvancedOnly>)}
       </div>
     </div>
   );

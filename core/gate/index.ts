@@ -9,6 +9,7 @@ export {
   attemptId,
   nextAttemptId,
   sensitiveChanges,
+  unalteredPins,
   verifyMergeCommit,
   testSupportFiles,
   testRoots,

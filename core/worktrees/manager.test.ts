@@ -48,6 +48,24 @@ describe("WorktreeManager", () => {
     await expect(manager.create({ taskId: "T-2", actor: person })).rejects.toThrow(/already exists/);
   }, SLOW);
 
+  it("clears a worktree add that never finished, but never a branch that holds work", async () => {
+    // What a killed add leaves: git's entry for the folder, the folder, and the branch at the base commit.
+    const folder = path.join(repo.root, ".perfect-planner", "worktrees", "T-5");
+    await git(repo.root, ["worktree", "add", "-b", "pp/T-5", folder, "main"]);
+    const again = await manager.create({ taskId: "T-5", actor: person });
+    expect(again.branch).toBe("pp/T-5");
+    expect(await git(repo.root, ["worktree", "list", "--porcelain"])).not.toMatch(/locked/);
+    await manager.remove("T-5");
+    // The same leftover with a commit of someone's own on the branch is left exactly as it is.
+    const kept = path.join(repo.root, ".perfect-planner", "worktrees", "T-6");
+    await git(repo.root, ["worktree", "add", "-b", "pp/T-6", kept, "main"]);
+    writeFileSync(path.join(kept, "mine.txt"), "work\n");
+    await commitAll(kept, "my work");
+    await expect(manager.create({ taskId: "T-6", actor: person })).rejects.toThrow(/already exists/);
+    expect(readFileSync(path.join(kept, "mine.txt"), "utf8")).toBe("work\n");
+    expect(await git(repo.root, ["rev-list", "--count", "main..pp/T-6"])).toBe("1");
+  }, SLOW);
+
   it("relies on git to refuse checking out one branch in two worktrees", async () => {
     const info = await manager.create({ taskId: "T-3", actor: person });
     const result = await runGit(repo.root, ["worktree", "add", path.join(path.dirname(repo.root), "elsewhere"), info.branch]);
@@ -66,6 +84,17 @@ describe("WorktreeManager", () => {
       await expect(manager.create({ taskId: "T-4", actor: person })).rejects.toThrow(/3 worktrees are already running/);
     } finally {
       blocker.close();
+    }
+  }, SLOW);
+
+  it("never gives two projects open at once the same dev-server port", async () => {
+    const other = await makeRepo({ "README.md": "other\n" });
+    try {
+      const second = new WorktreeManager({ repoRoot: other.root, ledger: await memoryLedger(), install: false, maxParallel: 3, ports: [43100, 43199] });
+      const made = await Promise.all([manager.create({ taskId: "T-1", actor: person }), second.create({ taskId: "T-1", actor: person }), manager.create({ taskId: "T-2", actor: person }), second.create({ taskId: "T-2", actor: person })]);
+      expect(new Set(made.map((info) => info.port)).size).toBe(4);
+    } finally {
+      other.cleanup();
     }
   }, SLOW);
 

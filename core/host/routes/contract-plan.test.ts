@@ -171,12 +171,16 @@ describe("plan approval signs the contracts", () => {
     const view = await get("/planning");
     const ok = await post("/planning/approve", { fingerprint: view.fingerprint });
     expect(ok.status).toBe(200);
-    const releaseTask = ok.body.result.tasks["K-first-release"] as string;
+    // The closing task waits for every other task, so the first task with nothing to wait for is the one to start.
+    const roadmap = await get("/planning/roadmap");
+    const first = roadmap.phases.flatMap((p: any) => p.tasks).find((t: any) => t.task && !t.own && t.dependsOn.length === 0);
+    const releaseTask = first.task as string;
+    const files = first.contract.allowedFiles as string[];
     const dispatched = await hostCall(ctx.base, "POST", `/tasks/${releaseTask}/dispatch${P}`, {});
     expect(dispatched.status, JSON.stringify(dispatched.body)).toBe(200);
-    expect(dispatched.body.result.brief).toContain("You may change only: CHANGELOG.md, docs/release/**");
+    expect(dispatched.body.result.brief).toContain(`You may change only: ${files.join(", ")}`);
     const created = project().entries().find((e) => e.type === "worktree.created" && e.subject === releaseTask)!;
-    expect(created.data).toMatchObject({ claims: ["CHANGELOG.md", "docs/release/**"] });
+    expect(created.data).toMatchObject({ claims: files });
     const view2 = contractOf(project().entries(), releaseTask)!;
     expect(view2).toMatchObject({ status: "signed", plan: "P-1" });
   }, 60_000);

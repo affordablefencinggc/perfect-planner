@@ -69,6 +69,7 @@
   },
   "bundle": {
     "active": true,
+    "licenseFile": "../LICENSE",
     "targets": ["msi", "nsis"],
     "resources": { "../dist/desktop-host": "desktop-host" },
     "icon": [
@@ -78,6 +79,10 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "linux": {
+      "deb": { "depends": ["libsecret-tools"] },
+      "rpm": { "depends": ["libsecret"] }
+    },
     "macOS": {
       "signingIdentity": "-"
     },

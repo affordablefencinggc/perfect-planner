@@ -709,6 +709,18 @@ describe("runTestCommand", () => {
     expect(isConclusiveFailure({ ...base, passed: true, exitCode: 0 })).toBe(false);
   });
 
+  it("a missing package.json or module is not a failing test", () => {
+    const base = { passed: false, timedOut: false, durationMs: 1, outputTail: "" };
+    expect(isConclusiveFailure({ ...base, exitCode: 254, outputTail: "npm error enoent Could not read package.json" })).toBe(false);
+    expect(isConclusiveFailure({ ...base, exitCode: 254 })).toBe(false);
+    expect(isConclusiveFailure({ ...base, exitCode: 1, outputTail: "npm error code ENOENT\nnpm error path /x/package.json" })).toBe(false);
+    expect(isConclusiveFailure({ ...base, exitCode: 1, outputTail: "Error: Cannot find module 'vitest'" })).toBe(false);
+    expect(isConclusiveFailure({ ...base, exitCode: 1, outputTail: "Error: Cannot find module './add'" })).toBe(true);
+    expect(isConclusiveFailure({ ...base, exitCode: 1, outputTail: "Error: Cannot find module 'D:\\a\\repo\\nope.js'" })).toBe(true);
+    expect(isConclusiveFailure({ ...base, exitCode: 1, outputTail: "Error: Cannot find module '/tmp/repo/nope.js'" })).toBe(true);
+    expect(isConclusiveFailure({ ...base, exitCode: 1, outputTail: "FAIL  add.test.js\nAssertionError: expected 1 to be 2" })).toBe(true);
+  });
+
   it("finds a missing program before running it, whatever language the shell speaks", async () => {
     const dir = scratch();
     const env = scrubbedEnv(process.env);
@@ -780,3 +792,52 @@ setInterval(() => {}, 1000);
     expect(alive()).toBe(false);
   }, SLOW);
 });
+
+describe("a merge that already landed before the host was killed", () => {
+  async function proven() {
+    const ctx = await approved();
+    await ctx.addWorktree();
+    writeFiles(ctx.worktree, { "feature.txt": "enabled\n" });
+    await commitAll(ctx.worktree, "enable feature");
+    expect((await ctx.gate.prove("T-1", ctx.worktree)).ok).toBe(true);
+    const tip = await head(ctx.root, ctx.branch);
+    expect(ctx.gate.approveDiff("T-1", JEV, tip).ok).toBe(true);
+    return { ...ctx, tip };
+  }
+  const merge = (ctx: { root: string; gate: TestGate; branch: string }) => ctx.gate.mergeAndVerify("T-1", { repoRoot: ctx.root, branch: ctx.branch, integrationBranch: "main", actor: OWNER });
+
+  it("finishes the ledger for the approved merge once, and a second try is refused", async () => {
+    const ctx = await proven();
+    expect(ctx.gate.approveMerge("T-1", OWNER, ctx.tip).ok).toBe(true);
+    await git(ctx.root, ["merge", "--no-ff", "-q", "-m", "Merge pp/T-1", ctx.branch]);
+    const landed = await head(ctx.root, "main");
+    const result = await merge(ctx);
+    expect(result).toMatchObject({ ok: true, mergeCommit: landed });
+    expect(await head(ctx.root, "main")).toBe(landed);
+    const written = types(ctx.ledger);
+    expect(written.filter((type) => type === "merge.done")).toHaveLength(1);
+    expect(written.filter((type) => type === "task.done")).toHaveLength(1);
+    expect(ctx.gate.state("T-1").stage).toBe("done");
+    expect(await merge(ctx)).toMatchObject({ ok: false, reason: expect.stringContaining("already done") });
+    expect(types(ctx.ledger)).toEqual(written);
+  });
+
+  it("does nothing for a head the person never approved", async () => {
+    const ctx = await proven();
+    await git(ctx.root, ["merge", "--no-ff", "-q", "-m", "Merge pp/T-1", ctx.branch]);
+    expect(await merge(ctx)).toMatchObject({ ok: false, reason: expect.stringContaining("has not been approved by a person") });
+    expect(types(ctx.ledger)).not.toContain("task.done");
+  });
+
+  it("does not trust a merge whose content is not the clean merge of the approved commit", async () => {
+    const ctx = await proven();
+    expect(ctx.gate.approveMerge("T-1", OWNER, ctx.tip).ok).toBe(true);
+    await git(ctx.root, ["merge", "--no-ff", "--no-commit", "-q", ctx.branch]);
+    writeFiles(ctx.root, { "extra.txt": "smuggled\n" });
+    await git(ctx.root, ["add", "-A"]);
+    await git(ctx.root, ["commit", "-q", "-m", "Merge pp/T-1 plus more"]);
+    expect(await merge(ctx)).toMatchObject({ ok: false });
+    expect(types(ctx.ledger)).not.toContain("task.done");
+  });
+});
+

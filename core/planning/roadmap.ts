@@ -3,7 +3,8 @@
 
 import { isAuthoritative, type Actor, type Ledger, type LedgerEntry } from "../ledger/index";
 import { appendNumbered } from "../numbering/index";
-import { contractDigest, draftContract, normalizeContract } from "./contract";
+import { contractDigest, draftContract, normalizeContract, repoAwareDoneWhen, verifyDoneWhen } from "./contract";
+import { groupKey, splitByRepo } from "../repos/index";
 import { nodeArea } from "./mindmap";
 import type { RepoIndex } from "./repo";
 import type { MindMap, MindNode, PhaseId, Roadmap, RoadmapPhase, RoadmapTask, TaskContract } from "./types";
@@ -31,6 +32,13 @@ export function phaseOf(node: MindNode): PhaseId {
   if (area === "stack" || area === "data" || area === "auth") return "foundation";
   if (node.kind === "integration") return "integrations";
   return "core";
+}
+
+/** At most this many parts get a verify task, so a big existing repo does not bury the plan. */
+export const MAX_VERIFY_TASKS = 8;
+
+export function verifyKey(nodeId: string): string {
+  return `V-${nodeId}`;
 }
 
 export function taskKey(nodeId: string): string {
@@ -142,12 +150,14 @@ export function buildRoadmap(map: MindMap, opts: { owner?: string; repo?: RepoIn
       },
       opts.repo,
     );
+    const real = repoAwareDoneWhen(drafted.contract.allowedFiles, opts.repo, doneWhen);
+    if (real !== doneWhen) drafted.contract = { ...drafted.contract, doneWhen: real };
     return {
       key: taskKey(node.id),
       title: titleOf(node),
       phase: phaseOf(node),
       owner,
-      doneWhen,
+      doneWhen: real,
       node: node.id,
       change: node.kind === "risk" ? "fix" : "feature",
       dependsOn: ordered.filter((n) => deps.has(n.id)).map((n) => taskKey(n.id)),
@@ -156,7 +166,27 @@ export function buildRoadmap(map: MindMap, opts: { owner?: string; repo?: RepoIn
     };
   });
 
-  const releaseDone = "`npm test` passes on a clean checkout and a test proves the release entry (R-1, v1.0.0) is in the ledger with its stamp.";
+  // What the repo already has and tests: a verify-only task runs those tests, so "already built" is proven, not assumed.
+  for (const node of all.filter((n) => n.existing && n.kind !== "risk").slice(0, MAX_VERIFY_TASKS)) {
+    const doneWhen = verifyDoneWhen(node.label, opts.repo);
+    if (!doneWhen) continue;
+    const drafted = draftContract({ kind: "verify", label: node.label, parts: [], doneWhen }, opts.repo);
+    tasks.push({
+      key: verifyKey(node.id),
+      title: `Verify ${node.label} still works`,
+      phase: "release",
+      owner,
+      doneWhen,
+      node: node.id,
+      change: "fix",
+      dependsOn: [],
+      contract: drafted.contract,
+      contractFlags: drafted.flags,
+    });
+  }
+
+  const suite = opts.repo?.tests?.suite ?? "npm test";
+  const releaseDone = `\`${suite}\` passes on a clean checkout and a test proves the release entry (R-1, v1.0.0) is in the ledger with its stamp.`;
   const release = draftContract({ kind: "release", label: "Cut the first release", parts: [], doneWhen: releaseDone }, opts.repo);
   tasks.push({
     key: FINAL_TASK_KEY,
@@ -213,28 +243,37 @@ export function writeRoadmap(ledger: Ledger, actor: Actor, roadmap: Roadmap): Re
     contracts.set(task.key, parsed.contract);
   }
   const numbers: Record<string, string> = {};
+  /** Every number a key became: a task over several repos is one task per repo, and what waited on it waits on all of them. */
+  const parts: Record<string, string[]> = {};
   for (const task of ordered) {
     const contract = contracts.get(task.key)!;
-    const entry = appendNumbered(ledger, {
-      actor,
-      type: "task.created",
-      summary: task.title,
-      refs: [],
-      data: {
-        change: task.change,
-        phase: task.phase,
-        owner: task.owner,
-        doneWhen: task.doneWhen,
-        node: task.node,
-        dependsOn: task.dependsOn.map((d) => numbers[d]!),
-        key: task.key,
-        source: "planning",
-        contract,
-        contractDigest: contractDigest(contract),
-        contractFlags: task.contractFlags ?? [],
-      },
-    });
-    numbers[task.key] = entry.subject;
+    const dependsOn = [...new Set(task.dependsOn.flatMap((d) => parts[d]!))];
+    for (const part of splitByRepo(task.key, task.title, task.repos)) {
+      const entry = appendNumbered(ledger, {
+        actor,
+        type: "task.created",
+        summary: part.title,
+        refs: [],
+        data: {
+          change: task.change,
+          phase: task.phase,
+          owner: task.owner,
+          doneWhen: task.doneWhen,
+          node: task.node,
+          dependsOn,
+          key: task.key,
+          source: "planning",
+          contract,
+          contractDigest: contractDigest(contract),
+          contractFlags: task.contractFlags ?? [],
+          ...(part.repo ? { repo: part.repo } : {}),
+          ...(part.group ? { group: groupKey(part.group) } : {}),
+          ...(task.template ? { template: task.template } : {}),
+        },
+      });
+      numbers[task.key] ??= entry.subject;
+      (parts[task.key] ??= []).push(entry.subject);
+    }
   }
   return numbers;
 }

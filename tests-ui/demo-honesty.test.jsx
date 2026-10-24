@@ -75,7 +75,9 @@ describe("Demo controls are honest about being sample data", () => {
     fireEvent.click(handle);
     await user.click(screen.getByRole("button", { name: /Merge queue/ }));
     const run = screen.getByRole("button", { name: /Run merge gate/ });
-    expect(run.disabled).toBe(true);
+    expect(run.getAttribute("aria-disabled")).toBe("true");
+    await user.click(run);
+    expect(container.querySelector(".toast").textContent).toContain("there is no repository to merge");
     expect(run.closest(".merge-conveyor").textContent).toContain("Demo only — sample data");
   });
 
@@ -92,14 +94,18 @@ describe("Demo controls are honest about being sample data", () => {
 
   test("the Demo inspector shows only what the sample item carries and cannot approve", () => {
     const node = phases[2].nodes[0];
-    const { container } = render(<InspectorDrawer open demoMode onClose={vi.fn()} selected={node} />);
+    const onToast = vi.fn();
+    const { container } = render(<InspectorDrawer open demoMode onClose={vi.fn()} selected={node} onToast={onToast} />);
     const dialog = screen.getByRole("dialog", { name: "Work item inspector" });
     expect(within(dialog).getByText(node.owner)).toBeTruthy();
     expect(within(dialog).getByText(node.branch)).toBeTruthy();
-    expect(container.textContent).not.toContain("Worktree");
+    // Worktree is laid out like a real task but never invented for a sample item.
+    expect(within(dialog).getByText("Worktree").nextElementSibling.textContent).toBe("Not recorded in the sample");
     for (const invented of ["B04 · Architecture contract", "src/sync/plan.ts", "plan-registry:v2", "Wave 4", "NO-GO"]) expect(container.textContent).not.toContain(invented);
     const approve = within(dialog).getByRole("button", { name: /Approve next gate/ });
-    expect(approve.disabled).toBe(true);
+    expect(approve.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(approve);
+    expect(onToast).toHaveBeenCalledWith(expect.stringContaining("not recorded in the Demo"), "warning");
     expect(dialog.textContent).toContain("Demo only — sample data");
     expect(dialog.textContent).toContain("None of its checks are proven yet");
   });

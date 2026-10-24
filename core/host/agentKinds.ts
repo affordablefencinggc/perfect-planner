@@ -4,10 +4,13 @@
 export type AgentKind = "claude" | "gemini" | "codex";
 
 /** npmEntry: the script behind the npm .cmd shim on Windows, so it runs under node with no cmd.exe. */
-export const AGENTS: Record<AgentKind, { cli: string; label: string; npmEntry: string }> = {
-  claude: { cli: "claude", label: "Claude Code", npmEntry: "@anthropic-ai/claude-code/cli.js" },
-  gemini: { cli: "gemini", label: "Gemini CLI", npmEntry: "@google/gemini-cli/bundle/gemini.js" },
-  codex: { cli: "codex", label: "Codex CLI", npmEntry: "@openai/codex/bin/codex.js" },
+export const AGENTS: Record<AgentKind, { cli: string; label: string; npmEntry: string; promptArgs: string[] }> = {
+  claude: { cli: "claude", label: "Claude Code", npmEntry: "@anthropic-ai/claude-code/cli.js", promptArgs: [] },
+  gemini: { cli: "gemini", label: "Gemini CLI", npmEntry: "@google/gemini-cli/bundle/gemini.js", promptArgs: ["-i"] },
+  codex: { cli: "codex", label: "Codex CLI", npmEntry: "@openai/codex/bin/codex.js", promptArgs: [] },
 };
+
+/** What the person would have typed after starting the agent. */
+export const CHECK_IN_PROMPT = "check in with Perfect Planner";
 
 export const AGENT_KINDS = Object.keys(AGENTS) as AgentKind[];

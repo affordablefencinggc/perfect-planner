@@ -169,7 +169,9 @@ function windowsProvider(run: ToolRunner, service: string): JevKeyProvider {
     status,
     async read() {
       const result = await ps("read");
-      if (result.code === 2 || result.missing) return null;
+      // No PowerShell is a store problem, not a key that was never saved (the tool is part of Windows).
+      if (result.missing) throw new Error("Windows Credential Manager could not read the Jev key: PowerShell is not available.");
+      if (result.code === 2) return null;
       if (result.code !== 0) fail("Windows Credential Manager", "read the Jev key", result);
       const key = Buffer.from(result.stdout.trim(), "base64").toString("utf8");
       return key ? new SecretKey(key) : null;

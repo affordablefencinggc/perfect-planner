@@ -17,8 +17,10 @@ import type { CoreProject } from "../project";
 import { AGENT_KINDS, type AgentKind } from "../agentKinds";
 import { HttpError, type Router } from "../router";
 import { writeOwnerOnlyFile } from "../tokenFile";
+import { waitingQuestions } from "./decisions";
 import { localPersonId } from "./people";
 import { repoState } from "./tasks";
+import { extraRepoRoots } from "../../repos/index";
 import { chosenRepoRoot, rootsFileFor } from "../protectedRoots";
 
 export const AGENT_SERVER_NAME = "perfect-planner-core";
@@ -45,6 +47,10 @@ export interface AgentView {
   person: string;
   task?: string;
   connectedAt?: string;
+  /** When the agent last called a tool. */
+  lastSeen?: string;
+  /** Not heard from lately: the header no longer counts it as checked in. */
+  quiet?: boolean;
   connection?: string;
   revoked?: boolean;
 }
@@ -165,7 +171,8 @@ export const rootsFilePath = rootsFileFor;
  */
 export function projectRoots(project: CoreProject, extra: readonly (string | undefined)[] = []): string[] {
   const manager = project.state.get("tasks.worktrees") as { repoRoot?: unknown; worktreeRoot?: unknown } | undefined;
-  const roots = [project.root, chosenRepoRoot(project.root), manager?.repoRoot, manager?.worktreeRoot, ...extra];
+  const all = project.state.get("tasks.worktrees.all") as Map<string, { repoRoot: string; worktreeRoot: string }> | undefined;
+  const roots = [project.root, chosenRepoRoot(project.root), ...extraRepoRoots(project.root), manager?.repoRoot, manager?.worktreeRoot, ...[...(all?.values() ?? [])].flatMap((m) => [m.repoRoot, m.worktreeRoot]), ...extra];
   return [...new Set(roots.filter((root): root is string => typeof root === "string" && path.isAbsolute(root)))];
 }
 
@@ -189,6 +196,7 @@ function viewAgents(project: CoreProject): { agents: AgentView[]; connections: C
   const now = new Date().toISOString();
   const linked = new Map<string, string>();
 
+  const liveIds = new Set(project.service.liveAgents().map((a) => a.id));
   const agents = project.service.listAgents().map((record): AgentView => {
     if (!firstSeen.has(record.id)) firstSeen.set(record.id, now);
     const token = tokens.get(record.id);
@@ -201,6 +209,8 @@ function viewAgents(project: CoreProject): { agents: AgentView[]; connections: C
       role: record.role,
       person: record.person,
       connectedAt: firstSeen.get(record.id)!,
+      ...(project.service.seenAt(record.id) ? { lastSeen: project.service.seenAt(record.id)! } : {}),
+      ...(liveIds.has(record.id) ? {} : { quiet: true }),
       ...(record.model ? { model: record.model } : {}),
       ...(record.task ? { task: record.task } : {}),
       ...(conn ? { connection: conn.id } : {}),
@@ -221,7 +231,7 @@ export function registerAgentRoutes(router: Router): void {
   router.get("/agents", ({ project, host }) => {
     const url = project.state.get(BRIDGE_URL) as string | undefined;
     const entry = agentEntryPath();
-    return { bridge: { enabled: host.bridgeEnabled, ...(url ? { url } : {}) }, skillLine: skillLine(entry.path), agentBuilt: entry.built, ...viewAgents(project) };
+    return { bridge: { enabled: host.bridgeEnabled, ...(url ? { url } : {}) }, skillLine: skillLine(entry.path), agentBuilt: entry.built, waiting: waitingQuestions(project), ...viewAgents(project) };
   });
 
   router.post("/agents/connect", async ({ project, host, body }) => {

@@ -75,6 +75,8 @@ export function parsePeopleEvent(raw: unknown): PeopleEvent | undefined {
       return raw as PeopleEvent;
     case "doc.removed":
       return isSlug(e.doc) ? (raw as PeopleEvent) : undefined;
+    case "task.assigned":
+      return typeof e.task === "string" && /^T-\d+$/.test(e.task) && isSlug(e.person) ? (raw as PeopleEvent) : undefined;
   }
   return undefined;
 }
@@ -104,6 +106,8 @@ export interface Roster {
   /** Current members, in the order they joined. */
   members: Map<string, MemberState>;
   docs: Map<string, DocState>;
+  /** Task number -> the member it is assigned to (the latest assignment wins). */
+  assignments: Map<string, string>;
   /** Agents of people who were removed; they may no longer write. */
   retiredAgents: Set<string>;
   /**
@@ -122,7 +126,7 @@ export interface Roster {
 
 /** `owner` is `ledger.owner`, a principal such as "person:looplet-spare". */
 export function emptyRoster(owner?: string): Roster {
-  const roster: Roster = { members: new Map(), docs: new Map(), retiredAgents: new Set() };
+  const roster: Roster = { members: new Map(), docs: new Map(), assignments: new Map(), retiredAgents: new Set() };
   if (owner?.startsWith("person:")) roster.pinnedOwner = owner.slice("person:".length);
   return roster;
 }
@@ -139,7 +143,7 @@ export function applyEntry(roster: Roster, entry: LedgerEntry): void {
   // Only an entry the ledger verified as written by a person can change people.
   const refused = event ? !isAuthoritative(entry, { personOnly: true }) || peopleOpRefusal(entry, roster) !== null : true;
   if (!event || refused) return;
-  const { members, docs, retiredAgents } = roster;
+  const { members, docs, assignments, retiredAgents } = roster;
   if ("agents" in event && event.agents) for (const agent of event.agents) retiredAgents.delete(agent);
   switch (event.op) {
     case "member.added":
@@ -165,6 +169,8 @@ export function applyEntry(roster: Roster, entry: LedgerEntry): void {
     case "member.removed":
       for (const agent of members.get(event.person)?.agents ?? []) retiredAgents.add(agent);
       members.delete(event.person);
+      // Their tasks go back to nobody; the owner hands them on again.
+      for (const [task, person] of assignments) if (person === event.person) assignments.delete(task);
       return;
     case "photo.set": {
       const m = members.get(event.person);
@@ -192,6 +198,9 @@ export function applyEntry(roster: Roster, entry: LedgerEntry): void {
     }
     case "doc.removed":
       docs.delete(event.doc);
+      return;
+    case "task.assigned":
+      assignments.set(event.task, event.person);
       return;
   }
 }
@@ -272,6 +281,13 @@ export function peopleOpRefusal(draft: Pick<EntryDraft, "actor" | "data">, roste
         }
         if (!event.file.includes(`-${event.sha256.slice(0, 12)}.`)) return "the photo file name does not match its fingerprint";
       }
+      return null;
+    }
+    case "task.assigned": {
+      if (!isOwner) return "only the owner gives tasks to people";
+      const target = roster.members.get(event.person);
+      if (!target) return `${event.person} is not on the project`;
+      if (target.role === "viewer") return `${target.name} is a viewer and cannot be given work`;
       return null;
     }
     case "doc.shared":

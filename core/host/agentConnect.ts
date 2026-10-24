@@ -16,8 +16,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { findExecutable, isWithin, NO_CWD_SEARCH_ENV, registeredRoots } from "../exec/index";
-import { AGENT_KINDS, AGENTS, type AgentKind } from "./agentKinds";
+import { findExecutable, NO_CWD_SEARCH_ENV } from "../exec/index";
+import { agentLaunch } from "./agentLaunch";
+import { AGENT_KINDS, AGENTS, CHECK_IN_PROMPT, type AgentKind } from "./agentKinds";
 import { childEnv, protectFor } from "./protectedRoots";
 import { isNetworkPath } from "./tokenFile";
 
@@ -146,78 +147,7 @@ export function installSkill(plan: Pick<ConnectPlan, "skillFrom" | "skillTo">, h
   }
 }
 
-export interface Launch {
-  command: string;
-  args: string[];
-}
-
-/**
- * How to start an agent CLI (claude, gemini, codex) without a shell, by core/exec's finder, so one planted in the project,
- * the picked repo or a PATH folder that links into either never runs. On Windows a claude.exe runs as
- * itself; on macOS and Linux an npm-installed claude (a node script) runs under this Node, never
- * through its `env node` shebang; an npm shim (claude.cmd) is never run: its package entry runs under this Node instead, and only
- * when that entry also lies outside every protected folder. Null when no usable Claude Code is found.
- */
-export function agentLaunch(
-  agent: AgentKind,
-  args: string[],
-  env: NodeJS.ProcessEnv,
-  cwd: string,
-  protect: readonly string[],
-  platform: NodeJS.Platform = process.platform,
-): Launch | null {
-  const { cli, npmEntry } = AGENTS[agent];
-  const program = findExecutable(cli, env, cwd, platform, protect, { windowsExtensions: [".exe", ".cmd"] });
-  if (!program) return null;
-  if (platform !== "win32") return nodeScript(program) ? { command: process.execPath, args: [program, ...args] } : { command: program, args };
-  if (!/\.cmd$/i.test(program)) return { command: program, args };
-  // The npm package entry the shim (claude.cmd, gemini.cmd, codex.cmd) starts; it runs under this Node instead.
-  const entry = path.join(path.dirname(program), "node_modules", ...npmEntry.split("/"));
-  let real: string;
-  try {
-    if (!fs.statSync(entry).isFile()) return null;
-    real = fs.realpathSync.native(entry);
-  } catch {
-    return null;
-  }
-  const roots = [cwd, ...protect, ...registeredRoots()];
-  if (roots.some((root) => isWithin(root, entry) || isWithin(root, real) || isWithin(safeReal(root), real))) return null;
-  return { command: process.execPath, args: [entry, ...args] };
-}
-
-/** Claude Code's launch (kept for callers that only start Claude Code). */
-export function claudeLaunch(args: string[], env: NodeJS.ProcessEnv, cwd: string, protect: readonly string[], platform: NodeJS.Platform = process.platform): Launch | null {
-  return agentLaunch("claude", args, env, cwd, protect, platform);
-}
-
-/**
- * True for an npm-installed claude on macOS and Linux: a link to a .js file or a script starting
- * `#!/usr/bin/env node`. Its shebang would look node up on PATH, where a planted node could sit, so
- * it runs under this Node instead.
- */
-function nodeScript(program: string): boolean {
-  try {
-    if (/\.[cm]?js$/i.test(fs.realpathSync.native(program))) return true;
-    const fd = fs.openSync(program, "r");
-    try {
-      const head = Buffer.alloc(128);
-      const read = fs.readSync(fd, head, 0, head.length, 0);
-      return /^#!\s*\S*\/env\s+(?:-S\s+)?node(?:\s|$)/.test(head.subarray(0, read).toString("utf8"));
-    } finally {
-      fs.closeSync(fd);
-    }
-  } catch {
-    return false;
-  }
-}
-
-function safeReal(p: string): string {
-  try {
-    return fs.realpathSync.native(p);
-  } catch {
-    return path.resolve(p);
-  }
-}
+export { agentLaunch, claudeLaunch, type Launch } from "./agentLaunch";
 
 /** Where connect.mjs runs: the terminal's folder and environment, and where it writes. */
 export interface ConnectIo {
@@ -228,6 +158,19 @@ export interface ConnectIo {
   here: string;
   out(text: string): void;
   err(text: string): void;
+  /** How long one agent CLI call may take before connect gives up on it (default 30 s). */
+  timeoutMs?: number;
+  /** True when a person is at this terminal (stdin and stdout are a TTY): connect then starts the agent for them. */
+  interactive?: boolean;
+  /** Starts the agent with the terminal attached and returns its exit code; null when it could not start. Defaults to a real spawn. */
+  startAgent?: (agent: AgentKind, tokenFile: string, io: ConnectIo) => number | null;
+}
+
+const CLI_TIMEOUT_MS = 30_000;
+/** io.timeoutMs, else PP_CONNECT_CLI_TIMEOUT_MS (so a test can shorten it through the real line), else 30 s. */
+function cliTimeout(io: ConnectIo): number {
+  const fromEnv = Number(io.env.PP_CONNECT_CLI_TIMEOUT_MS);
+  return io.timeoutMs ?? (Number.isFinite(fromEnv) && fromEnv > 0 ? fromEnv : CLI_TIMEOUT_MS);
 }
 
 /** Runs the agent's CLI from the project folder (its mcp add registers that folder). */
@@ -242,7 +185,38 @@ function run(agent: AgentKind, args: string[], tokenFile: string | null, io: Con
     // The agent's own lookups (git, node) see only PATH folders outside the protected roots; on Windows
     // nothing is ever resolved from the current folder either.
     env: { ...childEnv(io.env, { cwd: io.cwd, protect }), ...NO_CWD_SEARCH_ENV },
+    timeout: cliTimeout(io),
+    killSignal: "SIGKILL",
   });
+}
+
+/** Starts the agent in this terminal, in this folder, already told to check in; same finder and protected folders as the connect calls. */
+function startAgent(agent: AgentKind, tokenFile: string, io: ConnectIo): number | null {
+  const protect = protectFor(tokenFile);
+  const launch = agentLaunch(agent, [...AGENTS[agent].promptArgs, CHECK_IN_PROMPT], io.env, io.cwd, protect);
+  if (!launch) return null;
+  const started = spawnSync(launch.command, launch.args, {
+    cwd: io.cwd,
+    stdio: "inherit",
+    env: { ...childEnv(io.env, { cwd: io.cwd, protect }), ...NO_CWD_SEARCH_ENV },
+  });
+  return started.error ? null : (started.status ?? 0);
+}
+
+/** The last of a CLI's output, with anything key-shaped or naming the token file removed. */
+export function cliTail(text: string, tokenFile: string, max = 400): string {
+  let out = text.trim().replace(/pp_[cw]_[A-Za-z0-9_-]+/g, "[key]");
+  if (tokenFile) out = out.split(tokenFile).join("[token file]");
+  return out.length > max ? `...${out.slice(-max)}` : out;
+}
+
+/** One sentence on the likeliest cause, from what the CLI said; empty when nothing is recognised. */
+export function failureHint(agent: AgentKind, output: string): string {
+  if (agent === "gemini" && /trust|untrusted|not a trusted/i.test(output)) return "Gemini CLI does not trust this folder, and 0.65 and later will not add a server to a folder it does not trust. Start Gemini CLI here once, choose Trust folder, exit, then run the line again.";
+  if (agent === "codex" && /(config\.toml|\.codex)/i.test(output) && /(permission|read-only|denied|EACCES|EROFS|parse|invalid|expected)/i.test(output)) return "Codex CLI could not read or write its config file (~/.codex/config.toml). Check that it exists, is valid and is not read-only.";
+  if (/EACCES|EPERM|EROFS|permission denied|read-only/i.test(output)) return "The agent could not write its settings: a permissions problem in this folder or your home folder.";
+  if (/ENOTFOUND|ECONNREFUSED|ETIMEDOUT|network/i.test(output)) return "The agent could not reach its own service; check your internet connection.";
+  return "";
 }
 
 /** The first agent CLI found on this computer, in the order Perfect Planner was built and proven with. */
@@ -291,7 +265,8 @@ export function parseArgs(argv: string[]): { agent?: string; rest: string[] } {
 /** connect.mjs itself: `[--agent claude|gemini|codex] <bridge url> <token file>`, or `--skill-only`. Returns the exit code. */
 export function runConnect(all: string[], io: ConnectIo): number {
   const { here } = io;
-  const { agent: picked, rest: argv } = parseArgs(all);
+  const noStart = all.includes("--no-start");
+  const { agent: picked, rest: argv } = parseArgs(all.filter((arg) => arg !== "--no-start"));
   if (picked !== undefined && !AGENT_KINDS.includes(picked as AgentKind)) {
     io.err(`Perfect Planner: --agent must be one of ${AGENT_KINDS.join(", ")}.\n`);
     return 2;
@@ -333,30 +308,41 @@ export function runConnect(all: string[], io: ConnectIo): number {
     io.err(`Perfect Planner: could not install the skill (${(error as Error).message}). Connecting anyway.\n`);
   }
 
-  run(agent, plan.remove, tokenFile, io); // nothing to remove the first time; that is fine
+  const removed = run(agent, plan.remove, tokenFile, io); // nothing to remove the first time; that is fine
   const added = run(agent, plan.add, tokenFile, io);
   if (added.error || added.status !== 0) {
-    const missing = (added.error as NodeJS.ErrnoException | undefined)?.code === "ENOENT";
+    const code = (added.error as NodeJS.ErrnoException | undefined)?.code;
+    const seconds = Math.max(1, Math.round(cliTimeout(io) / 1000));
+    const output = cliTail(`${added.stderr ?? ""}\n${added.stdout ?? ""}`, tokenFile);
+    const hint = failureHint(agent, output);
+    // `mcp remove` succeeding means an older connection existed and is gone now.
+    const lost = removed.status === 0 && !removed.error ? ` The earlier ${label} connection was removed; run the line again once this is fixed.` : "";
     io.err(
-      missing
+      code === "ENOENT"
         ? `Perfect Planner: ${label} (the ${cli} command) is not installed here. Pick your agent in Connect agent, or use the MCP settings it shows.\n`
-        : `Perfect Planner: ${cli} mcp add failed.\n${added.stderr || added.stdout}\n`,
+        : code === "ETIMEDOUT"
+          ? `Perfect Planner: ${label} did not answer in ${seconds} s, so connecting was stopped. It may be waiting for you in another window or stuck; close it, then run the line again.${lost}\n`
+          : `Perfect Planner: ${cli} mcp add failed.\n${output}\n${hint ? `${hint}\n` : ""}${lost ? `${lost.trim()}\n` : ""}`,
     );
     return 1;
   }
   const ignored = agent === "gemini" && keepOutOfGit(io.cwd, io.env, protectFor(tokenFile));
+  const start = io.interactive && !noStart;
   io.out(
     [
       agent === "codex" ? "Connected Codex CLI to Perfect Planner (Codex keeps one connection for this computer)." : `Connected ${label} in this folder (${io.cwd}) to Perfect Planner.`,
       ignored ? "Kept .gemini/settings.json out of git; it belongs to this computer." : "",
       skill ? `Installed the ${SKILL} skill for ${label} on this computer.` : "",
-      agent === "gemini"
-        ? "Next: start Gemini CLI in this folder, choose Trust folder if it asks, and say: check in with Perfect Planner"
-        : `Next: start ${label} in this folder and say: check in with Perfect Planner`,
+      start
+        ? `Starting ${label} now; it will check in with Perfect Planner by itself.${agent === "gemini" ? " Choose Trust folder if it asks." : ""}`
+        : agent === "gemini"
+          ? "Next: start Gemini CLI in this folder, choose Trust folder if it asks, and say: check in with Perfect Planner"
+          : `Next: start ${label} in this folder and say: check in with Perfect Planner`,
     ]
       .filter(Boolean)
       .join("\n") + "\n",
   );
+  if (start && (io.startAgent ?? startAgent)(agent, tokenFile, io) === null) io.err(`Perfect Planner: connected, but could not start ${label}. Start it in this folder and say: ${CHECK_IN_PROMPT}\n`);
   return 0;
 }
 
@@ -368,6 +354,7 @@ function main(argv: string[]): number {
     here: path.dirname(fileURLToPath(import.meta.url)),
     out: (text) => process.stdout.write(text),
     err: (text) => process.stderr.write(text),
+    interactive: Boolean(process.stdin.isTTY && process.stdout.isTTY),
   });
 }
 

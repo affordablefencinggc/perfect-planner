@@ -1,4 +1,6 @@
 import React from "react";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -143,5 +145,26 @@ describe("Structure workspace intake and connection map", () => {
     expect(await screen.findByText(/Nothing was registered or read/)).toBeTruthy();
     expect(workspaceAdapter.registerWorkspaceReadOnly).not.toHaveBeenCalled();
     expect(workspaceAdapter.censusRegisteredWorkspace).not.toHaveBeenCalled();
+  });
+});
+
+describe("Structure discovery cards layout", () => {
+  const css = readFileSync(join(process.cwd(), "src", "components", "StructureWorkspace.css"), "utf8");
+  const declarations = (selector) => css.split("}").filter((block) => block.split("{")[0].split(",").map((part) => part.trim()).includes(selector)).map((block) => block.split("{")[1]).join(";");
+
+  test("the QUESTION label gets a column as wide as its own word, so it cannot run into the text beside it", () => {
+    // At the enforced 13px monospace "QUESTION" is about 62px; the old fixed 54px column let it overlap the question.
+    const rows = declarations(".discovery-learning-lenses p");
+    const columns = /grid-template-columns:\s*([^;]+)/.exec(rows)?.[1] ?? "";
+    expect(columns.trim().startsWith("max-content")).toBe(true);
+    expect(columns).not.toMatch(/^\s*\d+px/);
+  });
+
+  test("the cards panel is as wide as the space it sits in, never wider than the viewport minus a guess", () => {
+    const panel = declarations(".discovery-learning-lenses");
+    const width = /(?:^|[;\s])width:\s*([^;]+)/.exec(panel)?.[1] ?? "";
+    expect(width).toMatch(/100%/);
+    expect(width).not.toMatch(/vw/);
+    expect(declarations(".discovery-learning-lenses article")).toMatch(/min-width:\s*0/);
   });
 });

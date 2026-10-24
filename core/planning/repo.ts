@@ -7,6 +7,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { mentionsApp, NOT_AN_APP_FACTS } from "./description";
 import { profileIdea, SIGNALS } from "./profile";
+import { readTestSetup, type TestSetup } from "./tests";
 import type { IdeaProfile } from "./types";
 
 /** One question the repo already answers. */
@@ -89,7 +90,11 @@ export function readRepoStack(root: string): RepoStack {
   if (wrangler) hosts.push({ choice: "cloudflare", label: "Cloudflare Workers", file: wrangler });
   const fly = firstExisting(root, ["fly.toml"]);
   if (fly) hosts.push({ choice: "fly-io", label: "Fly.io", file: fly });
-  if (hosts.length === 1) add({ id: "stack.hosting", choice: hosts[0].choice, text: hosts[0].label, evidence: [hosts[0].file] });
+  const netlify = firstExisting(root, ["netlify.toml"]);
+  if (netlify) hosts.push({ choice: "netlify", label: "Netlify", file: netlify });
+  const docker = firstExisting(root, ["Dockerfile"]);
+  if (docker && hosts.length === 0) hosts.push({ choice: "", label: "Docker container", file: docker });
+  if (hosts.length === 1) add({ id: "stack.hosting", ...(hosts[0].choice ? { choice: hosts[0].choice } : {}), text: hosts[0].label, evidence: [hosts[0].file] });
   else if (hosts.length > 1) add({ id: "stack.hosting", text: hosts.map((h) => h.label).join(" and "), evidence: hosts.map((h) => h.file) });
 
   // data
@@ -98,6 +103,10 @@ export function readRepoStack(root: string): RepoStack {
   const supabaseEvidence = [has("@supabase/supabase-js") ? PKG : undefined, supabaseDir].filter((x): x is string => Boolean(x));
   if (supabase || has("pg") || has("postgres")) {
     add({ id: "data.store", choice: "postgres", text: supabase ? "Supabase (Postgres)" : "Postgres", evidence: supabase ? supabaseEvidence : [PKG] });
+  } else if (has("mongodb") || has("mongoose")) {
+    add({ id: "data.store", text: "MongoDB", evidence: [PKG] });
+  } else if (has("firebase") || has("firebase-admin")) {
+    add({ id: "data.store", text: "Firebase (Firestore)", evidence: [PKG] });
   } else if (has("better-sqlite3") || has("sqlite3")) {
     add({ id: "data.store", choice: "sqlite-local", text: "SQLite", evidence: [PKG] });
   }
@@ -109,6 +118,10 @@ export function readRepoStack(root: string): RepoStack {
   if (supabase) add({ id: "auth.provider", choice: "supabase-auth", text: "Supabase Auth", evidence: supabaseEvidence });
   else if (has("next-auth") || has("@auth/core")) add({ id: "auth.provider", choice: "authjs", text: "Auth.js", evidence: [PKG] });
   else if (hasPrefix("@clerk/")) add({ id: "auth.provider", choice: "clerk", text: "Clerk", evidence: [PKG] });
+
+  else if (has("firebase") || has("firebase-admin")) add({ id: "auth.provider", text: "Firebase Auth", evidence: [PKG] });
+  else if (has("@auth0/auth0-react") || has("auth0")) add({ id: "auth.provider", text: "Auth0", evidence: [PKG] });
+  else if (has("lucia") || has("better-auth")) add({ id: "auth.provider", text: has("lucia") ? "Lucia" : "Better Auth", evidence: [PKG] });
 
   // money
   if (has("stripe") || has("@stripe/stripe-js")) {
@@ -149,6 +162,16 @@ export function readRepoStack(root: string): RepoStack {
   }
   if (has("react") || has("vite") || has("next")) signals.add("web");
 
+  // testing: the repo already has tests and a command that runs them, and CI that releases
+  const tests = readTestSetup(root);
+  if (tests.suite || tests.runners.length > 0 || tests.pytest) {
+    const how = tests.suite ?? tests.runners.map((r) => `npm run ${r.script}`).join(", ");
+    add({ id: "testing.strategy", choice: "unit-integration", text: `Automated tests (${how || "pytest"})`, evidence: [PKG] });
+  }
+  const workflows = exists(root, ".github/workflows") ? fs.readdirSync(path.join(root, ".github/workflows")).filter((f) => /\.ya?ml$/.test(f)) : [];
+  const releaseFlow = workflows.find((f) => /release|deploy|publish/i.test(f));
+  if (releaseFlow) add({ id: "testing.deploy", text: `CI release workflow (${releaseFlow})`, evidence: [`.github/workflows/${releaseFlow}`] });
+
   // A package with a `bin`, or a plain library with an entry point and no UI, app or server framework, is not an app.
   const appDeps = ["react", "next", "vue", "svelte", "@sveltejs/kit", "electron", "@capacitor/core", "expo", "react-native", "express", "fastify", "koa", "hono", "@nestjs/core"];
   const entry = Boolean(pkg && (pkg.bin || pkg.main || pkg.exports || pkg.module));
@@ -187,6 +210,8 @@ export function profileRepo(
 /** The files of a repo, repo-relative with "/", for contracts to guess a task's likely files from. */
 export interface RepoIndex {
   files: string[];
+  /** How the repo runs its tests (read from package.json and runner configs). */
+  tests?: TestSetup;
   /** The walk stopped at its file limit, so the list is not everything. */
   truncated: boolean;
 }
@@ -225,5 +250,6 @@ export function listRepoFiles(root: string, options: { maxFiles?: number; maxDep
     }
   };
   if (fs.existsSync(root)) walk(root, "", 0);
-  return { files, truncated };
+  const tests = readTestSetup(root);
+  return tests.suite || tests.runners.length > 0 || tests.pytest ? { files, truncated, tests } : { files, truncated };
 }

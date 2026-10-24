@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { PublicAccountCache } from "./keychain";
+import { PrivateKeyMemory, PublicAccountCache, powershellError } from "./keychain";
 import { FileStore, KeychainKeyProvider, Ledger, LedgerError, isAuthoritative, osSecretStore, type SecretStore } from "./index";
 
 /** A SecretStore in memory, so the provider's own logic is tested on every machine. */
@@ -169,6 +169,14 @@ describe("keychain helpers are started by full path", () => {
     expect(asked).toEqual(["secret-tool"]);
   });
 
+  it("names the install command for apt and dnf when secret-tool is missing", () => {
+    const store = osSecretStore("perfect-planner-test", "linux", () => null);
+    const state = store.state();
+    expect(state.available).toBe(false);
+    expect(state.reason).toContain("sudo apt install libsecret-tools");
+    expect(state.reason).toContain("sudo dnf install libsecret");
+  });
+
   it.skipIf(process.platform === "win32")("runs exactly the path the locator gives", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pp-keytool-"));
     try {
@@ -185,8 +193,109 @@ describe("keychain helpers are started by full path", () => {
   });
 });
 
+/**
+ * Linux stand-ins for Windows PowerShell. They only imitate how powershell.exe ends (exit code, stdout,
+ * stderr) and read the real script it is given; they cannot run the WinRT Credential Locker. The
+ * windows-latest keychain-ci job is the real proof.
+ */
+describe("the Windows vault through a stand-in powershell", () => {
+  const clixml = (text: string) => `#< CLIXML\n<Objs Version="1.1.0.1" xmlns="http://schemas.microsoft.com/powershell/2004/04"><Obj S="progress" RefId="0"><TN RefId="0"><T>System.Management.Automation.PSCustomObject</T></TN><MS><I64 N="SourceId">1</I64></MS></Obj><S S="Error">${text}</S></Objs>`;
+
+  /** mode "ok": a working vault kept in a file; "missing-key": get finds nothing; otherwise exit 1 with `stderr`. */
+  function standIn(behaviour: { exit?: number; stderr?: string; okNoise?: string }) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pp-ps-"));
+    const tool = path.join(dir, "powershell");
+    const data = path.join(dir, "secret");
+    const scripts = path.join(dir, "scripts");
+    fs.writeFileSync(
+      tool,
+      `#!${process.execPath}
+const fs = require("fs");
+const b = ${JSON.stringify(behaviour)};
+const script = Buffer.from(process.argv[process.argv.indexOf("-EncodedCommand") + 1], "base64").toString("utf16le");
+fs.appendFileSync(${JSON.stringify(scripts)}, script + "\\n=====\\n");
+const input = fs.readFileSync(0, "utf8");
+if (b.exit) { process.stderr.write(b.stderr || ""); process.exit(b.exit); }
+if (b.okNoise) process.stderr.write(b.okNoise);
+if (script.includes("RetrievePassword")) process.stdout.write(fs.existsSync(${JSON.stringify(data)}) ? "found:" + fs.readFileSync(${JSON.stringify(data)}, "utf8") : "missing");
+else if (script.includes("Vault.Add") || script.includes("vault.Add")) fs.writeFileSync(${JSON.stringify(data)}, input.trim());
+else if (fs.existsSync(${JSON.stringify(data)})) fs.unlinkSync(${JSON.stringify(data)});
+`,
+    );
+    fs.chmodSync(tool, 0o755);
+    return {
+      store: osSecretStore("perfect-planner-test", "win32", () => tool),
+      scripts: () => fs.readFileSync(scripts, "utf8"),
+      cleanup: () => fs.rmSync(dir, { recursive: true, force: true }),
+    };
+  }
+
+  it.skipIf(process.platform === "win32")("shows the decoded error, not '#< CLIXML', when PowerShell exits 1", () => {
+    const t = standIn({ exit: 1, stderr: clixml("Element not found._x000D__x000A_") });
+    try {
+      const state = t.store.state();
+      expect(state).toMatchObject({ available: false, reason: expect.stringContaining("Element not found") });
+      expect((state as { reason: string }).reason).not.toContain("CLIXML");
+      expect(() => t.store.get("k")).toThrow(/Element not found/);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it.skipIf(process.platform === "win32")("tolerates stderr noise when PowerShell exits 0", () => {
+    const t = standIn({ okNoise: clixml("ignored") });
+    try {
+      expect(t.store.state()).toEqual({ available: true });
+      t.store.set("k", "v");
+      expect(t.store.get("k")).toBe("v");
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it.skipIf(process.platform === "win32")("treats a never-saved key as missing while the vault stays available", () => {
+    const t = standIn({});
+    try {
+      expect(t.store.get("never-saved")).toBeUndefined();
+      expect(t.store.state()).toEqual({ available: true });
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it.skipIf(process.platform === "win32")("sends a script that looks for not-found down the inner-exception chain and silences progress", () => {
+    const t = standIn({});
+    try {
+      t.store.get("k");
+      const script = t.scripts();
+      expect(script).toContain("$ProgressPreference = 'SilentlyContinue'");
+      expect(script).toContain("-2147023728");
+      expect(script).toContain("$e = $e.InnerException");
+      expect(script).toContain("if (Test-NotFound $_.Exception) { $null } else { throw }");
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it.skipIf(process.platform === "win32")("reads any other failure as unavailable, never as a missing key", () => {
+    const t = standIn({ exit: 1, stderr: clixml("Access is denied._x000D__x000A_") });
+    try {
+      expect(t.store.state()).toMatchObject({ available: false, reason: expect.stringContaining("Access is denied") });
+      expect(() => t.store.get("k")).toThrow();
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it("powershellError decodes CLIXML error text and passes plain text through", () => {
+    expect(powershellError(clixml("a &lt;b&gt; &amp; c_x000D__x000A_d"))).toBe("a <b> & c\nd");
+    expect(powershellError("plain failure")).toBe("plain failure");
+    expect(powershellError("#< CLIXML\n<Objs></Objs>")).toBe("PowerShell reported an error");
+  });
+});
+
 describe("PublicAccountCache", () => {
-  it("keeps keychain reads per signed write constant: one private-key read, no public reads", () => {
+  it("reads the keychain once per key, not once per signed write", () => {
     const secrets = new CountingSecrets();
     const keys = new KeychainKeyProvider(secrets);
     keys.ensureKey("person:owner");
@@ -197,12 +306,12 @@ describe("PublicAccountCache", () => {
     secrets.reads = [];
     for (let i = 2; i <= 11; i++) ledger.append({ actor: owner, type: "task.created", subject: `T-${i}`, summary: "Task" });
     ledger.close();
-    expect(secrets.reads.filter((a) => a.startsWith("private."))).toHaveLength(10);
+    expect(secrets.reads).toEqual([]);
     expect(secrets.reads.filter((a) => !a.startsWith("private."))).toEqual([]);
     fs.rmSync(root, { recursive: true, force: true });
   });
 
-  it("never remembers a private key", () => {
+  it("the public cache itself never remembers a private key", () => {
     const secrets = new CountingSecrets();
     const cache = new PublicAccountCache(secrets);
     secrets.set("private.system", "k");
@@ -255,5 +364,42 @@ describe("PublicAccountCache", () => {
     expect(() => cache.get("pins")).toThrow("PowerShell failed");
     fail = false;
     expect(cache.get("pins")).toBe("[]");
+  });
+
+  it("after this instance rotates, it signs with the new key and a matching id", () => {
+    const keys = new KeychainKeyProvider(new FakeSecrets());
+    keys.ensureKey("person:owner");
+    keys.sign("person:owner", Buffer.from("x")); // remembers the first private key
+    const rotated = keys.rotateKey("person:owner");
+    expect(keys.sign("person:owner", Buffer.from("y")).keyId).toBe(rotated.keyId);
+  });
+});
+
+describe("PrivateKeyMemory", () => {
+  it("reads a private key once, and drops it on its own write, remove or forget; other accounts pass through", () => {
+    const secrets = new CountingSecrets();
+    const memory = new PrivateKeyMemory(secrets);
+    secrets.set("private.system", "k1");
+    secrets.set("pins", "[]");
+    expect(memory.get("private.system")).toBe("k1");
+    expect(memory.get("private.system")).toBe("k1");
+    expect(secrets.reads).toEqual(["private.system"]);
+    memory.set("private.system", "k2");
+    expect(memory.get("private.system")).toBe("k2");
+    memory.forget("private.system");
+    memory.get("private.system");
+    memory.remove("private.system");
+    expect(memory.get("private.system")).toBeUndefined();
+    memory.get("pins");
+    memory.get("pins");
+    expect(secrets.reads.filter((a) => a === "pins")).toHaveLength(2);
+  });
+
+  it("does not remember a missing key", () => {
+    const secrets = new CountingSecrets();
+    const memory = new PrivateKeyMemory(secrets);
+    expect(memory.get("private.system")).toBeUndefined();
+    secrets.values.set("private.system", "late");
+    expect(memory.get("private.system")).toBe("late");
   });
 });

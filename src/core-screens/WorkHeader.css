@@ -1,0 +1,11 @@
+.work-header { margin: 0 0 14px; padding: 10px 12px; border: 1px solid var(--line, #d8d5cc); border-radius: 9px; background: #fff; }
+.work-header-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.work-header-badge { padding: 1px 7px; border: 1px solid #d9c28a; border-radius: 999px; background: #fbf3dc; color: #7a5a14; font: 9px var(--mono, monospace); white-space: nowrap; }
+.work-header-facts { display: grid; grid-template-columns: 1fr 1fr; gap: 0 12px; margin: 0; }
+.work-header-facts > div { min-width: 0; padding: 6px 0; border-top: 1px solid #eceae3; }
+.work-header-facts > .wide { grid-column: 1 / -1; }
+.work-header-facts dt { color: var(--muted, #6b6f6a); font: 7px var(--mono, monospace); text-transform: uppercase; letter-spacing: 0.04em; }
+.work-header-facts dd { margin: 2px 0 0; font: 9px/1.35 var(--mono, monospace); overflow-wrap: anywhere; }
+.work-header-facts dd.empty { color: var(--muted, #6b6f6a); }
+.inspector-drawer.drawer-right .drawer-action { padding-bottom: 70px; }
+.work-header-facts .inspector-owner { display: inline-flex; align-items: center; gap: 6px; }

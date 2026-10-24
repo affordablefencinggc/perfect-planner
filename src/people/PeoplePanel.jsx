@@ -1,5 +1,7 @@
 import { useState } from "react";
 import "./PeoplePanel.css";
+import { PersonProfile } from "./PersonProfile.jsx";
+import { statsFromTasks } from "./profileStats.js";
 import { ID_PATTERN, initials, isIdle, presenceLine, slugify, stageLabel } from "./presenceText.js";
 
 const STAGES = ["plan", "task", "relay", "git", "proof", "release", "people", "housekeeping"];
@@ -46,6 +48,7 @@ function AddMemberForm({ members, firstMember, starter, onAddMember }) {
   return (
     <form className="people-form" aria-label="Add helper" onSubmit={submit}>
       <h3>{firstMember ? "Add the first person" : "Add helper"}</h3>
+      <p className="people-hint">This only records the person here. Nothing is sent to them. Helpers share this project through git.</p>
       <label>Name<input value={name} onChange={(e) => setName(e.target.value)} autoComplete="off" /></label>
       <label>Person id<input value={person} onChange={(e) => setIdEdit(e.target.value)} readOnly={Boolean(fixedId)} autoComplete="off" aria-invalid={idProblem ? "true" : undefined} /></label>
       {fixedId && <p className="people-hint">You have already been working on this project as {fixedId}, so that stays your person id.</p>}
@@ -84,7 +87,8 @@ function ShareDocForm({ onShareDoc }) {
   );
 }
 
-export function PeoplePanel({ view, photos = {}, me, starter, now = () => new Date(), onAddMember, onChangeRole, onRemoveMember, onSetPhoto, onShareDoc, onOpenDoc }) {
+export function PeoplePanel({ view, photos = {}, me, starter, now = () => new Date(), onAddMember, onChangeRole, onRemoveMember, onSetPhoto, onShareDoc, onOpenDoc, tasks = [], onAssign }) {
+  const [profileOf, setProfileOf] = useState(null);
   const [confirming, setConfirming] = useState(null);
   const [photoError, setPhotoError] = useState("");
   const members = view?.members ?? [];
@@ -140,6 +144,7 @@ export function PeoplePanel({ view, photos = {}, me, starter, now = () => new Da
                       {isMe && <span className="people-you">You</span>}
                     </div>
                     {m.role === "helper" && m.approves?.length > 0 && <p className="people-approves">Can approve: {m.approves.join(", ")}</p>}
+                    <button type="button" className="people-profile-open" aria-label={`Open ${m.name} profile`} onClick={() => setProfileOf(m.person)}>Profile</button>
                     <p className={`people-presence${idle ? " is-idle" : ""}`}>{presenceLine(m, nowDate)}{idle && <span className="people-idle-tag"> (idle)</span>}</p>
                     {isMe && onSetPhoto && (
                       <label className="people-photo">Change photo<input type="file" accept={PHOTO_TYPES} onChange={pickPhoto} /></label>
@@ -171,6 +176,20 @@ export function PeoplePanel({ view, photos = {}, me, starter, now = () => new Da
         )}
         {canAdd && <AddMemberForm members={members} firstMember={solo} starter={starter} onAddMember={onAddMember} />}
       </section>
+
+      {profileOf && (() => {
+        const m = members.find((x) => x.person === profileOf);
+        if (!m) return null;
+        const stats = statsFromTasks(m, tasks);
+        return (
+          <PersonProfile
+            onClose={() => setProfileOf(null)}
+            onAssign={isOwner ? onAssign : undefined}
+            onShareLink={isOwner ? onShareDoc : undefined}
+            profile={{ person: m.person, name: m.name, role: ROLE_LABEL[m.role] ?? m.role, avatar: photos[m.person], stats, timeline: stats.recent, current: stats.openTasks[0]?.label, branch: stats.openTasks[0]?.branch, agents: m.agents, assignable: isOwner && onAssign ? tasks.filter((t) => !t.owner && t.status !== "done" && t.stage !== "done").map((t) => ({ id: t.id, label: t.label ?? t.id })) : undefined, today: now().toISOString().slice(0, 10) }}
+          />
+        );
+      })()}
 
       <section className="people-section" aria-label="Shared documents">
         <h2>Shared documents</h2>

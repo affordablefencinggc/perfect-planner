@@ -4,7 +4,7 @@ default-run = "perfect-planner-desktop"
 version = "0.1.0"
 description = "Perfect Planner native authority shell"
 authors = ["Perfect Planner contributors"]
-license = "UNLICENSED"
+license-file = "../LICENSE"
 edition = "2021"
 rust-version = "1.77.2"
 

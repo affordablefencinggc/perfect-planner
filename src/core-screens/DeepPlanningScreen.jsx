@@ -1,4 +1,4 @@
-import { useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import {
   CheckCircleIcon,
   FlagIcon,
@@ -10,6 +10,8 @@ import {
 } from "@phosphor-icons/react";
 import { AdvancedOnly, ConfidenceMeter, CoreError, CoreLoading, CoreScreen, useAdvanced } from "./CoreScreen.jsx";
 import ContractDetails from "./ContractDetails.jsx";
+import { useOptionalProject } from "../project/ProjectProvider.jsx";
+import { projectFolderFor } from "../project/projectFolders.js";
 import { useCoreResource } from "./coreApi.js";
 import "./DeepPlanningScreen.css";
 
@@ -53,6 +55,7 @@ export default function DeepPlanningScreen() {
         <>
           <ProgressHeader data={data} />
           <ApprovePanel data={data} resource={resource} />
+          <TemplateBar data={data} resource={resource} />
           <BlockersRail data={data} onOpen={() => setView("questions")} />
           <ViewSwitch view={view} onChange={setView} />
           <div role="tabpanel" id={`planning-panel-${view}`} aria-labelledby={`planning-tab-${view}`} className="planning-panel">
@@ -72,13 +75,21 @@ function IdeaStart({ resource }) {
   const [idea, setIdea] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
+  const [template, setTemplate] = useState("blank");
+  const repo = useCoreResource("/planning/repo");
+  const repoKnown = repo.status === "ready" && repo.data.known;
+  const [chosen, setChosen] = useState(false);
+  // A repo that was read starts as "add a feature to an existing app", until the person picks something else.
+  useEffect(() => {
+    if (repoKnown && !chosen && repo.data.suggestedTemplate) setTemplate(repo.data.suggestedTemplate);
+  }, [repoKnown, chosen, repo.data?.suggestedTemplate]);
   const id = useId();
   const submit = async (event) => {
     event.preventDefault();
     setBusy(true);
     setError(null);
     try {
-      await resource.post("/planning/start", { idea });
+      await resource.post("/planning/start", { idea, ...(template === "blank" ? {} : { template }) });
     } catch (e) {
       setError(e.message);
     } finally {
@@ -88,22 +99,133 @@ function IdeaStart({ resource }) {
   return (
     <form className="planning-start" onSubmit={submit}>
       <LightbulbIcon aria-hidden="true" className="planning-start-icon" />
-      <strong>Start with your idea</strong>
-      <p>Describe what you want to build in a sentence or two. Perfect Planner turns it into the questions that need an answer before any code is written, with a recommendation for each.</p>
+      <strong>{repoKnown ? `What do you want to do in ${repo.data.name}?` : "Start with your idea"}</strong>
+      {repo.status === "ready" && <RepoRead repo={repo} />}
+      <p>{repoKnown ? "Say what to add, fix or change. " : "Describe what you want to build in a sentence or two. "} Perfect Planner turns it into the questions that need an answer before any code is written, with a recommendation for each.</p>
       <label htmlFor={`${id}-idea`} className="planning-label">Your idea</label>
       <textarea
         id={`${id}-idea`}
         rows={3}
         value={idea}
         onChange={(e) => setIdea(e.target.value)}
-        placeholder="For example: a desktop invoice app with Stripe payments that works offline"
+        placeholder={repoKnown ? "For example: add CSV export to the reports page" : "For example: a desktop invoice app with Stripe payments that works offline"}
       />
+      <TemplatePicker value={template} onChange={(t) => { setChosen(true); setTemplate(t); }} />
       <p className="core-muted planning-note">Recommendations come from built-in question packs. Live web research is off because it needs a research key, so no sources are attached yet.</p>
       {error && <p className="planning-refusal" role="alert">{error}</p>}
       <button type="submit" className="core-button primary" disabled={busy || idea.trim().length < 3}>
         {busy ? "Starting…" : "Start planning"}
       </button>
     </form>
+  );
+}
+
+// What planning read from the project's folder before any idea is typed, or a box to point it at the repo.
+function RepoRead({ repo }) {
+  const [path, setPath] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const tried = useRef(null);
+  const id = useId();
+  const data = repo.data;
+  // The folder the person scanned in Structure is the repo: hand it to planning once, without asking them to paste it.
+  const scanned = useOptionalProject()?.activeProject?.name;
+  const folder = data.known ? null : projectFolderFor(scanned);
+  useEffect(() => {
+    if (!folder || tried.current === folder) return;
+    tried.current = folder;
+    repo.post("/planning/repo", { path: folder }).catch((e) => setError(e.message));
+  }, [folder, repo]);
+  const point = async (event) => {
+    event.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      await repo.post("/planning/repo", { path: path.trim() });
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  if (data.known) {
+    const facts = data.facts.map((f) => f.text);
+    return (
+      <p className="core-card planning-repo" role="status">
+        Read your repo <strong>{data.name}</strong>: {data.fileCount}{data.truncated ? "+" : ""} files{facts.length ? `, ${facts.join(", ")}` : ""}{data.tests ? `, tests run with ${data.tests}` : ", no tests found"}. Questions it already answers are not asked.
+      </p>
+    );
+  }
+  return (
+    <form className="core-card planning-repo" onSubmit={point}>
+      <label htmlFor={`${id}-repo`} className="planning-label">Plan from your existing repo (optional)</label>
+      <input id={`${id}-repo`} value={path} onChange={(e) => setPath(e.target.value)} placeholder="C:\repos\my-app" autoComplete="off" />
+      <p className="core-muted planning-note">Perfect Planner only reads file names and a few config files. Nothing is run or changed.</p>
+      {error && <p className="planning-refusal" role="alert">{error}</p>}
+      <button type="submit" className="core-button" disabled={busy || !path.trim()}>Read this folder</button>
+    </form>
+  );
+}
+
+// ---------- Starter templates (core/planning/templates.ts, listed by GET /planning/templates) ----------
+// A starter only suggests. It answers nothing and approves nothing. No list, no picker.
+
+function TemplatePicker({ value, onChange }) {
+  const list = useCoreResource("/planning/templates");
+  const id = useId();
+  if (list.status !== "ready") return null;
+  const options = [{ id: "blank", title: "Start blank", description: list.data.blank.description }, ...list.data.templates];
+  return (
+    <fieldset className="planning-templates">
+      <legend className="planning-label">What kind of work is this? (optional)</legend>
+      <div className="planning-template-list">
+        {options.map((t) => (
+          <label key={t.id} className={`planning-template${value === t.id ? " is-chosen" : ""}`}>
+            <input type="radio" name={`${id}-template`} value={t.id} checked={value === t.id} onChange={() => onChange(t.id)} />
+            <strong>{t.title}</strong>
+            <span className="core-muted">{t.description}</span>
+          </label>
+        ))}
+      </div>
+      <p className="core-muted planning-note">{list.data.note}</p>
+    </fieldset>
+  );
+}
+
+function TemplateBar({ data, resource }) {
+  const list = useCoreResource("/planning/templates");
+  const [busy, setBusy] = useState(false);
+  const [refusal, setRefusal] = useState(null);
+  const id = useId();
+  if (list.status !== "ready") return null;
+  const t = data.template;
+  const locked = data.approval.approved.length > 0; // the roadmap is on the board: the starter is fixed
+  const act = async (path, body) => {
+    setBusy(true);
+    setRefusal(null);
+    try {
+      await resource.post(path, body);
+    } catch (e) {
+      setRefusal(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <section className="core-card planning-template-bar" aria-label="Starter template">
+      <label htmlFor={`${id}-starter`} className="planning-label">Starter</label>
+      <select id={`${id}-starter`} value={t?.id ?? "blank"} disabled={busy || locked} onChange={(e) => act("/planning/template", { template: e.target.value })}>
+        <option value="blank">Start blank</option>
+        {list.data.templates.map((x) => <option key={x.id} value={x.id}>{x.title}</option>)}
+      </select>
+      {t && <span className="core-muted">{t.description} {locked ? "The plan is approved, so the starter is fixed." : "Your answers are kept if you change it."}</span>}
+      {!locked && t?.skippable > 0 && (
+        <button type="button" className="core-button" disabled={busy} onClick={() => act("/planning/template/skip", {})}>
+          Mark {t.skippable === 1 ? "1 question" : `${t.skippable} questions`} as not needed ({t.usuallySkip.map((a) => a.title).join(", ")})
+        </button>
+      )}
+      {refusal && <p className="planning-refusal" role="alert">{refusal}</p>}
+    </section>
   );
 }
 
@@ -287,6 +409,7 @@ function QuestionPacks({ data, resource }) {
             <header>
               <h3 id={`planning-pack-${area.area}`}>{area.title}</h3>
               <span className={`core-pill ${open ? "" : "good"}`}>{open ? `${open} open` : "All answered"}</span>
+              {area.hint && <span className="core-pill">{area.hint === "ask-first" ? "Start here" : "Usually not needed for this starter"}</span>}
             </header>
             <div className="planning-cards">
               {area.questions.map((q) => <QuestionCard key={q.q} question={q} resource={resource} />)}
@@ -397,6 +520,14 @@ function QuestionCard({ question, resource }) {
           <AdvancedOnly as="p">
             {[question.decision, question.spike?.task, question.entries?.decided, question.entries?.spike, question.entries?.answered && `answered ${question.entries.answered}`].filter(Boolean).join(" · ")}
           </AdvancedOnly>
+        </div>
+      )}
+
+      {open && question.suggestion && (
+        <div className="planning-suggestion">
+          <span>Suggestion from the {question.suggestion.from} starter: <strong>{question.suggestion.label}</strong></span>
+          <p>{question.suggestion.why} Nothing is decided until you use it.</p>
+          <button type="button" className="core-button" disabled={busy} onClick={() => send(question.suggestion.option ? { choice: question.suggestion.option } : { text: question.suggestion.text })}>Use suggestion</button>
         </div>
       )}
 
@@ -527,6 +658,7 @@ function RoadmapView() {
   const { phases, written, answered } = resource.data;
   const dropped = resource.data.dropped ?? [];
   const existing = resource.data.existing ?? [];
+  const template = resource.data.template;
   return (
     <div className="planning-roadmap">
       <p className="core-muted">
@@ -535,8 +667,14 @@ function RoadmapView() {
       {existing.length > 0 && (
         <p className="core-muted planning-existing">Already in your repo, so no task: {existing.map((e) => e.label).join(", ")}.</p>
       )}
+      {template && !written && (
+        <p className="core-muted planning-existing">
+          Tasks marked Suggested come from the {template.title} starter. They are added only when you approve the plan, and you can leave any of them out.
+          {template.leftOut.length > 0 && ` Not suggested because of your idea: ${template.leftOut.map((x) => x.title).join(", ")}.`}
+        </p>
+      )}
       <RoadmapChanges resource={resource} />
-      {!answered && <p className="core-empty" role="status"><strong>No answers yet</strong>Only the release task exists until questions are answered.</p>}
+      {!answered && !template && <p className="core-empty" role="status"><strong>No answers yet</strong>Only the release task exists until questions are answered.</p>}
       <ol className="planning-phases">
         {phases.map((phase) => (
           <li key={phase.id} className="core-card planning-phase">
@@ -547,11 +685,11 @@ function RoadmapView() {
               <ul>
                 {phase.tasks.map((t) => (
                   <li key={t.key} className={`planning-task${t.own ? " is-own" : ""}`}>
-                    <strong>{t.title} {t.own && <span className="core-pill">Your task</span>}</strong>
+                    <strong>{t.title} {t.own && <span className="core-pill">Your task</span>} {t.suggested && <span className="core-pill">Suggested</span>}</strong>
                     {t.doneWhen && <span className="core-muted">Done when {t.doneWhen}</span>}
                     <span className="core-muted">Owner: {t.owner}</span>
                     <AdvancedOnly as="span">
-                      {t.task ?? t.key}{t.entry ? ` · ${t.entry}` : ""}{t.dependsOnTasks.length ? ` · after ${t.dependsOnTasks.join(", ")}` : ""}
+                      {t.task ?? t.key}{t.entry ? ` · ${t.entry}` : ""}{t.dependsOnTasks.length ? ` · after ${t.dependsOnTasks.join(", ")}` : ""}{t.template ? ` · ${t.template.size} · ${t.template.files.join(", ")}` : ""}
                     </AdvancedOnly>
                     {t.contract && (
                       <ContractDetails

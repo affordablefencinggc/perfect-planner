@@ -48,8 +48,41 @@ Pass `secretScan: false` to skip the hook and leave the config alone.
 | `list()`, `get(taskId)` | Running worktrees (`WorktreeInfo`: branch, path, baseSha, baseRef, port, claims) |
 | `claim(taskId, files)` | Adds file claims; returns conflicts (folder and case aware, same rules as the collision engine) |
 | `reconcile()` | Compares the registry with `git worktree list`: entries git lost, and pp worktrees nobody tracks |
+| `updateFromMain(taskId)` | Merges the task's integration branch (`baseRef`) into its branch, inside its worktree, without touching unsaved work (below) |
+| `releaseClaims(taskId, files?)` | Drops a task's file claims (all, or just the files named). The host route decides when that is allowed |
+
+## Bringing a task up to date with main
+
+`updateFromMain` never starts a merge in the worker's folder. It refuses, changing nothing, when the folder is
+missing or on another branch, a merge/rebase/cherry-pick is already in progress, or anything is modified, staged or
+untracked (it names the files). Otherwise git works the merge out in memory (`merge-tree --write-tree`, Git 2.38+):
+a conflict is reported with the files and nothing else happens. Only a clean merge is applied: a commit made with
+`commit-tree` (parents: the task's tip and the integration tip) and then a `merge --ff-only` of a clean folder.
+Git itself refuses that if it would overwrite a file, and the manager refuses first when the update would write over
+an ignored file (the worker's notes or data). Nothing is reset, stashed, aborted or deleted. After a failed apply the
+folder is compared with how it was and the answer says whether it is unchanged. On success `baseSha` moves to the
+integration commit, so "what the worker changed" (the diff screen, the watcher) stays the worker's own work. The
+check and diff approval for the old tip no longer match: the gate checks the exact commit, so it must be checked and
+approved again. Status calls use `--no-optional-locks` so they never take `index.lock` from the worker's own git.
 
 State lives in `<git common dir>/perfect-planner/worktrees.json`, so it survives restarts and is shared by every worktree.
+
+## A task folder that is gone, and folders nobody works in (hygiene.ts)
+
+These are all new calls next to `reconcile()` (which keeps its old meaning); none of them deletes a branch.
+
+| Call | Does |
+|---|---|
+| `reconcileWithDisk({ forget? })` | Registry against git against disk, per task: `ok`; `missing` (folder deleted, branch still there: can be recreated); `gone` (folder and branch both deleted: a stale record, dropped only when `forget` is set, with a `worktree.removed` entry marked `forgotten`); `unlinked` (a folder is there but git does not track it, or the record names a folder outside the planner's own worktree folder: never touched). Also lists pp worktrees nobody tracks. Only reads, apart from forgetting `gone` records. |
+| `recreate(taskId, actor)` | For a `missing` folder only: `git worktree add --force <folder> pp/T-n` from the existing branch, so the committed work is back. Refuses if the folder exists or another worktree holds the branch. Restores the launch steps (settings, secret scan, install), keeps the port, writes `worktree.created` with `recreated: true`. If it fails it removes only the folder it just made. |
+| `sweep({ classify, actor, dryRun })` | The safe clean-up. The caller says what each task is (`active`, `finished`, `released` or `{ keep: reason }`). A folder is removed only if its task is `finished` or `released` and nothing in it can be lost (`keepReasons` in `hygiene.ts`: no uncommitted, untracked or ignored work; its HEAD is on a branch; no commit that is neither merged into the base nor on a remote; not locked; a released task's branch must be fully merged, because the branch goes with the folder and a new worker could not otherwise start). Everything else is kept and returned with its owner, disk size and the reasons. `active` tasks are never listed or touched. `dryRun` only lists. |
+| `removeChecked(taskId, actor, decide)` | The person's own choice to remove a folder the sweep kept: checked again at that moment, refused when work would be lost. Commits only on the branch stay on the branch. |
+
+The host (`core/host/routes/worktreeCare.ts`) runs `reconcileWithDisk` and the sweep on the first Tasks
+request after the app starts (and when a task is finished), `reconcileWithDisk` before every dispatch, and
+serialises dispatch, the sweep, recreate and a chosen removal so they never interleave. Routes:
+`GET /worktrees` (the list for the Advanced view), `POST /worktrees/clean`, `POST /worktrees/:id/remove`,
+`POST /tasks/:id/recreate-folder`.
 
 ## Ledger entries written
 

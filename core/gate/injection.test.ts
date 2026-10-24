@@ -6,7 +6,8 @@ import { gitExecutable } from "../exec/index";
 import { filterPrograms, git, GitHardeningError, GitProgramRefusedError, runGit } from "../worktrees/git";
 import { WorktreeManager } from "../worktrees/manager";
 import { commitAll, makeRepo, memoryLedger, writeFiles } from "../worktrees/testing";
-import { TestGate, sensitiveChanges, verifyMergeCommit } from "./index";
+import { pinTestFiles } from "./gate";
+import { TestGate, sensitiveChanges, unalteredPins, verifyMergeCommit } from "./index";
 
 // A program on the PC writes hooks or git settings into the project's own .git between approval and
 // merge. The app's git must never run them, and the diff the person sees must be the real one.
@@ -335,5 +336,48 @@ describe("sensitiveChanges for the diff the person approves", () => {
     expect(
       sensitiveChanges(["src/app.ts", "package.json", "pnpm-lock.yaml", ".npmrc", ".gitattributes", ".gitmodules", ".github/workflows/ci.yml", ".githooks/pre-commit", ".husky/pre-push", "vite.config.mjs", "README.md"]),
     ).toEqual(["package.json", "pnpm-lock.yaml", ".npmrc", ".gitattributes", ".gitmodules", ".github/workflows/ci.yml", ".githooks/pre-commit", ".husky/pre-push", "vite.config.mjs"]);
+  });
+
+  it("skips the flag only for the exact approved test file, and only while it is exactly what was approved", () => {
+    const pinned = ["tests/save.check.mjs"];
+    const changed = ["src/save.js", "tests/save.check.mjs", "tests/helper.mjs", "tests/other.check.mjs", "tests/save.check.mjs.bak", "tests/sub/save.check.mjs"];
+    const support = new Set(["tests/save.check.mjs"]);
+    // Not told the approved file is unchanged: nothing is exempt, as before.
+    expect(sensitiveChanges(changed, pinned, support)).toContain("tests/save.check.mjs");
+    // Told it is unchanged: that one path drops out; every other test-like file and renamed copy stays flagged.
+    expect(sensitiveChanges(changed, pinned, support, new Set(pinned))).toEqual(["tests/helper.mjs", "tests/other.check.mjs", "tests/save.check.mjs.bak", "tests/sub/save.check.mjs"]);
+    // The exemption needs the file to be pinned: an "unchanged" claim for any other path does nothing.
+    expect(sensitiveChanges(["tests/helper.mjs"], pinned, support, new Set(["tests/helper.mjs"]))).toEqual(["tests/helper.mjs"]);
+    // Real sensitive files are never exempted, even when pinned and unchanged.
+    const hard = ["package.json", ".github/workflows/ci.yml", "vitest.config.mjs", "tests/setup.mjs"];
+    expect(sensitiveChanges(hard, hard, new Set(hard), new Set(hard))).toEqual(hard);
+  });
+
+  it("unalteredPins lists only approved files whose committed content is still the approved content", async () => {
+    const repo = await makeRepo({ "tests/a.check.mjs": "process.exit(0);\n", "tests/b.check.mjs": "process.exit(0);\n" });
+    cleanups.push(repo.cleanup);
+    const pins = pinTestFiles(repo.root, ["tests/a.check.mjs", "tests/b.check.mjs"]);
+    writeFiles(repo.root, { "tests/b.check.mjs": "process.exit(0); // edited after approval\n", "tests/c.check.mjs": "process.exit(0);\n" });
+    const tip = await commitAll(repo.root, "edit b, add c");
+    expect([...(await unalteredPins(repo.root, tip, pins))]).toEqual(["tests/a.check.mjs"]);
+  });
+  it("shows no flag for the approved test plus product code, keeps flags for other tests and CI files, and flags an edited copy", async () => {
+    const repo = await makeRepo({ "tests/a.check.mjs": "process.exit(0);\n", "src/app.js": "export const a = 1;\n" });
+    cleanups.push(repo.cleanup);
+    const pins = pinTestFiles(repo.root, ["tests/a.check.mjs"]);
+    const flagged = async (tip: string, changed: string[]) => sensitiveChanges(changed, Object.keys(pins), new Set(Object.keys(pins)), await unalteredPins(repo.root, tip, pins));
+    // (a) the approved test file plus product code only: nothing flagged.
+    writeFiles(repo.root, { "src/app.js": "export const a = 2;\n" });
+    const tipA = await commitAll(repo.root, "product code");
+    expect(await flagged(tipA, ["src/app.js", "tests/a.check.mjs"])).toEqual([]);
+    // (b) another test file, package.json or a CI workflow alongside it: still flagged.
+    writeFiles(repo.root, { "tests/other.check.mjs": "process.exit(0);\n", "package.json": "{}\n", ".github/workflows/ci.yml": "on: push\n" });
+    const tipB = await commitAll(repo.root, "other files");
+    const all = ["src/app.js", "tests/a.check.mjs", "tests/other.check.mjs", "package.json", ".github/workflows/ci.yml"];
+    expect(await flagged(tipB, all)).toEqual(["tests/other.check.mjs", "package.json", ".github/workflows/ci.yml"]);
+    // (c) an edited copy of the approved test is flagged.
+    writeFiles(repo.root, { "tests/a.check.mjs": "process.exit(0); // edited\n" });
+    const tipC = await commitAll(repo.root, "edit approved test");
+    expect(await flagged(tipC, ["src/app.js", "tests/a.check.mjs"])).toEqual(["tests/a.check.mjs"]);
   });
 });
