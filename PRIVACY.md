@@ -18,7 +18,7 @@ Nothing else is sent by the app.
 ## Where your data lives
 
 - Projects, the ledger and your settings live in the app data folder on your computer.
-- On Windows that is `%APPDATA%\com.perfectplanner.desktop`. On Linux it is `~/.local/share/com.perfectplanner.desktop`.
+- On Windows that is `%APPDATA%\com.perfectplanner.desktop`. The app window's own browser data (WebView2) is kept in `%LOCALAPPDATA%\com.perfectplanner.desktop`. On Linux it is `~/.local/share/com.perfectplanner.desktop`.
 - Your signing key and TypeSafe key are kept in your computer's key store (Windows Credential Manager, or the Linux Secret Service).
 - Uninstalling the app keeps this data. Delete the folder yourself if you want it gone.
 

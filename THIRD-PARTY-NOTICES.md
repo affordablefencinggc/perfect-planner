@@ -8,6 +8,8 @@ This file is generated. Do not edit it by hand. To regenerate it, run this from 
 node scripts/generate-third-party-notices.mjs
 ```
 
+The tables list each part's name, version and SPDX licence. The full licence texts ship with the installer in `THIRD-PARTY-LICENSES.txt` (inside the app's `desktop-host` folder, next to `NODE-LICENSE.txt`), written at build time by `node scripts/generate-third-party-notices.mjs --licenses-out <file> --no-notices`. That file is large, so it is not kept in git.
+
 It reads `package-lock.json`, `src-tauri/Cargo.lock` (through `cargo metadata`) and `scripts/desktop-node-runtime.json`. It needs `cargo` and network access. It is not part of any npm script or CI step.
 
 ## Not resolved
@@ -16,7 +18,7 @@ Nothing. Every licence below came from the lockfile or crate metadata.
 
 ## Node.js runtime v24.21.0
 
-The installer bundles the Node.js runtime v24.21.0 (from https://nodejs.org/dist/v24.21.0/). Its licence text is published at https://raw.githubusercontent.com/nodejs/node/v24.21.0/LICENSE (sha256 5888dbb9a1d2b18f2c3e6c5f6af1b39de658372b402a0577b002777f14c62ace). The full text is not kept in this file because it is large: the release build writes it next to the installer with `node scripts/generate-third-party-notices.mjs --node-license-out <file>`.
+The installer bundles the Node.js runtime v24.21.0 (from https://nodejs.org/dist/v24.21.0/). Its full licence text is in the bundled `NODE-LICENSE.txt` and is also published at https://raw.githubusercontent.com/nodejs/node/v24.21.0/LICENSE (sha256 5888dbb9a1d2b18f2c3e6c5f6af1b39de658372b402a0577b002777f14c62ace). The full text is not kept in this file because it is large: the release build writes it next to the installer with `node scripts/generate-third-party-notices.mjs --node-license-out <file>`.
 
 ## npm packages (210)
 

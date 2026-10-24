@@ -9,12 +9,16 @@
 // and scripts/desktop-node-runtime.json (the bundled Node runtime licence,
 // downloaded and checked against the pinned sha256).
 // Optional: --node-license-out <file> also writes the Node licence text (for the installer bundle).
+// Optional: --licenses-out <file> writes the full licence text of every shipped npm package and Rust
+// crate (read from node_modules and the local cargo registry cache; a crate whose files are not cached
+// is listed with its SPDX id and its crates.io page). Run it at build time; the output is not committed.
+// --skip-cargo leaves crates out, --no-notices skips rewriting THIRD-PARTY-NOTICES.md.
 // Needs network for cargo (first run) and the Node licence text. Anything it
 // cannot resolve is listed in the file under "Not resolved".
-import { readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -29,7 +33,7 @@ for (const [path, p] of Object.entries(lock.packages)) {
   const name = p.name ?? path.slice(path.lastIndexOf("node_modules/") + "node_modules/".length);
   let license = p.license;
   if (!license) { license = "unresolved"; unresolved.push(`npm ${name}@${p.version}: no license field in package-lock.json`); }
-  npm.push({ name, version: p.version, license: typeof license === "string" ? license : JSON.stringify(license) });
+  npm.push({ dir: join(root, path), name, version: p.version, license: typeof license === "string" ? license : JSON.stringify(license) });
 }
 npm.sort(byName);
 
@@ -37,7 +41,7 @@ npm.sort(byName);
 const cargo = new Map();
 const tauri = join(root, "src-tauri");
 let cargoOk = true;
-for (const target of ["x86_64-pc-windows-msvc", "x86_64-unknown-linux-gnu"]) {
+for (const target of process.argv.includes("--skip-cargo") ? [] : ["x86_64-pc-windows-msvc", "x86_64-unknown-linux-gnu"]) {
   try {
     const meta = JSON.parse(execFileSync("cargo", ["metadata", "--format-version", "1", "--locked", "--filter-platform", target],
       { cwd: tauri, encoding: "utf8", maxBuffer: 1 << 28, stdio: ["ignore", "pipe", "ignore"] }));
@@ -53,14 +57,14 @@ for (const target of ["x86_64-pc-windows-msvc", "x86_64-unknown-linux-gnu"]) {
     for (const id of seen) {
       if (id === meta.resolve.root) continue;
       const p = pkgs.get(id);
-      cargo.set(`${p.name}@${p.version}`, { name: p.name, version: p.version, license: p.license ?? (p.license_file ? `see ${p.license_file}` : "unresolved") });
+      cargo.set(`${p.name}@${p.version}`, { dir: dirname(p.manifest_path), name: p.name, version: p.version, license: p.license ?? (p.license_file ? `see ${p.license_file}` : "unresolved") });
     }
   } catch {
     cargoOk = false;
     unresolved.push(`cargo metadata failed for ${target} (cargo missing or no network)`);
   }
 }
-if (!cargoOk && cargo.size === 0) {
+if (!cargoOk && cargo.size === 0 && !process.argv.includes("--skip-cargo")) {
   const text = readFileSync(join(tauri, "Cargo.lock"), "utf8");
   for (const m of text.matchAll(/\[\[package\]\]\nname = "([^"]+)"\nversion = "([^"]+)"\n(source = )?/g)) {
     if (m[3]) cargo.set(`${m[1]}@${m[2]}`, { name: m[1], version: m[2], license: "unresolved" });
@@ -74,6 +78,7 @@ const crates = [...cargo.values()].sort(byName);
 const rt = JSON.parse(readFileSync(join(root, "scripts/desktop-node-runtime.json"), "utf8"));
 let nodeText = null;
 try {
+  if (!process.argv.includes("--node-license-out")) throw new Error("not requested");
   const res = await fetch(rt.license.url);
   const buf = Buffer.from(await res.arrayBuffer());
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -96,6 +101,8 @@ out.push(
   "node scripts/generate-third-party-notices.mjs",
   "```",
   "",
+  "The tables list each part's name, version and SPDX licence. The full licence texts ship with the installer in `THIRD-PARTY-LICENSES.txt` (inside the app's `desktop-host` folder, next to `NODE-LICENSE.txt`), written at build time by `node scripts/generate-third-party-notices.mjs --licenses-out <file> --no-notices`. That file is large, so it is not kept in git.",
+  "",
   "It reads `package-lock.json`, `src-tauri/Cargo.lock` (through `cargo metadata`) and `scripts/desktop-node-runtime.json`. It needs `cargo` and network access. It is not part of any npm script or CI step.",
   "",
   "## Not resolved",
@@ -104,7 +111,7 @@ out.push(
   "",
   `## Node.js runtime ${rt.version}`,
   "",
-  `The installer bundles the Node.js runtime ${rt.version} (from ${rt.baseUrl}). Its licence text is published at ${rt.license.url} (sha256 ${rt.license.sha256}). The full text is not kept in this file because it is large: the release build writes it next to the installer with \`node scripts/generate-third-party-notices.mjs --node-license-out <file>\`.`,
+  `The installer bundles the Node.js runtime ${rt.version} (from ${rt.baseUrl}). Its full licence text is in the bundled \`NODE-LICENSE.txt\` and is also published at ${rt.license.url} (sha256 ${rt.license.sha256}). The full text is not kept in this file because it is large: the release build writes it next to the installer with \`node scripts/generate-third-party-notices.mjs --node-license-out <file>\`.`,
   "",
   `## npm packages (${npm.length})`,
   "",
@@ -123,6 +130,30 @@ out.push(
   ...crates.map(row),
   "",
 );
+// ---- full licence texts (build-time output, not committed)
+const licFlag = process.argv.indexOf("--licenses-out");
+if (licFlag > 0 && process.argv[licFlag + 1]) {
+  const licenseFiles = (dir) => {
+    try { return readdirSync(dir).filter((f) => /^(licen[sc]e|copying|unlicense|notice)([-_.].*)?$/i.test(f)).sort().map((f) => readFileSync(join(dir, f), "utf8").trim()).filter(Boolean); } catch { return []; }
+  };
+  const sections = [];
+  const missing = [];
+  for (const [kind, list] of [["npm", npm], ["crate", crates]]) {
+    for (const p of list) {
+      const texts = p.dir ? [...new Set(licenseFiles(p.dir))] : [];
+      if (!texts.length) {
+        const where = kind === "npm" ? `https://www.npmjs.com/package/${p.name}/v/${p.version}` : `https://crates.io/crates/${p.name}/${p.version}`;
+        missing.push(`${kind} ${p.name}@${p.version} (${p.license}): licence file not found locally; see ${where}`);
+      } else sections.push(`${"=".repeat(78)}\n${kind} ${p.name}@${p.version}  (${p.license})\n${"=".repeat(78)}\n\n${texts.join("\n\n---\n\n")}\n`);
+    }
+  }
+  const head = `Perfect Planner third-party licences\n\nThis file holds the full licence text of the software that ships with Perfect Planner. It is generated at build time from the installed packages. The Node.js runtime licence is in NODE-LICENSE.txt beside this file.\n\n${missing.length ? `Licence files not found locally (SPDX id and where to read the text):\n${missing.map((m) => `- ${m}`).join("\n")}\n\n` : ""}`;
+  const dest = resolve(process.argv[licFlag + 1]);
+  mkdirSync(dirname(dest), { recursive: true });
+  writeFileSync(dest, head + sections.join("\n"));
+  console.log(`licence texts: ${sections.length} written, ${missing.length} not found locally -> ${dest}`);
+}
+if (process.argv.includes("--no-notices")) process.exit(0);
 const flag = process.argv.indexOf("--node-license-out");
 if (flag > 0 && process.argv[flag + 1]) {
   if (!nodeText) { console.error("Node licence text could not be fetched"); process.exit(1); }
