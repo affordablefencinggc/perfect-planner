@@ -1,4 +1,4 @@
-import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9,7 +9,7 @@ import { git, GitError, runGit } from "./git";
 import { isWithin, lines, realDir, samePath, toRepoPath } from "./platform";
 import { type Actor, type LedgerPort, WORKTREES_ACTOR } from "./ports";
 import { copyLocalSettings, placeholderSecrets } from "./settings";
-import { branchFor, TASK_ID, type WorktreeInfo } from "./types";
+import { branchFor, LEDGER_NAMESPACE, TASK_ID, type WorktreeInfo } from "./types";
 
 export type Installer = (worktreePath: string) => Promise<void>;
 
@@ -18,6 +18,12 @@ export interface WorktreeManagerOptions {
   ledger: LedgerPort;
   /** Worktrees live here, relative to the repo root (spec 5.3). */
   worktreeDir?: string;
+  /**
+   * Set when another ledger shares this git repo (core/host/repoClaim.ts). This ledger then keeps its branches
+   * (pp/<namespace>/T-n), folders (<worktreeDir>/<namespace>/T-n), registry and ports apart from the others.
+   * Unset for the repo's first ledger, whose names stay as they always were.
+   */
+  namespace?: string;
   /** Cap on parallel worktrees to protect disk and CPU (spec 5.6). */
   maxParallel?: number;
   /** Inclusive dev-server port range handed out one per worktree. */
@@ -82,6 +88,20 @@ export interface UpdateFromMainResult {
   fastForward?: boolean;
 }
 
+interface OtherLedgers {
+  worktrees: WorktreeInfo[];
+  branches: Set<string>;
+  paths: string[];
+  ports: Set<number>;
+}
+
+interface OtherLedgers {
+  worktrees: WorktreeInfo[];
+  branches: Set<string>;
+  paths: string[];
+  ports: Set<number>;
+}
+
 interface Registry {
   schemaVersion: 1;
   worktrees: WorktreeInfo[];
@@ -113,6 +133,7 @@ const PORT_LEASES = new Map<number, string>();
 export class WorktreeManager {
   readonly repoRoot: string;
   readonly worktreeRoot: string;
+  readonly namespace: string | null;
   private readonly ledger: LedgerPort;
   private readonly maxParallel: number;
   private readonly portRange: [number, number];
@@ -125,8 +146,10 @@ export class WorktreeManager {
   private queue: Promise<unknown> = Promise.resolve();
 
   constructor(options: WorktreeManagerOptions) {
+    if (options.namespace !== undefined && !LEDGER_NAMESPACE.test(options.namespace)) throw new WorktreeError(`"${options.namespace}" is not a ledger namespace.`);
+    this.namespace = options.namespace ?? null;
     this.repoRoot = realDir(options.repoRoot);
-    this.worktreeRoot = path.join(this.repoRoot, ...(options.worktreeDir ?? ".perfect-planner/worktrees").split("/"));
+    this.worktreeRoot = path.join(this.repoRoot, ...(options.worktreeDir ?? ".perfect-planner/worktrees").split("/"), ...(this.namespace ? [this.namespace] : []));
     this.ledger = options.ledger;
     this.maxParallel = options.maxParallel ?? 4;
     this.portRange = options.ports ?? [5200, 5999];
@@ -159,10 +182,11 @@ export class WorktreeManager {
   private async createNow({ taskId, actor, baseRef, claims = [] }: CreateOptions): Promise<WorktreeInfo> {
     if (!TASK_ID.test(taskId)) throw new WorktreeError(`"${taskId}" is not a task id like T-14 or T-14.a2.`);
     const registry = await this.readRegistry();
+    const others = await this.otherLedgers();
     if (registry.worktrees.some((info) => info.taskId === taskId)) throw new WorktreeError(`${taskId} already has a worktree.`);
     if (registry.worktrees.length >= this.maxParallel) throw new WorktreeError(`${this.maxParallel} worktrees are already running; finish or remove one first.`);
 
-    const branch = branchFor(taskId);
+    const branch = branchFor(taskId, this.namespace);
     const worktreePath = path.join(this.worktreeRoot, taskId);
     const base = baseRef ?? (await git(this.repoRoot, ["symbolic-ref", "--short", "HEAD"]));
     const baseSha = await git(this.repoRoot, ["rev-parse", "--verify", `${base}^{commit}`]).catch(() => {
@@ -173,7 +197,10 @@ export class WorktreeManager {
       throw new WorktreeError(`Branch ${branch} already exists. Use the next attempt id instead of reusing it.`);
     }
     if (existsSync(worktreePath)) throw new WorktreeError(`${toRepoPath(path.relative(this.repoRoot, worktreePath))} already exists on disk.`);
-    const conflicts = this.conflictsWith(registry.worktrees, taskId, claims);
+    // Collision guard: another ledger on this repo must not hold the branch or the folder we are about to make.
+    if (others.branches.has(branch)) throw new WorktreeError(`Branch ${branch} already belongs to another ledger on this repo; nothing was created.`);
+    if (others.paths.some((item) => samePath(item, worktreePath))) throw new WorktreeError(`${toRepoPath(path.relative(this.repoRoot, worktreePath))} already belongs to another ledger on this repo; nothing was created.`);
+    const conflicts = this.conflictsWith([...registry.worktrees, ...others.worktrees], taskId, claims);
     if (conflicts.length) throw new WorktreeError(`${taskId} claims files already claimed: ${conflicts.map((c) => `${c.mine} (${c.taskId})`).join(", ")}.`);
 
     await this.excludeWorktreeDir();
@@ -191,7 +218,7 @@ export class WorktreeManager {
     try {
       const realPath = realDir(worktreePath);
       if (!isWithin(realDir(this.worktreeRoot), realPath)) throw new WorktreeError("Worktree folder was redirected outside .perfect-planner/worktrees.");
-      const port = await this.freePort(registry.worktrees);
+      const port = await this.freePort(registry.worktrees, others);
       const tracked = new Set(lines(await git(this.repoRoot, ["ls-files", "--", ".env*"])));
       const settings = copyLocalSettings(this.repoRoot, realPath, tracked);
       if (this.secretScan) await this.installSecretScan(realPath);
@@ -465,6 +492,8 @@ export class WorktreeManager {
     const missing = registry.worktrees.filter((info) => !listed.some((item) => samePath(item, info.path))).map((info) => info.taskId);
     const untracked = listed
       .filter((item) => isWithin(this.worktreeRoot, path.resolve(item)) || isWithin(realDir(this.worktreeRoot), path.resolve(item)))
+      // Only folders directly under our root are ours: another ledger's live below its own namespace folder.
+      .filter((item) => samePath(path.dirname(path.resolve(item)), this.worktreeRoot) || samePath(path.dirname(path.resolve(item)), realDir(this.worktreeRoot)))
       .filter((item) => !registry.worktrees.some((info) => samePath(item, info.path)))
       .map((item) => path.basename(item));
     return { missing, untracked };
@@ -476,7 +505,43 @@ export class WorktreeManager {
   }
 
   private async registryFile(): Promise<string> {
-    return path.join(await this.gitCommonDir(), "perfect-planner", "worktrees.json");
+    return path.join(await this.gitCommonDir(), "perfect-planner", this.namespace ? `worktrees.${this.namespace}.json` : "worktrees.json");
+  }
+
+  /**
+   * What the other ledgers sharing this git repo hold (their registries sit beside ours in the repo's git folder).
+   * Their branches, folders, ports and file claims are off limits to this ledger: a worktree that would land on
+   * any of them is refused instead of created.
+   */
+  private async otherLedgers(): Promise<OtherLedgers> {
+    const own = path.basename(await this.registryFile());
+    const dir = path.join(await this.gitCommonDir(), "perfect-planner");
+    const out: OtherLedgers = { worktrees: [], branches: new Set(), paths: [], ports: new Set() };
+    let names: string[] = [];
+    try {
+      names = readdirSync(dir);
+    } catch {
+      return out;
+    }
+    for (const name of names) {
+      if (name === own || !/^worktrees(?:\.l-[0-9a-f]{8})?\.json$/.test(name)) continue;
+      let parsed: Registry;
+      try {
+        parsed = JSON.parse(readFileSync(path.join(dir, name), "utf8")) as Registry;
+      } catch {
+        // An unreadable neighbour cannot be checked, so nothing is created beside it.
+        throw new WorktreeError(`${name} (another ledger's worktree list in this repo) cannot be read, so no worktree was created. Fix or move that file, then try again.`);
+      }
+      if (!Array.isArray(parsed.worktrees)) continue;
+      const tag = name === "worktrees.json" ? "the first ledger" : `ledger ${name.slice("worktrees.".length, -".json".length)}`;
+      for (const info of parsed.worktrees) {
+        out.worktrees.push({ ...info, taskId: `${info.taskId} of ${tag}` });
+        out.branches.add(info.branch);
+        out.paths.push(info.path);
+        out.ports.add(info.port);
+      }
+    }
+    return out;
   }
 
   private async readRegistry(): Promise<Registry> {
@@ -517,16 +582,21 @@ export class WorktreeManager {
   /** Keeps this repo's leases equal to the ports its registry holds; a lease with no worktree behind it is dropped. */
   private syncLeases(registry: Registry): void {
     const held = new Set(registry.worktrees.map((info) => info.port));
-    for (const [port, holder] of PORT_LEASES) if (holder === this.repoRoot && !held.has(port)) PORT_LEASES.delete(port);
-    for (const port of held) PORT_LEASES.set(port, this.repoRoot);
+    for (const [port, holder] of PORT_LEASES) if (holder === this.leaseKey && !held.has(port)) PORT_LEASES.delete(port);
+    for (const port of held) PORT_LEASES.set(port, this.leaseKey);
   }
 
-  private async freePort(taken: WorktreeInfo[]): Promise<number> {
+  /** Who holds this manager's dev-server ports in this process: the repo, and the ledger within it when several share it. */
+  private get leaseKey(): string {
+    return this.namespace ? `${this.repoRoot}#${this.namespace}` : this.repoRoot;
+  }
+
+  private async freePort(taken: WorktreeInfo[], others: OtherLedgers): Promise<number> {
     const used = new Set(taken.map((info) => info.port));
     for (let port = this.portRange[0]; port <= this.portRange[1]; port += 1) {
       const holder = PORT_LEASES.get(port);
-      if (!used.has(port) && (!holder || holder === this.repoRoot) && (await portIsFree(port))) {
-        PORT_LEASES.set(port, this.repoRoot);
+      if (!used.has(port) && (!holder || holder === this.leaseKey) && !others.ports.has(port) && (await portIsFree(port))) {
+        PORT_LEASES.set(port, this.leaseKey);
         return port;
       }
     }

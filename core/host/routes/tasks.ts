@@ -10,7 +10,7 @@
 // this screen. Agents never reach these routes; they use the MCP tools.
 import fs from "node:fs";
 import path from "node:path";
-import { deriveState, sensitiveChanges, testSupportFiles, type GateState } from "../../gate/index";
+import { deriveState, sensitiveChanges, testSupportFiles, unalteredPins, type GateState } from "../../gate/index";
 import type { Actor } from "../../ledger/index";
 import type { AgentKind } from "../agentKinds";
 import { attemptLabel, unmetDependencies, waitingMessage, type TaskView } from "../../mcp/index";
@@ -23,12 +23,13 @@ import { AGENT_SERVER_NAME, agentEntryPath, connectLine, nodeBinary, quoteFor, t
 export { quoteFor };
 import { localPerson, localPersonId } from "./people";
 import { PRIMARY_REPO, readRepos } from "../../repos/index";
+import { sandboxStatus } from "../../exec/index";
 import { replayRoster } from "../../people/index";
 import { protectRepository } from "../project";
 import { chosenRepoRoot, repoRefusal } from "../protectedRoots";
 import { syncJevPolicy } from "./decisions";
 import { jevActor, jevApprovedDiff, jevView, reviewDiffWithJev, reviewTestWithJev, sendBackNotes, type JevLine } from "./jev-review";
-import { repoClaimRefusal } from "../repoClaim";
+import { repoClaimRefusal, repoNamespaceFor } from "../repoClaim";
 import { isNetworkPath } from "../tokenFile";
 
 // Kept here too for older imports; they live in ../protectedRoots so connect.mjs can use them without the routes.
@@ -175,17 +176,20 @@ function repoOfLabel(project: CoreProject, label: string): string | null {
   return project.service.board().get(label.replace(/\.a\d+$/, ""))?.repo ?? null;
 }
 
-function manager(project: CoreProject, root: string, name: string | null = null): WorktreeManager {
+/** The worktree manager for one repo of the project. Ledgers that share a git folder each get their own (see repoClaim.ts). */
+async function manager(project: CoreProject, root: string, name: string | null = null): Promise<WorktreeManager> {
   const real = fs.realpathSync(root);
+  const namespace = await repoNamespaceFor(project, real);
   let all = project.state.get(MANAGERS) as Map<string, WorktreeManager> | undefined;
   if (!all) {
     all = new Map();
     project.state.set(MANAGERS, all);
   }
-  let current = all.get(real);
+  const key = namespace ? `${real}#${namespace}` : real;
+  let current = all.get(key);
   if (!current) {
-    current = new WorktreeManager({ repoRoot: root, ledger: project.ledger, maxParallel: parallelCap() });
-    all.set(real, current);
+    current = new WorktreeManager({ repoRoot: root, ledger: project.ledger, maxParallel: parallelCap(), ...(namespace ? { namespace } : {}) });
+    all.set(key, current);
     project.protectRoots([current.repoRoot, current.worktreeRoot]);
   }
   // The first repo's manager stays where older readers (the connect roots, tests) look for it.
@@ -355,7 +359,7 @@ function viewTask(project: CoreProject, task: TaskView, worktrees: WorktreeInfo[
 
 async function listWorktrees(project: CoreProject, repo: RepoState): Promise<WorktreeInfo[]> {
   if (!repo.ok || !repo.root) return [];
-  const list = await manager(project, repo.root, repo.name).list().catch(() => []);
+  const list = await (await manager(project, repo.root, repo.name)).list().catch(() => []);
   // Only other repos are tagged: the first repo's worktrees look exactly as they always did.
   return repo.name === PRIMARY_REPO ? list : list.map((info) => ({ ...info, repo: repo.name }));
 }
@@ -368,13 +372,23 @@ async function allRepos(project: CoreProject): Promise<{ repos: RepoState[]; wor
   return { repos, worktrees: lists.flat() };
 }
 
+/**
+ * Whether approved test commands run inside the OS sandbox. True only when the person opted in
+ * (PP_CONTAIN_TESTS=1, the same switch testRunnerFor reads), this is Linux and bubblewrap works.
+ * Never true on Windows or macOS. Anything else is "not contained", and the screen says so.
+ */
+export async function containmentView(env: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform): Promise<{ contained: boolean; by?: "bubblewrap" }> {
+  if (env.PP_CONTAIN_TESTS !== "1" || platform !== "linux") return { contained: false };
+  return (await sandboxStatus(platform, env)).kind === "bubblewrap" ? { contained: true, by: "bubblewrap" } : { contained: false };
+}
+
 export async function overview(project: CoreProject) {
   const { repos, worktrees } = await allRepos(project);
   const board = project.service.board();
   const assignments = replayRoster(project.entries(), project.ledger.owner).assignments;
   const tasks = [...board.values()].map((task) => viewTask(project, task, worktrees, board, assignments));
   const settings = taskSettings(project);
-  return { repo: repos[0]!, settings, queue: queueOf(tasks, settings.limit), repos: repos.map((repo) => ({ ...repo, worktrees: worktrees.filter((w) => (w.repo ?? PRIMARY_REPO) === repo.name).length })), tasks, groups: taskGroups(tasks) };
+  return { repo: repos[0]!, containment: await containmentView(), settings, queue: queueOf(tasks, settings.limit), repos: repos.map((repo) => ({ ...repo, worktrees: worktrees.filter((w) => (w.repo ?? PRIMARY_REPO) === repo.name).length })), tasks, groups: taskGroups(tasks) };
 }
 
 /** Tasks split from one plan task over several repos, in task order, with whether every part is ready to merge. */
@@ -426,7 +440,7 @@ function refuse(result: { ok: boolean; reason?: string }): void {
 async function worktreeFor(project: CoreProject, label: string): Promise<WorktreeInfo> {
   const name = repoOfLabel(project, label);
   const root = await requireRepo(project, name);
-  const tree = await manager(project, root, name).get(label);
+  const tree = await (await manager(project, root, name)).get(label);
   if (!tree) throw new HttpError(409, "NO_WORKTREE", `${label} has no worktree yet. Start a worker on it first.`);
   return tree;
 }
@@ -510,7 +524,7 @@ async function dispatch(project: CoreProject, host: CoreHost, id: string, body: 
   const model = typeof body.model === "string" && body.model.trim() ? body.model.trim() : undefined;
   if (model !== undefined && !MODEL.test(model)) throw new HttpError(400, "INVALID", "Name the worker's model in letters, digits and . _ : / - (for example claude-sonnet-4).");
   const label = attemptLabel(task);
-  const worktrees = manager(project, root, repoName);
+  const worktrees = await manager(project, root, repoName);
   let tree = await worktrees.get(label);
   if (!tree) {
     try {
@@ -572,7 +586,7 @@ async function updateFromMain(project: CoreProject, id: string) {
   await worktreeFor(project, label);
   let result;
   try {
-    result = await manager(project, root, repoName).updateFromMain(label);
+    result = await (await manager(project, root, repoName)).updateFromMain(label);
   } catch (error) {
     if (error instanceof WorktreeError) throw new HttpError(409, "NO_WORKTREE", error.message);
     throw error;
@@ -617,7 +631,7 @@ async function releaseFileClaims(project: CoreProject, id: string, body: Record<
   if (!/^T-\d+(?:\.a\d+)?$/.test(id)) throw new HttpError(400, "INVALID", `"${id}" is not a task number like T-14.`);
   const repoName = repoOfLabel(project, id);
   const root = await requireRepo(project, repoName);
-  const tree = await manager(project, root, repoName).get(id);
+  const tree = await (await manager(project, root, repoName)).get(id);
   if (!tree) throw new HttpError(409, "NO_WORKTREE", `${id} has no worktree, so it holds no file claims.`);
   if (!tree.claims.length) return { released: [], message: `${id} holds no file claims.`, ...(await overview(project)) };
   const stale = staleClaimReason(project, tree, project.service.board());
@@ -641,7 +655,7 @@ async function releaseFileClaims(project: CoreProject, id: string, body: Record<
     refs: [],
     data: { claimsReleased: files, stale, by: "person" },
   });
-  const done = await manager(project, root, repoName).releaseClaims(id, files);
+  const done = await (await manager(project, root, repoName)).releaseClaims(id, files);
   return { released: done.released, remaining: done.remaining, stale, message: `Released ${done.released.join(", ")}. Other tasks can claim ${done.released.length === 1 ? "it" : "them"} now.`, ...(await overview(project)) };
 }
 
@@ -686,11 +700,8 @@ async function changedFiles(project: CoreProject, label: string, tree: { path: s
   const state = deriveState(project.entries(), label);
   const pinned = Object.keys(state.approval?.pins ?? {});
   const support = state.definition ? await testSupportFiles(tree.path, [tree.baseSha, tip], pinned, state.definition.command) : new Set<string>();
-  // The approved test files themselves are not flagged once the test has passed at this very tip: the gate refuses a
-  // pinned file that differs from what the person approved (on disk and in the commit), so they are byte for byte
-  // the ones already read at approval. Their helpers, imports and anything else beside them stay flagged.
-  const unchanged = state.worktree?.passed && state.worktree.commit?.toLowerCase() === tip.toLowerCase() ? new Set(pinned) : new Set<string>();
-  return { files, sensitive: sensitiveChanges(files, pinned, support).filter((file) => !unchanged.has(file)).sort() };
+  const unchanged = state.approval ? await unalteredPins(tree.path, tip, state.approval.pins) : new Set<string>();
+  return { files, sensitive: sensitiveChanges(files, pinned, support, unchanged).sort() };
 }
 
 /** A refusal plus the end of the test's own output, so the person sees why the test failed. */
@@ -929,7 +940,7 @@ export function registerTaskRoutes(router: Router): void {
     dispatches(project).delete(label);
     // A watcher pass that began before the task was done may still have git running in its folder, which Windows will not remove.
     await project.watch?.tick();
-    const removed = await manager(project, root, task.repo).remove(label, WORKTREES_ACTOR).catch((error: Error) => ({ error: error.message }));
+    const removed = await (await manager(project, root, task.repo)).remove(label, WORKTREES_ACTOR).catch((error: Error) => ({ error: error.message }));
     return { merged: true, commit: merged.mergeCommit, into: tree.baseRef, removed, ...(await overview(project)) };
   };
   router.post("/tasks/:id/merge", ({ project, params, body }) => mergeTask(project, params.id!, body));

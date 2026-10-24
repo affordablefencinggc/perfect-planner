@@ -1,14 +1,19 @@
-// One git folder, one project. Worktrees, the pp/* branches, the dev-server ports and the registry of task
-// folders belong to the git folder, not to a project. Two projects that handed workers the same git folder
-// would share their T-1: the second dispatch would find the first project's worktree and hand its worker
-// that checkout, and checks and approvals would be made against the other project's commits.
+// Several ledgers (projects) may share one git folder, each kept apart. Worktrees, the pp/* branches, the
+// dev-server ports and the registry of task folders live in the git folder, and every ledger numbers its tasks
+// from T-1, so two ledgers handing out the same names would share a T-1: the second dispatch would find the
+// first one's worktree, and checks and approvals would be made against the other ledger's commits.
 //
 // The first project to use a git folder writes a small record into the repo's own git folder
-// (<git common dir>/perfect-planner/project.json, never committed). Another project is refused while the
-// first still uses the folder. When the first project stopped using it (its folder is gone, or it points
-// at another git folder) the record is stale and can be taken over, but only if no worktree registered in
-// the repo came from somewhere else: work started by another project is preserved and named, never
-// adopted, moved or removed.
+// (<git common dir>/perfect-planner/project.json, never committed) and keeps the plain names (pp/T-1,
+// .perfect-planner/worktrees/T-1, worktrees.json). Every further project that uses the folder while the first
+// still does gets a namespace of its own, "l-" and eight hex digits from its folder, recorded in
+// perfect-planner/projects/<namespace>.json: its branches are pp/<namespace>/T-1, its folders
+// .perfect-planner/worktrees/<namespace>/T-1 and its registry worktrees.<namespace>.json (core/worktrees).
+// A namespace that two different folders would share, or a record that cannot be read, is refused.
+// When the first project stopped using the folder (its folder is gone, or it points at another git folder) the
+// record is stale and can be taken over, but only if no worktree registered under the plain names came from
+// somewhere else: work started by another project is preserved and named, never adopted, moved or removed.
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { runGit } from "../worktrees/index";
@@ -19,6 +24,7 @@ import { extraRepoRoots } from "../repos/index";
 
 const CLAIM_FILE = "project.json";
 const REGISTRY_FILE = "worktrees.json";
+const LEDGERS_DIR = "projects";
 
 interface Claim {
   /** The folder that holds the project's .perfect-planner/ledger. */
@@ -87,9 +93,54 @@ function registeredTasks(dir: string): string[] {
   }
 }
 
+/** The namespace this project's worktrees take when it shares a git folder with another one. Stable for the folder. */
+export function ledgerNamespace(project: CoreProject): string {
+  return `l-${createHash("sha256").update(folderIdentity(project.root)).digest("hex").slice(0, 8)}`;
+}
+
+/**
+ * The namespace `project` uses in the git folder `top`: null when it is (or would become) the folder's first
+ * ledger and keeps the plain names, otherwise its own. Reads only; the claim itself is made by repoClaimRefusal.
+ */
+export async function repoNamespaceFor(project: CoreProject, top: string): Promise<string | null> {
+  const dir = await commonDirOf(top);
+  if (!dir) return null;
+  const found = readClaim(path.join(dir, "perfect-planner", CLAIM_FILE));
+  if (found.state !== "ok") return null;
+  if (folderIdentity(found.claim.folder) === folderIdentity(project.root)) return null;
+  return (await ownerStillUses(found.claim.folder, dir)) ? ledgerNamespace(project) : null;
+}
+
+/** A further ledger's own record in the repo: null when it may use the folder, otherwise why not. */
+function claimNamespace(project: CoreProject, dir: string, write: boolean): string | null {
+  const namespace = ledgerNamespace(project);
+  const file = path.join(dir, "perfect-planner", LEDGERS_DIR, `${namespace}.json`);
+  const mine = folderIdentity(project.root);
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const found = readClaim(file);
+    if (found.state === "unreadable") {
+      return `This git folder keeps a note of which project uses it (${file}), and that note cannot be read, so it was not handed to this project. If no other project uses this folder, move that one small file aside and try again. Nothing was changed.`;
+    }
+    if (found.state === "ok") {
+      if (folderIdentity(found.claim.folder) === mine) return null;
+      return `Another project (${found.claim.key}) already holds the name ${namespace} in this git folder, so this project could not get a worktree area of its own there. Choose a different git folder for this project. Nothing was changed.`;
+    }
+    if (!write) return null;
+    try {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      const record: Claim = { folder: fs.realpathSync.native(project.root), key: project.key, at: new Date().toISOString() };
+      fs.writeFileSync(file, `${JSON.stringify(record, null, 2)}\n`, { flag: "wx" });
+      return null;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    }
+  }
+  return "Another project just took this git folder. Choose a different one.";
+}
+
 /**
  * Null when `project` may hand workers the git folder `top`; otherwise the plain-words reason it may not.
- * With `write` the project also records itself as the folder's user (the first dispatch, or the person
+ * With `write` the project also records itself as a user of the folder (the first dispatch, or the person
  * choosing the folder). Without it nothing is written, so a screen can look at the folder safely.
  */
 export async function repoClaimRefusal(project: CoreProject, top: string, { write }: { write: boolean }): Promise<string | null> {
@@ -101,9 +152,8 @@ export async function repoClaimRefusal(project: CoreProject, top: string, { writ
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const found = readClaim(file);
     if (found.state === "ok" && folderIdentity(found.claim.folder) === mine) return null;
-    if (found.state === "ok" && (await ownerStillUses(found.claim.folder, dir))) {
-      return `Another project on this computer (${found.claim.key}) already uses this git folder, and workers there would share its worktrees and branches. Choose a different git folder for this project, or stop using this one in the other project first. Nothing was changed.`;
-    }
+    // Another live project already holds the plain names: this one takes a namespace of its own beside it.
+    if (found.state === "ok" && (await ownerStillUses(found.claim.folder, dir))) return claimNamespace(project, dir, write);
     if (found.state === "unreadable") {
       return `This git folder keeps a note of which project uses it (${file}), and that note cannot be read, so it was not handed to this project. If no other project uses this folder, move that one small file aside and try again. Nothing was changed.`;
     }

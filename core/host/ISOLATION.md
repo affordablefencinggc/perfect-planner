@@ -62,22 +62,39 @@ Every line names the test (file, then the start of its title) that attacks it. A
 - The MVP scan folder cannot be aimed at another project: not with `..`, an absolute path, a backslash path or a
   link (`BAD_PATH`). "the MVP scan folder cannot be aimed at another project".
 
-**One git folder, one project** (new in this lane: `repoClaim.ts`)
+**Several projects on one git folder** (`repoClaim.ts`, `core/worktrees`)
 
-Worktrees, the `pp/T-n` branches, the port table and the worktree registry belong to the git folder, not the
-project. Before this lane two projects given the same repo shared T-1: B's dispatch found A's worktree and handed
-its worker A's checkout. Now the first project to use a git folder writes a record in the repo's own git folder
-and another project is refused (409 `REPO_IN_USE`) in choosing it, in dispatching on it and in reading it.
-All in "a git folder is used by one project":
+Worktrees, the `pp/T-n` branches, the port table and the worktree registry live in the git folder, and every
+project numbers its tasks from T-1. Before `repoClaim.ts` two projects given the same repo shared T-1: B's
+dispatch found A's worktree and handed its worker A's checkout. The fix first refused the second project
+(409 `REPO_IN_USE`). Now, at the owner's choice (2026-10-23, "one repo might have multiple ledgers"), a git folder
+can hold several ledgers, each kept apart:
 
-- the same git folder cannot be given to a second project, and the first project's worktree is untouched;
+- the first project to use the folder writes a record in the repo's own git folder (`project.json`) and keeps the
+  plain names (`pp/T-1`, `.perfect-planner/worktrees/T-1`, `worktrees.json`);
+- every further project gets a namespace `l-` plus eight hex digits from its folder, recorded in
+  `perfect-planner/projects/<namespace>.json`: branches `pp/<namespace>/T-1`, folders
+  `.perfect-planner/worktrees/<namespace>/T-1`, registry `worktrees.<namespace>.json`, and its own cap on
+  parallel worktrees;
+- collision guard (`WorktreeManager`): a worktree is refused when another ledger's registry holds the branch,
+  the folder or a file claim; a dev-server port another ledger holds is never handed out; a neighbouring
+  registry that cannot be read stops creation beside it; two folders that would share a namespace are refused;
+- merges into the repo's main checkout are queued one at a time (`oneMergeAtATime`), whichever ledger asks.
+
+All in "several projects can share one git folder":
+
+- a second project on A's git folder gets worktrees, branches and a registry of its own, and A's worktree is
+  untouched (also `core/worktrees/ledgers.test.ts` for the guard, and `core/attack/multi-ledger.test.ts` for
+  several ledgers x several workers on one repo, all merging);
 - a folder an older app already filled with A's worktrees (a registry, no record) is not handed to B;
 - when A moves to another git folder, B may take the old one over, but when A is gone and its worktrees are not,
   B may not (work started elsewhere is named and kept, never adopted);
 - a damaged record is not guessed around (the one file to move aside is named);
 - a symlink planted where the next worktree goes is refused, and nothing lands in the other project's repo;
-- two projects choosing the same unused git folder at the same moment: exactly one gets it;
-- another spelling of A's git folder (a worktree of it, a link to it, a path with dots) is still A's folder;
+- two projects choosing the same unused git folder at the same moment: one holds the plain names, the other a
+  namespace of its own;
+- another spelling of A's git folder (a worktree of it, a link to it, a path with dots) is still A's folder, and
+  the second project gets one namespace, not one per spelling;
 - a git folder written as a network path, another drive's path, a URL or a home shortcut is refused and nothing
   is recorded; a network path saved in a project's own repo.json is never looked at on Windows (UNC, device and
   mixed-slash spellings). Checked as strings.

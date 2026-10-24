@@ -188,6 +188,7 @@ export function CoreAgentConnect() {
                 and installs the Perfect Planner skill for {choice.label} on this computer. Then {choice.start} and say{" "}
                 <strong>check in with Perfect Planner</strong>. Already in {choice.label}? Paste the line into the chat; it shows you the line and runs it only after you say yes.
               </p>
+              {choice.id !== "claude" && <p className="core-muted">Beta. {choice.id === "gemini" ? "Gemini needs Trust folder chosen before the connect line, and its headless shell may be denied." : "Codex allows one connection per computer."}</p>}
               {choice.id === "codex" && <p className="core-muted">Codex keeps one Perfect Planner connection for the whole computer, so this replaces any earlier Codex connection.</p>}
               {pending.warning && <p className="core-agent-connect-warn">{pending.warning}</p>}
               <div className="core-agent-connect-snippet">

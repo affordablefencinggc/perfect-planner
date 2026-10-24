@@ -48,6 +48,7 @@ function AddMemberForm({ members, firstMember, starter, onAddMember }) {
   return (
     <form className="people-form" aria-label="Add helper" onSubmit={submit}>
       <h3>{firstMember ? "Add the first person" : "Add helper"}</h3>
+      <p className="people-hint">This only records the person here. Nothing is sent to them. Helpers share this project through git.</p>
       <label>Name<input value={name} onChange={(e) => setName(e.target.value)} autoComplete="off" /></label>
       <label>Person id<input value={person} onChange={(e) => setIdEdit(e.target.value)} readOnly={Boolean(fixedId)} autoComplete="off" aria-invalid={idProblem ? "true" : undefined} /></label>
       {fixedId && <p className="people-hint">You have already been working on this project as {fixedId}, so that stays your person id.</p>}

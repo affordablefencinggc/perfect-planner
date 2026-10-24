@@ -253,6 +253,16 @@ describe("TasksScreen", () => {
     expect(within(after).getByRole("button", { name: "Start worker" })).toBeTruthy();
   });
 
+  test("a stalled worker's task shows the stalled flag beside the Release button", async () => {
+    const tree = { path: "/w", branch: "pp/T-1", base: "main", port: 5200 };
+    routeFetch({ "GET /tasks": async () => ok(view([task({ status: "claimed", owner: "worker-1", stage: "building", worktree: tree, stalled: true })])) });
+    renderScreen();
+    const t1 = await card("T-1 Save notes");
+    const flag = within(t1).getByText("stalled");
+    const release = within(t1).getByRole("button", { name: "Release claim" });
+    expect(flag.nextElementSibling).toBe(release);
+  });
+
   const jevTree = { path: "/w", branch: "pp/T-1", base: "main", port: 5200 };
   const jevTest = { entry: "L-000007", command: "npm test", files: ["save.test.js"], by: "worker-1" };
 
@@ -475,5 +485,25 @@ describe("TasksScreen queue and batch", () => {
     fireEvent.click(await screen.findByRole("button", { name: /Merge into main/ }));
     const notice = await screen.findByText(/main was left untouched/);
     expect(notice.textContent).toContain("expected 2 got 3");
+  });
+
+  describe("containment disclosure", () => {
+    const proposed = () => task({ stage: "test-proposed", worktree: { path: "/w", branch: "pp/T-1", base: "main", port: 5200 }, test: { command: "node t.mjs", files: ["t.mjs"], entry: "L-000007", by: { kind: "agent", id: "w", model: "m" } } });
+    test.each([["no containment field (older host / Windows)", undefined], ["not contained", { contained: false }]])("%s: approve-test card and screen say NOT contained", async (_n, containment) => {
+      routeFetch({ "GET /tasks": async () => ok({ ...view([proposed()]), ...(containment ? { containment } : {}) }) });
+      renderScreen();
+      const c = await card("T-1 Save notes");
+      expect(within(c).getByText("This command runs as you, with your files and network.")).toBeTruthy();
+      expect(screen.getAllByText("NOT contained").length).toBeGreaterThan(0);
+      expect(screen.queryByText("contained: bubblewrap")).toBeNull();
+    });
+    test("contained: shows the bubblewrap pill and not the runs-as-you sentence", async () => {
+      routeFetch({ "GET /tasks": async () => ok({ ...view([proposed()]), containment: { contained: true, by: "bubblewrap" } }) });
+      renderScreen();
+      await card("T-1 Save notes");
+      expect(screen.getByText("contained: bubblewrap")).toBeTruthy();
+      expect(screen.queryByText("NOT contained")).toBeNull();
+      expect(screen.queryByText("This command runs as you, with your files and network.")).toBeNull();
+    });
   });
 });

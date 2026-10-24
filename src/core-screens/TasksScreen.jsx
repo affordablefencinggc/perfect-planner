@@ -92,6 +92,10 @@ function JevLine({ label, line }) {
   );
 }
 
+// What running a test means for the person's computer. The host says whether the opt-in sandbox is on.
+const Pill = ({ contained }) => <span className={`core-pill ${contained ? "good" : "bad"}`}>{contained ? "contained: bubblewrap" : "NOT contained"}</span>;
+const Disclosure = ({ contained }) => <p className="core-muted core-tasks-line">{contained ? "This command runs in a bubblewrap sandbox: no network, writes only in its worktree." : "This command runs as you, with your files and network."}</p>;
+
 function RepoPicker({ repo, onSave }) {
   const [root, setRoot] = useState(repo.suggested ?? "");
   const [error, setError] = useState(null);
@@ -145,7 +149,7 @@ function SensitiveBlock({ diff, confirmed, onConfirm, canConfirm }) {
       <WarningCircleIcon weight="fill" aria-hidden="true" />
       <div>
         <strong>This diff changes {files.length === 1 ? "a file" : `${files.length} files`} that can run code on your computer.</strong>
-        <p>Install scripts, lockfiles, git settings and hooks, CI workflows and npm settings run or change programs when you install, push or merge. Test files are listed too, because a test can change what the approved test checks or run code when it is run, so the worker's own test file shows up on every task. Read each one in the diff below before approving.</p>
+        <p>Install scripts, lockfiles, git settings and hooks, CI workflows and npm settings run or change programs when you install, push or merge. Test files are listed too, because a test can change what the approved test checks or run code when it is run. The test you approved is not listed while it is exactly as you approved it. Read each one in the diff below before approving.</p>
         <ul>{files.map((file) => <li key={file}><code>{file}</code></li>)}</ul>
         {canConfirm && (
           <label className="core-tasks-sensitive-confirm">
@@ -171,7 +175,7 @@ function DiffView({ diff }) {
   );
 }
 
-function TaskCard({ task, repoRoot, project, act, busy, notice, dispatchFor, onDispatched, onHideDispatch, showRepo }) {
+function TaskCard({ contained, task, repoRoot, project, act, busy, notice, dispatchFor, onDispatched, onHideDispatch, showRepo }) {
   const [model, setModel] = useState(task.dispatch?.model ?? DEFAULT_WORKER_MODEL);
   const [diff, setDiff] = useState(null);
   const [diffError, setDiffError] = useState(null);
@@ -233,7 +237,7 @@ function TaskCard({ task, repoRoot, project, act, busy, notice, dispatchFor, onD
       {task.lastProgress && <p className="core-tasks-line"><span className="core-muted">Latest</span> {task.lastProgress}</p>}
       {task.proofs.length > 0 && <p className="core-tasks-line"><span className="core-muted">Proof</span> {task.proofs.map((p) => `${p.kind} ${p.link.slice(0, 12)}`).join(", ")}</p>}
       {task.check && task.stage !== "done" && (
-        <p className="core-tasks-line"><span className="core-muted">Last check</span> {task.check.passed ? "passed" : "failed"}{task.check.commit ? ` at ${task.check.commit.slice(0, 12)}` : ""}</p>
+        <p className="core-tasks-line"><span className="core-muted">Last check</span> <Pill contained={contained} /> {task.check.passed ? "passed" : "failed"}{task.check.commit ? ` at ${task.check.commit.slice(0, 12)}` : ""}</p>
       )}
       {task.merged && <p className="core-tasks-line"><span className="core-muted">Merged</span> {task.merged.commit?.slice(0, 12)}</p>}
       <WorkHeader
@@ -255,6 +259,7 @@ function TaskCard({ task, repoRoot, project, act, busy, notice, dispatchFor, onD
 
       {notice && <p className={`core-tasks-notice ${notice.tone}`} role="status">{notice.text}</p>}
 
+      {(task.stage === "test-proposed" || task.stage === "test-approved") && <Disclosure contained={contained} />}
       <div className="core-tasks-actions">
         {canStart && !dispatchFor && (
           <span className="core-tasks-start">
@@ -275,7 +280,7 @@ function TaskCard({ task, repoRoot, project, act, busy, notice, dispatchFor, onD
           </button>
         )}
         {task.stage === "building" && (
-          <button type="button" className="core-button primary" onClick={() => run("check", `/tasks/${id}/check`)} disabled={working}>Check the work</button>
+          <button type="button" className="core-button primary" onClick={() => run("check", `/tasks/${id}/check`)} disabled={working} title={working ? "Another step on this task is still running." : undefined}>Check the work</button>
         )}
         {(task.stage === "review-diff" || task.stage === "ready-to-merge") && (
           <>
@@ -293,6 +298,7 @@ function TaskCard({ task, repoRoot, project, act, busy, notice, dispatchFor, onD
             )}
           </>
         )}
+        {canRelease && task.stalled && <span className="core-pill warn">stalled</span>}
         {canRelease && !releasing && (
           <button type="button" className="core-button" onClick={() => setReleasing(true)} disabled={working}>Release claim</button>
         )}
@@ -496,6 +502,7 @@ export default function TasksScreen() {
       {data?.repo?.ok && !manyRepos && (
         <p className="core-muted core-tasks-repo-line">Workers branch from <code>{data.repo.root}</code></p>
       )}
+      {data?.repo?.ok && data.tasks.length > 0 && <p className="core-muted core-tasks-repo-line">Test commands: <Pill contained={data.containment?.contained === true} /></p>}
       {data?.repo?.ok && data.repos && <RepoBar repos={data.repos} onAdd={addRepo} onRemove={removeRepo} />}
       {notices.repo && <p className={`core-tasks-notice ${notices.repo.tone}`}>{notices.repo.text}</p>}
       {data?.groups?.map((group) => <GroupBar key={group.group} group={group} tasks={data.tasks} busy={busy === `group:${group.group}`} notice={notices[`group:${group.group}`]} onMerge={mergeGroup} />)}
@@ -505,6 +512,7 @@ export default function TasksScreen() {
           {data.tasks.map((task) => (
             <TaskCard
               key={task.id}
+              contained={data.containment?.contained === true}
               task={task}
               showRepo={manyRepos}
               repoRoot={(data.repos?.find((r) => r.name === (task.repo ?? "main")) ?? data.repo)?.root}
