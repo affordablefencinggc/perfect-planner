@@ -1432,12 +1432,44 @@
   > details
   > .workspace-tree-children
   > .workspace-tree-node::before {
-  top: -1px;
+  top: -16px;
   left: 50%;
   width: 1px;
-  height: 33px;
+  height: 16px;
   border-top: 0;
   border-left: 1px solid #89928e;
+}
+/* Horizontal line joining the cards in a row; the first and last card only
+   reach in from their centre, so the line never dangles past either end. */
+.workspace-tree-node.root
+  > details
+  > .workspace-tree-children
+  > .workspace-tree-node::after {
+  content: "";
+  position: absolute;
+  top: -16px;
+  left: -15px;
+  right: -15px;
+  border-top: 1px solid #89928e;
+  pointer-events: none;
+}
+.workspace-tree-node.root
+  > details
+  > .workspace-tree-children
+  > .workspace-tree-node:first-child::after {
+  left: 50%;
+}
+.workspace-tree-node.root
+  > details
+  > .workspace-tree-children
+  > .workspace-tree-node:last-child::after {
+  right: 50%;
+}
+.workspace-tree-node.root
+  > details
+  > .workspace-tree-children
+  > .workspace-tree-node:only-child::after {
+  display: none;
 }
 .empty-folder {
   margin-top: 10px;
