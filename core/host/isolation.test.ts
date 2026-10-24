@@ -305,34 +305,53 @@ describe("one folder, one ledger writer", () => {
   });
 });
 
-describe("a git folder is used by one project", () => {
-  it("the same git folder cannot be given to a second project: choosing it, dispatching on it and reading it all say so, and the first project's worktree is untouched", async () => {
-    const { ctx, alpha } = await twoProjects();
+/** The namespaces ledgers other than the first took in a repo, from perfect-planner/projects/. */
+const namespacesIn = (repo: string) => {
+  const dir = path.join(repo, ".git", "perfect-planner", "projects");
+  return fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => f.endsWith(".json")).map((f) => f.replace(/\.json$/, "")).sort() : [];
+};
+
+describe("several projects can share one git folder", () => {
+  it("a second project on A's git folder gets worktrees, branches and a registry of its own, and A's worktree is untouched", async () => {
+    const { ctx, alpha, beta } = await twoProjects();
     const a = await dispatch(ctx, alpha);
-    const registry = path.join(alpha.repo, ".git", "perfect-planner", "worktrees.json");
+    const gitDir = path.join(alpha.repo, ".git", "perfect-planner");
+    const registry = path.join(gitDir, "worktrees.json");
     const registryBefore = fs.readFileSync(registry, "utf8");
-    const betaBefore = ctx.host.project("beta").entries().length;
+    const alphaBefore = ctx.host.project("alpha").entries().length;
     fs.writeFileSync(path.join(a.worktree, "work-in-progress.txt"), "alpha's unfinished work\n");
 
     const chosen = await hostCall(ctx.base, "POST", "/tasks/repo?project=beta", { root: alpha.repo });
-    expect(chosen.status, JSON.stringify(chosen.body)).toBe(409);
-    expect(chosen.body.code).toBe("REPO_IN_USE");
-    expect(chosen.body.message).toContain("alpha");
+    expect(chosen.status, JSON.stringify(chosen.body)).toBe(200);
+    const [namespace] = namespacesIn(alpha.repo);
+    expect(namespacesIn(alpha.repo)).toHaveLength(1);
+    expect(namespace).toMatch(/^l-[0-9a-f]{8}$/);
+    expect(JSON.parse(fs.readFileSync(path.join(gitDir, "project.json"), "utf8"))).toMatchObject({ key: "alpha" });
+    expect(JSON.parse(fs.readFileSync(path.join(gitDir, "projects", `${namespace}.json`), "utf8"))).toMatchObject({ key: "beta" });
 
-    // Even if project B's repo.json already names A's folder (written by hand, or by an older app), B gets nothing.
-    fs.writeFileSync(path.join(ctx.host.project("beta").root, ".perfect-planner", "repo.json"), JSON.stringify({ root: alpha.repo }));
-    const view = await hostCall(ctx.base, "GET", "/tasks?project=beta");
-    expect(view.body.result.repo).toMatchObject({ ok: false });
-    expect(view.body.result.repo.reason).toContain("alpha");
-    const dispatched = await hostCall(ctx.base, "POST", "/tasks/T-1/dispatch?project=beta", {});
-    expect(dispatched.status).toBe(409);
-    expect(dispatched.body.message).toContain("alpha");
-    for (const route of ["approve-test", "check", "merge"]) expect((await hostCall(ctx.base, "POST", `/tasks/T-1/${route}?project=beta`, { test: "L-000003", commit: "a".repeat(40) })).status, route).toBe(409);
+    // Both projects' T-1 now run in the one repo: same task id, different branch, folder, registry and port.
+    const b = await dispatch(ctx, beta);
+    expect(b.worktree).not.toBe(a.worktree);
+    expect(a.worktree).toBe(path.join(alpha.repo, ".perfect-planner", "worktrees", "T-1"));
+    expect(b.worktree).toBe(path.join(alpha.repo, ".perfect-planner", "worktrees", namespace!, "T-1"));
+    expect(git(alpha.repo, "branch", "--list", "pp/*").split("\n").map((line) => line.replace(/^[*+ ]+/, "")).sort()).toEqual([`pp/${namespace}/T-1`, "pp/T-1"].sort());
+    expect(git(a.worktree, "rev-parse", "--abbrev-ref", "HEAD")).toBe("pp/T-1");
+    expect(git(b.worktree, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`pp/${namespace}/T-1`);
+    const first = JSON.parse(fs.readFileSync(registry, "utf8")).worktrees;
+    const second = JSON.parse(fs.readFileSync(path.join(gitDir, `worktrees.${namespace}.json`), "utf8")).worktrees;
+    expect(first).toHaveLength(1);
+    expect(second).toHaveLength(1);
+    expect(first[0].port).not.toBe(second[0].port);
 
+    // The first project's registry, files and ledger did not move for the second project's arrival.
     expect(fs.readFileSync(registry, "utf8")).toBe(registryBefore);
     expect(fs.readFileSync(path.join(a.worktree, "work-in-progress.txt"), "utf8")).toBe("alpha's unfinished work\n");
-    expect(ctx.host.project("beta").entries().length).toBe(betaBefore);
-    expect(ctx.host.project("beta").entries().some((e) => e.type === "worktree.created")).toBe(false);
+    expect(ctx.host.project("alpha").entries().length).toBe(alphaBefore);
+    // Each project sees only its own worktree in /tasks.
+    const alphaView = (await hostCall(ctx.base, "GET", "/tasks?project=alpha")).body.result.tasks as { id: string; worktree?: { path?: string } }[];
+    const betaView = (await hostCall(ctx.base, "GET", "/tasks?project=beta")).body.result.tasks as { id: string; worktree?: { path?: string } }[];
+    expect(JSON.stringify(alphaView)).not.toContain(namespace!);
+    expect(JSON.stringify(betaView)).not.toContain(`worktrees/T-1"`);
   }, 120_000);
 
   it("a folder an older app already filled with project A's worktrees is not handed to project B, record or no record", async () => {
@@ -411,18 +430,19 @@ describe("a git folder is used by one project", () => {
     expect(git(beta.repo, "branch", "--list", "pp/*")).toBe("");
   }, 120_000);
 
-  it("two projects choosing the same unused git folder at the same moment: exactly one gets it", async () => {
+  it("two projects choosing the same unused git folder at the same moment: one holds the plain names, the other a namespace of its own", async () => {
     const { ctx, alpha, beta } = await twoProjects();
     const shared = newRepo("shared");
     const [one, two] = await Promise.all([alpha, beta].map((side) => hostCall(ctx.base, "POST", `/tasks/repo?project=${side.key}`, { root: shared })));
-    expect([one!.status, two!.status].sort()).toEqual([200, 409]);
-    const loser = one!.status === 409 ? one! : two!;
-    expect(loser.body.code).toBe("REPO_IN_USE");
+    expect([one!.status, two!.status]).toEqual([200, 200]);
     const winner = JSON.parse(fs.readFileSync(path.join(shared, ".git", "perfect-planner", "project.json"), "utf8")).key as string;
-    expect([alpha.key, beta.key]).toContain(winner);
+    const loser = winner === alpha.key ? beta.key : alpha.key;
+    const [namespace] = namespacesIn(shared);
+    expect(namespacesIn(shared)).toHaveLength(1);
+    expect(JSON.parse(fs.readFileSync(path.join(shared, ".git", "perfect-planner", "projects", `${namespace}.json`), "utf8")).key).toBe(loser);
   }, 60_000);
 
-  it("another spelling of A's git folder is still A's folder: a worktree of it, a link to it, a path with dots", async () => {
+  it("another spelling of A's git folder is still A's folder: a worktree of it, a link to it, a path with dots all join the one repo, with one namespace for the second project", async () => {
     const { ctx, alpha, beta } = await twoProjects();
     const a = await dispatch(ctx, alpha);
     const link = path.join(os.tmpdir(), `pp-iso-link-${path.basename(alpha.repo)}`);
@@ -431,11 +451,12 @@ describe("a git folder is used by one project", () => {
     const spellings = [a.worktree, link, `${alpha.repo}${path.sep}.${path.sep}`, path.join(alpha.repo, "..", path.basename(alpha.repo))];
     for (const root of spellings) {
       const res = await hostCall(ctx.base, "POST", "/tasks/repo?project=beta", { root });
-      expect(res.status, `${root}: ${JSON.stringify(res.body)}`).toBe(409);
-      expect(res.body.code, root).toBe("REPO_IN_USE");
+      expect(res.status, `${root}: ${JSON.stringify(res.body)}`).toBe(200);
     }
-    expect(fs.existsSync(path.join(ctx.host.project(beta.key).root, ".perfect-planner", "repo.json"))).toBe(true);
-    expect(JSON.parse(fs.readFileSync(path.join(ctx.host.project(beta.key).root, ".perfect-planner", "repo.json"), "utf8")).root).toBe(beta.repo);
+    // Four spellings, one repo, one record: beta never gets a second namespace, and alpha stays the first ledger.
+    expect(namespacesIn(alpha.repo)).toHaveLength(1);
+    expect(JSON.parse(fs.readFileSync(path.join(alpha.repo, ".git", "perfect-planner", "project.json"), "utf8"))).toMatchObject({ key: "alpha" });
+    expect(namespacesIn(beta.repo)).toHaveLength(0);
   }, 120_000);
 
   it("a git folder written as a network path, another drive's path, a URL or a home shortcut is refused and nothing is recorded", async () => {
