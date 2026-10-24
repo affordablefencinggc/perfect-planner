@@ -1422,6 +1422,10 @@
   grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
   gap: 40px 30px;
 }
+.workspace-tree-node.root > details > .workspace-tree-children {
+  /* Trim only the sides, so a wrapped row's joining line stops at its outer cards. */
+  clip-path: inset(-120px 0 -120px 0);
+}
 .workspace-tree-node.root > details > .workspace-tree-children::before {
   top: 0;
   left: 50%;
