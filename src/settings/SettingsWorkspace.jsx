@@ -359,6 +359,7 @@ export function SettingsWorkspace({ onWorkspace, onClose, onToast, invoke, jevSt
 
           <Section id="data" title="Your data" intro="Uninstalling Perfect Planner keeps your plans, proof and settings on this computer. That is deliberate: the ledger is your record, and a reinstall picks it up again.">
             <Row title="Where it lives" help="Windows: %LOCALAPPDATA%\com.perfectplanner.desktop. macOS: ~/Library/Application Support/com.perfectplanner.desktop. Linux: ~/.local/share/com.perfectplanner.desktop." />
+            <Row title="Who can read the signing key" help="On Linux, another program you run can read the key through secret-tool. Windows Credential Manager has no per-app lock, so any program you run can ask for it." />
             <Row title="To remove it" help="Close Perfect Planner, uninstall it, then delete that folder. This cannot be undone, and it also deletes the signed ledger. Your own project folders are never in it." />
           </Section>
 
