@@ -1,0 +1,43 @@
+name: Review bot
+
+# Judges a PR's exact head with core/reviewbot and shows the verdict as this check (red unless GO)
+# and in the job summary. Read-only token, no secrets, nothing from the PR is checked out or run:
+# it checks out the BASE commit (the trusted bot) and reads the PR through the API only.
+# It cannot comment (a read-only token cannot), so it does not judge the other checks; those are
+# listed in the merge table. Linux only; the size rule needs a build, so use `--sizes` by hand.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: review-bot-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    name: Review bot
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+      # The PR that adds the bot has no bot on its base yet; the job is then a green no-op.
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        if: hashFiles('scripts/review-bot.mjs') != ''
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --ignore-scripts
+        if: hashFiles('scripts/review-bot.mjs') != ''
+      - run: node scripts/review-bot.mjs --pr "$PR_NUMBER" --skip-checks --ci
+        if: hashFiles('scripts/review-bot.mjs') != ''
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}

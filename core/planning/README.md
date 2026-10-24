@@ -118,6 +118,57 @@ The person can also add their own task (`session.addTask`, a person-signed
 leave a draft roadmap task out before approval (`dropRoadmapTask` /
 `restoreRoadmapTask`, recorded as their `decision.made` with `data.roadmap`).
 
+## Plan templates (`templates.ts`, `seed.ts`)
+
+Starter plans by kind of work, as plain data on the server (nothing in the
+client bundle): New web app, New command-line tool, Backend service / API,
+Library or package, Add a feature to an existing app, Fix a bug, Clean-up /
+refactor, Get an app ready to release. Each has a one-line description, the
+question areas to ask first and the areas "usually skipped", a default depth
+(quick, standard, thorough), suggested starter answers and a roadmap skeleton
+of tiny tasks (title, a done-when sentence, a size hint and the files it
+likely touches, by repo type; no task names more than four files).
+
+A template only suggests. It never answers a question, never approves a plan
+and never writes a task:
+
+- Choosing one is the person's `decision.made` (D-n) with `data.template`
+  `{ id, depth, context, previous }`, so it is in the ledger and can be audited.
+  `session.chooseTemplate(actor, { id, depth? , context? })` is person only; an
+  unknown id or depth is refused before anything is written; the same pick twice
+  writes nothing; `null` or "blank" is a pick too. The latest signed pick wins on
+  replay; an unsigned line, an agent's line or an answer is ignored.
+- Switching after answers exist keeps every answer, the person's own tasks and
+  the tasks they left out. Only the suggestions change. Once the roadmap is on
+  the board the template can no longer change (the same pick is still fine).
+- Suggested answers sit next to a question as "Suggestion from the <title>
+  starter". The person uses one with the ordinary answer route. "Skip the usual
+  areas" (`session.skipUsual`) is the person's tap that answers the open
+  questions in those areas "Not needed for ...", in their name. An area the idea
+  raises a signal for (payments, AI, offline) is not skipped.
+- The skeleton is adapted, not pasted. `readRepoContext(root, stack, idea)`
+  reads flags and names from the folder (manifest, tests, CI, README, language,
+  source and test folders, a validated Python package folder; nothing is run,
+  symlinks are not followed, and no free text is kept). A task the repo already
+  covers becomes an `existing` line; a task the idea rules out is listed as left
+  out, with the reason; file patterns and the test command follow the language.
+  `{subject}` in a title is the idea's first sentence, cleaned and cut to 48
+  characters. Tasks carry a `template` block `{ id, step, size, tier, files }`
+  (optional, written to the ledger as `data.template` on `task.created`).
+- Template tasks are drafts until the plan is approved: the roadmap view marks
+  them `suggested` and the approval writes them like any roadmap task.
+- The plan fingerprint includes the template (id, depth, context) only when one
+  was chosen, so an approval is for the plan as shown with that starter.
+
+Routes: `GET /planning/templates` (the same cards for every project; the repo
+and the idea cannot change the list), `POST /planning/template { template,
+depth? }`, `POST /planning/template/skip`, and `/planning/start` also takes an
+optional `template`. `types.ts` and `roadmap.ts` only gained the optional
+`template` block. Known limits: the mind map still adds its own generic test
+and release tasks next to the template's; there is no folder-based pre-selection
+of a template; depth can be set through the route but the screen does not offer
+it yet.
+
 ## Live research (`research.ts`)
 
 `ResearchProvider { name; available(); research(query, signal?) }` with

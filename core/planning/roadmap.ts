@@ -4,6 +4,7 @@
 import { isAuthoritative, type Actor, type Ledger, type LedgerEntry } from "../ledger/index";
 import { appendNumbered } from "../numbering/index";
 import { contractDigest, draftContract, normalizeContract, repoAwareDoneWhen, verifyDoneWhen } from "./contract";
+import { groupKey, splitByRepo } from "../repos/index";
 import { nodeArea } from "./mindmap";
 import type { RepoIndex } from "./repo";
 import type { MindMap, MindNode, PhaseId, Roadmap, RoadmapPhase, RoadmapTask, TaskContract } from "./types";
@@ -242,28 +243,37 @@ export function writeRoadmap(ledger: Ledger, actor: Actor, roadmap: Roadmap): Re
     contracts.set(task.key, parsed.contract);
   }
   const numbers: Record<string, string> = {};
+  /** Every number a key became: a task over several repos is one task per repo, and what waited on it waits on all of them. */
+  const parts: Record<string, string[]> = {};
   for (const task of ordered) {
     const contract = contracts.get(task.key)!;
-    const entry = appendNumbered(ledger, {
-      actor,
-      type: "task.created",
-      summary: task.title,
-      refs: [],
-      data: {
-        change: task.change,
-        phase: task.phase,
-        owner: task.owner,
-        doneWhen: task.doneWhen,
-        node: task.node,
-        dependsOn: task.dependsOn.map((d) => numbers[d]!),
-        key: task.key,
-        source: "planning",
-        contract,
-        contractDigest: contractDigest(contract),
-        contractFlags: task.contractFlags ?? [],
-      },
-    });
-    numbers[task.key] = entry.subject;
+    const dependsOn = [...new Set(task.dependsOn.flatMap((d) => parts[d]!))];
+    for (const part of splitByRepo(task.key, task.title, task.repos)) {
+      const entry = appendNumbered(ledger, {
+        actor,
+        type: "task.created",
+        summary: part.title,
+        refs: [],
+        data: {
+          change: task.change,
+          phase: task.phase,
+          owner: task.owner,
+          doneWhen: task.doneWhen,
+          node: task.node,
+          dependsOn,
+          key: task.key,
+          source: "planning",
+          contract,
+          contractDigest: contractDigest(contract),
+          contractFlags: task.contractFlags ?? [],
+          ...(part.repo ? { repo: part.repo } : {}),
+          ...(part.group ? { group: groupKey(part.group) } : {}),
+          ...(task.template ? { template: task.template } : {}),
+        },
+      });
+      numbers[task.key] ??= entry.subject;
+      (parts[task.key] ??= []).push(entry.subject);
+    }
   }
   return numbers;
 }

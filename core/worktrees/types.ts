@@ -13,6 +13,8 @@ export interface WorktreeInfo {
   createdAt: string;
   /** Repo-relative file claims, forward slashes. Advisory; the watcher reports what really changed. */
   claims: string[];
+  /** Set by the host when it lists a project's worktrees over several repos; never stored. */
+  repo?: string;
 }
 
 export const TASK_ID = /^T-[1-9]\d{0,6}(?:\.a[2-9]\d{0,3})?$/;
