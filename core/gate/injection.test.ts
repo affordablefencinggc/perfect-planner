@@ -361,4 +361,23 @@ describe("sensitiveChanges for the diff the person approves", () => {
     const tip = await commitAll(repo.root, "edit b, add c");
     expect([...(await unalteredPins(repo.root, tip, pins))]).toEqual(["tests/a.check.mjs"]);
   });
+  it("shows no flag for the approved test plus product code, keeps flags for other tests and CI files, and flags an edited copy", async () => {
+    const repo = await makeRepo({ "tests/a.check.mjs": "process.exit(0);\n", "src/app.js": "export const a = 1;\n" });
+    cleanups.push(repo.cleanup);
+    const pins = pinTestFiles(repo.root, ["tests/a.check.mjs"]);
+    const flagged = async (tip: string, changed: string[]) => sensitiveChanges(changed, Object.keys(pins), new Set(Object.keys(pins)), await unalteredPins(repo.root, tip, pins));
+    // (a) the approved test file plus product code only: nothing flagged.
+    writeFiles(repo.root, { "src/app.js": "export const a = 2;\n" });
+    const tipA = await commitAll(repo.root, "product code");
+    expect(await flagged(tipA, ["src/app.js", "tests/a.check.mjs"])).toEqual([]);
+    // (b) another test file, package.json or a CI workflow alongside it: still flagged.
+    writeFiles(repo.root, { "tests/other.check.mjs": "process.exit(0);\n", "package.json": "{}\n", ".github/workflows/ci.yml": "on: push\n" });
+    const tipB = await commitAll(repo.root, "other files");
+    const all = ["src/app.js", "tests/a.check.mjs", "tests/other.check.mjs", "package.json", ".github/workflows/ci.yml"];
+    expect(await flagged(tipB, all)).toEqual(["tests/other.check.mjs", "package.json", ".github/workflows/ci.yml"]);
+    // (c) an edited copy of the approved test is flagged.
+    writeFiles(repo.root, { "tests/a.check.mjs": "process.exit(0); // edited\n" });
+    const tipC = await commitAll(repo.root, "edit approved test");
+    expect(await flagged(tipC, ["src/app.js", "tests/a.check.mjs"])).toEqual(["tests/a.check.mjs"]);
+  });
 });
