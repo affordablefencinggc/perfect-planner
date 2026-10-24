@@ -142,8 +142,8 @@ describe("CorePlanSpine", () => {
     expect(within(cards[0]).getByText("It saves")).toBeTruthy();
     // The card being built right now stands out and says so.
     expect(cards[0].className).toContain("core-working");
-    expect(cards[0].querySelector(".core-working-badge").textContent).toBe("Claude is building this now");
-    expect(cards[1].querySelector(".core-working-badge")).toBeNull();
+    expect(cards[0].querySelector(".core-working-text").textContent).toBe("Building now");
+    expect(cards[1].className).not.toContain("core-working");
     // T-2: merged, robot parked with the green outline, diff and proof counted.
     expect(cards[1].querySelector(".perimeter-worker.running")).toBeNull();
     expect(cards[1].querySelector(".perimeter-success-trail.complete")).not.toBeNull();

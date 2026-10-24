@@ -94,13 +94,12 @@ function Vertebra({ task, side, owner, via, agents, onOpen, onPerson, people, on
   return (
     <article className={`plan-node core-vertebra${you ? " core-needs-you" : ""}${building ? " core-working" : ""}`} aria-label={`${task.label} ${task.title}`} data-stage={task.stage} data-side={side} tabIndex={0} onClick={() => onOpen(task)} onKeyDown={(event) => { if (event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); onOpen(task); } }}>
       <Robot task={task} worker={worker} />
-      {building && <span className="core-working-badge">{family ? `${family.name} is` : "A model is"} building this now</span>}
       <span className="node-header">
         <code>{task.label}</code>
         <span className="node-branch-ref" title={task.worktree?.branch ? `Branch: ${task.worktree.branch}` : "No branch yet"}><GitBranchIcon /></span>
         <strong>{task.title}</strong>
         {family && <span className="model-id-chip" title={model}>{family.name}</span>}
-        <small>{STAGE_TEXT[task.stage] ?? String(task.stage)}</small>
+        <small className={building ? "core-working-text" : undefined}>{building ? "Building now" : STAGE_TEXT[task.stage] ?? String(task.stage)}</small>
         <span className={`proof-counter${diff ? " proven" : ""}`} title="Change approved by you">DIFF {diff}/1</span>
         <span className={`proof-counter${shots ? " proven" : ""}`} title="Proof items attached">SHOT {shots}</span>
         <Owner person={owner} via={via} onPerson={onPerson} />
