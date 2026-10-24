@@ -156,6 +156,8 @@ channels (the checks above) and not against a test command that goes looking on 
 
 - One person means one set of credentials: the person's cookie, CSRF header and signing key work for every
   project, by design. Nothing separates two projects from the person's own window, only from workers.
+- On Linux, another program run by the same person can read the signing key through `secret-tool`.
+- Windows Credential Manager has no per-app lock, so any program the person runs can ask it for the signing key.
 - The host is one process. A bug in it that mixes two projects' objects is not caught by any test here beyond
   the routes attacked above.
 - Not run: any Windows run (UNC, junction, case and trailing-dot rules are string checks on Linux; real NTFS
