@@ -1,5 +1,5 @@
 import React from "react";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import DeepPlanningScreen from "../../src/core-screens/DeepPlanningScreen.jsx";
 import { ViewModeProvider, VIEW_MODE_STORAGE_KEY } from "../../src/project/viewMode.js";
@@ -53,8 +53,12 @@ describe("Deep planning with a repo", () => {
   it("keeps the person's own pick instead of the suggestion", async () => {
     mockApi({ "GET /planning": () => ok(notStarted), "GET /planning/templates": () => ok(LIST), "GET /planning/repo": () => ok(READ) });
     renderScreen();
-    fireEvent.click(await screen.findByRole("radio", { name: /New web app/ }));
+    // Wait for the repo to be read first: the suggestion lands then, and must not undo a pick made after it.
+    await screen.findByText(/What do you want to do in needle-main\?/);
+    await waitFor(() => expect(screen.getByRole("radio", { name: /Add a feature to an existing app/ }).checked).toBe(true));
+    fireEvent.click(screen.getByRole("radio", { name: /New web app/ }));
     expect(screen.getByRole("radio", { name: /New web app/ }).checked).toBe(true);
+    expect(screen.getByRole("radio", { name: /Add a feature to an existing app/ }).checked).toBe(false);
   });
 
   it("asks for the repo folder when none was read, and sends it", async () => {
