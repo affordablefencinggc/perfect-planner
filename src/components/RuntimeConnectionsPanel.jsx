@@ -28,7 +28,7 @@ const reasonLabels = Object.freeze({
   MCP_OUTPUT_LIMIT: "The service exceeded its response limit. The check was stopped.",
   MCP_INTERRUPTED: "The check was interrupted. Run a new check when ready.",
   MCP_CLEANUP_FAILED: "The helper did not confirm cleanup. The connection was not accepted.",
-  "receipt-missing": "No project-bound runtime receipt",
+  "receipt-missing": "Not checked yet for this project",
   "project-binding-required": "Select an active project before using runtime evidence",
   "project-binding-mismatch": "Receipt belongs to a different project",
   "project-binding-invalid": "Receipt has an invalid project binding",
@@ -152,6 +152,7 @@ function RuntimeCapabilityCard({
   const reasons = capability.denialReasons.length
     ? capability.denialReasons
     : ["Current project-bound receipt"];
+  const notChecked = !capability.receiptId && capability.denialReasons.length === 1 && capability.denialReasons[0] === "receipt-missing";
   const observedAt = formatReceiptTime(capability.observedAt);
   const expiresAt = formatReceiptTime(capability.expiresAt);
 
@@ -164,9 +165,9 @@ function RuntimeCapabilityCard({
       <header>
         <span>
           <strong>{descriptor.label}</strong>
-          <small>{capability.source ?? "No project-bound receipt"}</small>
+          <small>{capability.source ?? "No receipt yet"}</small>
         </span>
-        <b className="runtime-health-label">{capability.health}</b>
+        <b className="runtime-health-label">{notChecked ? "Not checked yet" : capability.health}</b>
       </header>
 
       {descriptor.capabilityId === "mcp" && (
@@ -176,7 +177,7 @@ function RuntimeCapabilityCard({
         </p>
       )}
 
-      <div className="runtime-scope-list" aria-label="Runtime scopes">
+      {!notChecked && <div className="runtime-scope-list" aria-label="Runtime scopes">
         {descriptor.supportedScopes.map((scope) => {
           const granted = capability.scopes.includes(scope);
           return (
@@ -184,15 +185,14 @@ function RuntimeCapabilityCard({
               key={scope}
               className={granted ? "scope-granted" : "scope-denied"}
             >
-              {scope} {granted ? "granted" : "denied"}
+              {scope} {granted ? "granted" : "not granted"}
             </span>
           );
         })}
-      </div>
+      </div>}
 
       <p className="runtime-reason">
-        <b>Reason:</b>{" "}
-        {reasons.map((reason) => humanizeReason(reason)).join(" · ")}
+        {notChecked ? "Nothing has been checked yet. Nothing was refused." : <><b>Reason:</b>{" "}{reasons.map((reason) => humanizeReason(reason)).join(" · ")}</>}
       </p>
 
       {capability.receiptId && (
@@ -263,7 +263,7 @@ export function RuntimeConnectionsPanel({
           <small>
             {activeProject
               ? `${activeProject.name} · ${availableCount} of 8 available`
-              : "No active project · 0 of 8 available"}
+              : "No active project"}
           </small>
         </span>
       </header>
@@ -290,7 +290,11 @@ export function RuntimeConnectionsPanel({
       <AgentSessionsPanel project={activeProject} onObservation={onAgentObservation} onOpenProjectSetup={onOpenProjectSetup} />
       <BrowserInputMarkerControl control={browserInput}/>
 
-      <div className="runtime-capability-grid">
+      {!activeProject ? (
+        <p className="runtime-reason" role="status">
+          <b>Pick a project to check evidence.</b> Nothing has been checked yet.
+        </p>
+      ) : <div className="runtime-capability-grid">
         {runtimeCapabilityCatalog.map((descriptor) => (
           <RuntimeCapabilityCard
             key={descriptor.capabilityId}
@@ -301,7 +305,7 @@ export function RuntimeConnectionsPanel({
             onAction={onAction}
           />
         ))}
-      </div>
+      </div>}
 
       <button
         type="button"

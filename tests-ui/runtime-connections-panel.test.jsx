@@ -124,18 +124,16 @@ describe("project-scoped Runtime & Connections surface", () => {
     expect(screen.queryByRole("textbox", {name: "IDE MCP configuration"})).toBeNull();
   });
 
-  test("is reachable from More actions and fails all eight runtimes closed without a project", async () => {
+  test("is reachable from More actions and shows one pick-a-project state without a project", async () => {
     const user = userEvent.setup();
     const { container } = renderShell();
     const panel = await openRuntimePanel(user);
 
-    expect(within(panel).getByText("No active project · 0 of 8 available")).toBeTruthy();
-    expect(container.querySelectorAll("[data-runtime-capability]")).toHaveLength(8);
-    expect(container.querySelectorAll(".runtime-health-unavailable")).toHaveLength(8);
-    expect(container.querySelectorAll("[data-runtime-action]:disabled")).toHaveLength(8);
-    expect(panel.textContent).toContain(
-      "Select an active project before using runtime evidence",
-    );
+    expect(within(panel).getByText("No active project")).toBeTruthy();
+    expect(container.querySelectorAll("[data-runtime-capability]")).toHaveLength(0);
+    expect(container.querySelectorAll("[data-runtime-action]")).toHaveLength(0);
+    expect(panel.textContent).toContain("Pick a project to check evidence.");
+    expect(panel.textContent).not.toMatch(/denied/i);
   });
 
   test("an allowed MCP context preference remains unavailable without a receipt", async () => {
@@ -152,7 +150,8 @@ describe("project-scoped Runtime & Connections surface", () => {
     expect(mcp.textContent).toContain(
       "Context preference: allowed · receipt still required",
     );
-    expect(mcp.textContent).toContain("No project-bound runtime receipt");
+    expect(mcp.textContent).toContain("Not checked yet");
+    expect(mcp.textContent).not.toMatch(/denied|not granted/);
     expect(
       within(mcp).getByRole("button", {
         name: "Check MCP read eligibility",
@@ -178,7 +177,7 @@ describe("project-scoped Runtime & Connections surface", () => {
 
     expect(browser.className).toContain("runtime-health-available");
     expect(browser.textContent).toContain("read granted");
-    expect(browser.textContent).toContain("content denied");
+    expect(browser.textContent).toContain("content not granted");
     expect(within(browser).getByText("browser-runtime-probe")).toBeTruthy();
     expect(
       within(browser).getByRole("button", {
