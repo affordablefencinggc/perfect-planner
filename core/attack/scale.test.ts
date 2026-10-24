@@ -143,6 +143,7 @@ describe.skipIf(!runHere)(`${PROJECTS} projects x ${WORKERS} parallel workers`, 
     expect(ports.every((p) => Number.isInteger(p)), `dispatch result carries a port: ${JSON.stringify(ports.slice(0, 3))}`).toBe(true);
     expect(new Set(ports).size, "no two workers across all projects got the same dev-server port").toBe(ports.length);
 
+    expect(refusals.filter((r) => /index\.lock|cannot lock ref|update_ref failed/.test(r)).slice(0, 5), "merges raced on git's own locks (F9): one merge at a time per repo").toEqual([]);
     for (let ki = 0; ki < keys.length; ki++) {
       const key = keys[ki]!;
       const view = (await hostCall(ctx.base, "GET", `/tasks?project=${key}`)).body.result.tasks as any[];

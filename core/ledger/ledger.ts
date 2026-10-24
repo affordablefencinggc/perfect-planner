@@ -271,7 +271,7 @@ export class Ledger {
   append(draft: EntryDraft): LedgerEntry {
     if (!this.writable) throw new LedgerError("READ_ONLY", `this ledger is read-only (${this.store.description})`);
     if (!this.chain.ok) {
-      throw new LedgerError("CHAIN_BROKEN", `writes are stopped: ${this.chain.firstBad} failed the fingerprint check (${this.chain.problem}); acknowledge it first`);
+      throw new LedgerError("CHAIN_BROKEN", this.stoppedMessage());
     }
     return this.write(draft);
   }
@@ -332,7 +332,7 @@ export class Ledger {
     if (!this.writable) throw new LedgerError("READ_ONLY", `this ledger is read-only (${this.store.description})`);
     if (person?.kind !== "person") throw new LedgerError("BAD_ACTOR", "only a person can trust a key");
     if (!this.chain.ok && this.chain.problem !== "signature") {
-      throw new LedgerError("CHAIN_BROKEN", `writes are stopped: ${this.chain.firstBad} failed the fingerprint check (${this.chain.problem}); acknowledge it first`);
+      throw new LedgerError("CHAIN_BROKEN", this.stoppedMessage());
     }
     // The hash chain is intact here, so the tip is safe to record as HEAD.
     const tip = this.last();
@@ -450,7 +450,7 @@ export class Ledger {
     if (!this.writable) throw new LedgerError("READ_ONLY", `this ledger is read-only (${this.store.description})`);
     if (person?.kind !== "person") throw new LedgerError("BAD_ACTOR", "only a person can set a recovery code");
     if (!this.chain.ok) {
-      throw new LedgerError("CHAIN_BROKEN", `writes are stopped: ${this.chain.firstBad} failed the fingerprint check (${this.chain.problem}); acknowledge it first`);
+      throw new LedgerError("CHAIN_BROKEN", this.stoppedMessage());
     }
     return this.makeRecoveryCode(person, reason);
   }
@@ -619,6 +619,13 @@ export class Ledger {
     }
   }
 
+  /** Why writes are stopped: a save that failed (full disk) is fixed by restarting, not by acknowledging a tampered entry. */
+  private stoppedMessage(): string {
+    if (this.chain.ok) return "writes are stopped";
+    if (this.chain.problem === "write") return `disk full or not writable: saving ${this.chain.firstBad} failed (${this.chain.detail ?? "write error"}); the saved history is intact. Free the space, then reopen the app`;
+    return `writes are stopped: ${this.chain.firstBad} failed the fingerprint check (${this.chain.problem}); acknowledge it first`;
+  }
+
   private write(input: EntryDraft, acknowledging = false): LedgerEntry {
     if (!input || typeof input !== "object") throw new LedgerError("EMPTY_FIELD", "an entry is required");
     // Work on a frozen JSON copy: what is checked is what is hashed and stored,
@@ -655,7 +662,7 @@ export class Ledger {
     } catch (error) {
       // The line may or may not have reached disk; stop rather than risk a reused number or a fork.
       this.chain = { ok: false, firstBad: entry.n, problem: "write", detail: (error as Error).message };
-      throw new LedgerError("CHAIN_BROKEN", `writing ${entry.n} failed (${(error as Error).message}); writes are stopped until the ledger is reopened`);
+      throw new LedgerError("CHAIN_BROKEN", `disk full or not writable: saving ${entry.n} failed (${(error as Error).message}); the saved history is intact. Free the space, then reopen the app`);
     }
     this.index.set(entry.n, this.list.length);
     this.list.push(entry);

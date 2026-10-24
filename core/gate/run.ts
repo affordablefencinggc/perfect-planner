@@ -146,6 +146,9 @@ export function testEnv(
 /** A run proves the test fails only if the test itself ran and reported failure. */
 export function isConclusiveFailure(run: TestRunResult): boolean {
   if (run.passed || run.timedOut || run.exitCode === null) return false;
+  // npm that could not find the project's package.json or the named script never ran a test (exit 254 or 1), so the
+  // worker could "make it pass" later by adding an empty script (F4 of the soak trial).
+  if (/npm (?:error|ERR!) (?:code ENOENT|Missing script|Could not read package\.json)|Could not read package\.json|Missing script: /i.test(run.outputTail)) return false;
   // Shell "cannot execute" / "command not found" (POSIX) and "not recognized" (cmd.exe) mean the test never ran.
   // cmd.exe under `cmd /d /s /c` can report exit 1 for a missing command, so the message is checked too.
   if (isWindows) return run.exitCode !== 9009 && !/is not recognized as an internal or external command/i.test(run.outputTail);

@@ -154,6 +154,34 @@ describe("owner recovery code", () => {
     expect(victim.status).toMatchObject({ ok: false, problem: "signature", brokenAt: last.n.replace(/\d+$/, (d) => String(Number(d) + 1).padStart(d.length, "0")) });
   });
 
+  it("remembers a checked signature per entry but never lets a changed hash, signature or key ride on it", () => {
+    const { store, code } = project();
+    const pc = newComputer(store);
+    recover(pc.ledger, code); // the code is now spent, so a second recovery with it is a forgery
+    const entries = [...pc.store.load().entries];
+    const before = ownerChain(entries)!.keys.map((k) => k.keyId);
+    expect(ownerChain(entries)!.keys.map((k) => k.keyId)).toEqual(before); // second call is served from the memo
+    // a forged recovery by a thief, frozen like real entries, asked about twice (the second answer must not come from a stale "ok")
+    const thief = new MemoryKeyProvider({ autoCreate: false });
+    const thiefKey = thief.createKey("person:owner");
+    const forged = handWritten(entries, thief, recoveredFor(entries, code, thiefKey, entries[entries.length - 1]));
+    const frozen = forged.map((e) => Object.freeze({ ...e, sig: e.sig && Object.freeze({ ...e.sig }) }) as LedgerEntry);
+    for (let i = 0; i < 2; i++) expect(ownerChain(frozen)!.keys.map((k) => k.keyId)).not.toContain(thiefKey.keyId);
+    // copies of an already-verified entry with its signature, its signer key or its content changed are checked again and fail
+    const signedOne = entries.find((e) => e.sig && e.actor.kind === "person")!;
+    const other = new MemoryKeyProvider({ autoCreate: false }).createKey("person:owner");
+    const variants: LedgerEntry[] = [
+      { ...signedOne, summary: signedOne.summary + " (edited)" },
+      { ...signedOne, sig: { ...signedOne.sig!, value: Buffer.alloc(64, 1).toString("base64") } },
+      { ...signedOne, sig: { ...signedOne.sig!, pub: other.publicKey, key: other.keyId } },
+      { ...signedOne, sig: { ...signedOne.sig!, pub: other.publicKey } },
+    ];
+    for (const v of variants) {
+      const swapped = entries.map((e) => (e.n === signedOne.n ? (Object.freeze(v) as LedgerEntry) : e));
+      for (let i = 0; i < 2; i++) expect(ownerChain(swapped)?.keys.map((k) => k.keyId) ?? []).not.toEqual(expect.arrayContaining([other.keyId]));
+    }
+  });
+
   it("never accepts a second recovery under the same code, even before a new code is set", () => {
     const { store, code } = project();
     const pc = newComputer(store);
