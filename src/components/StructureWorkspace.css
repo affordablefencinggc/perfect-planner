@@ -1903,3 +1903,88 @@
   height: 16px;
   color: inherit;
 }
+
+/* Spine look, as drawn for the Plan board: the root is the head card, a grey line runs down the middle, and each
+   folder is a blue-outlined card on alternate sides with a dashed line to a dot on the spine. */
+.workspace-tree-node.root > details > summary .tree-node-card {
+  border: 1px solid #aab1ae;
+  border-radius: 12px;
+}
+.workspace-tree-node.root > details > .workspace-tree-children {
+  --spine-reach: 56px;
+  margin-top: 24px;
+  padding: 36px 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 40px;
+  clip-path: none;
+}
+.workspace-tree-node.root > details > .workspace-tree-children::before {
+  top: -24px;
+  left: 50%;
+  width: 4px;
+  border-radius: 2px;
+  background: #c3c7c4;
+  transform: translateX(-50%);
+  animation: none;
+}
+.workspace-tree-node.root > details > .workspace-tree-children > .workspace-tree-node {
+  width: calc(50% - var(--spine-reach));
+}
+.workspace-tree-node.root > details > .workspace-tree-children > .workspace-tree-node:nth-child(odd) {
+  align-self: flex-start;
+}
+.workspace-tree-node.root > details > .workspace-tree-children > .workspace-tree-node:nth-child(even) {
+  align-self: flex-end;
+}
+.workspace-tree-node.root > details > .workspace-tree-children > .workspace-tree-node::before {
+  top: 35px;
+  height: 0;
+  width: calc(var(--spine-reach) - 7px);
+  border-left: 0;
+  border-top: 1px dashed #7aa58a;
+  animation: none;
+}
+.workspace-tree-node.root > details > .workspace-tree-children > .workspace-tree-node:nth-child(odd)::before {
+  left: 100%;
+}
+.workspace-tree-node.root > details > .workspace-tree-children > .workspace-tree-node:nth-child(even)::before {
+  left: auto;
+  right: 100%;
+}
+.workspace-tree-node.root > details > .workspace-tree-children > .workspace-tree-node::after,
+.workspace-tree-node.root > details > .workspace-tree-children > .workspace-tree-node:only-child::after {
+  display: block;
+  top: 28px;
+  width: 14px;
+  height: 14px;
+  border: 2px solid #b4b9b6;
+  border-radius: 50%;
+  background: #fff;
+  box-sizing: border-box;
+  right: auto;
+}
+.workspace-tree-node.root > details > .workspace-tree-children > .workspace-tree-node:nth-child(odd)::after {
+  left: calc(100% + var(--spine-reach) - 7px);
+}
+.workspace-tree-node.root > details > .workspace-tree-children > .workspace-tree-node:nth-child(even)::after {
+  left: auto;
+  right: calc(100% + var(--spine-reach) - 7px);
+}
+.workspace-tree-node.root > details > .workspace-tree-children > .workspace-tree-node > details > summary .tree-node-card {
+  width: 100% !important; /* styles.css fixes a card at 330px with !important */
+  border: 2px solid var(--blue-focus, #3c6ee8);
+  border-radius: 12px;
+}
+@media (max-width: 760px) {
+  .workspace-tree-node.root > details > .workspace-tree-children > .workspace-tree-node {
+    width: 100%;
+  }
+  .workspace-tree-node.root > details > .workspace-tree-children > .workspace-tree-node::before,
+  .workspace-tree-node.root > details > .workspace-tree-children > .workspace-tree-node::after {
+    display: none;
+  }
+  .workspace-tree-node.root > details > .workspace-tree-children::before {
+    left: 6px;
+  }
+}
