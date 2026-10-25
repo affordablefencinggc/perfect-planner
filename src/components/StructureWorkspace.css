@@ -1427,48 +1427,35 @@
   clip-path: inset(-120px 0 -120px 0);
 }
 .workspace-tree-node.root > details > .workspace-tree-children::before {
+  /* The trunk runs the whole height, so every wrapped row joins the root, not just the first. */
   top: 0;
   left: 50%;
-  bottom: auto;
-  height: 82px;
 }
+/* Each card drops from a horizontal rail that sits just above its row. */
 .workspace-tree-node.root
   > details
   > .workspace-tree-children
   > .workspace-tree-node::before {
-  top: -1px;
+  top: -17px;
   left: 50%;
   width: 1px;
-  height: 33px;
+  height: 17px;
   border-top: 0;
   border-left: 1px solid #89928e;
 }
-/* Horizontal line joining the cards in a row, running behind them at mid-height; the first and last card only
-   reach in from their centre, so the line never dangles past either end. */
+/* The rail: each card adds half a column gap either side, so neighbours meet and a row reads as one line.
+   The parent's clip-path trims the ends at the outer cards. */
 .workspace-tree-node.root
   > details
   > .workspace-tree-children
   > .workspace-tree-node::after {
   content: "";
   position: absolute;
-  z-index: -1;
-  top: 50px;
+  top: -17px;
   left: calc(var(--tree-gap, 30px) / -2);
   right: calc(var(--tree-gap, 30px) / -2);
   border-top: 1px solid #89928e;
   pointer-events: none;
-}
-.workspace-tree-node.root
-  > details
-  > .workspace-tree-children
-  > .workspace-tree-node:first-child::after {
-  left: 50%;
-}
-.workspace-tree-node.root
-  > details
-  > .workspace-tree-children
-  > .workspace-tree-node:last-child::after {
-  right: 50%;
 }
 .workspace-tree-node.root
   > details
