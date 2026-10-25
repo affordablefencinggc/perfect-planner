@@ -35,7 +35,7 @@ function today(offsetDays = 0) {
   return new Date(Date.now() + offsetDays * 86_400_000).toISOString().slice(0, 10);
 }
 
-export default function DeepPlanningScreen() {
+export default function DeepPlanningScreen({ onWorkspace }) {
   const resource = useCoreResource("/planning", { isEmpty: (data) => !data?.started });
   const [view, setView] = useState("questions");
   const data = resource.data;
@@ -51,7 +51,7 @@ export default function DeepPlanningScreen() {
       {data && (
         <>
           <ProgressHeader data={data} />
-          <ApprovePanel data={data} resource={resource} />
+          <ApprovePanel data={data} resource={resource} onWorkspace={onWorkspace} />
           <TemplateBar data={data} resource={resource} />
           <BlockersRail data={data} onOpen={() => setView("questions")} />
           <ViewSwitch view={view} onChange={setView} />
@@ -201,7 +201,7 @@ function ProgressHeader({ data }) {
   );
 }
 
-function ApprovePanel({ data, resource }) {
+function ApprovePanel({ data, resource, onWorkspace }) {
   const [busy, setBusy] = useState(false);
   const [refusal, setRefusal] = useState(null);
   const [done, setDone] = useState(null);
@@ -232,7 +232,7 @@ function ApprovePanel({ data, resource }) {
           </p>
         )}
         {refusal && <p className="planning-refusal" role="alert">{refusal}</p>}
-        {done && <p className="planning-done" role="status">{done}</p>}
+        {done && <p className="planning-done" role="status">{done} {onWorkspace && <button type="button" className="core-button" onClick={() => onWorkspace("plan")}>See it on the spine</button>}</p>}
       </div>
       <button type="button" className="core-button primary" onClick={approve} disabled={busy || (data.approval.current ?? data.approval.upToDate)}>
         <SealCheckIcon aria-hidden="true" /> {busy ? "Approving…" : (data.approval.current ?? data.approval.upToDate) ? "Plan approved" : latest ? "Approve changed plan" : "Approve plan"}
