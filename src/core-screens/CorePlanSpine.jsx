@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { GitBranchIcon } from "@phosphor-icons/react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { CaretDownIcon, CaretUpIcon, CrosshairIcon, GitBranchIcon } from "@phosphor-icons/react";
 import { useCoreResource } from "./coreApi.js";
 import { modelLabel } from "./CoreAgentConnect.jsx";
 import { modelFamily } from "./CoreSpine.jsx";
@@ -44,7 +44,7 @@ export function draftGroups(roadmap) {
   const phases = [];
   let n = 0;
   (roadmap?.phases ?? []).forEach((phase, index) => {
-    const rows = (phase.tasks ?? []).map((t) => ({ owner: null, task: { id: t.key, label: `T${++n}`, title: shortTitle(t.title), stage: "draft", clauses: [], draft: true } }));
+    const rows = (phase.tasks ?? []).map((t) => ({ owner: null, task: { id: t.key, label: `T${++n}`, title: shortTitle(t.title), stage: "draft", clauses: t.doneWhen ? [t.doneWhen] : [], dispatch: { model: t.owner }, draft: true } }));
     if (rows.length) phases.push({ id: phase.id, n: index + 1, title: phase.title, rows });
   });
   return phases;
@@ -108,6 +108,7 @@ function Vertebra({ task, side, owner, via, agents, onOpen, onPerson, people, on
   const diff = task.diffApproval ? 1 : 0;
   const shots = (task.proofs ?? []).length;
   const clauses = task.clauses?.length ? task.clauses : [];
+  const total = Math.max(clauses.length, 1);
   const you = NEEDS_YOU.has(task.stage);
   const building = isWorking(task, worker);
   return (
@@ -119,22 +120,25 @@ function Vertebra({ task, side, owner, via, agents, onOpen, onPerson, people, on
         <strong>{task.title}</strong>
         {family && <span className="model-id-chip" title={model}>{family.name}</span>}
         <small className={building ? "core-working-text" : undefined}>{building ? "Building now" : STAGE_TEXT[task.stage] ?? String(task.stage)}</small>
-        {!task.draft && <><span className={`proof-counter${diff ? " proven" : ""}`} title="Change approved by you">DIFF {diff}/1</span>
-        <span className={`proof-counter${shots ? " proven" : ""}`} title="Proof items attached">SHOT {shots}</span></>}
+        <span className={`proof-counter${diff ? " proven" : ""}`} title="Change approved by you"><GitBranchIcon />{diff ? total : 0}/{total}</span>
+        <span className={`proof-counter${shots ? " proven" : ""}`} title="Proof items attached"><CrosshairIcon />{shots ? total : 0}/{total}</span>
         {!task.draft && <Owner person={owner} via={via} onPerson={onPerson} />}
       </span>
       {clauses.length > 0 && (
+        <>
+        <span className="proof-column-labels" aria-hidden="true"><span>DIFF</span><span>SHOT</span><span>TASK</span></span>
         <span className="node-items">
           {clauses.slice(0, 6).map((clause, i) => (
             <span className="node-item" key={i}>
-              {!task.draft && <><span className={`tiny-check${diff ? " checked" : ""}`} aria-hidden="true" />
-              <span className={`tiny-check${shots ? " checked" : ""}`} aria-hidden="true" /></>}
-              {!task.draft && <code>{task.label}-{i + 1}</code>}
+              <span className={`tiny-check${diff ? " checked" : ""}`} aria-hidden="true" />
+              <span className={`tiny-check${shots ? " checked" : ""}`} aria-hidden="true" />
+              <code>{task.label}-{i + 1}</code>
               <span>{clause}</span>
             </span>
           ))}
           {clauses.length > 6 && <span className="core-muted">+{clauses.length - 6} more</span>}
         </span>
+        </>
       )}
       {task.merged?.mergeCommit && <span className="core-vertebra-note">Merged at {String(task.merged.mergeCommit).slice(0, 12)}</span>}
       {people && task.stage !== "done" && (
@@ -198,16 +202,45 @@ export function peopleOf({ tasks, groups, agents, people }) {
   return { list: [...byId.values()], byId, ownerId, via };
 }
 
+/** One line under a phase title: what its first topics are, as the demo's phase card says what the phase is for. */
+function phaseLine(phase) {
+  return phase.rows.slice(0, 2).map((r) => shortTitle(r.task.title, 40)).join(" · ");
+}
+
+/** The model on top of the whole spine, standing in for the one that orchestrates: the family doing most of the tasks. */
+function headRobot(groups, agents) {
+  const count = new Map();
+  for (const g of groups) for (const r of g.rows) {
+    const robot = robotOf(r.task, liveWorker(r.task, agents), "waiting");
+    if (robot) count.set(robot.family.id, { robot, n: (count.get(robot.family.id)?.n ?? 0) + 1 });
+  }
+  return [...count.values()].sort((a, b) => b.n - a.n)[0]?.robot ?? null;
+}
+
 function SpineCanvas({ groups, model, agents, onWorkspace, onPerson, onAssign, runners, className = "" }) {
   let index = 0;
+  const canvas = useRef(null);
+  const head = headRobot(groups, agents);
+  const page = (direction) => {
+    const scroller = canvas.current?.closest(".workspace-stage-coordinate") ?? canvas.current?.closest(".plan-workspace");
+    const box = scroller && scroller.scrollHeight > scroller.clientHeight ? scroller : null;
+    (box ?? window).scrollBy({ top: direction * Math.max(620, (box?.clientHeight ?? window.innerHeight) * 0.88), behavior: "smooth" });
+  };
   return (
-    <div className={`plan-canvas ${className}`}>
+    <div className={`plan-canvas ${className}`} ref={canvas}>
+      <nav className="plan-page-controls" aria-label="Move through plan pages">
+        <button type="button" onClick={() => page(-1)} aria-label="Move up one plan page"><CaretUpIcon weight="bold" /></button>
+        <span>page</span>
+        <button type="button" onClick={() => page(1)} aria-label="Move down one plan page"><CaretDownIcon weight="bold" /></button>
+      </nav>
       <div className="spine-line" aria-hidden="true" />
-      {groups.map((phase) => (
+      {groups.map((phase, phaseIndex) => (
         <div className="phase-row" key={phase.id}>
+          {phaseIndex === 0 && head && <div className="head-orchestrator-perch"><span className="head-orchestrator-character" role="img" aria-label={`${head.label} heads this plan`} title={`${head.label} heads this plan`}><img className="model-worker-image" src={head.src} alt="" /></span></div>}
           <div className="phase-capsule" role="group" aria-label={`${phase.n ? `Phase ${phase.n}` : "Group"} ${phase.title}`}>
             <strong>{phase.n ? `P${phase.n} · ` : ""}{phase.title}</strong>
-            <small>{phase.rows[0]?.task.draft ? `${phase.rows.length} planned` : `${phase.rows.filter((r) => r.task.stage === "done").length}/${phase.rows.length} merged`}</small>
+            <span>{phaseLine(phase)}</span>
+            <small title={phase.rows[0]?.task.draft ? "Topics planned, none started" : "Tasks merged"}>{phase.rows.filter((r) => r.task.stage === "done").length}/{phase.rows.length}</small>
           </div>
           <div className="phase-nodes">
             {phase.rows.map(({ task }) => {

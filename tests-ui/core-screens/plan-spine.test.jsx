@@ -147,9 +147,8 @@ describe("CorePlanSpine", () => {
     // T-2: merged, robot parked with the green outline, diff and proof counted.
     expect(cards[1].querySelector(".perimeter-worker.running")).toBeNull();
     expect(cards[1].querySelector(".perimeter-success-trail.complete")).not.toBeNull();
-    expect(cards[1].textContent).toContain("DIFF 1/1");
-    expect(cards[1].textContent).toContain("SHOT 1");
-    // T-3: a model we cannot place gets no robot, and it is marked as waiting on the person.
+    expect(cards[1].textContent).toContain("1/11/1");
+        // T-3: a model we cannot place gets no robot, and it is marked as waiting on the person.
     expect(cards[2].querySelector(".perimeter-worker")).toBeNull();
     expect(cards[2].className).toContain("core-needs-you");
     expect(screen.getByRole("status").textContent).toContain("1 of 3 merged · 1 working now");
