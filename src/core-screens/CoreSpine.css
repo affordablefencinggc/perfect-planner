@@ -48,6 +48,8 @@
 .core-plan-spine { overflow: visible; background: none; }
 .core-plan-spine .plan-canvas { padding-top: 24px; }
 .core-plan-spine .plan-node { min-height: 0; cursor: pointer; }
+.core-plan-spine .core-vertebra { outline: 2px solid var(--blue-focus); outline-offset: -2px; }
+.core-plan-spine .core-vertebra[data-stage="draft"] { outline-style: dashed; }
 .core-plan-spine .core-needs-you { box-shadow: inset 0 0 0 1px #e6ebf0, 0 0 0 2px var(--amber), 0 7px 16px rgba(54, 66, 82, 0.13); }
 .core-plan-spine .perimeter-worker.running { animation-iteration-count: infinite; }
 /* The card an agent is building right now: a blue glow, a bigger robot and "Building now" in place of the stage, so it reads at a glance. */

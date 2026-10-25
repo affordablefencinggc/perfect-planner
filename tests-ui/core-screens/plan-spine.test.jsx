@@ -180,3 +180,16 @@ describe("CorePlanSpine", () => {
     expect((await screen.findByRole("alert")).textContent).toContain("disk unreadable");
   });
 });
+
+describe("a plan not yet approved", () => {
+  test("is drawn as short topic cards on the spine, and a card opens Deep planning", async () => {
+    routeFetch({ tasks: [], roadmap: { phases: [{ id: "p1", title: "Foundations", tasks: [{ key: "k1", title: "Sign people in with a one-time email link: tokens expire after ten minutes and are single use", doneWhen: "a test signs in twice" }] }] } });
+    const onWorkspace = vi.fn();
+    render(<CorePlanSpine onWorkspace={onWorkspace} />);
+    const card = await screen.findByRole("article", { name: /Sign people in with a one-time email link/ });
+    expect(card.textContent).not.toMatch(/tokens expire/);
+    expect(card.textContent).toMatch(/Planned, not started/);
+    fireEvent.click(card);
+    expect(onWorkspace).toHaveBeenCalledWith("planning");
+  });
+});

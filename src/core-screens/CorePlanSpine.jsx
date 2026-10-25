@@ -27,9 +27,28 @@ const STAGE_TEXT = {
   "ready-to-merge": "Ready to merge",
   reopened: "Reopened",
   done: "Merged",
+  draft: "Planned, not started",
 };
 const NEEDS_YOU = new Set(["test-proposed", "test-passes-already", "review-diff", "ready-to-merge"]);
 const HALTED = new Set(["test-passes-already", "jev-found-gaps"]);
+
+/** A planned task as a topic: its first clause, cut at a word, so a card reads as a heading. */
+export function shortTitle(title, max = 44) {
+  const first = String(title ?? "").split(/[:;.,\u2014\u2013(]| - /)[0].trim() || String(title ?? "").trim();
+  if (first.length <= max) return first;
+  return `${first.slice(0, max).replace(/\s+\S*$/, "")}…`;
+}
+
+/** The approved-to-be plan as groups of topic cards, before the ledger has any task. */
+export function draftGroups(roadmap) {
+  const phases = [];
+  let n = 0;
+  (roadmap?.phases ?? []).forEach((phase, index) => {
+    const rows = (phase.tasks ?? []).map((t) => ({ owner: null, task: { id: t.key, label: `T${++n}`, title: shortTitle(t.title), stage: "draft", clauses: [], draft: true } }));
+    if (rows.length) phases.push({ id: phase.id, n: index + 1, title: phase.title, rows });
+  });
+  return phases;
+}
 
 const taskNumber = (id) => Number(String(id).replace(/\D/g, "")) || 0;
 
@@ -100,17 +119,17 @@ function Vertebra({ task, side, owner, via, agents, onOpen, onPerson, people, on
         <strong>{task.title}</strong>
         {family && <span className="model-id-chip" title={model}>{family.name}</span>}
         <small className={building ? "core-working-text" : undefined}>{building ? "Building now" : STAGE_TEXT[task.stage] ?? String(task.stage)}</small>
-        <span className={`proof-counter${diff ? " proven" : ""}`} title="Change approved by you">DIFF {diff}/1</span>
-        <span className={`proof-counter${shots ? " proven" : ""}`} title="Proof items attached">SHOT {shots}</span>
-        <Owner person={owner} via={via} onPerson={onPerson} />
+        {!task.draft && <><span className={`proof-counter${diff ? " proven" : ""}`} title="Change approved by you">DIFF {diff}/1</span>
+        <span className={`proof-counter${shots ? " proven" : ""}`} title="Proof items attached">SHOT {shots}</span></>}
+        {!task.draft && <Owner person={owner} via={via} onPerson={onPerson} />}
       </span>
       {clauses.length > 0 && (
         <span className="node-items">
           {clauses.slice(0, 6).map((clause, i) => (
             <span className="node-item" key={i}>
-              <span className={`tiny-check${diff ? " checked" : ""}`} aria-hidden="true" />
-              <span className={`tiny-check${shots ? " checked" : ""}`} aria-hidden="true" />
-              <code>{task.label}-{i + 1}</code>
+              {!task.draft && <><span className={`tiny-check${diff ? " checked" : ""}`} aria-hidden="true" />
+              <span className={`tiny-check${shots ? " checked" : ""}`} aria-hidden="true" /></>}
+              {!task.draft && <code>{task.label}-{i + 1}</code>}
               <span>{clause}</span>
             </span>
           ))}
@@ -188,14 +207,14 @@ function SpineCanvas({ groups, model, agents, onWorkspace, onPerson, onAssign, r
         <div className="phase-row" key={phase.id}>
           <div className="phase-capsule" role="group" aria-label={`${phase.n ? `Phase ${phase.n}` : "Group"} ${phase.title}`}>
             <strong>{phase.n ? `P${phase.n} · ` : ""}{phase.title}</strong>
-            <small>{phase.rows.filter((r) => r.task.stage === "done").length}/{phase.rows.length} merged</small>
+            <small>{phase.rows[0]?.task.draft ? `${phase.rows.length} planned` : `${phase.rows.filter((r) => r.task.stage === "done").length}/${phase.rows.length} merged`}</small>
           </div>
           <div className="phase-nodes">
             {phase.rows.map(({ task }) => {
               const side = index++ % 2 === 0 ? "left" : "right";
               const worker = liveWorker(task, agents);
               const runner = runners && isWorking(task, worker) ? robotOf(task, worker, "running") : null;
-              const card = <Vertebra task={task} side={side} owner={model.byId.get(model.ownerId.get(task.id))} via={model.via.get(task.id)} agents={agents} onOpen={() => onWorkspace?.("tasks")} onPerson={onPerson} people={model.assignable ? model.list : null} onAssign={onAssign} />;
+              const card = <Vertebra task={task} side={side} owner={model.byId.get(model.ownerId.get(task.id))} via={model.via.get(task.id)} agents={agents} onOpen={(t) => onWorkspace?.(t.draft ? "planning" : "tasks")} onPerson={onPerson} people={model.assignable ? model.list : null} onAssign={onAssign} />;
               return (
                 <div className={`single-node-row row-${side}`} key={task.id}>
                   {side === "left" ? <div className="node-slot node-left has-node">{card}</div> : <div className="node-spacer" />}
@@ -243,6 +262,18 @@ export default function CorePlanSpine({ onWorkspace, onCount }) {
   const groups = useMemo(() => groupByPhase(list, roadmap.data), [list, roadmap.data]);
   const model = useMemo(() => peopleOf({ tasks: list, groups, agents: live, people: people.data }), [list, groups, live, people.data]);
   useEffect(() => { onCount?.(list.length); }, [list.length, onCount]);
+  const drafts = useMemo(() => draftGroups(roadmap.data), [roadmap.data]);
+  if (tasks.status === "empty" && drafts.length) {
+    const topics = drafts.reduce((sum, g) => sum + g.rows.length, 0);
+    const none = { list: [], byId: new Map(), ownerId: new Map(), via: new Map(), assignable: false };
+    return (
+      <section className="workspace plan-workspace core-plan-spine" aria-label="Plan spine">
+        <p className="core-muted core-plan-count" role="status">Your plan as {topics} topic{topics === 1 ? "" : "s"}. Approve the plan in Deep planning and each topic becomes a task on this spine.</p>
+        <button type="button" className="core-button" onClick={() => onWorkspace?.("planning")}>Open Deep planning</button>
+        <SpineCanvas groups={drafts} model={none} agents={[]} onWorkspace={onWorkspace} onPerson={() => undefined} onAssign={() => undefined} />
+      </section>
+    );
+  }
   if (tasks.status === "no-session" || tasks.status === "loading" || tasks.status === "empty") return null;
   if (tasks.status === "error") return <p role="alert" className="core-tasks-warn">The ledger could not be read, so the spine is not drawn. {tasks.error?.message} <button type="button" className="core-button" onClick={tasks.reload}>Try again</button></p>;
 
