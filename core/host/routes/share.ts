@@ -31,7 +31,7 @@ function listFiles(dir: string): { name: string; bytes: number }[] {
 
 async function repoRoot(project: CoreProject): Promise<string> {
   const state = await repoState(project);
-  if (!state.ok || !state.root) throw new HttpError(409, "NO_REPO", state.reason ?? "Choose the project's git folder first.");
+  if (!state.ok || !state.root) throw new HttpError(409, "NO_REPO", "Sharing needs the project's git folder. Open the Tasks page and choose it first.");
   return state.root;
 }
 
