@@ -10,6 +10,7 @@ const screens = {
   mvp: lazy(() => import("./MvpBoardScreen.jsx")),
   decisions: lazy(() => import("./DecisionsScreen.jsx")),
   people: lazy(() => import("./PeopleScreen.jsx")),
+  share: lazy(() => import("./ShareScreen.jsx")),
   tasks: lazy(() => import("./TasksScreen.jsx")),
   lookup: lazy(() => import("./LedgerLookupScreen.jsx")),
 };
@@ -21,6 +22,7 @@ export const coreWorkspaceLabels = {
   mvp: "MVP board",
   decisions: "Decisions",
   people: "People",
+  share: "Share",
   tasks: "Tasks",
   lookup: "Ledger search",
 };
@@ -49,6 +51,12 @@ export const coreWorkspaceContext = {
     purpose: "Who is on this project, where each person is, and the documents you share.",
     outcome: "Helpers added with the right role; shared docs versioned.",
     unlock: "Add a helper or share a document.",
+  },
+  share: {
+    stage: "coordinate",
+    purpose: "Send work to a teammate as a file and receive theirs, privately, with no GitHub.",
+    outcome: "Received work is checked and shown with any files that clash before anything merges.",
+    unlock: "Make a file to send, or put one you received in the inbox.",
   },
   tasks: {
     stage: "build",

@@ -162,7 +162,7 @@ const stageNavigation = [
     id: "coordinate",
     label: "Coordinate",
     number: "02",
-    workspaces: ["plan", "collision", "allocation", "decisions", "people"],
+    workspaces: ["plan", "collision", "allocation", "decisions", "people", "share"],
   },
   { id: "build", label: "Build", number: "03", workspaces: ["build", "tasks"] },
   {
