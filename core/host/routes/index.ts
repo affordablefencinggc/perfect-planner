@@ -10,6 +10,7 @@ import { registerPeopleRoutes } from "./people";
 import { registerPlanRoutes } from "./plan";
 import { registerPlanningRoutes } from "./planning";
 import { registerSearchRoutes } from "./search";
+import { registerShareRoutes } from "./share";
 import { registerRepoRoutes } from "./repos";
 import { registerTaskRoutes } from "./tasks";
 import { registerSummaryRoutes } from "./summary";
@@ -30,4 +31,5 @@ export function registerRoutes(router: Router): void {
   registerKeyRoutes(router);
   registerSummaryRoutes(router);
   registerTerminalRoutes(router);
+  registerShareRoutes(router);
 }
