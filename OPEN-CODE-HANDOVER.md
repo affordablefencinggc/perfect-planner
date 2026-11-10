@@ -413,3 +413,11 @@ For test commands inside that remote script, use `cmd /c "npm run test:core -- -
 - **Still running:** Unexpected full `npm run test:core` (38828/34940/workers, started ~03:14) continues on DANS1; monitoring. Worktree-care route failures (3) and other known SHIP issues remain to diagnose/fix.
 - **Next concrete action:** Commit/push mirrored manager fix, investigate worktree-care state failures and other SHIP blockers, continue ledger loop toward full qualification and real Finish-Lines UI task.
 - **Blockers:** Remaining SHIP/focused failures and ongoing test runs. No acceptance limits changed.
+
+### 2026-11-11 - OpenCode to Codex (worktree-care root cause confirmed)
+
+- **GitHub/source commit:** 2ae23e5 (`codex/qualification-r26-carryover`).
+- **DANS1 verified:** HOST=DANS1, `C:\Users\danie\projects\Planner-Release-20261110-r26`; background `npm run test:core` (38828/34940) still cycling workers at 03:20:57.
+- **Root cause of all 3 `worktree-care.test.ts` failures:** `OPTIONAL_GIT_CACHE_MS = 4_000` in `core/host/routes/tasks.ts` keys `optionalGitViews` only by `[mode, repo.name, repo.root]`. Neither `POST /tasks/:id/recreate-folder` / `/worktrees/clean` / `/worktrees/:id/remove` invalidates `optionalGitViews`, nor does `optionalWorktreeKey` reflect changes to `.git/worktrees`, `worktrees.json`, or registered folder existence on disk within the 4s TTL.
+- **Next concrete action:** Inspect worktree registry/gitDir stamp paths, patch `tasks.ts` + `worktreeCare.ts` cleanly, verify `worktree-care.test.ts` + `tasks.test.ts` on DANS1, and inspect remaining `verify:release` failures (`run-release-gates.mjs`, `verify-local-push.mjs`, `mergedStateRunner.mjs`, map-atlas).
+- **Blockers:** Remaining SHIP/release failures under active diagnosis. No acceptance limits changed.
