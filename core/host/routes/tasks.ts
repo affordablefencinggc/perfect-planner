@@ -93,6 +93,11 @@ function repoFile(project: CoreProject): string {
 
 const topCache = new Map<string, { top: string; identity: string }>();
 
+/** Test-only: clear the process-local repo-top cache so mocked Git reads are not reused across cases. */
+export function __resetGitTopCacheForTests(): void {
+  topCache.clear();
+}
+
 export async function gitTop(dir: string): Promise<string | null> {
   // A network path (\\host\share, //host/share) is never a project's git folder, and even looking at it makes Windows
   // talk to that machine (and offer this user's credentials). Refused before anything touches it.

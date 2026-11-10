@@ -16,7 +16,7 @@ import { icaclsPath } from "../tokenFile";
 import * as worktreeCare from "./worktreeCare";
 import * as worktreeModule from "../../worktrees/index";
 import { WorktreeManager } from "../../worktrees/index";
-import { recordedWorkerReport, recordedWorkerDispatch, createOptionalGitCache, gitIdentityRefusal, gitTop, overview, quoteFor, repoRefusal, withOutputTail, workerCommands, worktreesForWatcher } from "./tasks";
+import { recordedWorkerReport, recordedWorkerDispatch, createOptionalGitCache, gitIdentityRefusal, gitTop, __resetGitTopCacheForTests, overview, quoteFor, repoRefusal, withOutputTail, workerCommands, worktreesForWatcher } from "./tasks";
 
 const git = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, encoding: "utf8", env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t.invalid", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t.invalid" } }).trim();
 const write = (dir: string, file: string, text: string) => {
@@ -39,6 +39,9 @@ const post = async (route: string, body: unknown = {}) => { const started = Date
   return await hostCall(ctx.base, "POST", route + q, body); } finally { console.info("[task-timing] POST finished", route, Date.now() - started); } };
 
 describe("optional Git inspection cache", () => {
+  beforeEach(() => {
+    __resetGitTopCacheForTests();
+  });
   it("batches repository top-level and committed-HEAD discovery into one hardened Git read", async () => {
     const root = fs.realpathSync.native(process.cwd());
     const result = { code: 0, stdout: `${root}\n0123456789012345678901234567890123456789\n`, stderr: "", stdoutBytes: Buffer.alloc(0) };
