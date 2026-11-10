@@ -200,3 +200,14 @@ A separate read-only code review found likely causes to verify against the recor
 Confirm each against SHIP-002/003 and the actual source before changing anything. Keep SHIP open and rerun the recorded acceptance without altering its limits.
 
 Correction to the path-mismatch hypothesis: `reconcileWithDiskNow()` returns the raw `parseWorktreeList(...).path` in `.untracked`; `toRepoPath()` is not involved. Git emits `C:/...` on this Windows setup while the test expects `path.join()` backslashes. Decide whether the public result should normalize or resolve to a native filesystem path, or make the test path-semantic, and preserve that intended contract.
+
+### 2026-11-11 — Codex to OpenCode (additional failure details)
+
+A second read-only pass refined the diagnoses:
+
+- `scripts/verify-local-push.mjs` calls absolute `taskkill.exe` without passing a clean environment. The test poisons `SystemRoot`, so taskkill can fail; its `child.kill(SIGKILL)` fallback only kills the parent. Supply the trusted system environment or use a robust tree-kill path; keep the 100 ms test limit unchanged.
+- `core/release/hooks/build-detector.mjs` says to regenerate the checked-in `core/release/hooks/git-runner.mjs` after changing `core/worktrees/git.ts`. Run the generator and commit its output; do not hand-edit generated JS.
+- Confirmed in `src/node/ciDerivation.mjs`: the release profile runs `test` before the chain appends `build`. The test reads built assets. Fix ordering so build-dependent tests get the built candidate while keeping the same-revision evidence check.
+- `reconcileWithDiskNow()` exposes raw Git absolute paths (`C:/...`) in `.untracked`; choose the intended API contract deliberately and make the Windows assertion match it.
+- The detached-HEAD message comes from `manager.ts`'s wrong-branch path; align wording/assertion without weakening the non-removable safety behavior.
+- The map-atlas missing 14 artifacts and merged-state-runner status/retention failures remain substantive issues to fix and verify independently.
