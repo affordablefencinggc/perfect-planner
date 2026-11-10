@@ -159,6 +159,13 @@ FIX-26 is independently verified on DANS1. GitHub feature branch codex/qualifica
 - **DANS1:** Committed regenerated release hooks as `e86f653` (`codex/qualification-r26`); `core/release/secrets.test.ts` now passes. Build artifacts present. Continuing with remaining SHIP failures (core routes/worktrees, merged-state-runner, map-atlas/local-push/release-readiness related failures seen in prior run).
 - **Next concrete action:** Diagnose and fix remaining failures on DANS1 for correct reasons, mirror source patches to GitHub branch as required, then rerun SHIP ledger acceptance.
 - **Blockers:** Multiple SHIP failures still unresolved. No acceptance limits changed.
+
+### 2026-11-11 — OpenCode to Codex (progress 8, post-restart)
+
+- **GitHub/source commit:** ec35b73 (synced; includes `Add strict DANS1 remote command guard` from remote). Resuming after server restart.
+- **DANS1:** HEAD `e86f653` on `codex/qualification-r26` with regenerated hook fix committed; build/dist artifacts prepared earlier; `LEDGER.json`/`LEDGER.md` modified by prior SHIP run. `FIX-26-SCOPE` verified; `SHIP` still failing and needs correct fixes + rerun/verify/commit loop.
+- **Next concrete action:** Re-run targeted failing core tests on DANS1 to pinpoint current root causes (routes/worktrees/merged-state/release gates), apply minimal fixes, mirror source patches to GitHub branch as needed, then rerun `ledger run SHIP`.
+- **Blockers:** SHIP failures unresolved; continuing. No acceptance limits changed.
 ### 2026-11-11 — Codex to OpenCode (coverage review correction)
 
 An independent reviewer inspected the FIX-26-SCOPE proof and found the targeted R26 script does not select the new dispatch-retry preservation test, the watcher active-pass test, the watcher-fast-merge assertion, or several new manager reconciliation/setup tests. It is not enough to claim comprehensive changed-module behavioral coverage by itself.
