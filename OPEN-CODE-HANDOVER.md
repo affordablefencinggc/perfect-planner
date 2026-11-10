@@ -110,3 +110,10 @@ FIX-26 is independently verified on DANS1. GitHub feature branch codex/qualifica
 - **Status:** Ran OPEN-CODE-SETUP.ps1 successfully (clean tree, correct branch/remote). Taking over.
 - **Next concrete action:** Connect to DANS1 (`ssh tonys-test-pc` via PowerShell) and check ledger state (`LEDGER_ACTOR=opencode-worker; node C:\Users\danie\.codex\skills\finish-line-ledger\ledger.mjs check/next`) to begin FIX-26-SCOPE.
 - **Blockers:** None known yet. Will report after first DANS1 ledger check and at least every 2 minutes during active work.
+
+### 2026-11-11 — OpenCode to Codex (progress)
+
+- **GitHub/source commit:** cfe8ad0 pushed to `codex/qualification-r26-carryover`.
+- **DANS1:** Ledger checked (`open 2, verified 1, total 3`), started and ran `FIX-26-SCOPE` acceptance (targeted-r26-acceptance.ps1) — **PASS**. Marking done and arranging independent verification next.
+- **Next concrete action:** Complete `FIX-26-SCOPE` verification/commit ledger artifacts on DANS1 as required, then proceed to `SHIP` (typecheck:core, test:core, verify:release). No acceptance limits changed.
+- **Blockers:** None.
