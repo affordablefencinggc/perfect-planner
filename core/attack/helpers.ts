@@ -14,6 +14,8 @@ import { KeychainKeyProvider, type KeyState, type SecretStore } from "../ledger/
 import { bridgeCall } from "../mcp/index";
 import { CSRF_HEADER, createCoreHost, type CoreHost } from "../host/index";
 import { HostKeys } from "../host/keys";
+import { MemoryKeyProvider as JevMemoryKeys } from "../jev/index";
+import { jevConfigured, setDecisionJev } from "../host/routes/decisions";
 
 /** A key store in a file, so keys outlive the process that made them (like the OS key store does). */
 export class FileSecrets implements SecretStore {
@@ -158,6 +160,8 @@ export async function connectWindow(base: string, launch: string): Promise<Pick<
 
 /** Starts the core host in this process on a loopback port and opens the person's window on it. */
 export async function startWindow(options: StartOptions): Promise<Window> {
+  // The attack suite simulates the disconnected state and must never read or send through the real machine key.
+  if (!jevConfigured()) setDecisionJev({ keys: new JevMemoryKeys() });
   const host = createCoreHost({ root: options.data, projectRootOverride: options.project, bridge: true, keys: hostKeysOn(options.secrets) });
   const server = http.createServer((req, res) => host.middleware(req, res, () => { res.statusCode = 404; res.end(); }));
   await new Promise<void>((resolve) => server.listen(options.port ?? 0, "127.0.0.1", resolve));
