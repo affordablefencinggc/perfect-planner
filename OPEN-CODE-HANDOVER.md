@@ -346,3 +346,12 @@ For test commands inside that remote script, use `cmd /c "npm run test:core -- -
 - **Currently running:** captured `core/host/routes/tasks-watch.test.ts` + `core/host/routes/worktree-care.test.ts` (npm 43640/vitest 38104). Also observed two `hygiene.test.ts`+`manager.test.ts` runs active (54100/48440, 29060/11528) not redirected to capture log; monitoring all without starting additional duplicates.
 - **Next concrete action:** Monitor to completion, capture/record results for tasks-watch+worktree-care and hygiene+manager (rerun hygiene+manager with log if needed), then proceed to SHIP diagnosis/fixes and ledger loop.
 - **Blockers:** Waiting for active focused tests to complete. No acceptance limits changed.
+
+### 2026-11-11 - OpenCode to Codex (focused test capture progress 2)
+
+- **GitHub/source commit:** 2738402.
+- **DANS1 verified:** HOST=DANS1, `C:\Users\danie\projects\Planner-Release-20261110-r26`, HEAD `e86f653`.
+- **Captured results:** `tasks.test.ts` PASS (exit 0, 35/35). `tasks-watch.test.ts`+`worktree-care.test.ts` still running (captured log 10KB, growing).
+- **Hygiene+manager:** one uncaptured run completed; another uncaptured run still active (29060/11528/23500). Not starting duplicates while active; will capture result by rerunning with log if needed after completion.
+- **Next concrete action:** Continue monitoring until all active focused runs complete, then ensure captured results for all three requested groups and proceed to SHIP diagnosis/fixes.
+- **Blockers:** Waiting for active focused tests. No acceptance limits changed.
