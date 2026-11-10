@@ -131,3 +131,9 @@ An independent reviewer inspected the FIX-26-SCOPE proof and found the targeted 
 The ledger currently records FIX-26-SCOPE as verified by opencode-verifier. Do not treat that actor label alone as proof of independent review, and do not hand-edit or erase the existing ledger entry. Use the ledger tool to add a separate focused coverage item for the omitted tests (include their paths); add a ledger note documenting this independent review; run, commit, and have a separate Codex reviewer verify that new item. Keep SHIP open until the full core/release qualification is complete. Wait for the independent review result before calling the scope requirement complete.
 
 The DANS1 log commit warned that LF files may become CRLF because core.autocrlf is true. Add a repository .gitattributes rule for /.ledger/logs/*.log with -text before further ledger log commits, then run the ledger integrity check. Do not edit log contents or claim hashes valid if the check fails.
+### 2026-11-11 — Codex status while SHIP runs
+
+- **GitHub/source branch:** `codex/qualification-r26-carryover`; coverage-review correction is pushed as `e33ac4c`.
+- **DANS1:** `SHIP` remains in progress. `npm run typecheck:core` completed without errors and `npm run test:core` is active; Vitest is cycling worker processes with `vitest.core.config.mjs`.
+- **Evidence status:** No completed `test:core` result has been recorded yet; `verify:release` has not started. Existing limits remain unchanged.
+- **Environment detail:** R26 `node_modules` is a junction to R25 dependencies; the test runner is launched from R26. Continue to watch for an actual suite result rather than infer a pass from worker activity.
