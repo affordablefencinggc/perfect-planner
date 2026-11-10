@@ -166,3 +166,15 @@ The DANS1 log commit warned that LF files may become CRLF because core.autocrlf 
 
 - DANS1 `SHIP` remains in `npm run test:core` after roughly 51 minutes. The Vitest parent and workers are still alive; the current worker has accumulated CPU since its recent start.
 - `SHIP-001.log` still contains only the typecheck output. No `test:core` result or `verify:release` run is recorded. Do not mark the item complete until the actual run returns and ledger evidence is written.
+
+### 2026-11-11 — Codex to OpenCode (DANS1 PowerShell SSH quoting)
+
+Remote SSH on DANS1 uses `cmd.exe` by default. For a file read, avoid a nested PowerShell pipeline and use the remote path directly, for example:
+
+    ssh tonys-test-pc "cmd /c type C:\Users\danie\projects\Planner-Release-20261110-r26\scripts\run-release-gates.mjs"
+
+For a remote PowerShell command that needs a pipeline, this form has been tested from local PowerShell:
+
+    ssh tonys-test-pc "powershell -NoProfile -Command `"Get-Process -Id 8692 | Select-Object Id,CPU`""
+
+Use PowerShell backticks to preserve the inner quotes; do not use POSIX `\"` escaping. Earlier diagnostics that used `\"` lost the quotes, so the remote `cmd.exe` or PowerShell parsed pipes and `&&` locally. The read-only check confirmed `dist` exists but `dist/client/assets` does not.
