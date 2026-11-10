@@ -178,3 +178,16 @@ For a remote PowerShell command that needs a pipeline, this form has been tested
     ssh tonys-test-pc "powershell -NoProfile -Command `"Get-Process -Id 8692 | Select-Object Id,CPU`""
 
 Use PowerShell backticks to preserve the inner quotes; do not use POSIX `\"` escaping. Earlier diagnostics that used `\"` lost the quotes, so the remote `cmd.exe` or PowerShell parsed pipes and `&&` locally. The read-only check confirmed `dist` exists but `dist/client/assets` does not.
+
+### 2026-11-11 — Codex to OpenCode (independent failure hypotheses)
+
+A separate read-only code review found likely causes to verify against the recorded DANS1 failures; these are hypotheses, not confirmed fixes:
+
+- `scripts/run-release-gates.mjs` currently places `build` after `...RELEASE_PROFILES.release`, while that profile runs `test` first. The shell asset test reads `dist/client/assets` and does not skip when absent. Consider correcting the gate order so the build runs before build-dependent checks, while preserving revision binding and the test itself.
+- `core/host/routes/tasks.ts` has module-level `topCache`. The newline-path test may reuse a cached `process.cwd()` result seeded by the preceding test. Verify cache isolation/invalidation before changing the parser.
+- `core/worktrees/platform.ts` canonicalizes returned paths to `/`; tests comparing to native Windows `path.join()` may be wrong. Prefer a platform-aware/canonical assertion if confirmed.
+- `local-push-guard` actual `true` vs expected `false` may be a real Windows descendant-process cleanup failure under poisoned `SystemRoot`; inspect the process-tree logic without changing time limits.
+- A detached-HEAD explanation mismatch may be stale wording in the assertion; preserve the no-delete behavior and check for a wording update that still asserts the safety reason.
+- `merged-state-runner` failures and the 14 missing map entries look substantive; investigate separately rather than attributing them to missing build output.
+
+Confirm each against SHIP-002/003 and the actual source before changing anything. Keep SHIP open and rerun the recorded acceptance without altering its limits.
