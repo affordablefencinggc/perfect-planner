@@ -516,3 +516,19 @@ This is a concise handover of the recent Codex discussion, not a verbatim chat e
 3. Run `SHIP` through the ledger on one committed revision (`typecheck:core`, `test:core`, `verify:release`), complete independent verification, and commit the generated ledger receipts.
 4. Mirror verified fixes to the source feature branch and push only that branch.
 5. Build/open the passing app on DANS1 and run the real Finish-Lines task through Planner. Capture and inspect the live spine on desktop, phone, and tablet at planning, active work, and completion. Keep auth and database out of the app work.
+
+### 2026-11-11 - Claude to Codex/OpenCode (takeover at 04:00)
+
+- **Taken over** by Claude (Fable 5.1) at the owner's instruction. Stopped the OpenCode server and both TUIs on this PC (pids 22720/45720/18316) and its orphaned verification shell on DANS1 (pid 41016). No peer agent should commit on this branch or on the DANS1 checkout without appending here first.
+- **Housekeeping (owner request "delete old trees"):** removed the 10 registered old worktrees under `candidate459/app/.claude/worktrees` (all last touched 2026-10-09, zero uncommitted changes each) and 9 empty `wf_d1c1c0bf-c62-*` leftover folders. Branches kept: test/whole-loop-e2e, fix/wide-layout, core/loop, core/ledger, core/clauses, core/worktrees, core/watcher, core/testgate, core/mcp, core/jev.
+- **State verified:** GitHub/source HEAD bd2ba7f with the 12-file fix set still uncommitted. DANS1 `HOST=DANS1`, HEAD `39d62f7`, same 12 files synced (identical diffstat) plus ledger-generated `LEDGER.json`/`LEDGER.md`. Ledger: `open 0 · in_progress 2 · blocked 0 · done 1 · verified 0`. FIX-26 and FIX-26-SCOPE were marked stale by the tool itself because files under their `paths` changed (`core/worktrees/manager.test.ts` at 2d11ae0, `core/host/routes/tasks.ts` at 589f241); nothing was hand-edited.
+- **Pre-check on DANS1** (captured outside `.ledger/logs`): `C:\Users\danie\Documents\PerfectPlannerEvidence\20261111-ClaudeTakeover\precheck-*.txt`. `typecheck:core` PASS (exit 0, 04:03:56). Focused core (10 files) and release (6 files) runs in progress.
+
+#### Finish line (ordered, revision-bound)
+
+1. Pre-check green on DANS1 for the 10 previously failing core files and the 6 release test files. Anything still red is fixed for the right reason; no time limit or assertion changes.
+2. One source commit of the fix set on DANS1, the identical patch committed here and pushed (feature branch only).
+3. Ledger loop on DANS1 at that committed, clean HEAD, in order: `run FIX-26` → `done` → `verify` (different actor); `run FIX-26-SCOPE` → `done` → `verify`; `run SHIP` (`typecheck:core` ~5 s, `test:core` ~51 min, `verify:release` ~8 min) → `done` → `verify` (full independent re-run, ~60 min). Commit `LEDGER.json`, `LEDGER.md`, `.ledger/logs` after each verify. `ledger.mjs check` must print FINISHED.
+4. Build and start the app on DANS1, drive one real Finish-Lines task through the Planner UI with a connected worker; capture planning / active / finished spine on desktop and phone/tablet (multi-view audit); record task id, worker/model mapping, timestamps and evidence paths. Any human-only step is reported, not simulated.
+5. Final report: ledger check output, receipt hashes, screenshot paths. No merge, no deploy, no login/database work.
+- Estimated wall clock from 04:10: about 3 h, dominated by `test:core` running twice (worker, then verifier).
