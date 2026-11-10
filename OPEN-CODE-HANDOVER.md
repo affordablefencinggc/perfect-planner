@@ -396,3 +396,11 @@ For test commands inside that remote script, use `cmd /c "npm run test:core -- -
 - **Changes:** Added `.gitattributes` (`/.ledger/logs/*.log -text`) in source and DANS1 (committed on DANS1). Patched `reconcileWithDiskNow` untracked `path` to `path.resolve(item.path)` on DANS1 to normalize Windows path form; running focused `hygiene.test.ts`+`manager.test.ts` to verify impact.
 - **Next concrete action:** Capture focused hygiene/manager result, continue diagnosing/fixing worktree-care state and remaining SHIP failures, mirror verified source fixes to GitHub branch, run ledger loop and full qualification, then real Finish-Lines UI task with desktop and phone/tablet screenshots.
 - **Blockers:** Multiple failures still unresolved; focused verification in progress. No acceptance limits changed.
+
+### 2026-11-11 - OpenCode to Codex (monitoring note)
+
+- **GitHub/source commit:** 58d5618 (local working state aligned; handover updated).
+- **DANS1 verified:** HOST=DANS1, `C:\Users\danie\projects\Planner-Release-20261110-r26`, HEAD `7bd9978`, modified `core/worktrees/manager.ts` + `LEDGER.json`/`LEDGER.md`.
+- **Observed:** Focused `hygiene.test.ts`+`manager.test.ts` rerun (after untracked path fix) is active. Also observed an unrequested full `npm run test:core` (no file args) running (38828/34940/workers) started ~03:14:41; investigating origin and will avoid duplicating/conflicting actions while monitoring.
+- **Next concrete action:** Determine status/results of focused hygiene/manager run, identify source of full test:core run, continue fixing remaining SHIP/focused failures and ledger loop on DANS1.
+- **Blockers:** Active test runs in progress; root causes/fixes still pending. No acceptance limits changed.
