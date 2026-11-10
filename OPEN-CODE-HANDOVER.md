@@ -421,3 +421,19 @@ For test commands inside that remote script, use `cmd /c "npm run test:core -- -
 - **Root cause of all 3 `worktree-care.test.ts` failures:** `OPTIONAL_GIT_CACHE_MS = 4_000` in `core/host/routes/tasks.ts` keys `optionalGitViews` only by `[mode, repo.name, repo.root]`. Neither `POST /tasks/:id/recreate-folder` / `/worktrees/clean` / `/worktrees/:id/remove` invalidates `optionalGitViews`, nor does `optionalWorktreeKey` reflect changes to `.git/worktrees`, `worktrees.json`, or registered folder existence on disk within the 4s TTL.
 - **Next concrete action:** Inspect worktree registry/gitDir stamp paths, patch `tasks.ts` + `worktreeCare.ts` cleanly, verify `worktree-care.test.ts` + `tasks.test.ts` on DANS1, and inspect remaining `verify:release` failures (`run-release-gates.mjs`, `verify-local-push.mjs`, `mergedStateRunner.mjs`, map-atlas).
 - **Blockers:** Remaining SHIP/release failures under active diagnosis. No acceptance limits changed.
+
+### 2026-11-11 - OpenCode to Codex (full SHIP-002 and SHIP-003 root-cause map)
+
+- **GitHub/source commit:** 525ec21 (`codex/qualification-r26-carryover`).
+- **DANS1 verified:** HOST=DANS1, `C:\Users\danie\projects\Planner-Release-20261110-r26`; background `npm run test:core` (38828/34940) still running at 03:27:31.
+- **Every remaining `SHIP-002` (`test:core`) failure mapped from source:**
+  1. `corrupt.test.ts` (12): `dispatch` calls `getOrCreateForDispatch` before checking ledger writability/integrity, and `createNow` now leaves the folder/branch behind when `ledger.append` throws `CHAIN_BROKEN`.
+  2. `oddrepos.test.ts` (3) & `injection.test.ts` (2): `createNow` wraps `GitProgramRefusedError`/`GitHardeningError` in `WorktreeError` (and leaves `T-1` behind when `git worktree add` fails cleanly before exposing unrelated user work); `injection.test.ts:247` compares hooksPath against `gitExecutable` (`cmd\git.exe`) rather than `directGit(gitExecutable)` (`mingw64\bin\git.exe`).
+  3. `cost.test.ts` (1): `report_progress` writes `data: {}` instead of omitting empty `data` when usage is rejected and activity is omitted.
+  4. `jev.test.ts` (2): `JevReviewer` defaults `now` to wall clock (`2026-11`) while `newLedger()` pins `2026-10`.
+  5. `isolation.test.ts` (1): `onIdentityReport` in `openCoreProject` appends to a read-only/damaged ledger during `hello` without guarding `!ledger.status.writable || !ledger.status.ok`.
+  6. `jev-wiring.test.ts` (1): `POST /tasks/:id/check` did not call `syncJevPolicy(project, { fresh: true })` before `proveRequest`.
+  7. `connect-built.test.ts` (1): test predates `connectionIsCurrent` + explicit `--agent claude`.
+  8. `tasks-watch.test.ts` (1) & `worktree-care.test.ts` (3): `optionalGitViews` 4s TTL not invalidated on mutations / disk changes.
+- **Next concrete action:** Finish reading `guardedGitRunner.mjs`, `verify-local-push.mjs`, `run-release-gates.mjs`, and `map-atlas-coverage.test.mjs` for `SHIP-003`, then apply clean fixes without changing any time limit.
+- **Blockers:** Completing `SHIP-003` root-cause inspection before patching. No acceptance limits changed.
