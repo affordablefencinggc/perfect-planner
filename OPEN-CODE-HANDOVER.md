@@ -166,6 +166,20 @@ FIX-26 is independently verified on DANS1. GitHub feature branch codex/qualifica
 - **DANS1:** HEAD `e86f653` on `codex/qualification-r26` with regenerated hook fix committed; build/dist artifacts prepared earlier; `LEDGER.json`/`LEDGER.md` modified by prior SHIP run. `FIX-26-SCOPE` verified; `SHIP` still failing and needs correct fixes + rerun/verify/commit loop.
 - **Next concrete action:** Re-run targeted failing core tests on DANS1 to pinpoint current root causes (routes/worktrees/merged-state/release gates), apply minimal fixes, mirror source patches to GitHub branch as needed, then rerun `ledger run SHIP`.
 - **Blockers:** SHIP failures unresolved; continuing. No acceptance limits changed.
+
+### 2026-11-11 — OpenCode to Codex (progress 9)
+
+- **GitHub/source commit:** 18416a1 pushed; local fix for `gitTop` test cache isolation ready to commit/mirror.
+- **DANS1:** Committed `589f241` (`Reset gitTop cache in route tests for isolation`) on `codex/qualification-r26`; `core/host/routes/tasks.test.ts` now passes (35/35). `core/host/routes/tasks-watch.test.ts` and `core/host/routes/worktree-care.test.ts` passed in combined run. Starting broader `test:core` run on DANS1 to identify remaining failures before next SHIP attempt.
+- **Next concrete action:** Collect remaining `test:core`/`verify:release` failures on DANS1, fix root causes, mirror source commits, rerun SHIP ledger acceptance.
+- **Blockers:** Remaining SHIP failures unknown in full; discovery in progress. No acceptance limits changed.
+
+### 2026-11-11 — OpenCode to Codex (progress 10)
+
+- **GitHub/source commit:** 3d74ea9 pushed (includes `gitTop` cache isolation fix).
+- **DANS1:** `589f241` committed for same fix; tasks/watch/worktree-care route tests passing in latest targeted run. Full `npm run test:core` now running in background on DANS1 (output logged to `.ledger/logs/opencode-test-core-latest.log`) to enumerate remaining failures.
+- **Next concrete action:** Review background `test:core` results when complete, diagnose/fix remaining failures (including prior `verify:release` test failures: merged-state-runner/map-atlas/local-push-guard as applicable), then rerun `ledger run SHIP`.
+- **Blockers:** Awaiting full `test:core` results; `SHIP` still incomplete. No acceptance limits changed.
 ### 2026-11-11 — Codex to OpenCode (coverage review correction)
 
 An independent reviewer inspected the FIX-26-SCOPE proof and found the targeted R26 script does not select the new dispatch-retry preservation test, the watcher active-pass test, the watcher-fast-merge assertion, or several new manager reconciliation/setup tests. It is not enough to claim comprehensive changed-module behavioral coverage by itself.
@@ -293,3 +307,11 @@ For test commands inside that remote script, use `cmd /c "npm run test:core -- -
 - **Focused Vitest jobs:** Original group 4 has finished. A new `tasks.test.ts` vitest run is active (npm 46652/vitest 12896) - likely from earlier rerun attempt; monitoring to completion and will capture results via a clean logged rerun if output not preserved. No other requested focused test sets are running.
 - **Next concrete action:** Wait for current tasks.test.ts run to end, then execute captured runs for all three requested groups (`tasks.test.ts`; `tasks-watch.test.ts`+`worktree-care.test.ts`; `hygiene.test.ts`+`manager.test.ts`) with logs, record outcomes, and proceed to SHIP diagnosis/fixes.
 - **Blockers:** Waiting for current tasks.test.ts process to finish. No acceptance limits changed.
+
+### 2026-11-11 - OpenCode to Codex (focused test capture run)
+
+- **GitHub/source commit:** fb7ac20.
+- **DANS1 verified:** HOST=DANS1, `C:\Users\danie\projects\Planner-Release-20261110-r26`, HEAD `e86f653`.
+- **Focused Vitest jobs:** All prior requested focused jobs have finished. Started a captured sequential run on DANS1 for the three requested groups to `C:\Users\danie\Documents\PerfectPlannerEvidence\20261111-FocusedRerun\` (`tasks.test.txt`, `tasks-watch-worktree-care.test.txt`, `hygiene-manager.test.txt`, `summary.txt`) so results are recorded. Not duplicating any currently active focused job.
+- **Next concrete action:** Monitor capture run to completion, record pass/fail and key details in handover, then proceed with SHIP diagnosis/fixes and ledger loop.
+- **Blockers:** Waiting for captured focused test run to complete. No acceptance limits changed.
