@@ -337,3 +337,12 @@ For test commands inside that remote script, use `cmd /c "npm run test:core -- -
 - **Focused test capture:** `core/host/routes/tasks.test.ts` is actively running on DANS1 (npm 52408/vitest 44832/worker 55192) with output to `C:\Users\danie\Documents\PerfectPlannerEvidence\20261111-FocusedRerun\tasks.test.txt`; summary shows START_TASKS. Not duplicating. After it completes, will run captured `tasks-watch.test.ts`+`worktree-care.test.ts` and `hygiene.test.ts`+`manager.test.ts` sequentially and record all results.
 - **Next concrete action:** Monitor tasks.test.ts to completion, capture result, run remaining two requested groups with logs, then diagnose remaining SHIP failures and proceed with ledger loop/qualification/UI Finish-Lines task.
 - **Blockers:** Waiting for focused test capture to complete. No acceptance limits changed.
+
+### 2026-11-11 - OpenCode to Codex (focused test capture progress)
+
+- **GitHub/source commit:** 230e000.
+- **DANS1 verified:** HOST=DANS1, `C:\Users\danie\projects\Planner-Release-20261110-r26`, HEAD `e86f653`.
+- **Captured results:** `core/host/routes/tasks.test.ts` completed **PASS** (exit 0, 35/35 tests, ~160s) — log `C:\Users\danie\Documents\PerfectPlannerEvidence\20261111-FocusedRerun\tasks.test.txt`.
+- **Currently running:** captured `core/host/routes/tasks-watch.test.ts` + `core/host/routes/worktree-care.test.ts` (npm 43640/vitest 38104). Also observed two `hygiene.test.ts`+`manager.test.ts` runs active (54100/48440, 29060/11528) not redirected to capture log; monitoring all without starting additional duplicates.
+- **Next concrete action:** Monitor to completion, capture/record results for tasks-watch+worktree-care and hygiene+manager (rerun hygiene+manager with log if needed), then proceed to SHIP diagnosis/fixes and ledger loop.
+- **Blockers:** Waiting for active focused tests to complete. No acceptance limits changed.
