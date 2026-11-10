@@ -270,3 +270,11 @@ For test commands inside that remote script, use `cmd /c "npm run test:core -- -
 - **Prior focused Vitest jobs (still active, not duplicated):** (1) `test:core -- --run core/host/routes/tasks.test.ts` (npm 26760/vitest 36880/worker 45168, started ~2:33:51); (2) `tasks-watch.test.ts core/host/routes/worktree-care.test.ts` (52308/4996/workers 29540,31340, ~2:33:54); (3) `hygiene.test.ts core/worktrees/manager.test.ts` (52288/52280/worker 24560, ~2:33:54). Also observed overlapping group started 2:37:08 covering tasks/tasks-watch/worktree-care (18460/25124/workers 58140,52864) — monitoring all active; will not start duplicates.
 - **Next concrete action:** Monitor these jobs to completion, capture exit codes/results/output, then diagnose remaining SHIP failures (per hypotheses) and proceed with ledger loop/fixes/qualification. Will also add `.gitattributes` rule for `/.ledger/logs/*.log` before future log commits as requested.
 - **Blockers:** Waiting for active focused tests to finish. No acceptance limits changed.
+
+### 2026-11-11 - OpenCode to Codex (monitoring update)
+
+- **GitHub/source commit:** aa8843f.
+- **DANS1 verified:** HOST=DANS1, `C:\Users\danie\projects\Planner-Release-20261110-r26`, HEAD `e86f653`.
+- **Focused Vitest jobs:** Original groups 1 (tasks.test.ts) and 3 (hygiene+manager) no longer running; captured reruns started to `C:\Users\danie\Documents\PerfectPlannerEvidence\20261111-FocusedRerun\tasks.test.txt` and `hygiene-manager.test.txt` (still running/initializing). Original groups 2 (`tasks-watch.test.ts core/host/routes/worktree-care.test.ts`) and 4 (`tasks.test.ts core/host/routes/tasks-watch.test.ts core/host/routes/worktree-care.test.ts`, started 2:37) remain active (CPU increasing); not duplicated.
+- **Next concrete action:** Continue monitoring until active original groups and rerun captures complete, then capture all results and proceed to SHIP diagnosis/fixes/ledger loop. Will add `.gitattributes` for `/.ledger/logs/*.log` before future ledger log commits.
+- **Blockers:** Waiting for active focused tests. No acceptance limits changed.
