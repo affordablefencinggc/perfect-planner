@@ -472,3 +472,47 @@ For test commands inside that remote script, use `cmd /c "npm run test:core -- -
   - Release: `src/node/guardedGitRunner.mjs` (compile `PlannerGuardedJob.dll` once per process with SHA-256 verification before `Assembly.Load` inside `powershell.exe`), `scripts/verify-local-push.mjs` (`cleanEnvironment()` on `taskkill.exe`), `src/engine/appMapRegistry.js` (`supporting.exact` sync), `tests/shell-release-feedback-boundary.test.mjs` (`{ skip: requiresBuild }`).
 - **Next concrete action:** Sync these 12 source files to DANS1 (verifying `HOST=DANS1` and path), run `typecheck:core`, the 9 failing core test files, and the 5 failing release test files on DANS1, then commit on DANS1 and mirror to GitHub branch.
 - **Blockers:** None. No acceptance limits changed.
+
+### 2026-11-11 - Codex recent-chat handover (current verified state)
+
+This is a concise handover of the recent Codex discussion, not a verbatim chat export. The in-app thread reader could not return the active turn within its response-size limit.
+
+#### Goal and boundaries
+
+- Complete FIX-26, the full core/release qualification, then build and run a real Finish-Lines task through Planner on DANS1.
+- Keep the original test limits unchanged. Keep login and database work out of scope. Do not merge or deploy.
+- For the live spine trial, capture planning, active-work, and completion states with desktop and phone/tablet screenshots. Use real worker activity and provider identities; do not claim completion from a build alone.
+- Use PowerShell for DANS1 work over the authorized SSH alias `tonys-test-pc`.
+
+#### Current DANS1 state
+
+- Checkout: `C:\Users\danie\projects\Planner-Release-20261110-r26`, branch `codex/qualification-r26`.
+- Current code commit: `39d62f7 Normalize reconciled worktree paths on Windows`.
+- DANS1 working tree after that commit contained only the ledger-generated `LEDGER.json` and `LEDGER.md` changes; never edit those or `.ledger/logs/` by hand.
+- Latest authoritative `L check`: `open 0 · in_progress 2 · blocked 0 · done 1 · verified 0 · total 3`; `FIX-26-SCOPE` is done and awaiting independent verification. `FIX-26` is next. `SHIP` remains unfinished.
+- The successful `FIX-26-SCOPE` ledger run used the original `targeted-r26-acceptance.ps1`; no time limit changed. An independent verifier still needs to inspect the scoped changes and run `L verify FIX-26-SCOPE`.
+- The retained baseline proves two original failures: the empty-only-commit flow took 60,352 ms against its original 60-second bound; the “20,000 files” whole-flow case took 44.121 seconds against `<30s`. Its Windows fixture uses 2,000 files. Earlier worker/verifier passes exist at `0650030`, but those receipts are stale after later commits and must be refreshed through the ledger.
+- The DANS1 `test:core` capture started before this handover ended and later disappeared along with its log file. Its final result is unknown and must not be treated as ledger proof. Before it disappeared, `worktree-care.test.ts` showed two failures tied to stale cached worktree facts after outside folder changes.
+
+#### Current source checkout state
+
+- Source checkout: `C:\repos\perfect-planner-master-audit\candidate459\github-carryover-r26`, branch `codex/qualification-r26-carryover`.
+- The working tree has multiple uncommitted candidate fixes across core routes/worktrees, guarded Git, the app map registry, and release tests. They have not yet been fully qualified on DANS1. Review `git status -sb` and each diff before staging; do not overwrite those edits.
+- `core/host/routes/tasks.ts` now has a bounded asynchronous filesystem-stamp cache invalidation candidate to address the two observed `worktree-care` failures. It keeps the existing 4-second cache TTL, checks only the relevant worktree/admin directories and nearby parents, and treats symlink or inaccessible paths as uncacheable. It is not yet copied to DANS1 or verified there.
+- The Windows path normalization in `core/worktrees/manager.ts` is committed on DANS1 as `39d62f7`; the source branch has its mirrored path change in the existing source history.
+
+#### Release failures already traced from the recorded logs
+
+- The release feedback test reads `dist/client/assets/` before the release chain has built it. Keep the assertion; place it in a post-build gate or use the existing build-aware gate structure.
+- The static app-map registry lacks ownership entries for 14 current artifacts on DANS1. The candidate source diff includes app-map coverage updates; verify the registry against the full current census.
+- Git workspace inventory exceeds its existing 20-second operation budget on Windows because the double-snapshot census launches repeated guarded Git processes. Optimize process/preflight overhead while retaining the consistency snapshots and all existing time limits.
+- Existing merged-state runner tests expose preservation/classification failures for gate-created files and commits. Investigate the exact current DANS1 behavior; do not weaken those assertions.
+- The earlier broad encoded-string scan was rejected because it would export potentially sensitive matches. No files were changed by that rejected scan; do not retry it by another route.
+
+#### Next actions
+
+1. Finish independent verification of `FIX-26-SCOPE`, then run `L check` and complete `FIX-26` through `ledger.mjs` at a committed DANS1 revision.
+2. Apply and focus-test the worktree-cache invalidation on DANS1, then commit the repair. Continue with release-gate fixes without raising any timeout or removing checks.
+3. Run `SHIP` through the ledger on one committed revision (`typecheck:core`, `test:core`, `verify:release`), complete independent verification, and commit the generated ledger receipts.
+4. Mirror verified fixes to the source feature branch and push only that branch.
+5. Build/open the passing app on DANS1 and run the real Finish-Lines task through Planner. Capture and inspect the live spine on desktop, phone, and tablet at planning, active work, and completion. Keep auth and database out of the app work.
