@@ -149,7 +149,7 @@ describe("attack 1: replay after the app restarts", () => {
   // "connects" the agent: connect.mjs sees the file, registers a server with a dead token and says Connected. The
   // agent only finds out when its first call fails. connect.mjs's own message for this case ("the token file is gone
   // (the app restarted...)") never fires because the file is never gone.
-  it.fails("the old connect line is refused with 'Click Connect agent again' after a restart, instead of reporting Connected", async () => {
+  it("the old connect line is refused with 'Click Connect agent again' after a restart, instead of reporting Connected", async () => {
     const dirs = { data: tempDir(), repo: makeRepo(), secrets: "" };
     dirs.secrets = path.join(dirs.data, "secrets.json");
     const old = await firstRun(dirs);
@@ -164,7 +164,7 @@ describe("attack 1: replay after the app restarts", () => {
       fs.copyFileSync(path.resolve("core/mcp/skill/SKILL.md"), path.join(here, "skill", "SKILL.md"));
       const cwd = tempDir("pp-attack-cwd-");
       const output: string[] = [];
-      const exit = runConnect(["--agent", "claude", new URL(old.connectBridge).origin, old.connectTokenFile], { cwd, env: { PATH: bin, HOME: tempDir() }, home: tempDir(), here, out: (t) => output.push(t), err: (t) => output.push(t) });
+      const exit = await runConnect(["--agent", "claude", new URL(old.connectBridge).origin, old.connectTokenFile], { cwd, env: { PATH: bin, HOME: tempDir() }, home: tempDir(), here, out: (t) => output.push(t), err: (t) => output.push(t) });
       expect(output.join("")).not.toMatch(/Connected/);
       expect(exit).not.toBe(0);
       expect(output.join("")).toMatch(/Connect agent again/);

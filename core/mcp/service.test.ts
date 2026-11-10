@@ -532,3 +532,21 @@ describe("a connect line from before a restart", () => {
     await expect(hello(restarted, fresh, "New line")).resolves.toMatchObject({ role: "main" });
   });
 });
+
+
+describe("explicit worker activity", () => {
+  it("records working/waiting/finished on the owned attempt, and prose alone does not signal busy", async () => {
+    const { service, w1, w2 } = setup();
+    const worker = await hello(service, w1, "Codex");
+    await service.call(worker, "claim_task", { task: "T-1" });
+    for (const activity of ["working", "waiting", "finished"] as const) {
+      await service.call(worker, "report_progress", { task: "T-1", text: "Task update", activity });
+      expect(service.board().get("T-1")?.workerActivity).toMatchObject({ worker: worker.agent, activity });
+    }
+    await service.call(worker, "report_progress", { task: "T-1", text: "No activity signal" });
+    expect(service.board().get("T-1")?.workerActivity).toBeNull();
+    const other = await hello(service, w2, "Other");
+    await expectCode(service.call(other, "report_progress", { task: "T-1", text: "wrong task", activity: "working" }), "FORBIDDEN");
+    await expectCode(service.call(worker, "report_progress", { task: "T-1", text: "bad state", activity: "pretend" }), "INVALID");
+  });
+});

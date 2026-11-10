@@ -84,7 +84,8 @@ describe("person-only writes", () => {
     expect(plain.headers.get("set-cookie")).toBeNull();
     const claimed = await claimLaunch(url, hostOf(url).issueLaunch());
     expect(claimed.status).toBe(200);
-    expect(claimed.cookie).toMatch(/^pp_core_person=[\w-]{20,}$/);
+    expect(claimed.cookie?.split("=")[0]).toBe("pp_core_person_" + new URL(url).port);
+    expect(claimed.cookie?.split("=")[1]).toMatch(/^[\w-]{20,}$/);
     expect(claimed.csrf).toMatch(/^[\w-]{20,}$/);
   });
 

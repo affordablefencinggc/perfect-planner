@@ -49,6 +49,20 @@ beforeEach(() => { try { localStorage.clear(); } catch { /* ignore */ } });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.useRealTimers(); vi.restoreAllMocks(); });
 
 describe("CoreAgentConnect", () => {
+  test("does not inherit the old implicit Claude default or fall back to a Claude command", async () => {
+    localStorage.setItem("pp.connect.agent", "claude");
+    routeFetch({ "GET /agents": async () => ok(list()), "POST /agents/connect": async () => ok({ ...CONNECT, lines: { claude: CONNECT.claudeCode } }) });
+    renderWith();
+    fireEvent.click(await screen.findByRole("button", { name: /Connect agent/ }));
+    expect(await screen.findByText(/selected agent's command is unavailable/)).toBeTruthy();
+    expect(screen.getByRole("radio", { name: "Codex CLI" }).getAttribute("aria-checked")).toBe("true");
+    expect(screen.getByRole("button", { name: "Copy the Codex CLI command" }).disabled).toBe(true);
+    expect(screen.getByLabelText("Codex CLI command").textContent).toBe("");
+    expect(document.body.textContent).not.toContain(CONNECT.claudeCode);
+    fireEvent.click(screen.getByRole("radio", { name: "Claude Code" }));
+    expect(screen.getByLabelText("Claude Code command").textContent).toBe(CONNECT.claudeCode);
+  });
+
   test("shows loading, then the empty state with the Connect agent button", async () => {
     let release;
     routeFetch({ "GET /agents": () => new Promise((resolve) => { release = () => resolve(ok(list())); }) });
@@ -80,22 +94,22 @@ describe("CoreAgentConnect", () => {
     });
     renderWith();
     fireEvent.click(await screen.findByRole("button", { name: /Connect agent/ }));
-    const command = await screen.findByLabelText("Claude Code command");
-    expect(command.textContent).toBe(CONNECT.claudeCode);
+    const command = await screen.findByLabelText("Codex CLI command");
+    expect(command.textContent).toBe(CONNECT.lines.codex);
     expect(fetchMock.mock.calls.some(([url, init]) => String(url).startsWith("/api/core/agents/connect") && init.method === "POST")).toBe(true);
     expect(screen.getByText(/Waiting for the agent to check in/)).toBeTruthy();
     expect(screen.getByText(/Using another agent/)).toBeTruthy();
     expect(screen.getByLabelText("MCP settings").textContent).toContain('"mcpServers"');
 
-    fireEvent.click(screen.getByRole("button", { name: "Copy the Claude Code command" }));
-    await waitFor(() => expect(writeText).toHaveBeenCalledWith(CONNECT.claudeCode));
+    fireEvent.click(screen.getByRole("button", { name: "Copy the Codex CLI command" }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(CONNECT.lines.codex));
     expect(await screen.findByText("Copied")).toBeTruthy();
 
     // The agent calls hello; the next poll sees it.
     current = list([MAIN], [{ id: "C-1", person: "owner", issuedAt: "x", revoked: false, agent: MAIN.id }]);
     expect(await screen.findByText("Connected: Claude Code (claude-opus) is your main chat.", {}, { timeout: 4000 })).toBeTruthy();
     expect(document.body.textContent).not.toContain(TOKEN);
-    expect(screen.queryByLabelText("Claude Code command")).toBeNull();
+    expect(screen.queryByLabelText("Codex CLI command")).toBeNull();
     const agents = screen.getByRole("list", { name: "Connected agents" });
     expect(within(agents).getByText("Main chat")).toBeTruthy();
     for (let i = 0; i < localStorage.length; i++) expect(localStorage.getItem(localStorage.key(i))).not.toContain(TOKEN);
@@ -107,9 +121,9 @@ describe("CoreAgentConnect", () => {
     routeFetch({ "GET /agents": async () => ok(list()), "POST /agents/connect": async () => ok(CONNECT) });
     renderWith();
     fireEvent.click(await screen.findByRole("button", { name: /Connect agent/ }));
-    await screen.findByLabelText("Claude Code command");
+    await screen.findByLabelText("Codex CLI command");
     const picker = screen.getByRole("radiogroup", { name: "Your agent" });
-    expect(within(picker).getByRole("radio", { name: "Claude Code" }).getAttribute("aria-checked")).toBe("true");
+    expect(within(picker).getByRole("radio", { name: "Codex CLI" }).getAttribute("aria-checked")).toBe("true");
 
     fireEvent.click(within(picker).getByRole("radio", { name: "Gemini CLI" }));
     expect(screen.getByLabelText("Gemini CLI command").textContent).toBe(CONNECT.lines.gemini);
@@ -120,7 +134,7 @@ describe("CoreAgentConnect", () => {
     fireEvent.click(within(picker).getByRole("radio", { name: "Codex CLI" }));
     expect(screen.getByLabelText("Codex CLI command").textContent).toBe(CONNECT.lines.codex);
     expect(screen.getByText(/one Perfect Planner connection for the whole computer/)).toBeTruthy();
-    expect(localStorage.getItem("pp.connect.agent")).toBe("codex");
+    expect(localStorage.getItem("pp.connect.agent.v2")).toBe("codex");
   });
 
   test("lists agents with role badges and disconnects one", async () => {

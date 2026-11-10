@@ -85,7 +85,7 @@ function Prices({ prices, onSave }) {
   });
   return (
     <form onSubmit={form.run} aria-label="Your prices per million tokens">
-      <label>Model<input value={model} onChange={(e) => setModel(e.target.value)} placeholder="claude-sonnet-4-5" autoComplete="off" /></label>
+      <label>Model<input value={model} onChange={(e) => setModel(e.target.value)} placeholder="Configured model, for example gpt-5.6-terra" autoComplete="off" /></label>
       <label>$ per million in<input inputMode="decimal" value={input} onChange={(e) => setInput(e.target.value)} /></label>
       <label>$ per million out<input inputMode="decimal" value={output} onChange={(e) => setOutput(e.target.value)} /></label>
       <button type="submit" className="core-button" disabled={!model.trim() || input === "" || output === "" || form.busy}>Save price</button>

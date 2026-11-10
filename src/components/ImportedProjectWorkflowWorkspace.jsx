@@ -126,6 +126,7 @@ export function ImportedProjectWorkflowWorkspace({
   activeProject,
   onWorkspace,
   onSelect,
+  pendingDispatches,
 }) {
   const records = useProjectWorkRecords(activeProject?.projectId);
   usePlanTaskDriftWatch(activeProject, records);
@@ -187,7 +188,7 @@ export function ImportedProjectWorkflowWorkspace({
     {workspace === "plan" && <Suspense fallback={null}><CorePlanSpine onWorkspace={onWorkspace} onCount={setCoreTasks} /></Suspense>}
     {workspace === "plan" && <Suspense fallback={<p role="status">Opening the saved task map…</p>}><TaskDraftMap project={activeProject} records={records} onWorkspace={onWorkspace} /></Suspense>}
 
-    {(workspace === "evidence" || workspace === "build") && <Suspense fallback={<p role="status">Opening the task spine…</p>}><CoreSpine onWorkspace={onWorkspace} onCount={setCoreTasks} actions={workspace === "build"} /></Suspense>}
+    {(workspace === "evidence" || workspace === "build") && <Suspense fallback={<p role="status">Opening the task spine…</p>}><CoreSpine onWorkspace={onWorkspace} onCount={setCoreTasks} actions={workspace === "build"} accountAll={workspace === "build"} pendingDispatches={pendingDispatches} /></Suspense>}
     {workspacePanels[workspace] && !((workspace === "evidence" || workspace === "build") && coreTasks > 0) && (() => { const FeaturePanel = workspacePanels[workspace]; return <Suspense fallback={<p role="status">Opening this step…</p>}><FeaturePanel project={activeProject} records={records} onWorkspace={onWorkspace} onSelect={onSelect} /></Suspense>; })()}
 
     <section className="imported-workflow-context" aria-label="Workspace contract">

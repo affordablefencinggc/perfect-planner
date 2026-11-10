@@ -90,6 +90,24 @@ describe("ImportedProjectWorkflowWorkspace", () => {
     expect(container.textContent).not.toContain("Perfect Planner sample");
   });
 
+  test("Build accounts for an authoritative no-test task beside reviewable tasks", async () => {
+    const project = importedProject();
+    const task = (id, extra = {}) => ({ id, label: id, title: `Task ${id}`, status: "open", stage: "needs-test", attempt: 1, proofs: [], lastProgress: null, ...extra });
+    vi.stubGlobal("fetch", vi.fn(async (url) => {
+      const path = String(url).split("?")[0];
+      const result = path === "/api/core/tasks"
+        ? { repo: { ok: true, root: "/r" }, tasks: [task("T-1", { stage: "test-proposed", test: { entry: "L-1" } }), task("T-2", { stage: "test-proposed", test: { entry: "L-2" } }), task("T-3", { test: null })] }
+        : path === "/api/core/agents" ? { agents: [], connections: [] }
+          : path === "/api/core/session" ? { person: true } : null;
+      if (!result) throw new Error(`unexpected ${path}`);
+      return { ok: true, status: 200, json: async () => ({ ok: true, result }) };
+    }));
+    render(<ImportedProjectWorkflowWorkspace workspace="build" activeProject={project} onWorkspace={vi.fn()} />);
+    const list = await screen.findByRole("list", { name: "Tasks from the ledger" });
+    expect(list.querySelectorAll("article")).toHaveLength(3);
+    expect(list.textContent).toContain("T-3");
+  });
+
   test("renders a project-bound unanswered Plan instead of Demo fixtures", async () => {
     const user = userEvent.setup();
     const onWorkspace = vi.fn();

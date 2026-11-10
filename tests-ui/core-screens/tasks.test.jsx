@@ -1,6 +1,8 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import TasksScreen from "../../src/core-screens/TasksScreen.jsx";
+import TasksScreen, { DispatchPanel } from "../../src/core-screens/TasksScreen.jsx";
+import { useCoreResource } from "../../src/core-screens/coreApi.js";
+import { ProjectProvider } from "../../src/project/ProjectProvider.jsx";
 import { ViewModeContext } from "../../src/project/viewMode.js";
 
 // Built at run time so the repository's own push scan does not read it as a real token.
@@ -17,6 +19,7 @@ function routeFetch(routes) {
     const path = String(url).split("?")[0].replace("/api/core", "");
     if (path === "/session") return ok({ person: true });
     const handler = routes[`${init.method ?? "GET"} ${path}`];
+    if (!handler && path === "/tasks/T-1/check-input" && (init.method ?? "GET") === "GET") return ok({ attempt: "T-1", expected: { definitionEntry: "L-1", approvalEntry: "L-2", pin: "a".repeat(64), commit: "b".repeat(40) } });
     if (!handler) throw new Error(`unexpected ${init.method ?? "GET"} ${path}`);
     return handler(init);
   });
@@ -33,10 +36,224 @@ const renderScreen = (mode = "simple") =>
 
 const card = async (name) => screen.findByRole("article", { name });
 
+function ResourceProbe({ enabled = true }) {
+  const resource = useCoreResource("/tasks", { enabled, pollMs: 1000 });
+  return <output data-testid="resource-state">{resource.data?.tasks?.[0]?.title ?? resource.status}</output>;
+}
+
+function projectRegistry(initial = "alpha") {
+  let activeProjectId = initial;
+  const listeners = new Set();
+  const project = (projectId) => ({ projectId, view: { workspace: "tasks" }, authorities: { architecture: { state: "unavailable" }, folder: { state: "unavailable" }, component: { state: "unavailable" }, plan: { state: "unavailable" } } });
+  let currentSnapshot = { projects: [project("alpha"), project("beta")], activeProjectId, activeProject: project(activeProjectId), state: "ready", health: {} };
+  return {
+    get: project,
+    getSnapshot: () => currentSnapshot,
+    subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); },
+    setActive(projectId) { activeProjectId = projectId; currentSnapshot = { projects: [project("alpha"), project("beta")], activeProjectId, activeProject: project(activeProjectId), state: "ready", health: {} }; listeners.forEach(listener => listener()); return project(projectId); },
+  };
+}
+
 beforeEach(() => { try { localStorage.clear(); } catch { /* ignore */ } });
-afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe("TasksScreen", () => {
+  test("keeps one slow task read in flight and renders its rows after repeated poll intervals", async () => {
+    vi.useFakeTimers();
+    let settle;
+    const firstRead = new Promise((resolve) => { settle = resolve; });
+    const fetch = routeFetch({
+      "GET /tasks": vi.fn(() => firstRead),
+    });
+
+    renderScreen();
+    await act(async () => { await Promise.resolve(); });
+    expect(fetch.mock.calls.filter(([url]) => String(url).includes("/tasks")).length).toBe(1);
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(10000); });
+    expect(fetch.mock.calls.filter(([url]) => String(url).includes("/tasks")).length).toBe(1);
+
+    await act(async () => {
+      settle(ok(view([task()])));
+      for (let tick = 0; tick < 8; tick += 1) await Promise.resolve();
+    });
+    expect(screen.getByRole("article", { name: "T-1 Save notes" })).toBeTruthy();
+  });
+
+  test("invalidates a held task read and its queued poll when disabled or unmounted", async () => {
+    vi.useFakeTimers();
+    let settleDisabled;
+    let settleUnmounted;
+    const heldDisabled = new Promise(resolve => { settleDisabled = resolve; });
+    const heldUnmounted = new Promise(resolve => { settleUnmounted = resolve; });
+    let reads = 0;
+    const fetch = routeFetch({ "GET /tasks": () => (++reads === 1 ? heldDisabled : heldUnmounted) });
+    const rendered = render(<ResourceProbe />);
+    await act(async () => { await Promise.resolve(); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    expect(fetch).toHaveBeenCalledTimes(1);
+
+    rendered.rerender(<ResourceProbe enabled={false} />);
+    await act(async () => { settleDisabled(ok(view([task({ title: "Old reply" })]))); await Promise.resolve(); });
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId("resource-state").textContent).toBe("loading");
+
+    rendered.unmount();
+    const unmounted = render(<ResourceProbe />);
+    await act(async () => { await Promise.resolve(); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    expect(fetch).toHaveBeenCalledTimes(2);
+    unmounted.unmount();
+    await act(async () => { settleUnmounted(ok(view([task({ title: "Unmounted reply" })]))); await Promise.resolve(); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  test("keeps a switched project isolated from a held earlier project response", async () => {
+    let settleAlpha;
+    let settleBeta;
+    const alpha = new Promise(resolve => { settleAlpha = resolve; });
+    const beta = new Promise(resolve => { settleBeta = resolve; });
+    const fetch = routeFetch({ "GET /tasks": () => alpha });
+    fetch.mockImplementation((url, init = {}) => {
+      const path = String(url);
+      if (path.includes("project=alpha")) return alpha;
+      if (path.includes("project=beta")) return beta;
+      throw new Error(`unexpected ${path}`);
+    });
+    const registry = projectRegistry();
+    render(<ProjectProvider registry={registry} syncHistory={false}><ResourceProbe /></ProjectProvider>);
+    await act(async () => { await Promise.resolve(); });
+    expect(fetch).toHaveBeenCalledTimes(1);
+
+    await act(async () => { registry.setActive("beta"); await Promise.resolve(); });
+    expect(fetch).toHaveBeenCalledTimes(2);
+    await act(async () => { settleAlpha(ok(view([task({ title: "Alpha reply" })]))); await Promise.resolve(); });
+    expect(screen.getByTestId("resource-state").textContent).toBe("loading");
+    await act(async () => { settleBeta(ok(view([task({ title: "Beta reply" })]))); await Promise.resolve(); });
+    expect(screen.getByTestId("resource-state").textContent).toBe("Beta reply");
+  });
+
+  test("adopts the existing unresolved request when another window wins admission", async () => {
+    const winner = { requestId: "request-from-other-window", attempt: "T-1", expected: { definitionEntry: "L-1", approvalEntry: "L-2", pin: "a".repeat(64), commit: "b".repeat(40) } };
+    let calls = 0;
+    routeFetch({
+      "GET /tasks": async () => ok(view([task({ stage: "building" })])),
+      "POST /tasks/T-1/check": async init => {
+        const sent = JSON.parse(init.body);
+        if (++calls === 1) {
+          expect(sent.requestId).not.toBe(winner.requestId);
+          return ok({ passed: false, reason: "An earlier check is unresolved", execution: { version: 1, ...winner, phase: "launch-intent" } });
+        }
+        expect(sent).toEqual(winner);
+        return ok({ passed: true, commit: winner.expected.commit, execution: { version: 1, ...winner, phase: "terminal" } });
+      },
+    });
+    renderScreen();
+    fireEvent.click(await screen.findByRole("button", { name: "Check the work" }));
+    await waitFor(() => expect(JSON.parse(localStorage.getItem("pp.check-request.v1:default:T-1"))).toEqual(winner));
+    fireEvent.click(screen.getByRole("button", { name: "Recover check result" }));
+    await waitFor(() => expect(localStorage.getItem("pp.check-request.v1:default:T-1")).toBeNull());
+    expect(calls).toBe(2);
+  });
+
+
+  test("saves before submission and recovers the exact request after a lost reply and reload", async () => {
+    const row = task({ stage: "building", status: "claimed", owner: "worker-1", worktree: { path: "/w" } });
+    const bodies = [];
+    let lose = true;
+    const fetch = routeFetch({
+      "GET /tasks": async () => ok(view([row])),
+      "POST /tasks/T-1/check": async init => {
+        const body = JSON.parse(init.body);
+        bodies.push(body);
+        expect(JSON.parse(localStorage.getItem("pp.check-request.v1:default:T-1"))).toEqual(body);
+        if (lose) throw new Error("lost reply after completion");
+        return ok({ passed: true, commit: body.expected.commit, execution: { phase: "terminal", requestId: body.requestId } });
+      },
+    });
+    renderScreen();
+    fireEvent.click(await screen.findByRole("button", { name: "Check the work" }));
+    expect(await screen.findByRole("button", { name: "Recover check result" })).toBeTruthy();
+    cleanup();
+    lose = false;
+    renderScreen();
+    fireEvent.click(await screen.findByRole("button", { name: "Recover check result" }));
+    await waitFor(() => expect(localStorage.getItem("pp.check-request.v1:default:T-1")).toBeNull());
+    expect(bodies).toHaveLength(2);
+    expect(bodies[1]).toEqual(bodies[0]);
+    expect(fetch.mock.calls.filter(([url]) => String(url).includes("check-input"))).toHaveLength(1);
+  });
+
+  test("an unknown execution remains recoverable and never prepares another request", async () => {
+    const saved = { requestId: "request-000000001", attempt: "T-1", expected: { definitionEntry: "L-1", approvalEntry: "L-2", pin: "a".repeat(64), commit: "b".repeat(40) } };
+    localStorage.setItem("pp.check-request.v1:default:T-1", JSON.stringify(saved));
+    const fetch = routeFetch({
+      "GET /tasks": async () => ok(view([task({ stage: "building", checkReady: { ok: false, note: "Changed work" } })])),
+      "POST /tasks/T-1/check": async init => { expect(JSON.parse(init.body)).toEqual(saved); return ok({ passed: false, reason: "Outcome unknown", execution: { phase: "unknown" } }); },
+    });
+    renderScreen();
+    const recover = await screen.findByRole("button", { name: "Recover check result" });
+    expect(recover.disabled).toBe(false);
+    fireEvent.click(recover);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Recover check result" }).disabled).toBe(false));
+    expect(JSON.parse(localStorage.getItem("pp.check-request.v1:default:T-1"))).toEqual(saved);
+    expect(fetch.mock.calls.some(([url]) => String(url).includes("check-input"))).toBe(false);
+  });
+
+
+  test.each([false, true])("confirms release before a held refresh settles; failed refresh=%s", async (fails) => {
+    let finish;
+    const held = new Promise(resolve => { finish = resolve; });
+    let released = false;
+    const claimed = task({ status: "claimed", owner: "codex-worker", stage: "review-diff", worktree: { path: "/w", branch: "pp/T-1" } });
+    const fetch = routeFetch({
+      "GET /tasks": async () => {
+        if (!released) return ok(view([claimed]));
+        await held;
+        return fails ? refused("Read temporarily unavailable") : ok(view([{ ...claimed, owner: null, status: "open" }]));
+      },
+      "POST /tasks/T-1/release": async () => { released = true; return ok({ released: "T-1", from: "codex-worker", entry: "L-225" }); },
+    });
+    renderScreen();
+    const article = await card("T-1 Save notes");
+    fireEvent.click(within(article).getByRole("button", { name: "Release claim" }));
+    fireEvent.click(within(article).getByRole("button", { name: "Release T-1" }));
+    try {
+      expect(await screen.findByText(/The release is recorded. Refreshing/)).toBeTruthy();
+      await waitFor(() => expect(within(article).getByRole("button", { name: "Check work again" }).disabled).toBe(false));
+      expect(within(article).queryByRole("button", { name: "Release claim" })).toBeNull();
+      expect(within(article).queryByRole("button", { name: "Release T-1" })).toBeNull();
+      expect(fetch.mock.calls.filter(([u,i]) => String(u).includes("/release") && i.method === "POST")).toHaveLength(1);
+    } finally { finish(); }
+    if (fails) {
+      expect(await screen.findByText(/The release is recorded, but the task list could not refresh/)).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Refresh task list" })).toBeTruthy();
+    } else await waitFor(() => expect(screen.queryByText(/The release is recorded. Refreshing/)).toBeNull());
+  });
+
+  test.each([
+    { text: "Checking the task connection", at: "2026-11-04T03:40:00Z" },
+    "Checking the task connection",
+    { text: "<img src=x onerror=alert(1)>", at: "2026-11-04T03:40:00Z" },
+  ])("renders API progress and legacy progress as plain text without crashing: %j", async (lastProgress) => {
+    routeFetch({ "GET /tasks": async () => ok(view([task({ lastProgress })])) });
+    renderScreen();
+    const article = await card("T-1 Save notes");
+    const latest = within(article).getByText("Latest").closest("p");
+    const text = typeof lastProgress === "string" ? lastProgress : lastProgress.text;
+    expect(latest.textContent).toBe("Latest " + text);
+    expect(article.textContent).not.toContain("[object Object]");
+    expect(latest.querySelector("img")).toBeNull();
+    expect(within(article).getByRole("button", { name: "Start worker" })).toBeTruthy();
+  });
+  test("does not invent a latest progress line when progress is absent", async () => {
+    routeFetch({ "GET /tasks": async () => ok(view([task({ lastProgress: null })])) });
+    renderScreen();
+    const article = await card("T-1 Save notes");
+    expect(within(article).queryByText("Latest")).toBeNull();
+  });
+
   test("shows the empty state when no plan has been approved yet", async () => {
     routeFetch({ "GET /tasks": async () => ok(view([])) });
     renderScreen();
@@ -91,21 +308,23 @@ describe("TasksScreen", () => {
     const fetch = routeFetch({
       "GET /tasks": async () => ok(view(tasks)),
       "POST /tasks/T-1/dispatch": async (init) => {
-        expect(JSON.parse(init.body)).toEqual({ model: "claude-sonnet-4-5" });
-        tasks = [task({ worktree: { path: "/work/notes/.perfect-planner/worktrees/T-1", branch: "pp/T-1", base: "main", port: 5200 }, dispatch: { issuedAt: "now", model: "claude-sonnet-4-5" } })];
-        return ok({ task: "T-1", title: "Save notes", worktree: "/work/notes/.perfect-planner/worktrees/T-1", branch: "pp/T-1", tokenFile: "/p/.perfect-planner/tokens/T-1.token", brief: "You are a Perfect Planner worker on T-1: Save notes.\n2. Test first: … propose_test", setup: `cd "/w" && claude mcp add perfect-planner-core --env 'PP_AGENT_TOKEN_FILE=/p/.perfect-planner/tokens/T-1.token' -- node '/a'`, start: 'claude "$(cat "/b/T-1.md")"', json: "{}", agents: { gemini: { setup: "cd /w && node connect.mjs --agent gemini", start: "gemini --approval-mode auto_edit -i brief", note: "Choose Trust folder first." }, codex: { setup: "cd /w && node connect.mjs --agent codex", start: "codex -s workspace-write -a on-request brief", note: "One connection per computer." } }, shell: "Terminal", agentBuilt: true });
+        expect(JSON.parse(init.body)).toEqual({ model: "gpt-5.6-terra" });
+        tasks = [task({ worktree: { path: "/work/notes/.perfect-planner/worktrees/T-1", branch: "pp/T-1", base: "main", port: 5200 }, dispatch: { issuedAt: "now", model: "gpt-5.6-terra" } })];
+        return ok({ task: "T-1", model: "gpt-5.6-terra", title: "Save notes", worktree: "/work/notes/.perfect-planner/worktrees/T-1", branch: "pp/T-1", tokenFile: "/p/.perfect-planner/tokens/T-1.token", brief: "You are a Perfect Planner worker on T-1: Save notes.\n2. Test first: … propose_test", setup: `cd "/w" && claude mcp add perfect-planner-core --env 'PP_AGENT_TOKEN_FILE=/p/.perfect-planner/tokens/T-1.token' -- node '/a'`, start: 'claude "$(cat "/b/T-1.md")"', json: "{}", agents: { gemini: { setup: "cd /w && node connect.mjs --agent gemini", start: "gemini --approval-mode auto_edit -i brief", note: "Choose Trust folder first." }, codex: { setup: "cd /w && node connect.mjs --agent codex", start: "codex -s workspace-write -a on-request brief", note: "One connection per computer." } }, shell: "Terminal", agentBuilt: true });
       },
     });
     renderScreen();
     const t1 = await card("T-1 Save notes");
     expect(within(t1).getByText("Needs a test")).toBeTruthy();
-    fireEvent.change(within(t1).getByLabelText("Worker model"), { target: { value: "claude-sonnet-4-5" } });
+    fireEvent.change(within(t1).getByLabelText("Worker model"), { target: { value: "gpt-5.6-terra" } });
     fireEvent.click(within(t1).getByRole("button", { name: "Start worker" }));
     const setup = await screen.findByLabelText("Set-up command for T-1");
-    expect(setup.textContent).toContain("PP_AGENT_TOKEN_FILE=");
+    expect(setup.textContent).toContain("connect.mjs --agent codex");
+    expect(setup.textContent).not.toContain("claude");
+    expect(screen.getByText(/set-up command adds Perfect Planner to Codex CLI/)).toBeTruthy();
     expect(document.body.textContent).not.toContain(TOKEN);
     expect(screen.getByLabelText("Brief for T-1").textContent).toContain("propose_test");
-    expect(screen.getByLabelText("Start command for T-1").textContent).toContain("claude");
+    expect(screen.getByLabelText("Start command for T-1").textContent).toContain("codex -s workspace-write");
     expect(screen.getByLabelText("gemini start for T-1").textContent).toContain("auto_edit");
     expect(screen.getByLabelText("codex set-up for T-1").textContent).toContain("--agent codex");
     expect(fetch.mock.calls.filter(([u]) => String(u).includes("/dispatch"))).toHaveLength(1);
@@ -139,7 +358,7 @@ describe("TasksScreen", () => {
     let tasks = [task({ status: "claimed", owner: "worker-1", stage: "building", worktree: tree, lastProgress: "Saved to disk", proofs: [{ kind: "commit", link: "abc123" }] })];
     const fetch = routeFetch({
       "GET /tasks": async () => ok(view(tasks)),
-      "POST /tasks/T-1/check": async () => { tasks = [{ ...tasks[0], stage: "review-diff", check: { passed: true, commit: "abc123" } }]; return ok({ passed: true, commit: "abc123", ...view(tasks) }); },
+      "POST /tasks/T-1/check": async () => { tasks = [{ ...tasks[0], stage: "review-diff", check: { passed: true, commit: "abc123" } }]; return ok({ passed: true, commit: "abc123", execution: { phase: "terminal" }, ...view(tasks) }); },
       "GET /tasks/T-1/diff": async () => ok({ task: "T-1", files: ["src/save.js"], text: "+export const save = 1;", commit: "abc123" }),
       "POST /tasks/T-1/approve-diff": async (init) => {
         expect(JSON.parse(init.body)).toEqual({ commit: "abc123" });
@@ -323,7 +542,7 @@ describe("TasksScreen", () => {
       let finish;
       routeFetch({
         "GET /tasks": async () => ok(view([building({ checkReady: { ok: true, note: "The worker has not said it is done yet (it has not attached its commit). You can still check what it has saved so far." } })])),
-        "POST /tasks/T-1/check": () => new Promise((resolve) => { finish = () => resolve(ok({ passed: false, reason: "The test failed.", output: "boom", ...view([building()]) })); }),
+        "POST /tasks/T-1/check": () => new Promise((resolve) => { finish = () => resolve(ok({ passed: false, execution: { phase: "terminal" }, reason: "The test failed.", output: "boom", ...view([building()]) })); }),
       });
       renderScreen();
       const t1 = await card("T-1 Save notes");
@@ -332,7 +551,7 @@ describe("TasksScreen", () => {
       fireEvent.click(within(t1).getByRole("button", { name: "Check the work" }));
       const running = await within(t1).findByRole("button", { name: /Checking/ });
       expect(running.disabled).toBe(true);
-      expect(document.getElementById(running.getAttribute("aria-describedby")).textContent).toMatch(/Running the approved test in the worker's folder\. This can take a minute or more\./);
+      expect(document.getElementById(running.getAttribute("aria-describedby")).textContent).toMatch(/Waiting for the saved check result\. This may include preparing inputs and running the approved test\./);
       finish();
       expect(await screen.findByText(/The test failed\. boom/)).toBeTruthy();
       expect(within(t1).getByRole("button", { name: "Check the work" }).disabled).toBe(false);
@@ -537,7 +756,7 @@ describe("TasksScreen queue and batch", () => {
       "GET /tasks": async () => ok(withQueue([task({ id: "T-1", label: "T-1" }), task({ id: "T-2", label: "T-2", title: "Share" }), task({ id: "T-3", label: "T-3", title: "Export" })], queueOf({ notStarted: [{ id: "T-1", why: "Can start now." }, { id: "T-2", why: "Waiting for a free worker (limit 2)." }, { id: "T-3", why: "T-3 cannot start yet because it needs T-1." }] }))),
       "POST /tasks/start-all": async (init) => {
         started = true;
-        expect(JSON.parse(init.body)).toEqual({ model: "claude-sonnet-4-5" });
+        expect(JSON.parse(init.body)).toEqual({ model: "gpt-5.6-terra" });
         return ok({ ...withQueue([task()], queueOf()), started: [{ task: "T-1", title: "Save notes", worktree: "/w", branch: "pp/T-1", tokenFile: "/t", brief: "b", setup: "cd /w", start: "claude x", json: "{}", shell: "Terminal" }], refused: [] });
       },
     });
@@ -546,6 +765,7 @@ describe("TasksScreen queue and batch", () => {
     expect(within(queue).getByText(/0 of 2 workers running · 3 not started/)).toBeTruthy();
     expect(within(queue).getByText("Waiting for a free worker (limit 2).")).toBeTruthy();
     expect(within(queue).getByText(/cannot start yet/)).toBeTruthy();
+    fireEvent.change(within(queue).getByLabelText("Worker model"), { target: { value: "gpt-5.6-terra" } });
     fireEvent.click(within(queue).getByRole("button", { name: /Start all \(1\)/ }));
     await waitFor(() => expect(started).toBe(true));
     expect(await within(queue).findByText(/Started 1 worker; the commands are on each card/)).toBeTruthy();
@@ -626,4 +846,74 @@ describe("TasksScreen queue and batch", () => {
       expect(screen.queryByText("This command runs as you, with your files and network.")).toBeNull();
     });
   });
+});
+
+describe("dispatch provider selection", () => {
+  test("an explicit Claude selection uses only its named commands, never the Codex default", () => {
+    const dispatch = { task: "T-1", model: "claude-sonnet", setup: "codex setup default", start: "codex start default", brief: "Task brief", json: "{}", agents: { claude: { setup: "claude setup explicit", start: "claude start explicit" } } };
+    render(<DispatchPanel dispatch={dispatch} onClose={() => {}} />);
+    expect(screen.getByLabelText("Set-up command for T-1").textContent).toBe("claude setup explicit");
+    expect(screen.getByLabelText("Start command for T-1").textContent).toBe("claude start explicit");
+    expect(document.body.textContent).not.toContain("codex setup default");
+  });
+
+  test.each(["", "unrecognised-model", "gpt-5.6-terra"])("never falls back to Claude for %s without selected commands", (model) => {
+    const dispatch = { task: "T-1", model, setup: "claude setup legacy", start: "claude start legacy", brief: "Task brief", json: "{}", agents: {} };
+    render(<DispatchPanel dispatch={dispatch} onClose={() => {}} />);
+    expect(screen.getByRole("status").textContent).toMatch(/automatically/);
+    expect(screen.queryByLabelText("Set-up command for T-1")).toBeNull();
+    expect(screen.queryByLabelText("Start command for T-1")).toBeNull();
+    expect(document.body.textContent).not.toContain("claude setup legacy");
+    expect(document.body.textContent).not.toContain("claude start legacy");
+  });
+});
+
+describe("recheck reviewed work", () => {
+  test.each(["review-diff", "ready-to-merge"])("%s rechecks the repaired commit without renewing the attempt", async (stage) => {
+    let finish;
+    let tasks = [task({ stage, status: "claimed", owner: "worker-1", check: { passed: true, commit: "aaaaaaaaaaaa" }, proofs: [{ kind: "commit", link: "bbbbbbbbbbbb" }], checkReady: { ok: true }, diffApproval: { commit: "aaaaaaaaaaaa" } })];
+    const fetch = routeFetch({
+      "GET /tasks": async () => ok(view(tasks)),
+      "POST /tasks/T-1/check": () => new Promise(resolve => { finish = () => {
+        tasks = [{ ...tasks[0], stage: "review-diff", check: { passed: true, commit: "bbbbbbbbbbbb" } }];
+        resolve(ok({ passed: true, commit: "bbbbbbbbbbbb", execution: { phase: "terminal" }, ...view(tasks) }));
+      }; }),
+    });
+    renderScreen();
+    const t1 = await card("T-1 Save notes");
+    const line = () => within(t1).getByText("Last recorded check").closest("p").textContent;
+    expect(line()).toContain("passed at aaaaaaaaaaaa");
+    expect(line()).not.toContain("bbbbbbbbbbbb");
+    expect(line()).toContain("Later changes need another check.");
+    fireEvent.click(within(t1).getByRole("button", { name: "Check work again" }));
+    await waitFor(() => expect(finish).toBeTypeOf("function"));
+    expect(within(t1).getByRole("button", { name: /Checking/ }).disabled).toBe(true);
+    expect(within(t1).getByRole("button", { name: stage === "ready-to-merge" ? /Merge into/ : "Approve diff" }).disabled).toBe(true);
+    finish();
+    await screen.findByText(/passes in the worktree at bbbbbbbbbbbb/);
+    await waitFor(() => expect(line()).toContain("passed at bbbbbbbbbbbb"));
+    expect(within(t1).getByRole("button", { name: "Approve diff" }).disabled).toBe(true);
+    expect(within(t1).queryByRole("button", { name: /Merge into/ })).toBeNull();
+    expect(fetch.mock.calls.filter(([, i]) => i?.method === "POST").map(([u]) => String(u).split("?")[0])).toEqual(["/api/core/tasks/T-1/check"]);
+  });
+});
+test.each(["review-diff", "ready-to-merge"])("%s keeps recheck readiness refusal visible", async (stage) => {
+  const fetch = routeFetch({ "GET /tasks": async () => ok(view([task({ stage, status: "claimed", checkReady: { ok: false, note: "Commit repaired files before checking again." } })])) });
+  renderScreen();
+  const t1 = await card("T-1 Save notes");
+  const button = within(t1).getByRole("button", { name: "Check work again" });
+  expect(button.disabled).toBe(true);
+  expect(document.getElementById(button.getAttribute("aria-describedby")).textContent).toContain("Commit repaired files");
+  fireEvent.click(button);
+  expect(fetch.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(0);
+});
+test("shows durable selection as requested model, not a currently running model", async () => {
+  routeFetch({ "GET /tasks": async () => ok(view([task({ workerDispatch: { requestedModel: "gpt-5.6", requestedAt: "2026-11-04T03:00:00Z" } })])) });
+  renderScreen();
+  const t1 = await card("T-1 Save notes");
+  expect(within(t1).getByText("Requested model")).toBeTruthy();
+  expect(within(t1).getByText("gpt-5.6")).toBeTruthy();
+  expect(within(t1).getByText("Connection prepared")).toBeTruthy();
+  expect(within(t1).getByRole("button", { name: "Start worker" })).toBeTruthy();
+  expect(within(t1).getByLabelText("Worker model").value).toBe("gpt-5.6");
 });

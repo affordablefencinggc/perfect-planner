@@ -31,7 +31,14 @@ function same(a: string, b: string): boolean {
   return x.length === y.length && timingSafeEqual(x, y);
 }
 
-export function cookieValue(req: IncomingMessage, name = PERSON_COOKIE): string | undefined {
+/** Cookie names are scoped by the actual serving socket, never a supplied Host header. */
+export function personCookieName(req: IncomingMessage): string | undefined {
+  const port = req.socket?.localPort;
+  return Number.isInteger(port) && port! > 0 && port! <= 65535 ? PERSON_COOKIE + "_" + port : undefined;
+}
+
+export function cookieValue(req: IncomingMessage, name = personCookieName(req)): string | undefined {
+  if (!name) return undefined;
   return String(req.headers.cookie ?? "")
     .split(";")
     .map((part) => part.trim())
@@ -111,7 +118,9 @@ export class PersonSessions {
     return Boolean(session && same(session.csrf, csrf));
   }
 
-  setCookieHeader(cookie: string, path: string): string {
-    return `${PERSON_COOKIE}=${cookie}; HttpOnly; SameSite=Strict; Path=${path}`;
+  setCookieHeader(cookie: string, path: string, req: IncomingMessage): string {
+    const name = personCookieName(req);
+    if (!name) throw new Error("The session has no local serving port.");
+    return name + "=" + cookie + "; HttpOnly; SameSite=Strict; Path=" + path;
   }
 }

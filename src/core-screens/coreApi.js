@@ -246,43 +246,106 @@ export function useCoreResource(path, { isEmpty = (data) => data == null, pollMs
   const emptyRef = useRef(isEmpty);
   emptyRef.current = isEmpty;
   const seq = useRef(0);
+  const inFlight = useRef(null);
+  const mounted = useRef(true);
+  const lifecycle = useRef({ scope: null, enabled: null, generation: 0 });
+  const [refresh, setRefresh] = useState({ status: "idle", error: null });
+  const refreshNeeded = useRef(false);
+  const scope = `${project}:${path}`;
+  const scopeRef = useRef(scope);
+  scopeRef.current = scope;
+  // A request may not be abortable, but it must stop being authoritative as
+  // soon as this hook is disabled or moves to another project/path. Clearing
+  // the ref also prevents its finally block from using an old load closure to
+  // launch a queued refresh in the new lifecycle.
+  if (lifecycle.current.scope !== scope || lifecycle.current.enabled !== enabled) {
+    lifecycle.current = { scope, enabled, generation: lifecycle.current.generation + 1 };
+    ++seq.current;
+    inFlight.current = null;
+    refreshNeeded.current = false;
+  }
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      lifecycle.current = { ...lifecycle.current, generation: lifecycle.current.generation + 1 };
+      inFlight.current = null;
+      refreshNeeded.current = false;
+    };
+  }, []);
 
   const load = useCallback(async ({ quiet = false } = {}) => {
     if (!enabled || !path) return;
+    const generation = lifecycle.current.generation;
+    const isCurrent = () => mounted.current
+      && lifecycle.current.generation === generation
+      && lifecycle.current.enabled
+      && scopeRef.current === scope;
+    const active = inFlight.current;
+    if (active?.scope === scope) {
+      // A slow ledger read is still authoritative for this project. Polls must
+      // not make it stale before it has a chance to paint the task rows.
+      active.refreshQueued = true;
+      return active.promise;
+    }
     const id = ++seq.current;
     if (!quiet) setState((current) => ({ ...current, status: "loading", error: null }));
-    try {
-      const data = await coreGet(path, project);
-      if (id !== seq.current) return;
-      setState({ status: emptyRef.current(data) ? "empty" : "ready", data, error: null });
-    } catch (error) {
-      if (id !== seq.current) return;
-      if (isNoSession(error)) return setState({ status: "no-session", data: null, error });
-      if (quiet) return;
-      setState({ status: "error", data: null, error });
-    }
-  }, [path, project, enabled]);
+    const request = { scope, refreshQueued: false, promise: null };
+    request.promise = (async () => {
+      try {
+        const data = await coreGet(path, project);
+        if (!isCurrent() || id !== seq.current) return;
+        setState({ status: emptyRef.current(data) ? "empty" : "ready", data, error: null });
+        refreshNeeded.current = false;
+        setRefresh({ status: "idle", error: null });
+      } catch (error) {
+        if (!isCurrent() || id !== seq.current) return;
+        if (isNoSession(error)) return setState({ status: "no-session", data: null, error });
+        if (quiet) {
+          if (refreshNeeded.current) setRefresh({ status: "error", error });
+          return;
+        }
+        setState({ status: "error", data: null, error });
+      } finally {
+        if (inFlight.current === request) {
+          inFlight.current = null;
+          if (request.refreshQueued && isCurrent()) void load({ quiet: true });
+        }
+      }
+    })();
+    inFlight.current = request;
+    return request.promise;
+  }, [path, project, enabled, scope]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { refreshNeeded.current = false; setRefresh({ status: "idle", error: null }); load(); }, [load]);
   useEffect(() => {
     if (!pollMs || !enabled) return undefined;
     const timer = setInterval(() => load({ quiet: true }), pollMs);
     return () => clearInterval(timer);
   }, [load, pollMs, enabled]);
 
-  const post = useCallback(async (postPath, body) => {
+  const post = useCallback(async (postPath, body, { backgroundRefresh = false, reconcile } = {}) => {
     try {
       const result = await corePost(postPath, project, body);
-      await load({ quiet: true });
+      if (backgroundRefresh) {
+        if (scopeRef.current !== scope) return result;
+        // Confirmed write and optional read are separate outcomes. Older reads cannot undo this receipt.
+        ++seq.current;
+        if (reconcile) setState(current => ({ ...current, data: reconcile(current.data, result) }));
+        refreshNeeded.current = true;
+        setRefresh({ status: "pending", error: null });
+        void load({ quiet: true });
+      } else await load({ quiet: true });
       return result;
     } catch (error) {
       // The item changed since the person looked: show them the new version.
       if (error?.code === "STALE") await load({ quiet: true });
       throw error;
     }
-  }, [project, load]);
+  }, [project, load, scope]);
 
-  return { ...state, project, reload: () => load(), post, setData: (data) => setState({ status: emptyRef.current(data) ? "empty" : "ready", data, error: null }) };
+  return { ...state, refresh, project, reload: () => load(), post, setData: (data) => setState({ status: emptyRef.current(data) ? "empty" : "ready", data, error: null }) };
 }
 
 // Claim as soon as the app loads, so the secret leaves the address bar right away.

@@ -24,6 +24,7 @@ export const ENTRY_TYPES = [
   "merge.done",
   "worktree.removed",
   // Proof
+  "check.execution",
   "test.defined",
   "test.approved",
   "test.passed",

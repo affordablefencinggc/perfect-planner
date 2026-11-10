@@ -6011,6 +6011,11 @@ function PerfectPlannerShellCore({
   const demoMode = isDemoProject(activeProject);
   const projectWorkflowReady = Boolean(activeProject) && !["stale", "unavailable"].includes(activeProject.state);
   const [workspace, setWorkspace] = useState(() => readInitialWorkspace(appSettings.settings));
+  // One-time worker setup is scoped to the currently selected project and intentionally
+  // stays out of persistence. It survives the immediate Tasks → Build route only.
+  const [pendingDispatches, setPendingDispatches] = useState({});
+  const dispatchScope = activeProject?.projectId ?? "default";
+  useEffect(() => { setPendingDispatches({}); }, [dispatchScope]);
   const [autoStartIntakeToken, setAutoStartIntakeToken] = useState(0);
   const startupLocationApplied=useRef(false);
   const [leftOpen, setLeftOpen] = useState(false);
@@ -6579,7 +6584,7 @@ function PerfectPlannerShellCore({
           </div>
         )}
         <div className="workspace-stage" key={workspace}>
-          {isCoreWorkspace(workspace) && <CoreWorkspace workspace={workspace} onWorkspace={navigateWorkspace} />}
+          {isCoreWorkspace(workspace) && <CoreWorkspace workspace={workspace} onWorkspace={navigateWorkspace} pendingDispatches={pendingDispatches} onPendingDispatchesChange={setPendingDispatches} />}
           {workspace === "home" && (
             <ProjectHomeWorkspace
               collisionGate={collisionGate}
@@ -6729,6 +6734,7 @@ function PerfectPlannerShellCore({
                 workspace="build"
                 activeProject={activeProject}
                 onWorkspace={navigateWorkspace}
+                pendingDispatches={pendingDispatches}
                 onSelect={(item) => {
                   setSelected(item);
                   setInspectorSide("right");

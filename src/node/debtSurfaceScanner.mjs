@@ -24,8 +24,9 @@ const lineRules = Object.freeze([
 function matchesSurface(file, surface) { return surface.prefixes.some((prefix) => file.startsWith(prefix)) && surface.extensions.includes(path.posix.extname(file)); }
 function stableFindingId(surface, rule, file, lineText, occurrence = 1) { return `DEBT-${hash(`${surface}:${rule}:${file}:${lineText.trim()}:${occurrence}`).slice(0, 16).toUpperCase()}`; }
 
-async function collectFiles(root, options) {
+async function collectFiles(root, options, isScannedInput) {
   const files = []; const refused = []; let bytes = 0;
+  const discovery = { files: 0, bytes: 0, scannedFiles: 0, scannedBytes: 0, unmatchedFiles: 0, unmatchedBytes: 0 };
   async function visit(directory) {
     const entries = await readdir(directory, { withFileTypes: true });
     for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
@@ -34,13 +35,15 @@ async function collectFiles(root, options) {
       if (stat.isSymbolicLink()) { refused.push({ path: relative, reason: "symbolic-link" }); continue; }
       if (stat.isDirectory()) { await visit(absolute); continue; }
       if (!stat.isFile()) continue;
-      if (files.length >= options.maxFiles) throw new Error("Debt scan exceeds the bounded file limit.");
+      if (discovery.files >= options.maxFiles) throw new Error("Debt scan exceeds the bounded file limit.");
+      discovery.files += 1; discovery.bytes += stat.size;
+      if (!isScannedInput(relative)) { discovery.unmatchedFiles += 1; discovery.unmatchedBytes += stat.size; continue; }
       if (stat.size > options.maxFileBytes) { refused.push({ path: relative, reason: "file-too-large", size: stat.size }); continue; }
       if (bytes + stat.size > options.maxTotalBytes) throw new Error("Debt scan exceeds the bounded byte limit.");
-      bytes += stat.size; files.push({ absolute, relative, size: stat.size });
+      bytes += stat.size; discovery.scannedFiles += 1; discovery.scannedBytes += stat.size; files.push({ absolute, relative, size: stat.size });
     }
   }
-  await visit(root); return { files, refused, bytes };
+  await visit(root); return { files, refused, bytes, discovery };
 }
 
 export async function scanDebtSurfaces(projectRoot, input = {}, options = {}) {
@@ -50,7 +53,7 @@ export async function scanDebtSurfaces(projectRoot, input = {}, options = {}) {
   const limits = { maxFiles: Number(options.maxFiles ?? 2000), maxFileBytes: Number(options.maxFileBytes ?? 1_000_000), maxTotalBytes: Number(options.maxTotalBytes ?? 20_000_000), maxLinesPerFile: Number(options.maxLinesPerFile ?? 20_000), largeFileLines: Number(options.largeFileLines ?? 1000) };
   for (const [name, value] of Object.entries(limits)) if (!Number.isFinite(value) || value <= 0) throw new Error(`Debt scan requires a positive ${name}.`);
   const excludedPaths = new Set((input.excludedPaths ?? ["src/node/debtSurfaceScanner.mjs"]).map(normalize));
-  const inventory = await collectFiles(root, limits); const previousById = new Map((input.previousFindings ?? []).map((finding) => [finding.id, finding])); const findings = []; const evidence = [];
+  const inventory = await collectFiles(root, limits, (file) => !excludedPaths.has(file) && surfaces.some((surface) => matchesSurface(file, surface))); const previousById = new Map((input.previousFindings ?? []).map((finding) => [finding.id, finding])); const findings = []; const evidence = [];
   for (const surface of surfaces) {
     const selected = inventory.files.filter((file) => !excludedPaths.has(file.relative) && matchesSurface(file.relative, surface)); const fileHashes = [];
     for (const file of selected) {
@@ -86,6 +89,6 @@ export async function scanDebtSurfaces(projectRoot, input = {}, options = {}) {
   }
   findings.sort((a, b) => a.id.localeCompare(b.id));
   const coveredSurfaces = evidence.filter((item) => item.state === "COVERED").map((item) => item.surface);
-  const scanCore = { capturedAt, coveredSurfaces, findings, evidence, refused: inventory.refused, limits };
+  const scanCore = { capturedAt, coveredSurfaces, findings, evidence, refused: inventory.refused, discovery: inventory.discovery, limits };
   return { scanId: `DEBT-SCAN-${hash(JSON.stringify(scanCore)).slice(0, 16).toUpperCase()}`, ...scanCore, budget: input.budget ?? { critical: 0, high: 0, medium: 10, low: 25 }, maxAgeDays: input.maxAgeDays ?? { critical: 0, high: 30, medium: 90, low: 180 } };
 }

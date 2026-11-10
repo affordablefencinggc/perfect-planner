@@ -2,6 +2,19 @@
 .core-spine { display: grid; gap: var(--space-3); margin-bottom: var(--space-4); }
 .core-spine > header h3 { margin: 0; font-size: var(--text-lg); }
 .core-spine > header p { margin: var(--space-1) 0 0; font-size: var(--text-sm); }
+.core-spine .spine-live-work { display: grid; gap: var(--space-2); padding: var(--space-3); border: 2px solid var(--border-strong); border-radius: var(--radius-sm); background: linear-gradient(135deg, var(--surface), var(--green-soft)); box-shadow: 0 5px 0 color-mix(in srgb, var(--ink) 14%, transparent); }
+.core-spine .spine-live-work > header { display: flex; align-items: end; justify-content: space-between; gap: var(--space-3); flex-wrap: wrap; }
+.core-spine .spine-live-work h3, .core-spine .spine-live-work p { margin: 0; }
+.core-spine .spine-eyebrow { font-family: var(--mono); font-size: var(--text-xs); color: var(--green); text-transform: uppercase; letter-spacing: .08em; }
+.core-spine .spine-live-lanes { display: grid; gap: var(--space-2); margin: 0; padding: 0; list-style: none; }
+.core-spine .spine-live-lane article { grid-template-columns: auto minmax(0, 1fr); align-items: center; border-color: var(--green); background: var(--surface); }
+.core-spine .spine-live-lane .spine-model { width: 38px; height: 38px; font-size: var(--text-base); margin: 5px; }
+.core-spine .spine-live-lane .spine-model-orbit { inset: -8px; border-width: 2px; }
+.core-spine .spine-live-lane[data-live="finished"] article { border-color: var(--border-strong); }
+.core-spine .spine-live-copy { min-width: 0; }
+.core-spine .spine-live-copy h4, .core-spine .spine-live-action { margin: 0; overflow-wrap: anywhere; }
+.core-spine .spine-live-copy h4 { font-size: var(--text-base); }
+.core-spine .spine-live-action { margin-top: 2px; font-size: var(--text-sm); }
 .core-spine .spine-list { position: relative; list-style: none; margin: 0; padding: 0 0 0 var(--space-6); display: grid; gap: var(--space-4); }
 .core-spine .spine-list::before { content: ""; position: absolute; left: 9px; top: 6px; bottom: 6px; width: 2px; background: var(--border-strong); }
 .core-spine .spine-node { position: relative; }
@@ -30,10 +43,13 @@
 .core-spine .spine-model-orbit { position: absolute; inset: -7px; border-radius: 50%; border: 1px dashed var(--border-strong); animation: spine-orbit 3s linear infinite; }
 .core-spine .spine-model-orbit i { position: absolute; top: -3px; left: calc(50% - 3px); width: 6px; height: 6px; border-radius: 50%; background: var(--amber); }
 @keyframes spine-orbit { to { transform: rotate(360deg); } }
+.core-spine .spine-model-active .spine-model-glyph { animation: spine-icon-turn 3s linear infinite; }
+@keyframes spine-icon-turn { to { transform: rotate(360deg); } }
 @keyframes spine-pulse { 50% { box-shadow: 0 0 0 5px var(--amber-soft); } }
 @media (prefers-reduced-motion: reduce) {
-  .core-spine .spine-model-orbit, .core-spine .spine-node[data-working="true"] .spine-dot { animation: none; }
+  .core-spine .spine-model-orbit, .core-spine .spine-model-active .spine-model-glyph, .core-spine .spine-node[data-working="true"] .spine-dot { animation: none; }
 }
+@media (max-width: 520px) { .core-spine .spine-live-work { padding: var(--space-2); } .core-spine .spine-live-lane .spine-model { width: 34px; height: 34px; margin: 4px; } }
 
 .core-spine .spine-filters { display: flex; flex-wrap: wrap; gap: var(--space-2); }
 .core-spine .spine-filters button[aria-pressed="true"] { background: var(--ink); color: var(--surface); }
@@ -94,6 +110,50 @@
 .spine-runner { position: absolute; left: 50%; top: 0; width: 34px; height: 34px; margin-left: -17px; z-index: 6; pointer-events: auto; animation: spine-run 3.2s ease-in-out infinite; }
 .spine-runner img { width: 34px; height: 34px; }
 @keyframes spine-run { 0% { transform: translateY(-8px); opacity: 0; } 15% { opacity: 1; } 85% { opacity: 1; } 100% { transform: translateY(150px); opacity: 0; } }
-@media (prefers-reduced-motion: reduce) { .core-plan-spine .perimeter-worker.running .spine-runner { animation: none; opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .core-plan-spine .perimeter-worker.running,
+  .core-plan-spine .spine-runner { animation: none; opacity: 1; }
+}
 .core-plan-spine .core-assign { display: flex; align-items: center; gap: 8px; margin: 8px 22px 0; font: 11px system-ui, sans-serif; color: #5b605c; }
 .core-plan-spine .core-assign select { font: inherit; padding: 2px 6px; border: 1px solid var(--border-strong); border-radius: 6px; background: #fff; color: var(--ink); }
+
+/* The shared demo hides small labels below 1240px. A live task's state is
+   essential at every width, including phones and tablets. */
+.app-shell .core-plan-spine .plan-node .node-header > .core-task-state {
+  display: block;
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 1240px) {
+  .app-shell .core-plan-spine .plan-node .node-header > .core-task-state {
+    flex: 1 0 100%;
+  }
+}
+/* This live spine sits inside an already padded core screen. Avoid paying the
+   legacy demo's canvas and phase offsets again on narrow screens. */
+@media (max-width: 820px) {
+  .app-shell .core-plan-spine { min-width: 0; padding-inline: 0; }
+  .app-shell .core-plan-spine .plan-canvas {
+    width: 100%; min-width: 0; margin-inline: 0; padding-inline: 0;
+  }
+  .app-shell .core-plan-spine .spine-line { left: 10px; }
+  .app-shell .core-plan-spine .phase-capsule {
+    width: calc(100% - 24px); margin-left: 24px; margin-right: 0;
+  }
+  .app-shell .core-plan-spine .phase-nodes {
+    min-width: 0; margin-inline: 0; padding-left: 24px;
+  }
+  .app-shell .core-plan-spine .single-node-row { display: block; min-width: 0; }
+  .app-shell .core-plan-spine .node-slot { width: 100%; min-width: 0; padding: 0; }
+  .app-shell .core-plan-spine .plan-node .node-header > strong {
+    flex: 1 0 100%; min-width: 0; overflow-wrap: anywhere;
+  }
+  .app-shell .core-plan-spine .core-assign { flex-wrap: wrap; }
+  .app-shell .core-plan-spine .core-assign select { min-width: 0; max-width: 100%; }
+}
+
+/* Override the global page gutter on the nested live spine, not its outer page. */
+@media (max-width: 820px) {
+  .app-shell .imported-workflow-plan .core-plan-spine { padding-inline: 0 !important; }
+}

@@ -1,3 +1,4 @@
+import { CheckJournal, type CheckRequest, type CheckResult } from "./execution";
 import { createHash } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, unlinkSync } from "node:fs";
 import os from "node:os";
@@ -215,6 +216,32 @@ export function pinDigest(pins: Pins): string {
   return createHash("sha256").update(Object.keys(pins).sort().map((file) => `${file}=${pins[file]}`).join("\n")).digest("hex");
 }
 
+const FULL_COMMIT_ID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i;
+const GATE_READ_CACHE_LIMIT = 256;
+const gateReadCache = new Map<string, unknown>();
+
+function cachedGateRead<T>(key: string): T | undefined {
+  if (!gateReadCache.has(key)) return undefined;
+  const value = gateReadCache.get(key) as T;
+  gateReadCache.delete(key);
+  gateReadCache.set(key, value);
+  return value;
+}
+
+function rememberGateRead<T>(key: string, value: T): T {
+  gateReadCache.delete(key);
+  gateReadCache.set(key, value);
+  if (gateReadCache.size > GATE_READ_CACHE_LIMIT) {
+    const oldest = gateReadCache.keys().next().value as string | undefined;
+    if (oldest !== undefined) gateReadCache.delete(oldest);
+  }
+  return value;
+}
+
+function commitPinCacheKey(commit: string, file: string, hash: string): string | undefined {
+  return FULL_COMMIT_ID.test(commit) ? JSON.stringify(["pin", commit.toLowerCase(), file, hash]) : undefined;
+}
+
 function normalizeTestFile(file: string): string | undefined {
   const clean = path.posix.normalize(file.trim().replace(/\\/g, "/")).replace(/^\.\//, "");
   if (!clean || clean === "." || clean.startsWith("../") || clean === ".." || path.isAbsolute(file.trim()) || /^[a-z]:/i.test(clean)) return undefined;
@@ -248,35 +275,62 @@ export function pinTestFiles(cwd: string, files: readonly string[]): Pins {
 }
 
 /** Pinned files that are missing or differ in cwd: on disk, and in the commit checked out there. */
-async function changedTestFiles(cwd: string, pins: Pins): Promise<string[]> {
+async function changedTestFiles(cwd: string, pins: Pins, checkedCommit?: string | null): Promise<string[]> {
   const changed = new Set<string>();
   const onDisk = pinTestFiles(cwd, Object.keys(pins));
-  const isRepo = (await headOf(cwd)) !== undefined;
+  const commit = checkedCommit === undefined ? await headOf(cwd) : checkedCommit ?? undefined;
   for (const [file, hash] of Object.entries(pins)) {
     if (onDisk[file] !== hash) changed.add(file);
-    if (!isRepo) continue;
+    if (!commit) continue;
     // The committed copy counts too: an ignored or assume-unchanged file could hide a rewritten test from git status.
-    const committed = await runGit(cwd, ["cat-file", "blob", `HEAD:${file}`]).catch(() => undefined);
-    if (committed?.code === 0 && contentHash(committed.stdoutBytes) !== hash) changed.add(file);
+    const key = commitPinCacheKey(commit, file, hash);
+    const cachedMatch = key ? cachedGateRead<boolean>(key) : undefined;
+    if (cachedMatch !== undefined) {
+      if (!cachedMatch) changed.add(file);
+      continue;
+    }
+    const committed = await runGit(cwd, ["cat-file", "blob", commit + ":" + file]).catch(() => undefined);
+    if (committed?.code === 0) {
+      const matches = contentHash(committed.stdoutBytes) === hash;
+      if (key) rememberGateRead(key, matches);
+      if (!matches) changed.add(file);
+    }
   }
   return [...changed].sort();
 }
 
 /** The pinned test files whose content in `commit` is still exactly the content that was approved. */
 export async function unalteredPins(cwd: string, commit: string, pins: Pins): Promise<Set<string>> {
+  const cacheKey = FULL_COMMIT_ID.test(commit) ? JSON.stringify(["unaltered-pins", commit.toLowerCase(), Object.entries(pins)]) : undefined;
+  const cached = cacheKey ? cachedGateRead<string[]>(cacheKey) : undefined;
+  if (cached) return new Set(cached);
   const same = new Set<string>();
-  for (const [file, hash] of Object.entries(pins)) {
-    const blob = await runGit(cwd, ["cat-file", "blob", `${commit}:${file}`]).catch(() => undefined);
-    if (blob?.code === 0 && contentHash(blob.stdoutBytes) === hash) same.add(file);
-  }
+  let cacheable = !!cacheKey;
+  // Each pinned file is an independent object read; start them together.
+  const blobs = await Promise.all(Object.keys(pins).map((file) => runGit(cwd, ["cat-file", "blob", commit + ":" + file]).catch(() => undefined)));
+  Object.entries(pins).forEach(([file, hash], index) => {
+    const blob = blobs[index];
+    if (blob?.code === 0) {
+      if (contentHash(blob.stdoutBytes) === hash) same.add(file);
+    } else {
+      cacheable = false;
+    }
+  });
+  if (cacheKey && cacheable) rememberGateRead(cacheKey, [...same]);
   return same;
 }
 
 /** Why the merge commit about to land is not exactly the merge of `base` and `approved`, or null when it is. */
 export async function verifyMergeCommit(candidate: string, mergeCommit: string, base: string, approved: string): Promise<string | null> {
-  const head = (await runGit(candidate, ["rev-parse", "--verify", "HEAD^{commit}"])).stdout.trim();
+  // These are independent object-only reads.  HEAD is still re-read and
+  // compared exactly: the candidate can move while the checks are in flight.
+  const [headResult, parentsResult] = await Promise.all([
+    runGit(candidate, ["rev-parse", "--verify", "HEAD^{commit}"]),
+    runGit(candidate, ["rev-list", "--parents", "-n", "1", mergeCommit]),
+  ]);
+  const head = headResult.stdout.trim();
   if (head !== mergeCommit) return `The merge candidate moved from ${mergeCommit.slice(0, 12)} to ${head.slice(0, 12) || "nothing"} after the merge.`;
-  const parents = (await runGit(candidate, ["rev-list", "--parents", "-n", "1", mergeCommit])).stdout.trim().split(/\s+/).slice(1);
+  const parents = parentsResult.stdout.trim().split(/\s+/).slice(1);
   if (parents.length !== 2 || parents[0] !== base || parents[1] !== approved) return `The merge commit's parents are not ${base.slice(0, 12)} and the approved ${approved.slice(0, 12)}.`;
   const pure = await runGit(candidate, ["merge-tree", "--write-tree", "--no-messages", base, approved]);
   if (pure.code !== 0) {
@@ -517,49 +571,86 @@ const IMPORT_EXTENSIONS = ["", ".js", ".mjs", ".cjs", ".ts", ".mts", ".cts", ".t
  */
 export async function testRoots(cwd: string): Promise<string[]> {
   const roots: string[] = [];
-  try {
-    const top = await runGit(cwd, ["rev-parse", "--show-toplevel"]);
-    if (top.code === 0 && top.stdout.trim()) roots.push(path.resolve(cwd, top.stdout.trim()));
-    const list = await runGit(cwd, ["worktree", "list", "--porcelain"]);
-    if (list.code === 0) for (const line of lines(list.stdout)) if (line.startsWith("worktree ")) roots.push(path.resolve(line.slice("worktree ".length)));
-  } catch {
-    // No git, or git refused: cwd itself is still protected by the runner.
+  // Git worktree list already names the main checkout and every linked worktree.
+  // Keep the extra top-level query only as a fallback if that list fails or omits cwd.
+  const list = await runGit(cwd, ["worktree", "list", "--porcelain"]).catch(() => undefined);
+  if (list?.code === 0) {
+    for (const line of lines(list.stdout)) if (line.startsWith("worktree ")) roots.push(path.resolve(line.slice("worktree ".length)));
+    const current = path.resolve(cwd);
+    if (roots.some((root) => {
+      const relative = path.relative(root, current);
+      return relative === "" || relative === "." || (!path.isAbsolute(relative) && relative !== ".." && !relative.startsWith(".." + path.sep));
+    })) return [...new Set(roots)];
   }
+  // A failed or incomplete list still retains any top-level root Git can verify.
+  const top = await runGit(cwd, ["rev-parse", "--show-toplevel"]).catch(() => undefined);
+  if (top?.code === 0 && top.stdout.trim()) roots.push(path.resolve(cwd, top.stdout.trim()));
   return [...new Set(roots)];
 }
 
 export async function testSupportFiles(repoRoot: string, commits: readonly string[], pinned: readonly string[], command: string): Promise<Set<string>> {
+  const cacheableCommits = commits.every((commit) => FULL_COMMIT_ID.test(commit));
+  const cacheKey = cacheableCommits
+    ? JSON.stringify(["test-support", commits.map((commit) => commit.toLowerCase()), [...pinned], command])
+    : undefined;
+  const cached = cacheKey ? cachedGateRead<string[]>(cacheKey) : undefined;
+  if (cached) return new Set(cached);
   const support = new Set<string>();
-  for (const commit of commits) {
-    const tracked = new Set(lines((await runGit(repoRoot, ["ls-tree", "-r", "--name-only", commit])).stdout));
+  let cacheable = !!cacheKey;
+  // The commits are independent of each other; read them side by side. What each adds to `support` does not depend on order.
+  await Promise.all(commits.map(async (commit) => {
+    const tree = await runGit(repoRoot, ["ls-tree", "-r", "--name-only", commit]);
+    if (tree.code !== 0) cacheable = false;
+    const tracked = new Set(lines(tree.stdout));
     const show = async (file: string) => {
-      const result = await runGit(repoRoot, ["cat-file", "blob", `${commit}:${file}`]);
+      // A plainly spelled path that the commit's own file list does not name is not in the commit: that is
+      // a settled answer for this commit (a repo with no package.json), so it needs no process and does not stop the result being kept.
+      if (tree.code === 0 && /^[\w./-]+$/.test(file) && !tracked.has(file)) return "";
+      const result = await runGit(repoRoot, ["cat-file", "blob", commit + ":" + file]);
+      if (result.code !== 0) cacheable = false;
       return result.code === 0 ? result.stdout : "";
     };
     const named = (text: string) => [...text.matchAll(/[^\s"'`;&|<>()]+/g)].map((match) => normalizeTestFile(match[0])).filter((file): file is string => !!file && tracked.has(file));
     for (const file of named(command)) support.add(file);
-    try {
-      const scripts = (JSON.parse(await show("package.json")) as { scripts?: Record<string, string> }).scripts ?? {};
-      for (const value of Object.values(scripts)) if (typeof value === "string") for (const file of named(value)) support.add(file);
-    } catch {
-      // No package.json, or not valid JSON: nothing to follow.
-    }
-    const queue = [...pinned];
-    const seen = new Set(queue);
-    while (queue.length && seen.size < 2000) {
-      const file = queue.shift()!;
-      for (const match of (await show(file)).matchAll(IMPORT_SPECIFIER)) {
-        const specifier = match[1]!;
-        if (!specifier.startsWith(".")) continue;
-        const base = path.posix.normalize(path.posix.join(path.posix.dirname(file), specifier));
-        const target = [...IMPORT_EXTENSIONS.map((ext) => base + ext), ...IMPORT_EXTENSIONS.slice(1).map((ext) => `${base}/index${ext}`)].find((candidate) => tracked.has(candidate));
-        if (!target || seen.has(target)) continue;
-        seen.add(target);
-        support.add(target);
-        queue.push(target);
+    const fromScripts = async () => {
+      try {
+        const scripts = (JSON.parse(await show("package.json")) as { scripts?: Record<string, string> }).scripts ?? {};
+        for (const value of Object.values(scripts)) if (typeof value === "string") for (const file of named(value)) support.add(file);
+      } catch {
+        // No package.json, or not valid JSON: nothing to follow.
       }
-    }
-  }
+    };
+    // Follow imports one level at a time: every file of a level is read together, then handled in order,
+    // so the files found, and the 2000-file stop, are exactly what a one-by-one walk finds.
+    const fromImports = async () => {
+      let queue = [...pinned];
+      const seen = new Set(queue);
+      while (queue.length && seen.size < 2000) {
+        const level = queue;
+        queue = [];
+        const texts = await Promise.all(level.map((file) => show(file)));
+        for (let index = 0; index < level.length; index += 1) {
+          if (seen.size >= 2000) {
+            queue = [];
+            break;
+          }
+          const file = level[index]!;
+          for (const match of texts[index]!.matchAll(IMPORT_SPECIFIER)) {
+            const specifier = match[1]!;
+            if (!specifier.startsWith(".")) continue;
+            const base = path.posix.normalize(path.posix.join(path.posix.dirname(file), specifier));
+            const target = [...IMPORT_EXTENSIONS.map((ext) => base + ext), ...IMPORT_EXTENSIONS.slice(1).map((ext) => `${base}/index${ext}`)].find((candidate) => tracked.has(candidate));
+            if (!target || seen.has(target)) continue;
+            seen.add(target);
+            support.add(target);
+            queue.push(target);
+          }
+        }
+      }
+    };
+    await Promise.all([fromScripts(), fromImports()]);
+  }));
+  if (cacheKey && cacheable) rememberGateRead(cacheKey, [...support]);
   return support;
 }
 
@@ -610,8 +701,80 @@ export class TestGate {
   private readonly allowInstallScripts: boolean;
   private readonly protect: readonly string[];
 
+  readonly checks: CheckJournal;
+
+  /** Durable person-requested checks. Replay is resolved before the mutable resolver is called. */
+  proveRequest(request: CheckRequest, scope: string, resolveWorktree: () => Promise<string>): Promise<CheckResult> {
+    return this.checks.run(request, scope, async context => {
+      const taskId = request.attempt;
+      const cwd = await resolveWorktree();
+      const state = this.state(taskId);
+      const refused = startRefusal(state, this.policy);
+      if (refused) return { ok: false, reason: refused };
+      const definition = state.definition!;
+      const approval = state.approval!;
+      const expected = request.expected;
+      if (definition.n !== expected.definitionEntry || approval.n !== expected.approvalEntry || approval.pin !== expected.pin)
+        return { ok: false, reason: "The test definition or approval changed; prepare a new check request." };
+      const snapshot = await runGit(cwd, ["rev-parse", "HEAD^{commit}", "HEAD^{tree}"]).catch(() => undefined);
+      const [commit, tree] = snapshot?.code === 0 ? lines(snapshot.stdout) : [];
+      if (!commit || !tree || commit !== expected.commit) return { ok: false, reason: "The worktree commit changed; prepare a new check request." };
+      await ensureRequiredIgnores(cwd);
+      const status = await runGit(cwd, ["status", "--porcelain", "--untracked-files=normal"]);
+      if (status.code !== 0) return { ok: false, reason: "The worktree could not be inspected. Resolve the Git inspection failure before checking." };
+      if (lines(status.stdout).length) return { ok: false, reason: "Commit or remove these changes first; the test only counts against a clean commit." };
+      const leaked = await stagedPrivatePaths(cwd);
+      if (leaked.length) return { ok: false, reason: privateRefusal(leaked) };
+      if ((await changedTestFiles(cwd, approval.pins, commit)).length) return { ok: false, reason: "The approved test files changed. Restore them or get a new test approved." };
+      const identity = () => {
+        const canonical = realDir(cwd);
+        const stat = statSync(canonical, { bigint: true });
+        if (!stat.isDirectory()) throw new Error("The worktree is not a directory.");
+        return { path: canonical, device: String(stat.dev), inode: String(stat.ino) };
+      };
+      const originalIdentity = identity();
+      context.admitted({ scope, attempt: taskId, worktree: originalIdentity, commit, tree,
+        definitionEntry: definition.n, approvalEntry: approval.n, pins: approval.pins, pin: approval.pin, command: definition.command });
+      // Roots may require Git reads; resolve them before durable intent, never after spawning.
+      const protect = [...this.protect, ...(await testRoots(cwd))];
+      const beforeLaunch = this.state(taskId);
+      if (beforeLaunch.definition?.n !== definition.n || beforeLaunch.approval?.n !== approval.n || beforeLaunch.approval?.pin !== approval.pin || startRefusal(beforeLaunch, this.policy))
+        return { ok: false, reason: "The test approval or task eligibility changed before launch; no process was started." };
+      context.launch();
+      const run = await this.run(definition.command, cwd, { timeoutMs: this.timeoutMs, protect });
+      if (run.timedOut || run.exitCode === null) return context.unknown("The process did not reach an unambiguous normal exit. Descendant settlement is not established; this request remains unresolved.", run);
+      const invalid: string[] = [];
+      try {
+        const resolvedAgain = await resolveWorktree();
+        if (!samePath(realDir(resolvedAgain), originalIdentity.path) || JSON.stringify(identity()) !== JSON.stringify(originalIdentity)) invalid.push("worktree identity changed");
+        if (await headOf(cwd) !== commit) invalid.push("HEAD changed");
+        const afterStatus = await runGit(cwd, ["status", "--porcelain", "--untracked-files=normal"]);
+        if (afterStatus.code !== 0 || lines(afterStatus.stdout).length) invalid.push("worktree is no longer confirmed clean");
+        if ((await changedTestFiles(cwd, approval.pins, commit)).length) invalid.push("approved test files changed");
+        const current = this.state(taskId);
+        if (current.definition?.n !== definition.n || current.approval?.n !== approval.n || current.approval?.pin !== approval.pin || startRefusal(current, this.policy)) invalid.push("definition, approval or task eligibility changed");
+      } catch (error) { invalid.push(`post-run validation unavailable: ${(error as Error).message}`); }
+      const passed = run.passed && invalid.length === 0;
+      const reason = invalid.length ? `Check inputs changed or could not be verified: ${invalid.join("; ")}. The runner result is retained but does not prove this work.`
+        : passed ? undefined : `The test fails in the worktree (${describeRun(run)}).`;
+      const result = { ok: passed, ...(reason ? { reason } : {}), run, commit, output: run.outputTail };
+      const execution = context.terminal(result, { valid: invalid.length === 0, failures: invalid, exclusiveCustody: "not-established" });
+      // This proof entry IS the terminal receipt: there is no second publication gap.
+      const entry = this.ledger.append({ actor: GATE_ACTOR, type: passed ? "test.passed" : "test.failed", subject: taskId,
+        summary: invalid.length ? `${taskId} check result invalidated by changed inputs` : `Done-when test for ${taskId} ${passed ? "passes" : "fails"} in its worktree at ${commit.slice(0, 12)}`,
+        ...(reason ? { reason } : {}), refs: [],
+        evidence: [`test:${definition.command}`, `definition:${definition.n}`, "phase:worktree", `commit:${commit}`, `pin:${approval.pin}`, ...runEvidence(run), ...(invalid.length ? ["conclusive:false"] : [])],
+        data: { test: definition.command, definition: definition.n, phase: "worktree", afterMerge: false, commit, pin: approval.pin,
+          conclusive: invalid.length === 0 && (passed || isConclusiveFailure(run)), execution },
+      });
+      return { ...result, entry };
+    });
+  }
+
+
   constructor(options: TestGateOptions) {
     this.ledger = options.ledger;
+    this.checks = new CheckJournal(options.ledger);
     this.now = options.now ?? (() => new Date());
     this.run = options.run ?? runTestCommand;
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
@@ -943,15 +1106,24 @@ export class TestGate {
     }
     const forkPoint = await runGit(repoRoot, ["merge-base", `refs/heads/${integrationBranch}`, branchTip]);
     if (forkPoint.code !== 0) return refuse(`Could not find where ${branch} left ${integrationBranch}, so its changes cannot be checked.`);
-    const changed = lines((await runGit(repoRoot, ["-c", "core.quotePath=false", "diff", "--name-only", "--no-renames", forkPoint.stdout.trim(), branchTip])).stdout);
+    // Both reads are fixed to the same two immutable commit ids.  Run them
+    // together: the private-history check remains mandatory and both outputs
+    // are still examined before any candidate is created.
+    const [changedResult, history] = await Promise.all([
+      runGit(repoRoot, ["-c", "core.quotePath=false", "diff", "--name-only", "--no-renames", forkPoint.stdout.trim(), branchTip]),
+      runGit(repoRoot, ["-c", "core.quotePath=false", "log", "--name-only", "--format=", "--no-renames", `${forkPoint.stdout.trim()}..${branchTip}`, "--", `:(icase)${PRIVATE_DIR}`]),
+    ]);
+    const changed = lines(changedResult.stdout);
     await ensureRequiredIgnores(repoRoot);
     // Any commit on the branch, not only its tip: a token committed and later removed is still in history.
-    const history = await runGit(repoRoot, ["-c", "core.quotePath=false", "log", "--name-only", "--format=", "--no-renames", `${forkPoint.stdout.trim()}..${branchTip}`, "--", `:(icase)${PRIVATE_DIR}`]);
     if (history.code !== 0) return refuse(`Could not check ${branch}'s commits for ${PRIVATE_DIR}/ files: ${oneLine(history.stderr)}`);
     const leaked = [...new Set(privatePaths([...changed, ...lines(history.stdout)]))];
     if (leaked.length) return refuse(privateRefusal(leaked));
-    const support = await testSupportFiles(repoRoot, [forkPoint.stdout.trim(), branchTip], Object.keys(approval.pins), definition.command);
-    const sensitive = sensitiveChanges(changed, Object.keys(approval.pins), support, await unalteredPins(repoRoot, branchTip, approval.pins));
+    const [support, unchanged] = await Promise.all([
+      testSupportFiles(repoRoot, [forkPoint.stdout.trim(), branchTip], Object.keys(approval.pins), definition.command),
+      unalteredPins(repoRoot, branchTip, approval.pins),
+    ]);
+    const sensitive = sensitiveChanges(changed, Object.keys(approval.pins), support, unchanged);
     if (sensitive.length && !state.diffApproval.byPerson) {
       return refuse(`The diff changes ${sensitive.join(", ")}, which can change what the approved test checks; a person has to approve this diff.`);
     }

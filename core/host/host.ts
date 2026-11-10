@@ -15,7 +15,7 @@ import { HttpError, Router } from "./router";
 import { PersonSessions } from "./session";
 import { registerRoutes } from "./routes/index";
 import { syncJevPolicy } from "./routes/decisions";
-import { chosenRepoRoot } from "./routes/tasks";
+import { chosenRepoRoot, beginCloseOptionalGitViews, drainOptionalGitViews } from "./routes/tasks";
 import { extraRepoRoots } from "../repos/index";
 import { startProjectWatch, type ProjectWatchOptions } from "./watch";
 import { protectRoots } from "../exec/index";
@@ -134,8 +134,14 @@ export class CoreHost {
   async closeProject(key: string): Promise<void> {
     const project = this.projects.get(key);
     if (!project) return;
+    // Close admission before stopping observers: no new optional read can race
+    // with the drain, including a reader whose old cache entry was invalidated.
+    project.service.gate.checks.beginClose();
+    beginCloseOptionalGitViews(project);
     // The watcher writes to the ledger: it stops (and its pass in flight finishes) before anything else is closed.
     await project.watch?.stop().catch(() => undefined);
+    await drainOptionalGitViews(project);
+    await project.service.gate.checks.drain();
     await (await this.bridges.get(key))?.close().catch(() => undefined);
     this.bridges.delete(key);
     await Promise.allSettled([project.ready, project.protection]);
@@ -228,7 +234,7 @@ export class CoreHost {
       try { body = await readJson(req); } catch { body = {}; }
       const claimed = sameOriginRequest(req) ? this.sessions.claim((body as { launch?: unknown })?.launch) : null;
       if (!claimed) return send(401, { ok: false, code: "LAUNCH_REQUIRED", message: "Open Perfect Planner from a one-time link. This window cannot show or change anything until then." });
-      res.setHeader("set-cookie", this.sessions.setCookieHeader(claimed.cookie, "/api"));
+      res.setHeader("set-cookie", this.sessions.setCookieHeader(claimed.cookie, "/api", req));
       return send(200, { ok: true, result: { csrf: claimed.csrf } });
     }
     const match = this.router.match(method, path);
@@ -276,8 +282,11 @@ export class CoreHost {
   }
 
   async close(): Promise<void> {
+    for (const project of this.projects.values()) { project.service.gate.checks.beginClose(); beginCloseOptionalGitViews(project); }
     // Watchers first: they write to the ledger, so none may be mid-pass when it closes.
     await Promise.all([...this.projects.values()].map((project) => project.watch?.stop().catch(() => undefined)));
+    await Promise.all([...this.projects.values()].map((project) => drainOptionalGitViews(project)));
+    await Promise.all([...this.projects.values()].map(project => project.service.gate.checks.drain()));
     for (const bridge of this.bridges.values()) await (await bridge).close().catch(() => undefined);
     // Wait for the git runs started at open (exclude, protection) so none outlives the host in the project folder.
     for (const project of this.projects.values()) await Promise.allSettled([project.ready, project.protection]);

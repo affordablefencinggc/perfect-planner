@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
+import { readCheckRequest, saveCheckRequest, clearCheckRequest } from "./checkRequests.js";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { CheckCircleIcon, CopyIcon, GitMergeIcon, PlayIcon, SpinnerGapIcon, WarningCircleIcon } from "@phosphor-icons/react";
 import { describeLaunchFolder } from "../browser/launchFolder.js";
 import { copyText } from "../project/connectAgentSetup.js";
@@ -14,7 +15,9 @@ import "./TasksScreen.css";
 // the commit whose diff they read), so a worker changing it meanwhile makes the click stale. The
 // worker's token stays in a file; the commands only name that file.
 export const TASKS_POLL_MS = 2000;
-export const DEFAULT_WORKER_MODEL = "claude-sonnet-4-5";
+// A task dispatch must never silently attribute an arbitrary CLI worker to Claude.
+// Empty remains honest when the person has not configured the exact model yet.
+export const DEFAULT_WORKER_MODEL = "";
 
 const STAGE = {
   "needs-test": { label: "Needs a test", tone: "" },
@@ -35,6 +38,9 @@ const STAGE = {
 const tail = (output) => String(output ?? "").split(/\r?\n/).filter((l) => l.trim()).slice(-20).join("\n").slice(-2000);
 const withTail = (text, output) => (tail(output) ? `${text}\n\n${tail(output)}` : text);
 
+// Current API progress is { text, at }; retain compatibility with older string records.
+const progressText = (progress) => typeof progress === "string" ? progress : typeof progress?.text === "string" ? progress.text : "";
+
 const who = (actor) => (!actor ? "" : actor.kind === "person" ? `you (${actor.id})` : actor.model ? `${actor.id} (${actor.model})` : actor.id);
 
 function Snippet({ label, text, id, copied, onCopy }) {
@@ -51,24 +57,32 @@ function Snippet({ label, text, id, copied, onCopy }) {
   );
 }
 
-function DispatchPanel({ dispatch, onClose }) {
+export function DispatchPanel({ dispatch, onClose }) {
   const [copied, setCopied] = useState(null);
+  const codexSelected = /(?:^|[-_/])(?:codex|gpt|o\d)/i.test(String(dispatch.model ?? ""));
+  const claudeSelected = /(?:claude|sonnet|opus|haiku)/i.test(String(dispatch.model ?? ""));
+  const geminiSelected = /gemini/i.test(String(dispatch.model ?? ""));
+  const selected = codexSelected ? (dispatch.agents?.codex ? { ...dispatch, ...dispatch.agents.codex, provider: "Codex CLI" } : null)
+    : geminiSelected ? (dispatch.agents?.gemini ? { ...dispatch, ...dispatch.agents.gemini, provider: "Gemini CLI" } : null)
+      : claudeSelected ? (dispatch.agents?.claude ? { ...dispatch, ...dispatch.agents.claude, provider: "Claude Code" } : null) : null;
+  const usable = selected && typeof selected.setup === "string" && selected.setup.trim() && typeof selected.start === "string" && selected.start.trim();
   const copy = async (id, text) => setCopied({ id, ok: await copyText(text) });
   return (
     <div className="core-tasks-dispatch" role="region" aria-label={`Worker for ${dispatch.task}`}>
-      <p>
-        Two steps in a {dispatch.shell === "PowerShell" ? "PowerShell window" : "terminal"} on this computer: the set-up command adds Perfect Planner to Claude Code in the task's own folder, then the start command opens Claude Code with the brief. The worker writes the test first and waits for you to approve it here.
+      {usable ? <><p>
+        Two steps in a {selected.shell === "PowerShell" ? "PowerShell window" : "terminal"} on this computer: the set-up command adds Perfect Planner to {selected.provider} in the task's own folder, then the start command opens that selected worker with the brief. The worker writes the test first and waits for you to approve it here.
       </p>
       {dispatch.warning && <p className="core-tasks-warn">{dispatch.warning}</p>}
-      <Snippet label="Set-up command" id={`${dispatch.task}:setup`} text={dispatch.setup} copied={copied} onCopy={copy} />
-      <Snippet label="Start command" id={`${dispatch.task}:start`} text={dispatch.start} copied={copied} onCopy={copy} />
-      <details>
+      <Snippet label="Set-up command" id={`${dispatch.task}:setup`} text={selected.setup} copied={copied} onCopy={copy} />
+      <Snippet label="Start command" id={`${dispatch.task}:start`} text={selected.start} copied={copied} onCopy={copy} />
+      </> : <p role="status" className="core-tasks-warn">{codexSelected || geminiSelected || claudeSelected ? "The selected worker's commands are unavailable. Choose an available agent below; no other provider was selected automatically." : "Choose which agent to use below. A blank or unrecognised model does not select a provider automatically."}</p>}
+      <details open={!usable}>
         <summary>Read the brief, or use another agent</summary>
         <Snippet label="Brief" id={`${dispatch.task}:brief`} text={dispatch.brief} copied={copied} onCopy={copy} />
         <Snippet label="MCP settings" id={`${dispatch.task}:json`} text={dispatch.json} copied={copied} onCopy={copy} />
         {Object.entries(dispatch.agents ?? {}).map(([name, a]) => (
           <div key={name}>
-            <p className="core-muted">{name === "gemini" ? "Gemini CLI" : "Codex CLI"}: run the set-up, then the start command. {a.note}</p>
+            <p className="core-muted">{name === "gemini" ? "Gemini CLI" : name === "claude" ? "Claude Code" : "Codex CLI"}: run the set-up, then the start command. {a.note}</p>
             <Snippet label={`${name} set-up`} id={`${dispatch.task}:${name}:setup`} text={a.setup} copied={copied} onCopy={copy} />
             <Snippet label={`${name} start`} id={`${dispatch.task}:${name}:start`} text={a.start} copied={copied} onCopy={copy} />
           </div>
@@ -218,7 +232,7 @@ function KeptFolders({ project, version, onChange }) {
 }
 
 function TaskCard({ contained, task, repoRoot, project, act, busy, notice, dispatchFor, onDispatched, onHideDispatch, showRepo }) {
-  const [model, setModel] = useState(task.dispatch?.model ?? DEFAULT_WORKER_MODEL);
+  const [model, setModel] = useState(task.dispatch?.model ?? task.workerDispatch?.requestedModel ?? DEFAULT_WORKER_MODEL);
   const [diff, setDiff] = useState(null);
   const [diffError, setDiffError] = useState(null);
   const [sensitiveConfirmed, setSensitiveConfirmed] = useState(false);
@@ -232,8 +246,10 @@ function TaskCard({ contained, task, repoRoot, project, act, busy, notice, dispa
   const working = busy === id;
   const run = async (step, path, body) => { setDoing(step); try { return await act(id, step, path, body); } finally { setDoing(""); } };
   // Why "Check the work" is greyed or slow, in plain words.
+  const pendingCheck = readCheckRequest(project, task.label);
+  const canCheck = Boolean(pendingCheck) || ["building", "review-diff", "ready-to-merge"].includes(task.stage);
   const checking = working && doing === "check";
-  const checkNote = checking ? "Running the approved test in the worker's folder. This can take a minute or more." : working ? "Another step on this task is still running." : task.checkReady?.note ?? "";
+  const checkNote = checking ? "Waiting for the saved check result. This may include preparing inputs and running the approved test." : working ? "Another step on this task is still running." : task.checkReady?.note ?? "";
   const folder = task.worktree && task.worktree.state && task.worktree.state !== "ok" ? task.worktree : null;
   const base = task.worktree?.base ?? "main";
 
@@ -281,11 +297,12 @@ function TaskCard({ contained, task, repoRoot, project, act, busy, notice, dispa
       {task.jev && <JevLine label="Jev on the test" line={task.jev.test} />}
       {task.jev && ["review-diff", "ready-to-merge", "reopened"].includes(task.stage) && <JevLine label="Jev on the change" line={task.jev.diff} />}
       {task.owner && task.status !== "done" && <p className="core-tasks-line"><span className="core-muted">Worker</span> {task.owner}</p>}
-      {task.lastProgress && <p className="core-tasks-line"><span className="core-muted">Latest</span> {task.lastProgress}</p>}
+      {progressText(task.lastProgress) && <p className="core-tasks-line"><span className="core-muted">Latest</span> {progressText(task.lastProgress)}</p>}
       {task.proofs.length > 0 && <p className="core-tasks-line"><span className="core-muted">Proof</span> {task.proofs.map((p) => `${p.kind} ${p.link.slice(0, 12)}`).join(", ")}</p>}
       {task.check && task.stage !== "done" && (
-        <p className="core-tasks-line"><span className="core-muted">Last check</span> <Pill contained={contained} /> {task.check.passed ? "passed" : "failed"}{task.check.commit ? ` at ${task.check.commit.slice(0, 12)}` : ""}</p>
+        <p className="core-tasks-line"><span className="core-muted">Last recorded check</span> <Pill contained={contained} /> {task.check.passed ? "passed" : "failed"}{task.check.commit ? ` at ${task.check.commit.slice(0, 12)}` : ""}. Later changes need another check.</p>
       )}
+      {task.workerReport?.reportedModel && (task.dispatch?.model ?? task.workerDispatch?.requestedModel) && task.workerReport.reportedModel !== (task.dispatch?.model ?? task.workerDispatch?.requestedModel) && <p className="core-tasks-warn">Model conflict: requested {task.dispatch?.model ?? task.workerDispatch?.requestedModel}; worker reported {task.workerReport.reportedModel}. The report does not verify the runtime model.</p>}
       {task.merged && <p className="core-tasks-line"><span className="core-muted">Merged</span> {task.merged.commit?.slice(0, 12)}</p>}
       <WorkHeader
         facts={[
@@ -293,8 +310,9 @@ function TaskCard({ contained, task, repoRoot, project, act, busy, notice, dispa
           ["Branch", task.worktree?.branch],
           ["Base", task.worktree ? base : null],
           ["Worker", task.owner],
-          ["Model", task.dispatch?.model],
-          ["Started", task.dispatch?.issuedAt?.replace("T", " ").slice(0, 16)],
+          ["Requested model", task.dispatch?.model ?? task.workerDispatch?.requestedModel],
+          ["Worker-reported model", task.workerReport?.reportedModel ?? "Not reported"],
+          ["Connection prepared", (task.dispatch?.issuedAt ?? task.workerDispatch?.requestedAt)?.replace("T", " ").slice(0, 16)],
           ["Worktree", task.worktree ? `${task.worktree.path} · port ${task.worktree.port}` : null, true],
           ["Contract", task.test ? (task.approval ? "Test approved" : "Test proposed") : "No test yet"],
           ["File scope", task.claims?.length ? `${task.claims.length} claimed` : null],
@@ -316,7 +334,7 @@ function TaskCard({ contained, task, repoRoot, project, act, busy, notice, dispa
       <div className="core-tasks-actions">
         {canStart && !dispatchFor && (
           <span className="core-tasks-start">
-            <label>Worker model<input value={model} onChange={(e) => setModel(e.target.value)} autoComplete="off" /></label>
+            <label>Worker model<input value={model} onChange={(e) => setModel(e.target.value)} placeholder="Exact configured model, if known" autoComplete="off" /></label>
             <button type="button" className={`core-button ${task.stage === "needs-test" ? "primary" : ""}`} onClick={startWorker} disabled={working || Boolean(task.waitingFor)} title={task.waitingFor?.message}>
               {working ? <SpinnerGapIcon aria-hidden="true" /> : <PlayIcon aria-hidden="true" />} {task.dispatch ? "Start worker again" : "Start worker"}
             </button>
@@ -332,9 +350,9 @@ function TaskCard({ contained, task, repoRoot, project, act, busy, notice, dispa
             {task.jev.test.state === "waiting" ? "Ask Jev to review the test" : "Ask Jev again"}
           </button>
         )}
-        {task.stage === "building" && (
-          <button type="button" className="core-button primary" onClick={() => run("check", `/tasks/${id}/check`)} disabled={working || task.checkReady?.ok === false} title={working ? "Another step on this task is still running." : undefined} aria-describedby={checkNote ? `${id}-check-why` : undefined}>
-            {checking ? <><SpinnerGapIcon aria-hidden="true" /> Checking…</> : "Check the work"}
+        {canCheck && (
+          <button type="button" className="core-button primary" onClick={() => run("check", `/tasks/${id}/check`)} disabled={working || (!pendingCheck && task.checkReady?.ok === false)} title={working ? "Another step on this task is still running." : undefined} aria-describedby={checkNote ? `${id}-check-why` : undefined}>
+            {checking ? <><SpinnerGapIcon aria-hidden="true" /> Checking…</> : pendingCheck ? "Recover check result" : task.stage === "building" ? "Check the work" : "Check work again"}
           </button>
         )}
         {(task.stage === "review-diff" || task.stage === "ready-to-merge") && (
@@ -365,7 +383,8 @@ function TaskCard({ contained, task, repoRoot, project, act, busy, notice, dispa
         )}
       </div>
 
-      {task.stage === "building" && checkNote && <p id={`${id}-check-why`} className={task.checkReady?.ok === false && !working ? "core-tasks-warn" : "core-muted core-tasks-line"}>{checkNote}</p>}
+      {pendingCheck && <p className="core-muted">A saved check request is awaiting a settled result. Recover it before starting another check.</p>}
+      {canCheck && checkNote && <p id={`${id}-check-why`} className={task.checkReady?.ok === false && !working ? "core-tasks-warn" : "core-muted core-tasks-line"}>{checkNote}</p>}
 
       {canRelease && releasing && (
         <form className="core-tasks-sendback" aria-label={`Release ${task.label}`} onSubmit={async (e) => { e.preventDefault(); const ok = await run("release", `/tasks/${id}/release`, { owner: task.owner, ...(releaseReason.trim() ? { reason: releaseReason.trim() } : {}) }); if (ok) { setReleasing(false); setReleaseReason(""); } }}>
@@ -415,8 +434,8 @@ function QueuePanel({ data, post, busy, onStarted, onNotice }) {
   const save = (body) => run("settings", () => post("/tasks/settings", body));
   const startAll = () => run("start-all", async () => {
     const r = await post("/tasks/start-all", model.trim() ? { model: model.trim() } : {});
-    onStarted(r.started);
     setResult({ started: r.started.length, refused: r.refused });
+    onStarted(r.started);
   });
   // Read every waiting diff, then offer the clean ones together. A diff with a flagged file is never in the batch.
   const load = () => run("batch-load", async () => {
@@ -447,7 +466,7 @@ function QueuePanel({ data, post, busy, onStarted, onNotice }) {
             {[1, 2, 3, 4, 5, 6, 7, 8].map((n) => <option key={n} value={n}>{n}</option>)}
           </select>
         </label>
-        <label>Worker model<input value={model} onChange={(e) => setModel(e.target.value)} autoComplete="off" /></label>
+        <label>Worker model<input value={model} onChange={(e) => setModel(e.target.value)} placeholder="Exact configured model, if known" autoComplete="off" /></label>
         <button type="button" className="core-button primary" onClick={startAll} disabled={Boolean(busy) || !start.length} title={start.length ? undefined : "No task can start right now"}>
           {busy === "start-all" ? <SpinnerGapIcon aria-hidden="true" /> : <PlayIcon aria-hidden="true" />} Start all ({Math.min(start.length, Math.max(0, queue.limit - queue.running.length))})
         </button>
@@ -518,18 +537,62 @@ const NOTICE = {
   merge: (r) => ({ tone: "good", text: `Merged into ${r.into} at ${String(r.commit ?? "").slice(0, 12)}. The test passed on the merge and the task is done.` }),
 };
 
-export default function TasksScreen() {
+export default function TasksScreen({ onWorkspace, pendingDispatches, onPendingDispatchesChange }) {
   const [busy, setBusy] = useState(null);
   const [notices, setNotices] = useState({});
-  const [dispatches, setDispatches] = useState({});
+  const [localDispatches, setLocalDispatches] = useState({});
+  // This payload is deliberately in-memory only. The shell survives the Tasks → Build
+  // route, but a reload never restores commands or a worker token.
+  const dispatches = pendingDispatches ?? localDispatches;
+  const setDispatches = onPendingDispatchesChange ?? setLocalDispatches;
   const resource = useCoreResource("/tasks", { isEmpty: (data) => !data || (data.repo?.ok && !data.tasks?.length), pollMs: TASKS_POLL_MS });
   const data = resource.data;
 
+  useEffect(() => {
+    if (!data?.tasks) return;
+    setDispatches((all) => {
+      const next = Object.fromEntries(Object.entries(all).filter(([id]) => {
+        const task = data.tasks.find((item) => item.id === id);
+        return task && task.status !== "claimed" && task.status !== "done";
+      }));
+      return Object.keys(next).length === Object.keys(all).length ? all : next;
+    });
+  }, [data?.tasks, setDispatches]);
+
+  const checkActions = useRef(new Set());
   const act = async (id, step, path, body) => {
+    const checkKey = `${resource.project}:${id}`;
+    if (step === "check") {
+      if (checkActions.current.has(checkKey)) return null;
+      checkActions.current.add(checkKey);
+    }
     setBusy(id);
     setNotices((all) => ({ ...all, [id]: null }));
     try {
-      const result = await resource.post(path, body ?? {});
+      let checkRequest = null;
+      if (step === "check") {
+        const attempt = data.tasks.find(task => task.id === id)?.label;
+        if (!attempt) throw new Error("Refresh the task before checking it.");
+        checkRequest = readCheckRequest(resource.project, attempt);
+        if (!checkRequest) {
+          const prepared = await coreGet(`/tasks/${id}/check-input`, resource.project);
+          if (prepared.attempt !== attempt) throw new Error("The task changed while preparing the check. Refresh it first.");
+          checkRequest = { requestId: crypto.randomUUID(), ...prepared };
+          saveCheckRequest(resource.project, checkRequest);
+        }
+        body = checkRequest;
+      }
+      const result = await resource.post(path, body ?? {}, step === "release" ? {
+        backgroundRefresh: true,
+        reconcile: (current, receipt) => !current ? current : ({ ...current, tasks: current.tasks.map(task =>
+          task.label === receipt.released && task.owner === receipt.from
+            ? { ...task, owner: null, status: task.status === "blocked" ? "blocked" : "open", dispatch: null } : task) }),
+      } : undefined);
+      if (checkRequest && result?.execution?.requestId && result.execution.requestId !== checkRequest.requestId) {
+        checkRequest = { requestId: result.execution.requestId, attempt: result.execution.attempt, expected: result.execution.expected };
+        saveCheckRequest(resource.project, checkRequest);
+      }
+      if (checkRequest && ["terminal", "refused-beforelaunch"].includes(result?.execution?.phase)) clearCheckRequest(resource.project, checkRequest);
       const notice = NOTICE[step]?.(result ?? {});
       if (notice) setNotices((all) => ({ ...all, [id]: notice }));
       return result ?? true;
@@ -537,6 +600,7 @@ export default function TasksScreen() {
       setNotices((all) => ({ ...all, [id]: { tone: "bad", text: error.message } }));
       return null;
     } finally {
+      if (step === "check") checkActions.current.delete(checkKey);
       setBusy(null);
     }
   };
@@ -556,6 +620,8 @@ export default function TasksScreen() {
       resource={resource}
       empty={<><strong>No tasks yet.</strong>Approve the plan in Deep planning, or add your own task there, and the tasks appear here.</>}
     >
+      {resource.refresh?.status === "pending" && <p role="status">The release is recorded. Refreshing the task list; other task details may still be older.</p>}
+      {resource.refresh?.status === "error" && <p role="status" className="core-tasks-warn">The release is recorded, but the task list could not refresh: {resource.refresh.error.message} <button type="button" className="core-button" onClick={resource.reload}>Refresh task list</button></p>}
       {data && !data.repo?.ok && <RepoPicker repo={data.repo} onSave={saveRepo} />}
       {data?.repo?.ok && data.queue && data.tasks.length > 0 && <QueuePanel data={{ ...data, project: resource.project }} post={resource.post} busy={busy} onNotice={setBusy} onStarted={(list) => setDispatches((all) => ({ ...all, ...Object.fromEntries(list.map((d) => [d.task, d])) }))} />}
       {data?.repo?.ok && !manyRepos && (
@@ -581,7 +647,13 @@ export default function TasksScreen() {
               busy={busy}
               notice={notices[task.id]}
               dispatchFor={dispatches[task.id] && task.status !== "claimed" && task.status !== "done" ? dispatches[task.id] : null}
-              onDispatched={(result) => setDispatches((all) => ({ ...all, [task.id]: result }))}
+              onDispatched={(result) => {
+                setDispatches((all) => ({ ...all, [task.id]: result }));
+                // The host accepted this person's dispatch request. Return to the same
+                // project's live spine; its state still comes from the ledger and never
+                // claims that a worker is running until it reports fresh activity.
+                onWorkspace?.("build");
+              }}
               onHideDispatch={() => setDispatches((all) => ({ ...all, [task.id]: null }))}
             />
           ))}

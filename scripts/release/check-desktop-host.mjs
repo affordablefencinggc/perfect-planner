@@ -13,7 +13,7 @@
 //   node scripts/release/check-desktop-host.mjs [desktop-host folder]
 // Prints a JSON summary; exits non-zero on any failure. No secret is printed.
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import { tmpdir } from "node:os";
@@ -205,7 +205,8 @@ export async function runLoop(origin, headers, work, appNode) {
     worker.stop();
   }
   // The person checks, reads the diff, approves it and merges.
-  const checked = await api("POST", `/tasks/${task.id}/check`);
+  const preparedCheck = await api("GET", `/tasks/${task.id}/check-input`);
+  const checked = await api("POST", `/tasks/${task.id}/check`, { requestId: randomUUID(), ...preparedCheck });
   if (!checked.passed) throw new Error(`The check did not pass: ${JSON.stringify(checked).slice(0, 300)}`);
   steps.checkPassed = true;
   const diff = await api("GET", `/tasks/${task.id}/diff`);

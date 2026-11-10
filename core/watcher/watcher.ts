@@ -138,17 +138,31 @@ export class GitWatcher {
     return this.running;
   }
 
-  /** Tick every `intervalMs` (default 3s). The timer does not keep the process alive and ticks never overlap. */
+  /**
+   * Tick every `intervalMs` (default 3s). The timer does not keep the process alive and ticks never overlap.
+   * A project where nothing is happening is read less often, since every pass starts git for each task folder:
+   * after two quiet passes in a row the wait is doubled and after four it is tripled, and any news (a commit seen,
+   * a collision found or cleared, a failed read) puts it back to `intervalMs`.
+   */
   start(intervalMs = 3000): void {
     if (!this.stopped) return;
     this.stopped = false;
+    let quiet = 0;
     const loop = (): void => {
       if (this.stopped) return;
       this.tick()
-        .catch((error) => this.onError?.(error))
+        .then(
+          (result) => {
+            quiet = result.skipped || result.observed.length || result.collisions.length || result.resolved.length || result.errors.length ? 0 : quiet + 1;
+          },
+          (error) => {
+            quiet = 0;
+            this.onError?.(error);
+          },
+        )
         .finally(() => {
           if (this.stopped) return;
-          this.timer = setTimeout(loop, intervalMs);
+          this.timer = setTimeout(loop, intervalMs * (quiet >= 4 ? 3 : quiet >= 2 ? 2 : 1));
           this.timer.unref?.();
         });
     };

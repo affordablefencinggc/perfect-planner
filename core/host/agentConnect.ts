@@ -5,7 +5,7 @@
 // perfect-planner-connect skill for the user, so the agent knows the loop rules.
 // Claude Code, Gemini CLI and Codex CLI all read the same SKILL.md (the Agent Skills
 // format), so one source file is copied and the rules cannot drift between agents.
-// Without --agent it picks the first of claude, gemini, codex that is installed.
+// Without --agent it selects Codex only; another provider must be explicit.
 // The line names the file the app wrote the token to, never the token itself, so
 // nothing secret lands in shell history, a chat transcript or any agent's config.
 // `node connect.mjs --skill-only` installs just the skill, with no token, so every
@@ -98,7 +98,7 @@ function register(agent: AgentKind, env: string[], command: string[]): Pick<Conn
 }
 
 export function connectPlan(options: { bridgeUrl: string; tokenFile: string; here: string; home: string; agent?: AgentKind }): ConnectPlan {
-  const agent = options.agent ?? "claude";
+  const agent = options.agent ?? "codex";
   const env = [`PP_BRIDGE_URL=${options.bridgeUrl}`, `PP_AGENT_TOKEN_FILE=${options.tokenFile}`];
   return {
     agent,
@@ -164,6 +164,8 @@ export interface ConnectIo {
   interactive?: boolean;
   /** Starts the agent with the terminal attached and returns its exit code; null when it could not start. Defaults to a real spawn. */
   startAgent?: (agent: AgentKind, tokenFile: string, io: ConnectIo) => number | null;
+/** Injectable transport for isolated CLI registration tests. Production uses fetch. */
+  fetch?: typeof fetch;
 }
 
 const CLI_TIMEOUT_MS = 30_000;
@@ -219,9 +221,9 @@ export function failureHint(agent: AgentKind, output: string): string {
   return "";
 }
 
-/** The first agent CLI found on this computer, in the order Perfect Planner was built and proven with. */
+/** Codex is the only implicit provider; other installed providers require explicit selection. */
 export function detectAgent(isInstalled: (agent: AgentKind) => boolean = (agent) => agentLaunch(agent, [], process.env, process.cwd(), []) !== null): AgentKind | null {
-  return AGENT_KINDS.find(isInstalled) ?? null;
+  return isInstalled("codex") ? "codex" : null;
 }
 
 /**
@@ -262,8 +264,36 @@ export function parseArgs(argv: string[]): { agent?: string; rest: string[] } {
   return { agent, rest };
 }
 
+/** Authenticate without hello, claiming work, registering an actor or touching agent settings. */
+export async function connectionIsCurrent(bridgeUrl: string, tokenFile: string, fetchImpl: typeof fetch = fetch): Promise<boolean> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 3000);
+  try {
+    const info = fs.statSync(tokenFile);
+    if (!info.isFile() || info.size < 1 || info.size > 4096) return false;
+    const token = fs.readFileSync(tokenFile, "utf8").trim();
+    if (!token || /[\r\n]/.test(token)) return false;
+    const response = await fetchImpl(bridgeUrl + "/route", {
+      method: "POST", redirect: "error", signal: controller.signal,
+      headers: { "content-type": "application/json", authorization: "Bearer " + token },
+      body: JSON.stringify({ intent: "", limit: 1 }),
+    });
+    if (response.status !== 200 || !response.body) { await response.body?.cancel(); return false; }
+    const reader = response.body.getReader();
+    const chunks: Uint8Array[] = []; let bytes = 0;
+    for (;;) {
+      const chunk = await reader.read(); if (chunk.done) break;
+      bytes += chunk.value.length;
+      if (bytes > 65536) { await reader.cancel(); return false; }
+      chunks.push(chunk.value);
+    }
+    const value = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    return value?.ok === true && Array.isArray(value.result);
+  } catch { return false; } finally { clearTimeout(timer); }
+}
+
 /** connect.mjs itself: `[--agent claude|gemini|codex] <bridge url> <token file>`, or `--skill-only`. Returns the exit code. */
-export function runConnect(all: string[], io: ConnectIo): number {
+export async function runConnect(all: string[], io: ConnectIo): Promise<number> {
   const { here } = io;
   const noStart = all.includes("--no-start");
   const { agent: picked, rest: argv } = parseArgs(all.filter((arg) => arg !== "--no-start"));
@@ -292,9 +322,13 @@ export function runConnect(all: string[], io: ConnectIo): number {
     io.err("Perfect Planner: the token file is gone (the app restarted, or you disconnected). Click Connect agent again for a fresh line.\n");
     return 2;
   }
+  if (!await connectionIsCurrent(bridgeUrl, tokenFile, io.fetch)) {
+    io.err("Perfect Planner: this connection is unavailable or no longer valid. Open the app and click Connect agent again for a fresh line. No agent settings were changed.\n");
+    return 2;
+  }
   const agent = (picked as AgentKind | undefined) ?? detectAgent((kind) => agentLaunch(kind, [], io.env, io.cwd, protectFor(tokenFile)) !== null);
   if (!agent) {
-    io.err("Perfect Planner: none of claude, gemini or codex is installed here. For another agent, use the MCP settings from Connect agent instead.\n");
+    io.err("Perfect Planner: Codex CLI is not installed here. Install Codex or explicitly select an available provider in Connect agent.\n");
     return 1;
   }
   const { cli, label } = AGENTS[agent];
@@ -346,7 +380,7 @@ export function runConnect(all: string[], io: ConnectIo): number {
   return 0;
 }
 
-function main(argv: string[]): number {
+async function main(argv: string[]): Promise<number> {
   return runConnect(argv, {
     cwd: process.cwd(),
     env: process.env,
@@ -371,4 +405,4 @@ export function isMainModule(script: string | undefined, moduleUrl: string): boo
   }
 }
 
-if (isMainModule(process.argv[1], import.meta.url)) process.exit(main(process.argv.slice(2)));
+if (isMainModule(process.argv[1], import.meta.url)) main(process.argv.slice(2)).then(code => { process.exitCode = code; }, () => { console.error("Perfect Planner: connection could not be checked. Click Connect agent again for a fresh line."); process.exitCode = 2; });

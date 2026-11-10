@@ -3,6 +3,7 @@ import { CaretDownIcon, CaretUpIcon, CrosshairIcon, GitBranchIcon } from "@phosp
 import { useCoreResource } from "./coreApi.js";
 import { modelLabel } from "./CoreAgentConnect.jsx";
 import { modelFamily } from "./CoreSpine.jsx";
+import { deriveLiveWorkerState, providerOf, workerIdentityFor } from "./liveWorkerSpine.js";
 import { getModelWorkerAsset } from "../modelWorkerAssets.js";
 import "./CoreSpine.css";
 
@@ -16,15 +17,15 @@ const FAMILY_LABEL = { claude: "Claude", gemini: "Gemini", codex: "Codex" };
 
 const STAGE_TEXT = {
   "needs-test": "Waiting for a test",
-  "test-proposed": "Test waiting for you",
-  "test-approved": "Ready for a worker",
+  "test-proposed": "Test waiting for your approval",
+  "test-approved": "Test approved, waiting for a worker",
   "test-passes-already": "Test proves nothing",
   "waiting-for-jev": "Waiting for Jev",
   "jev-found-gaps": "Jev found gaps",
-  "ready-to-claim": "Ready for a worker",
+  "ready-to-claim": "Ready for a worker to claim",
   building: "Being built",
-  "review-diff": "Change waiting for you",
-  "ready-to-merge": "Ready to merge",
+  "review-diff": "Checked, waiting for your review of the change",
+  "ready-to-merge": "Approved, waiting for you to merge",
   reopened: "Reopened",
   done: "Merged",
   draft: "Planned, not started",
@@ -53,29 +54,32 @@ export function draftGroups(roadmap) {
 const taskNumber = (id) => Number(String(id).replace(/\D/g, "")) || 0;
 
 function liveWorker(task, agents) {
-  return (agents ?? []).find((a) => a.role === "worker" && a.task === task.label && !a.revoked);
+  return workerIdentityFor(task, agents);
 }
 
-const isWorking = (task, worker) => task.stage === "building" && Boolean(worker) && !worker.quiet;
+const isWorking = (task, worker) => deriveLiveWorkerState(task, worker).animated;
 
 function robotOf(task, worker, state) {
   const model = worker?.model ?? task.dispatch?.model;
-  const family = modelFamily(model);
+  const provider = providerOf(worker);
+  const family = provider === "unknown" ? modelFamily(model) : { id: provider, name: FAMILY_LABEL[provider] };
   const slug = ROBOT[family.id];
   if (!slug) return null;
-  return { family, model, label: `${FAMILY_LABEL[family.id]}${model ? ` (${modelLabel(model)})` : ""}`, src: getModelWorkerAsset(slug, state, "right") };
+  const mismatch = provider === "codex" && /claude|sonnet|opus|haiku/i.test(String(model ?? ""));
+  return { family, model, label: `${worker?.modelReported ? "Worker-reported provider: " : worker?.modelRequested ? "Requested provider: " : ""}${FAMILY_LABEL[family.id]}${model ? ` (${mismatch ? `configured ${modelLabel(model)}; provider identity is Codex` : modelLabel(model)})` : " · model unavailable"}`, src: getModelWorkerAsset(slug, state, "right"), conflict: worker?.modelConflict ? `; requested ${worker.requestedModel}, reported ${worker.reportedModel} (conflict)` : "" };
 }
 
 function Robot({ task, worker }) {
-  const working = isWorking(task, worker);
-  const state = working ? "running" : HALTED.has(task.stage) ? "dead-still" : "waiting";
+  const live = deriveLiveWorkerState(task, worker);
+  const working = live.animated;
+  const state = working ? "running" : HALTED.has(task.stage) || ["blocked", "stale", "test-failed", "awaiting-review", "done"].includes(live.state) ? "dead-still" : "waiting";
   const robot = robotOf(task, worker, state);
   if (!robot) return null;
-  const what = working ? "building this task now" : state === "dead-still" ? "stopped" : task.stage === "done" ? "finished" : "waiting";
+  const what = working ? "building this task now" : live.label;
   return (
     <>
       {task.stage === "done" && <span className="perimeter-success-trail complete" aria-hidden="true"><i className="trail-side trail-top" /><i className="trail-side trail-right" /><i className="trail-side trail-bottom" /><i className="trail-side trail-left" /></span>}
-      <span className={`perimeter-worker ${working ? "running" : "stopped"}${task.stage === "done" ? " lap-finished" : ""}`} role="img" aria-label={`${robot.label}, ${what}`} title={`${robot.label} · ${what}`}>
+      <span className={`perimeter-worker ${working ? "running" : "stopped"}${task.stage === "done" ? " lap-finished" : ""}`} role="img" aria-label={`${robot.label}${robot.conflict}, ${what}`} title={`${robot.label}${robot.conflict} · ${what}`}>
         <img className="model-worker-image" src={robot.src} alt="" />
       </span>
     </>
@@ -101,10 +105,14 @@ function Owner({ person, via, onPerson }) {
   );
 }
 
-function Vertebra({ task, side, owner, via, agents, onOpen, onPerson, people, onAssign }) {
+const CAN_START_FROM_PLAN = new Set(["needs-test", "test-proposed", "test-approved", "ready-to-claim", "reopened"]);
+
+function Vertebra({ task, side, owner, via, agents, onOpen, onOpenBuild, onStart, onPerson, people, onAssign }) {
   const worker = liveWorker(task, agents);
+  const live = deriveLiveWorkerState(task, worker);
   const model = worker?.model ?? task.dispatch?.model;
-  const family = model ? modelFamily(model) : null;
+  const provider = providerOf(worker);
+  const family = model ? (provider === "unknown" ? modelFamily(model) : { id: provider, name: FAMILY_LABEL[provider] }) : null;
   const diff = task.diffApproval ? 1 : 0;
   const shots = (task.proofs ?? []).length;
   const clauses = task.clauses?.length ? task.clauses : [];
@@ -119,7 +127,13 @@ function Vertebra({ task, side, owner, via, agents, onOpen, onPerson, people, on
         <span className="node-branch-ref" title={task.worktree?.branch ? `Branch: ${task.worktree.branch}` : "No branch yet"}><GitBranchIcon /></span>
         <strong>{task.title}</strong>
         {family && <span className="model-id-chip" title={model}>{family.name}</span>}
-        <small className={building ? "core-working-text" : undefined}>{building ? "Building now" : STAGE_TEXT[task.stage] ?? String(task.stage)}</small>
+        <small className={building ? "core-working-text" : "core-task-state"}>
+          {building
+            ? "Building now"
+            : (live.state === "working" || (live.state === "waiting" && task.stage !== "building"))
+              ? (STAGE_TEXT[task.stage] ?? String(task.stage))
+              : live.label}
+        </small>
         <span className={`proof-counter${diff ? " proven" : ""}`} title="Change approved by you"><GitBranchIcon />{diff ? total : 0}/{total}</span>
         <span className={`proof-counter${shots ? " proven" : ""}`} title="Proof items attached"><CrosshairIcon />{shots ? total : 0}/{total}</span>
         {!task.draft && <Owner person={owner} via={via} onPerson={onPerson} />}
@@ -151,7 +165,17 @@ function Vertebra({ task, side, owner, via, agents, onOpen, onPerson, people, on
         </label>
       )}
       {task.waitingFor?.message && <span className="core-vertebra-note core-waiting">{task.waitingFor.message}</span>}
-      {task.lastProgress && <span className="core-vertebra-note">{String(task.lastProgress.text ?? task.lastProgress).slice(0, 160)}</span>}
+      {task.lastProgress && <span className="core-vertebra-note">Worker-reported: {String(task.lastProgress.text ?? task.lastProgress).slice(0, 160)}</span>}
+      {onOpen && task.stage !== "done" && (
+        <button type="button" className="core-button core-plan-open-build" aria-label={`Open live Build for ${task.label}`} onClick={(event) => { event.stopPropagation(); (onOpenBuild ?? onOpen)(task); }}>
+          Open live Build
+        </button>
+      )}
+      {onStart && CAN_START_FROM_PLAN.has(task.stage) && (
+        <button type="button" className="core-button primary" aria-label={`Start work for ${task.label}`} onClick={(event) => { event.stopPropagation(); onStart(task); }}>
+          Start work
+        </button>
+      )}
     </article>
   );
 }
@@ -247,7 +271,7 @@ function SpineCanvas({ groups, model, agents, onWorkspace, onPerson, onAssign, r
               const side = index++ % 2 === 0 ? "left" : "right";
               const worker = liveWorker(task, agents);
               const runner = runners && isWorking(task, worker) ? robotOf(task, worker, "running") : null;
-              const card = <Vertebra task={task} side={side} owner={model.byId.get(model.ownerId.get(task.id))} via={model.via.get(task.id)} agents={agents} onOpen={(t) => onWorkspace?.(t.draft ? "planning" : "tasks")} onPerson={onPerson} people={model.assignable ? model.list : null} onAssign={onAssign} />;
+              const card = <Vertebra task={task} side={side} owner={model.byId.get(model.ownerId.get(task.id))} via={model.via.get(task.id)} agents={agents} onOpen={(t) => onWorkspace?.(t.draft ? "planning" : "tasks")} onOpenBuild={() => onWorkspace?.("build")} onStart={() => onWorkspace?.("tasks")} onPerson={onPerson} people={model.assignable ? model.list : null} onAssign={onAssign} />
               return (
                 <div className={`single-node-row row-${side}`} key={task.id}>
                   {side === "left" ? <div className="node-slot node-left has-node">{card}</div> : <div className="node-spacer" />}

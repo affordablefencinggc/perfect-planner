@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useCoreResource } from "./coreApi.js";
 import { modelLabel } from "./CoreAgentConnect.jsx";
+import { deriveLiveWorkerState, providerOf, workerIdentityFor } from "./liveWorkerSpine.js";
 import "./CoreSpine.css";
 
 // The project's real tasks as one top-down spine: each task is a node, with six stations it passes
@@ -47,26 +48,51 @@ export function modelFamily(model) {
 const taskNumber = (id) => Number(String(id).replace(/\D/g, "")) || 0;
 
 function workerFor(task, agents) {
-  const live = (agents ?? []).find((a) => a.role === "worker" && a.task === task.label && !a.revoked);
-  const model = live?.model ?? task.dispatch?.model;
-  return model || live ? { name: live?.name, model, quiet: Boolean(live?.quiet) } : null;
+  return workerIdentityFor(task, agents);
 }
 
 function ModelSymbol({ worker, active }) {
-  const family = modelFamily(worker.model);
-  const label = `${family.name}${worker.model ? ` (${modelLabel(worker.model)})` : ""}`;
+  const provider = providerOf(worker);
+  const family = provider === "unknown" ? modelFamily(worker.model) : { id: provider, glyph: provider === "codex" ? "X" : provider === "claude" ? "C" : "G", name: provider === "codex" ? "Codex" : provider === "claude" ? "Claude" : "Gemini" };
+  const mismatch = provider === "codex" && /claude|sonnet|opus|haiku/i.test(String(worker.model ?? ""));
+  const label = `${worker.modelReported ? "Worker-reported provider: " : worker.modelRequested ? "Requested provider: " : ""}${family.name}${worker.model ? ` (${mismatch ? `configured ${modelLabel(worker.model)}; provider identity is Codex` : modelLabel(worker.model)})` : " · model unavailable"}`;
   return (
-    <span className={`spine-model spine-model-${family.id}${active ? " spine-model-active" : ""}`} role="img" aria-label={`${label}${active ? ", working now" : ""}`} title={label}>
+    <span className={`spine-model spine-model-${family.id}${active ? " spine-model-active" : ""}`} role="img" aria-label={`${label}${worker.modelConflict ? `; requested ${worker.requestedModel}, reported ${worker.reportedModel} (conflict)` : ""}${active ? ", working now" : ""}`} title={label}>
       <span className="spine-model-glyph" aria-hidden="true">{family.glyph}</span>
       {active && <span className="spine-model-orbit" aria-hidden="true"><i /></span>}
     </span>
   );
 }
 
+function LiveWork({ tasks, agents }) {
+  const lanes = tasks.map((task) => {
+    const worker = workerFor(task, agents);
+    const live = deriveLiveWorkerState(task, worker);
+    return { task, worker, live };
+  }).filter(({ worker, live }) => worker && (live.animated || live.visible));
+  if (!lanes.length) return null;
+  return (
+    <section className="spine-live-work" aria-label="Live work">
+      <header><div><p className="spine-eyebrow">Observed now</p><h3>Live work</h3></div><p className="core-muted">Fresh worker-reported activity only</p></header>
+      <ol className="spine-live-lanes">
+        {lanes.map(({ task, worker, live }) => (
+          <li key={task.id} className="spine-live-lane" data-live={live.animated ? "working" : "finished"}>
+            <article>
+              <ModelSymbol worker={worker} active={live.animated} />
+              <div className="spine-live-copy"><p className="spine-id">{task.label} · {worker.id} · {providerOf(worker)} · {modelLabel(worker.model)}</p><h4>{task.title}</h4><p className="spine-live-action">{String(task.lastProgress?.text ?? task.lastProgress ?? live.label).slice(0, 200)}</p><p className="core-muted">{live.label} — {live.detail}{worker.modelConflict ? ` Requested ${worker.requestedModel}; worker reported ${worker.reportedModel}.` : ""}</p></div>
+            </article>
+          </li>
+        ))}
+      </ol>
+    </section>
+  );
+}
+
 function Node({ task, agents, onAct }) {
   const stage = STAGES[task.stage] ?? { done: 0, who: null, text: String(task.stage ?? "Unknown") };
   const worker = task.stage === "done" ? null : workerFor(task, agents);
-  const working = task.stage === "building" && worker && !worker.quiet;
+  const live = deriveLiveWorkerState(task, worker);
+  const working = live.animated;
   // A task nobody has touched is one line; the full card is for work that is moving or waiting on you.
   const idle = !worker && task.stage !== "done" && stage.who !== "you" && !task.proofs?.length && !task.lastProgress;
   return (
@@ -79,9 +105,9 @@ function Node({ task, agents, onAct }) {
           {worker && <ModelSymbol worker={worker} active={working} />}
         </header>
         <p className="spine-state">
-          {stage.text}
+          {live.state === "working" || (live.state === "waiting" && task.stage !== "building") ? stage.text : live.label}
           {stage.who === "you" && <strong className="spine-you"> · your turn</strong>}
-          {worker?.quiet && task.stage === "building" && <span className="core-muted"> · its worker has not been heard from lately</span>}
+          {worker && <span className="core-muted"> · {live.detail}</span>}
         </p>
         {!idle && <ol className="spine-stations" aria-label={`${task.label} progress`}>
           {STATIONS.map((name, i) => (
@@ -89,7 +115,7 @@ function Node({ task, agents, onAct }) {
           ))}
         </ol>}
         {onAct && NEXT_ACTION[task.stage] && <button type="button" className="core-button spine-act" onClick={() => onAct(task)}>{NEXT_ACTION[task.stage]}</button>}
-        {task.lastProgress && <p className="spine-progress core-muted">{String(task.lastProgress.text ?? task.lastProgress).slice(0, 200)}</p>}
+        {task.lastProgress && <p className="spine-progress core-muted">Worker-reported activity: {String(task.lastProgress.text ?? task.lastProgress).slice(0, 200)}</p>}
         {!idle && <p className="spine-meta core-muted">
           {task.proofs?.length ? `${task.proofs.length} proof item${task.proofs.length === 1 ? "" : "s"}` : "No proof attached"}
           {task.merged?.mergeCommit ? ` · merged at ${String(task.merged.mergeCommit).slice(0, 12)}` : ""}
@@ -102,12 +128,12 @@ function Node({ task, agents, onAct }) {
 const FILTERS = [
   ["all", "All", () => true],
   ["you", "Need you", (t, w) => STAGES[t.stage]?.who === "you" && t.stage !== "done"],
-  ["working", "Working", (t, w) => Boolean(w) && t.stage !== "done"],
+  ["working", "Working", (t, w) => deriveLiveWorkerState(t, w).animated],
   ["idle", "Not started", (t, w) => !w && t.stage !== "done" && STAGES[t.stage]?.who !== "you"],
   ["done", "Merged", (t) => t.stage === "done"],
 ];
 
-export default function CoreSpine({ onWorkspace, onCount, actions = false }) {
+export default function CoreSpine({ onWorkspace, onCount, actions = false, accountAll = false, pendingDispatches = {} }) {
   const [filter, setFilter] = useState("all");
   const [picked, setPicked] = useState(false);
   const tasks = useCoreResource("/tasks", { isEmpty: (data) => !data?.tasks?.length, pollMs: 4000 });
@@ -119,14 +145,16 @@ export default function CoreSpine({ onWorkspace, onCount, actions = false }) {
   const workerOf = (t) => workerFor(t, agents.data?.agents);
   const counts = Object.fromEntries(FILTERS.map(([id, , test]) => [id, list.filter((t) => test(t, workerOf(t))).length]));
   // On the Build page the first thing to see is what is waiting on the person, until they pick a view.
-  const view = actions && !picked && counts.you > 0 ? "you" : filter;
+  const view = actions && !accountAll && !picked && counts.you > 0 ? "you" : filter;
   const shown = list.filter((t) => FILTERS.find(([id]) => id === view)[2](t, workerOf(t)));
+  const pending = Object.values(pendingDispatches).find((dispatch) => dispatch?.task && list.some((task) => task.id === dispatch.task && task.status !== "claimed" && task.status !== "done"));
   return (
     <section className="core-spine core-card" aria-labelledby="core-spine-title" data-state={tasks.status}>
       <header>
         <h3 id="core-spine-title">Task spine</h3>
         {list.length > 0 && <p className="core-muted" role="status">{done} of {list.length} merged · every row is read from this project's ledger</p>}
       </header>
+      {pending && <p className="core-tasks-notice good" role="status">Worker setup is ready for {pending.task}. <button type="button" className="core-button" onClick={() => onWorkspace?.("tasks")}>Finish connecting worker</button> This returns to the exact set-up panel and does not start another worker.</p>}
       {tasks.status === "loading" && <p role="status" className="core-muted">Reading the ledger…</p>}
       {tasks.status === "error" && <p role="alert" className="core-tasks-warn">The ledger could not be read, so no tasks are shown. {tasks.error?.message} <button type="button" className="core-button" onClick={tasks.reload}>Try again</button></p>}
       {tasks.status === "empty" && (
@@ -135,6 +163,7 @@ export default function CoreSpine({ onWorkspace, onCount, actions = false }) {
           {onWorkspace && <button type="button" className="core-button" onClick={() => onWorkspace("planning")}>Open Deep planning</button>}
         </p>
       )}
+      {tasks.status === "ready" && <LiveWork tasks={list} agents={agents.data?.agents} />}
       {tasks.status === "ready" && list.length > 4 && (
         <div className="spine-filters" role="group" aria-label="Show tasks">
           {FILTERS.map(([id, label]) => (

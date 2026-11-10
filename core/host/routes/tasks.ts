@@ -1,3 +1,4 @@
+import { checkRequest } from "../../gate/execution";
 // Tasks screen (spec §4.1, §5): the person runs the core loop from the app.
 // Dispatch a worker on a task (a worktree, a worker token for that task only,
 // the brief and the command to paste), approve its test (then the gate runs it
@@ -11,10 +12,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { deriveState, sensitiveChanges, testSupportFiles, unalteredPins, type GateState } from "../../gate/index";
-import type { Actor } from "../../ledger/index";
+import { isAuthoritative, type Actor, type LedgerEntry } from "../../ledger/index";
 import type { AgentKind } from "../agentKinds";
 import { attemptLabel, unmetDependencies, waitingMessage, type TaskView } from "../../mcp/index";
-import { WorktreeError, WorktreeManager, git, refreshCarriedSettings, runGit, WORKTREES_ACTOR, type WorktreeInfo } from "../../worktrees/index";
+import { WorktreeError, WorktreeManager, git, headIdentity, refreshCarriedSettings, runGit, WORKTREES_ACTOR, type WorktreeInfo } from "../../worktrees/index";
 import type { CoreHost } from "../host";
 import type { CoreProject } from "../project";
 import { HttpError, type Router } from "../router";
@@ -43,6 +44,10 @@ const GROUP_MERGES = "tasks.groupMerges";
 const DISPATCHES = "tasks.dispatches";
 const MODEL = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,79}$/;
 const MAX_DIFF = 200_000;
+// The ledger is the task board's authority.  Git folder housekeeping is useful
+// context, but a slow or wedged git child must not leave the board loading.
+const OPTIONAL_GIT_VIEW_MS = 2_500;
+const OPTIONAL_GIT_CACHE_MS = 4_000;
 
 /** Where a task stands, in the order a person drives it. */
 export type TaskStage =
@@ -72,6 +77,8 @@ export interface RepoState {
   /** The repo's name in this project: "main" for the first one. */
   name: string;
   ok: boolean;
+  discovery?: "pending" | "unavailable";
+  discoveryIdentity?: string;
   root?: string;
   reason?: string;
   /** The folder the person already imported (this project's own folder), offered as the starting answer. */
@@ -84,16 +91,37 @@ function repoFile(project: CoreProject): string {
   return path.join(project.root, ".perfect-planner", REPO_FILE);
 }
 
+const topCache = new Map<string, { top: string; identity: string }>();
+
 export async function gitTop(dir: string): Promise<string | null> {
   // A network path (\\host\share, //host/share) is never a project's git folder, and even looking at it makes Windows
   // talk to that machine (and offer this user's credentials). Refused before anything touches it.
   if (isNetworkPath(dir)) return null;
   if (!fs.existsSync(dir)) return null;
-  const top = await runGit(dir, ["rev-parse", "--show-toplevel"]).catch(() => null);
-  if (!top || top.code !== 0) return null;
-  const head = await runGit(dir, ["rev-parse", "--verify", "HEAD^{commit}"]).catch(() => null);
-  if (!head || head.code !== 0) return null;
-  return fs.realpathSync(top.stdout.trim());
+  // Asked of git again whenever HEAD, its branch, the .git entry or the repo config changed (headIdentity), and for
+  // any folder whose state cannot be read that way; an unchanged repo is not re-verified on every request.
+  const repoIdentity = headIdentity(dir);
+  const cacheKey = process.platform === "win32" ? path.resolve(dir).toLowerCase() : path.resolve(dir);
+  const known = repoIdentity ? topCache.get(cacheKey) : undefined;
+  if (known && known.identity === repoIdentity && fs.existsSync(known.top)) return known.top;
+  // Both answers come from one Git invocation, narrowing (but not eliminating) the gap between
+  // top-level discovery and HEAD verification. `--verify` still makes an unborn or otherwise
+  // invalid HEAD fail closed. The final line is the verified commit id; everything before its
+  // delimiter is the top-level path and must retain meaningful whitespace and newlines.
+  const identity = await runGit(dir, ["rev-parse", "--show-toplevel", "--verify", "HEAD^{commit}"]).catch(() => null);
+  if (!identity || identity.code !== 0) return null;
+  const output = identity.stdout.replace(/\r?\n$/, "");
+  const head = /(?:^|\n)([0-9a-f]{40}|[0-9a-f]{64})$/i.exec(output);
+  if (!head || head.index === 0) return null;
+  const top = output.slice(0, head.index);
+  const real = fs.realpathSync(top);
+  // Remembered only if nothing it depends on moved while git was being asked.
+  if (repoIdentity && headIdentity(dir) === repoIdentity) {
+    topCache.delete(cacheKey);
+    topCache.set(cacheKey, { top: real, identity: repoIdentity });
+    if (topCache.size > 64) topCache.delete(topCache.keys().next().value as string);
+  }
+  return real;
 }
 
 /** The git folder of a repo of this project: the person's chosen one (else the project folder) for "main", the registered folder for the others. */
@@ -208,10 +236,50 @@ function dispatches(project: CoreProject): Map<string, Dispatch> {
   return map;
 }
 
+/** Historical owner-selected identity, never a live worker or a runtime-model attestation. */
+export function recordedWorkerDispatch(entries: readonly LedgerEntry[], label: string) {
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const entry = entries[i]!;
+    if (entry.subject !== label || entry.type !== "task.progress" || !isAuthoritative(entry, { personOnly: true })) continue;
+    const value = entry.data?.workerDispatch;
+    if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+    const data = value as Record<string, unknown>;
+    if (data.version !== 1 || typeof data.requestedAt !== "string" || !Number.isFinite(Date.parse(data.requestedAt))) continue;
+    if (data.requestedModel !== undefined && (typeof data.requestedModel !== "string" || !MODEL.test(data.requestedModel))) continue;
+    return { requestedAt: data.requestedAt, ...(typeof data.requestedModel === "string" ? { requestedModel: data.requestedModel } : {}) };
+  }
+  return null;
+}
+
+/** A signed receipt proves which self-report arrived, not the runtime model. */
+export function recordedWorkerReport(entries: readonly LedgerEntry[], label: string, owner?: string | null) {
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const entry = entries[i]!;
+    if (entry.subject !== label || entry.actor.kind !== "system" || entry.actor.id !== "worker-identity" || !isAuthoritative(entry)) continue;
+    const raw = entry.data?.workerReport;
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
+    const value = raw as Record<string, unknown>;
+    if (value.version !== 1 || typeof value.worker !== "string" || (owner && value.worker !== owner)) continue;
+    if (value.reportedModel !== null && typeof value.reportedModel !== "string") continue;
+    return { worker: value.worker, reportedModel: value.reportedModel, at: entry.at, entry: entry.n };
+  }
+  return null;
+}
+
 /** The worktrees the git watcher should read, or the plain reason it cannot see any. Errors are not swallowed: an unreadable list is not an empty one. */
 export async function worktreesForWatcher(project: CoreProject): Promise<{ repo: RepoState; list: WorktreeInfo[] }> {
-  const { repos, worktrees } = await allRepos(project, { tidyFolders: false });
+  const { repos, worktrees, inspection } = await allRepos(project, { tidyFolders: false });
   const repo = repos[0]!;
+  if (!repo.ok && !repo.discovery && !fs.existsSync(repoFile(project))) return { repo, list: [] };
+  const unreadable = repos.map((candidate) => ({ repo: candidate, result: inspection.get(candidate.name)! })).find(({ result }) => result.state !== "ready");
+  if (unreadable) {
+    const reason = unreadable.result.state === "pending"
+      ? "Git worktree inspection is still running."
+      : unreadable.result.state === "unavailable"
+        ? unreadable.result.reason
+        : "Git worktree inspection is unavailable.";
+    throw new Error(`Cannot safely watch worktrees for ${unreadable.repo.name}: ${reason}`);
+  }
   // A done task's folder is about to be removed (or waits for its clean-up), and a clean-up may be removing others right now:
   // a git process of ours inside one would keep Windows from removing it.
   const board = project.service.board();
@@ -312,8 +380,126 @@ function personSummary(actor: Actor | undefined) {
 }
 
 type FolderInfo = WorktreeInfo & { state?: string; note?: string };
+export type OptionalGitResult<T> =
+  | { state: "ready"; value: T }
+  | { state: "pending" }
+  | { state: "unavailable"; reason: string };
 
-function viewTask(project: CoreProject, task: TaskView, worktrees: FolderInfo[], board: ReadonlyMap<string, TaskView>, assignments: ReadonlyMap<string, string>) {
+interface OptionalGitView<T> { failure?: string; inFlight: Promise<T> | null; value: T | undefined; updatedAt: number; }
+
+/**
+ * A bounded view of optional Git facts.  Timing out a reader deliberately does
+ * not cancel it: the next poll joins the same read instead of starting another
+ * Git child.  Crucially, pending or failed inspection is not an empty list.
+ */
+export function createOptionalGitCache<T>({ timeoutMs = OPTIONAL_GIT_VIEW_MS, cacheMs = OPTIONAL_GIT_CACHE_MS, now = () => Date.now() } = {}) {
+  const entries = new Map<string, OptionalGitView<T>>();
+  // Invalidating cached facts must not forget an operating-system read still
+  // using this project's folders. Lifetime and freshness are separate.
+  const active = new Set<Promise<T>>();
+  let closing = false;
+  async function read(key: string, load: () => Promise<T>): Promise<OptionalGitResult<T>> {
+    if (closing) return { state: "unavailable", reason: "Project is closing; Git inspection is stopped." };
+    let entry = entries.get(key);
+    if (!entry) { entry = { inFlight: null, value: undefined, updatedAt: 0 }; entries.set(key, entry); }
+    // A failure arriving after a caller timed out must be observable on the next poll.
+    if (entry.failure !== undefined) { const reason = entry.failure; delete entry.failure; return { state: "unavailable", reason }; }
+    if (entry.value !== undefined && now() - entry.updatedAt < cacheMs) return { state: "ready", value: entry.value };
+    if (!entry.inFlight) {
+      const target = entry;
+      target.inFlight = Promise.resolve().then(load).then((value) => {
+        target.value = value;
+        target.updatedAt = now();
+        return value;
+      }, (error) => {
+        target.failure = error instanceof Error ? error.message : "Git inspection failed.";
+        throw error;
+      }).finally(() => { target.inFlight = null; });
+      const operation = target.inFlight;
+      active.add(operation);
+      // Both branches handle settlement; this observer creates no unhandled rejection.
+      void operation.then(() => active.delete(operation), () => active.delete(operation));
+      // A timed-out caller must not leave a later rejection unobserved.
+      void target.inFlight.catch(() => undefined);
+    }
+    const inFlight = entry.inFlight;
+    // Assigned immediately above when missing; retain an explicit guard for
+    // TypeScript and never represent an impossible cache fault as no folders.
+    if (!inFlight) return { state: "unavailable", reason: "Git inspection could not be started." };
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      const result = await Promise.race([
+        inFlight.then((value) => ({ timedOut: false as const, value })),
+        new Promise<{ timedOut: true }>((resolve) => { timer = setTimeout(() => resolve({ timedOut: true }), timeoutMs); }),
+      ]);
+      return result.timedOut ? { state: "pending" } : { state: "ready", value: result.value };
+    } catch (error) {
+      delete entry.failure; // This caller observed the rejection; an immediate retry is allowed.
+      return { state: "unavailable", reason: error instanceof Error ? error.message : "Git inspection failed." };
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+  return {
+    read,
+    invalidate: (key: string) => entries.delete(key),
+    clear: () => entries.clear(),
+    beginClose: () => { closing = true; },
+    drain: async () => {
+      closing = true;
+      await Promise.allSettled([...active]);
+      entries.clear();
+    },
+  };
+}
+
+const optionalRepoViews = new WeakMap<CoreProject, ReturnType<typeof createOptionalGitCache<RepoState>>>();
+const optionalGitViews = new WeakMap<CoreProject, ReturnType<typeof createOptionalGitCache<FolderInfo[]>>>();
+interface AllocationReceipt { selection: string; root: string; repo: string; tree: FolderInfo; }
+const allocatedWorktrees = new WeakMap<CoreProject, Map<string, AllocationReceipt>>();
+const closingProjects = new WeakSet<CoreProject>();
+function optionalCache(project: CoreProject) {
+  let cache = optionalGitViews.get(project);
+  if (!cache) {
+    cache = createOptionalGitCache<FolderInfo[]>();
+    if (closingProjects.has(project)) cache.beginClose();
+    optionalGitViews.set(project, cache);
+  }
+  return cache;
+}
+export function beginCloseOptionalGitViews(project: CoreProject): void {
+  closingProjects.add(project);
+  optionalGitViews.get(project)?.beginClose();
+  optionalRepoViews.get(project)?.beginClose();
+}
+export async function drainOptionalGitViews(project: CoreProject): Promise<void> {
+  beginCloseOptionalGitViews(project);
+  // Host shutdown waits for optional readers too: a still-running git process
+  // can otherwise retain a Windows handle inside a just-closed test worktree.
+  const cache = optionalGitViews.get(project);
+  await Promise.all([cache?.drain(), optionalRepoViews.get(project)?.drain()]);
+  allocatedWorktrees.delete(project);
+}
+function rememberAllocatedWorktree(project: CoreProject, repo: string | null, root: string, tree: FolderInfo, selection: string) {
+  let known = allocatedWorktrees.get(project);
+  if (!known) { known = new Map(); allocatedWorktrees.set(project, known); }
+  const name = repo ?? PRIMARY_REPO;
+  known.set(name + "\u0000" + tree.taskId, { selection, root, repo: name, tree: name === PRIMARY_REPO ? tree : { ...tree, repo: name } });
+}
+function optionalWorktreeKey(repo: RepoState, options: { tidyFolders?: boolean }) {
+  // Root and access state are part of the identity: a changed/refused repo may
+  // never inherit folder facts from its previous root.
+  return `${options.tidyFolders === false ? "watch" : "board"}\u0000${repo.name}\u0000${repo.ok ? repo.root ?? "" : `refused:${repo.reason ?? "unknown"}`}`;
+}
+function invalidateOptionalWorktreeView(project: CoreProject, repo: RepoState, options: { tidyFolders?: boolean } = {}) {
+  optionalCache(project).invalidate(optionalWorktreeKey(repo, options));
+}
+function optionalWorktreeView(project: CoreProject, repo: RepoState, options: { tidyFolders?: boolean }): Promise<OptionalGitResult<FolderInfo[]>> {
+  if (!repo.ok || !repo.root) return Promise.resolve({ state: "unavailable", reason: repo.reason ?? "This repository is unavailable." });
+  return optionalCache(project).read(optionalWorktreeKey(repo, options), () => listWorktrees(project, repo, options));
+}
+
+function viewTask(project: CoreProject, task: TaskView, worktrees: FolderInfo[], worktreeKnown: boolean, board: ReadonlyMap<string, TaskView>, assignments: ReadonlyMap<string, string>) {
   const label = attemptLabel(task);
   const gate = deriveState(project.entries(), label);
   const tree = worktrees.find((w) => w.taskId === label);
@@ -340,7 +526,7 @@ function viewTask(project: CoreProject, task: TaskView, worktrees: FolderInfo[],
     assignee: assignments.get(task.id) ?? null,
     attempt: task.attempt,
     clauses: task.clauses,
-    lastProgress: task.lastProgress,
+    lastProgress: task.lastProgress ? { text: task.lastProgress, at: task.lastProgressAt } : null,
     proofs: task.proofs.map((p) => ({ kind: p.kind, link: p.link })),
     stage,
     jev,
@@ -352,12 +538,18 @@ function viewTask(project: CoreProject, task: TaskView, worktrees: FolderInfo[],
     check: gate.worktree ? { passed: gate.worktree.passed, commit: gate.worktree.commit, entry: gate.worktree.n } : null,
     diffApproval: gate.diffApproval ? { commit: gate.diffApproval.commit, by: personSummary(gate.diffApproval.reviewer), entry: gate.diffApproval.n } : null,
     merged: gate.merged ?? null,
-    worktree: tree ? { path: tree.path, branch: tree.branch, base: tree.baseRef, port: tree.port, state: tree.state ?? "ok", ...(tree.note ? { note: tree.note } : {}) } : null,
+    // undefined means Git facts are not yet safe to report; null means inspected and absent.
+    worktree: tree ? { path: tree.path, branch: tree.branch, base: tree.baseRef, port: tree.port, state: tree.state ?? "ok", ...(tree.note ? { note: tree.note } : {}) } : worktreeKnown ? null : undefined,
     dispatch: dispatch ? { issuedAt: dispatch.issuedAt, ...(dispatch.model ? { model: dispatch.model } : {}) } : null,
+    workerDispatch: recordedWorkerDispatch(project.entries(), label),
+    workerReport: recordedWorkerReport(project.entries(), label, task.owner),
+    workerActivity: task.workerActivity ? { ...task.workerActivity,
+      afterCheck: Boolean(gate.worktree && project.entries().findIndex(e => e.n === task.workerActivity!.entry) > project.entries().findIndex(e => e.n === gate.worktree!.n)),
+    } : null,
     // Why this task cannot start yet (dispatch refuses it for the same reason), in plain words; null when nothing blocks it.
     waitingFor: unmet.length ? { tasks: unmet.map((d) => d.id), message: waitingMessage(label, unmet) } : null,
     // File claims this task's worktree holds, and, when nobody is working on it, why they can be released.
-    claims: tree?.claims ?? [],
+    claims: tree ? tree.claims : worktreeKnown ? [] : undefined,
     staleClaims,
     history: gate.history.slice(-12),
   };
@@ -369,17 +561,78 @@ async function listWorktrees(project: CoreProject, repo: RepoState, { tidyFolder
   // On the first look after the app starts (and when a task finishes) stale records and safe leftovers are tidied; see worktreeCare.
   // The git watcher's look does not tidy: a clean-up waits for the watcher's pass, so the pass must never wait for the clean-up.
   if (tidyFolders) await tidy(project, worktrees, dispatches(project));
-  const list = await annotate(worktrees, await worktrees.list().catch(() => []));
+  // A rejected Git list is unavailable evidence, never a successful empty
+  // list. optionalWorktreeView preserves that distinction for the board and
+  // watcher rather than allowing accidental stale-worktree reconciliation.
+  const list = await annotate(worktrees, await worktrees.list());
   // Only other repos are tagged: the first repo's worktrees look exactly as they always did.
   return repo.name === PRIMARY_REPO ? list : list.map((info) => ({ ...info, repo: repo.name }));
 }
 
+/** Optional discovery is read-only, deadline-bound and owned by the project lifetime.
+ * Mutating dispatch continues to call requireRepo/repoState for fresh validation. */
+function repoSelectionIdentity(project: CoreProject, name: string): string {
+  // A changed selection or removed Git directory invalidates prior discovery.
+  let selection = "";
+  try { selection = fs.readFileSync(repoFile(project), "utf8"); } catch { /* no chosen repository */ }
+  const extra = readRepos(project.root).repos.find((repo) => repo.name === name);
+  let selected: string | undefined;
+  try { selected = JSON.parse(selection).root; } catch { /* first imported folder */ }
+  const candidate = extra?.root ?? (typeof selected === "string" && selected ? selected : project.appData ? "" : project.root);
+  let gitStamp = "missing";
+  if (candidate && !isNetworkPath(candidate)) {
+    try { const stat = fs.statSync(path.join(candidate, ".git")); gitStamp = String(stat.dev) + ":" + stat.ino + (stat.isFile() ? ":" + fs.readFileSync(path.join(candidate, ".git"), "utf8") : ""); } catch { /* absence changes the key immediately */ }
+  }
+  return JSON.stringify([name, candidate, selection, gitStamp]);
+}
+
+async function optionalRepoState(project: CoreProject, name: string): Promise<RepoState> {
+  let cache = optionalRepoViews.get(project);
+  if (!cache) {
+    cache = createOptionalGitCache<RepoState>();
+    if (closingProjects.has(project)) cache.beginClose();
+    optionalRepoViews.set(project, cache);
+  }
+  const key = repoSelectionIdentity(project, name);
+  const result = await cache.read(key, () => repoState(project, name));
+  if (result.state === "ready") return result.value;
+  return { name, ok: false, discoveryIdentity: key, discovery: result.state, reason: result.state === "pending" ? "Checking this project's Git folder; the task ledger is ready." : result.reason };
+}
+
 /** Every repo of the project (the first one, then the extra ones) with the worktrees in each. A repo that cannot be read has its reason and no worktrees. */
-async function allRepos(project: CoreProject, options: { tidyFolders?: boolean } = {}): Promise<{ repos: RepoState[]; worktrees: WorktreeInfo[] }> {
+async function allRepos(project: CoreProject, options: { tidyFolders?: boolean } = {}): Promise<{ repos: RepoState[]; worktrees: WorktreeInfo[]; inspection: Map<string, OptionalGitResult<FolderInfo[]>> }> {
+  const before = new Map(allocatedWorktrees.get(project));
   const names = [PRIMARY_REPO, ...readRepos(project.root).repos.map((repo) => repo.name)];
-  const repos = await Promise.all(names.map((name) => repoState(project, name)));
-  const lists = await Promise.all(repos.map((repo) => listWorktrees(project, repo, options)));
-  return { repos, worktrees: lists.flat() };
+  const repos = await Promise.all(names.map((name) => optionalRepoState(project, name)));
+  // Worktree listing may invoke Git and optional hygiene.  It is not allowed to
+  // delay the ledger view; the next poll fills the optional folder facts in.
+  const known = allocatedWorktrees.get(project);
+  // Snapshot which receipts predate this inspection. An old in-flight response
+  // must not retire a receipt created by a concurrent dispatch.
+  const results = await Promise.all(repos.map((repo) => repo.discovery === "pending" ? Promise.resolve({ state: "pending" as const }) : optionalWorktreeView(project, repo, options)));
+  const inspection = new Map(repos.map((repo, index) => [repo.name, results[index]! ]));
+  const listed = results.flatMap((result) => result.state === "ready" ? result.value : []);
+  // A dispatch's actual create/get result is safe positive evidence even while
+  // a replacement optional scan is pending. It never implies other trees are absent.
+  for (const [key, receipt] of known ?? []) {
+    const repo = repos.find((candidate) => candidate.name === receipt.repo);
+    const result = repo && inspection.get(repo.name);
+    const current = project.service.board().get(receipt.tree.taskId.replace(/\.a\d+$/, ""));
+    const sameRoot = (repo?.ok && repo.root === receipt.root)
+      || (repo?.discovery === "pending" && repo.discoveryIdentity === receipt.selection);
+    const sameAttempt = current && attemptLabel(current) === receipt.tree.taskId && current.status !== "done";
+    if (!sameRoot || !sameAttempt || result?.state === "unavailable") {
+      if (before.get(key) === receipt) known!.delete(key);
+      continue;
+    }
+    if (result?.state === "ready") {
+      // A watcher scan must not consume the board's pending dispatch receipt.
+      if (options.tidyFolders !== false && before.get(key) === receipt) known!.delete(key);
+      continue;
+    }
+    if (result?.state === "pending" && !listed.some((item) => item.taskId === receipt.tree.taskId && (item.repo ?? PRIMARY_REPO) === receipt.repo)) listed.push(receipt.tree);
+  }
+  return { repos, inspection, worktrees: listed };
 }
 
 /**
@@ -393,14 +646,24 @@ export async function containmentView(env: NodeJS.ProcessEnv = process.env, plat
 }
 
 export async function overview(project: CoreProject) {
-  const { repos, worktrees } = await allRepos(project);
+  const { repos, worktrees, inspection } = await allRepos(project);
   const board = project.service.board();
   const assignments = replayRoster(project.entries(), project.ledger.owner).assignments;
-  const tasks = [...board.values()].map((task) => viewTask(project, task, worktrees, board, assignments));
+  const tasks = [...board.values()].map((task) => {
+    const repo = task.repo ?? PRIMARY_REPO;
+    return viewTask(project, task, worktrees, inspection.get(repo)?.state === "ready", board, assignments);
+  });
   // What is missing before "Check the work" can run, in plain words (only while a task is being built).
   await Promise.all(tasks.filter((task) => task.stage === "building" && task.worktree).map(async (task) => Object.assign(task, { checkReady: await checkReadiness({ proofs: task.proofs, worktree: task.worktree! }) })));
   const settings = taskSettings(project);
-  return { repo: repos[0]!, containment: await containmentView(), settings, queue: queueOf(tasks, settings.limit), repos: repos.map((repo) => ({ ...repo, worktrees: worktrees.filter((w) => (w.repo ?? PRIMARY_REPO) === repo.name).length })), tasks, groups: taskGroups(tasks) };
+  return {
+    repo: repos[0]!, containment: await containmentView(), settings, queue: queueOf(tasks, settings.limit),
+    repos: repos.map((repo) => {
+      const result = inspection.get(repo.name)!;
+      return { ...repo, worktrees: result.state === "ready" ? worktrees.filter((w) => (w.repo ?? PRIMARY_REPO) === repo.name).length : undefined, worktreeInspection: result.state === "ready" ? "ready" : result.state, ...(result.state === "unavailable" ? { worktreeInspectionReason: result.reason } : {}) };
+    }),
+    tasks, groups: taskGroups(tasks),
+  };
 }
 
 /** Tasks split from one plan task over several repos, in task order, with whether every part is ready to merge. */
@@ -449,9 +712,9 @@ function refuse(result: { ok: boolean; reason?: string }): void {
   if (!result.ok) throw new HttpError(409, "REFUSED", result.reason ?? "Refused.");
 }
 
-async function worktreeFor(project: CoreProject, label: string): Promise<WorktreeInfo> {
+async function worktreeFor(project: CoreProject, label: string, validatedRoot?: string): Promise<WorktreeInfo> {
   const name = repoOfLabel(project, label);
-  const root = await requireRepo(project, name);
+  const root = validatedRoot ?? await requireRepo(project, name);
   const tree = await (await manager(project, root, name)).get(label);
   if (!tree) throw new HttpError(409, "NO_WORKTREE", `${label} has no worktree yet. Start a worker on it first.`);
   if (!fs.existsSync(tree.path)) throw new HttpError(409, "WORKTREE_MISSING", `The folder for ${label} was deleted outside Perfect Planner. Its work is safe on the branch ${tree.branch}; press "Recreate the folder" on this task first.`);
@@ -477,7 +740,7 @@ export function workerBrief(task: { label: string; title: string; clauses: strin
     `1. Call hello on the ${AGENT_SERVER_NAME} MCP server with your name and model.`,
     testStep,
     `3. When list_tasks shows ${task.label} with testApproved true, call claim_task. The claim is refused until the person has approved the test and Perfect Planner has seen it fail.`,
-    "4. Build it in small commits. report_progress after each step; ask_main when you need a decision (a blocking question pauses only you).",
+    "4. Build it in small commits. report_progress after each step with explicit activity: working while doing work, waiting when paused, finished when this work is complete. Omitted activity does not show busy. ask_main when you need a decision (a blocking question pauses only you).",
     "5. When the test passes for you, commit everything and call attach_proof with kind commit and the full commit hash. Perfect Planner runs the approved test itself; the person reviews your diff and merges.",
   ]
     .filter((line, i, all) => line !== "" || all[i - 1] !== "")
@@ -502,7 +765,6 @@ export function workerCommands(options: { worktree: string; bridgeUrl: string; t
   // Re-runnable: a new attempt in the same worktree replaces the older registration.
   const add = connectLine(bridgeUrl, tokenFile, entry, windows ? "win32" : "linux");
   const setup = windows ? `cd ${quote(worktree)}; ${add}` : `cd ${quote(worktree)} && ${add}`;
-  const start = windows ? `claude (Get-Content -Raw ${quote(briefFile)})` : `claude "$(cat ${quote(briefFile)})"`;
   const json = JSON.stringify({ mcpServers: { [AGENT_SERVER_NAME]: { command: nodeBinary(), args: [entry], env: { PP_BRIDGE_URL: bridgeUrl, PP_AGENT_TOKEN_FILE: tokenFile } } } }, null, 2);
   // Gemini CLI and Codex CLI: the same two steps with their own connect line and start command. Both start
   // interactively with the person at the keyboard and ask before running commands (Codex: workspace-write
@@ -513,10 +775,11 @@ export function workerCommands(options: { worktree: string; bridgeUrl: string; t
     return windows ? `cd ${quote(worktree)}; ${line}` : `cd ${quote(worktree)} && ${line}`;
   };
   const agents = {
+    claude: { setup: agentSetup("claude"), start: `claude ${brief}`, note: "Use only when you explicitly choose Claude Code." },
     gemini: { setup: agentSetup("gemini"), start: `gemini --approval-mode auto_edit -i ${brief}`, note: "Choose Trust folder first (start gemini once in the task folder), or the set-up command is refused." },
     codex: { setup: agentSetup("codex"), start: `codex -s workspace-write -a on-request ${brief}`, note: "Codex keeps one connection for this computer, so this replaces any other Codex worker's." },
   };
-  return { setup, start, json, agents, shell: windows ? "PowerShell" : "Terminal" };
+  return { setup, start: agents.codex.start, json, agents, shell: windows ? "PowerShell" : "Terminal" };
 }
 
 // ---------- routes ----------
@@ -528,6 +791,7 @@ function bodyOf(raw: unknown): Record<string, unknown> {
 async function dispatch(project: CoreProject, host: CoreHost, id: string, body: Record<string, unknown>) {
   if (!host.bridgeEnabled) throw new HttpError(503, "BRIDGE_OFF", "Agent connections are turned off for this app, so a worker has nothing to connect to.");
   const repoName = repoOfLabel(project, id);
+  const selectionAtDispatch = repoSelectionIdentity(project, repoName ?? PRIMARY_REPO);
   const root = await requireRepo(project, repoName);
   const task = findTask(project, id);
   if (task.status === "done") throw new HttpError(409, "DONE", `${id} is already done.`);
@@ -548,6 +812,11 @@ async function dispatch(project: CoreProject, host: CoreHost, id: string, body: 
       throw error;
     }
   }
+  // A just-created/reused worktree must be visible on the very next board and
+  // watcher read, rather than hidden behind the optional Git view TTL.
+  const repo: RepoState = { name: repoName ?? PRIMARY_REPO, ok: true, root };
+  invalidateOptionalWorktreeView(project, repo);
+  invalidateOptionalWorktreeView(project, repo, { tidyFolders: false });
   const bridge = await host.bridge(project);
   // One worker per task at a time: a new dispatch replaces the previous worker's token.
   revokeWorker(project, label);
@@ -566,6 +835,17 @@ async function dispatch(project: CoreProject, host: CoreHost, id: string, body: 
   const tokenFile = writeTokenFile(project, label, token);
   const entry = agentEntryPath();
   const commands = workerCommands({ worktree: tree.path, bridgeUrl: bridge.url, tokenFile, entry: entry.path, briefFile });
+  // Persist only the person's selection, never credentials or a claim that the CLI used it.
+  project.ledger.append({ actor: localPerson(project), type: "task.progress", subject: label,
+    summary: "Worker connection prepared", evidence: [], refs: [],
+    data: { workerDispatch: { version: 1, requestedAt: record.issuedAt, ...(model ? { requestedModel: model } : {}) } },
+  });
+  // Publish positive evidence at successful handoff, after the async dispatch
+  // work. Pending discovery can reuse it only for this exact selection identity.
+  rememberAllocatedWorktree(project, repoName, root, tree, selectionAtDispatch);
+  optionalRepoViews.get(project)?.clear();
+  invalidateOptionalWorktreeView(project, repo);
+  invalidateOptionalWorktreeView(project, repo, { tidyFolders: false });
   return {
     task: label,
     title: task.title,
@@ -700,7 +980,8 @@ async function releaseClaim(project: CoreProject, id: string, body: Record<strin
   project.service.tokens.revokeTask(task.id);
   if (label !== task.id) project.service.tokens.revokeTask(label);
   dispatches(project).delete(label);
-  return { released: label, from: owner, entry: entry.n, ...(await overview(project)) };
+  // A committed release must not wait for optional Git inspection of this or other tasks.
+  return { released: label, from: owner, entry: entry.n };
 }
 
 /**
@@ -710,11 +991,15 @@ async function releaseClaim(project: CoreProject, id: string, body: Record<strin
  * lists those in a block that needs its own confirmation, so the person reads them before approving.
  */
 async function changedFiles(project: CoreProject, label: string, tree: { path: string; baseSha: string }, tip: string): Promise<{ files: string[]; sensitive: string[] }> {
-  const files = (await git(tree.path, ["-c", "core.quotePath=false", "diff", "--name-only", "--no-renames", tree.baseSha, tip])).split(/\r?\n/).filter(Boolean).sort();
   const state = deriveState(project.entries(), label);
   const pinned = Object.keys(state.approval?.pins ?? {});
-  const support = state.definition ? await testSupportFiles(tree.path, [tree.baseSha, tip], pinned, state.definition.command) : new Set<string>();
-  const unchanged = state.approval ? await unalteredPins(tree.path, tip, state.approval.pins) : new Set<string>();
+  // Three independent reads of the same two commits: the list of changed files, the files the test depends on, and which pinned files are untouched.
+  const [listed, support, unchanged] = await Promise.all([
+    git(tree.path, ["-c", "core.quotePath=false", "diff", "--name-only", "--no-renames", tree.baseSha, tip]),
+    state.definition ? testSupportFiles(tree.path, [tree.baseSha, tip], pinned, state.definition.command) : Promise.resolve(new Set<string>()),
+    state.approval ? unalteredPins(tree.path, tip, state.approval.pins) : Promise.resolve(new Set<string>()),
+  ]);
+  const files = listed.split(/\r?\n/).filter(Boolean).sort();
   return { files, sensitive: sensitiveChanges(files, pinned, support, unchanged).sort() };
 }
 
@@ -834,19 +1119,36 @@ export function registerTaskRoutes(router: Router): void {
   });
 
   /** POST /tasks/:id/check: the gate runs the approved test in the worktree at its last commit. */
-  router.post("/tasks/:id/check", async ({ project, params }) => {
+  router.get("/tasks/:id/check-input", async ({ project, params }) => {
     const task = findTask(project, params.id!);
-    const label = attemptLabel(task);
-    const tree = await worktreeFor(project, label);
-    const run = await project.service.gate.prove(label, tree.path);
+    const attempt = attemptLabel(task);
+    const state = deriveState(project.entries(), attempt);
+    if (!state.definition || !state.approval) throw new HttpError(409, "CHECK_NOT_READY", "Approve the task's test before preparing a check.");
+    const tree = await worktreeFor(project, attempt);
+    const commit = await git(tree.path, ["rev-parse", "HEAD"]);
+    return { attempt, expected: { definitionEntry: state.definition.n, approvalEntry: state.approval.n, pin: state.approval.pin, commit } };
+  });
+
+  router.get("/tasks/:id/checks/:requestId", ({ project, params }) => {
+    const saved = project.service.gate.checks.status(params.requestId!);
+    if (!saved || saved.execution.attempt.replace(/\.a\d+$/, "") !== params.id) throw new HttpError(404, "NOT_FOUND", "This task has no recorded check with that request ID.");
+    return saved;
+  });
+
+  router.post("/tasks/:id/check", async ({ project, params, body }) => {
+    let request;
+    try { request = checkRequest(body); } catch (error) { throw new HttpError(400, "INVALID_CHECK_REQUEST", (error as Error).message); }
+    if (request.attempt.replace(/\.a\d+$/, "") !== params.id) throw new HttpError(400, "INVALID_CHECK_REQUEST", "The saved request names a different task.");
+    const scope = JSON.stringify([project.root, project.entries()[0]?.hash]);
+    const run = await project.service.gate.proveRequest(request, scope, async () => {
+      const current = findTask(project, params.id!);
+      if (attemptLabel(current) !== request.attempt) throw stale("This task has a newer attempt. The saved check cannot run there.");
+      return (await worktreeFor(project, request.attempt)).path;
+    });
     if (!run.ok && !run.run && !run.entry) refuse(run);
-    return {
-      passed: run.ok,
-      ...(run.commit ? { commit: run.commit } : {}),
-      ...(run.ok ? {} : { reason: run.reason }),
-      ...(run.run ? { output: run.run.outputTail } : {}),
-      ...(await overview(project)),
-    };
+    return { passed: run.ok, ...(run.commit ? { commit: run.commit } : {}),
+      ...(run.ok ? {} : { reason: run.reason }), ...(run.run ? { output: run.run.outputTail } : {}),
+      entry: run.entry?.n, execution: run.entry?.data?.execution };
   });
 
   /** GET /tasks/:id/diff: what the worker changed, from where the worktree branched to its tip. */
@@ -854,8 +1156,10 @@ export function registerTaskRoutes(router: Router): void {
     const task = findTask(project, params.id!);
     const tree = await worktreeFor(project, attemptLabel(task));
     const tip = await git(tree.path, ["rev-parse", "HEAD"]);
-    const { files, sensitive } = await changedFiles(project, attemptLabel(task), tree, tip);
-    const text = await git(tree.path, ["diff", "--no-color", "--no-renames", tree.baseSha, tip]);
+    const [{ files, sensitive }, text] = await Promise.all([
+      changedFiles(project, attemptLabel(task), tree, tip),
+      git(tree.path, ["diff", "--no-color", "--no-renames", tree.baseSha, tip]),
+    ]);
     return { task: attemptLabel(task), base: tree.baseSha, commit: tip, files, sensitive, text: text.length > MAX_DIFF ? `${text.slice(0, MAX_DIFF)}\n… diff cut at ${MAX_DIFF} characters` : text, truncated: text.length > MAX_DIFF };
   });
 
@@ -864,13 +1168,19 @@ export function registerTaskRoutes(router: Router): void {
     const task = findTask(project, id);
     const label = attemptLabel(task);
     const passed = deriveState(project.entries(), label).worktree;
-    const tip = await git((await worktreeFor(project, label)).path, ["rev-parse", "HEAD"]);
-    // Bound to the commit the person reviewed, which must still be the tip the test passed on.
-    if (!sameCommit(bodyOf(body).commit, tip) || !passed?.passed || !sameCommit(passed.commit, tip)) {
+    // The router has authenticated the person's request. The signed check can
+    // already refuse an absent/wrong commit without discovering Git folders.
+    if (!passed?.passed || !sameCommit(bodyOf(body).commit, passed.commit)) {
+      throw stale("The work changed since you reviewed it. Check it again and read the new diff before approving.");
+    }
+    // One fresh validated tree for this request, never a cross-request cache.
+    const tree = await worktreeFor(project, label);
+    const tip = await git(tree.path, ["rev-parse", "HEAD"]);
+    // The actual current HEAD must still be exactly the checked/reviewed commit.
+    if (!sameCommit(bodyOf(body).commit, tip) || !sameCommit(passed.commit, tip)) {
       throw stale("The work changed since you reviewed it. Check it again and read the new diff before approving.");
     }
     // Files that can run code on this machine need their own confirmation, naming exactly those files.
-    const tree = await worktreeFor(project, label);
     const { sensitive } = await changedFiles(project, label, tree, tip);
     const clean = sensitive.length === 0;
     const confirmed = bodyOf(body).confirmSensitive;
@@ -933,7 +1243,7 @@ export function registerTaskRoutes(router: Router): void {
     const task = findTask(project, id);
     const label = attemptLabel(task);
     const root = await requireRepo(project, task.repo);
-    const tree = await worktreeFor(project, label);
+    const tree = await worktreeFor(project, label, root);
     const approved = deriveState(project.entries(), label).diffApproval?.commit;
     if (!approved || !sameCommit(bodyOf(body).commit, approved)) throw stale("Merge the commit whose diff you approved; this screen is out of date.");
     // The diff approval that counts here is the person's own, and with a Jev key saved Jev read this exact commit too.

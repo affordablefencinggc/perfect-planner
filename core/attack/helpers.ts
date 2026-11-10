@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 // Shared pieces for the attack suite (core/attack/*.test.ts): a host that can be stopped and started again
 // over the same folders and keys (a restart), keys that survive a process dying (the OS key store does),
 // real throwaway git repositories, and the driver that takes one task all the way to "ready to merge"
@@ -128,9 +129,19 @@ export async function connectWindow(base: string, launch: string): Promise<Pick<
   const csrf = ((await claim.json()) as { result: { csrf: string } }).result.csrf;
   const person = () => ({ cookie, [CSRF_HEADER]: csrf, origin });
   const call: Window["call"] = async (method, route, body) => {
+    // Follow the real owner check workflow; explicit malformed bodies still reach the raw route unchanged.
+    if (method === "POST" && /^\/tasks\/T-\d+\/check(?:\?|$)/.test(route) && (body === undefined || (body !== null && typeof body === "object" && Object.getPrototypeOf(body) === Object.prototype && Object.keys(body).length === 0))) {
+      const prepared = await call("GET", route.replace(/\/check(?=\?|$)/, "/check-input"));
+      if (prepared.status !== 200) return prepared;
+      body = { requestId: randomUUID(), ...prepared.body.result };
+    }
     const send = async () => {
+      const phaseStart = Date.now();
+      if (process.env.PP_TEST_PHASE_TIMING === "1") console.log("[attack-phase] start", method, route.split("?")[0]);
       const res = await fetch(`${base}${route}`, { method, headers: { ...person(), ...(body === undefined ? {} : { "content-type": "application/json" }) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
-      return { status: res.status, body: (await res.json()) as { ok: boolean; result?: any; code?: string; message?: string } };
+      const response = { status: res.status, body: (await res.json()) as { ok: boolean; result?: any; code?: string; message?: string } };
+      if (process.env.PP_TEST_PHASE_TIMING === "1") console.log("[attack-phase] finish", method, route.split("?")[0], res.status, Date.now() - phaseStart);
+      return response;
     };
     const first = await send();
     // A new project waits for "Start a new history for this folder" before its first write; take it as the person would.

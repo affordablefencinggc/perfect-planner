@@ -3,7 +3,8 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import CorePlanSpine, { groupByPhase } from "../../src/core-screens/CorePlanSpine.jsx";
 
 const ok = (result) => ({ ok: true, status: 200, json: async () => ({ ok: true, result }) });
-const task = (id, over = {}) => ({ id, label: id, title: `Task ${id}`, status: "open", stage: "needs-test", clauses: [], proofs: [], lastProgress: null, merged: null, dispatch: null, worktree: null, diffApproval: null, ...over });
+const fresh = () => new Date().toISOString();
+const task = (id, over = {}) => { const value = { id, label: id, title: `Task ${id}`, status: "open", stage: "needs-test", clauses: [], proofs: [], lastProgress: null, merged: null, dispatch: null, worktree: null, diffApproval: null, ...over }; if (value.stage === "building" && value.lastProgress === null) value.lastProgress = { text: "worker-reported edit", at: fresh() }; return value; };
 
 function routeFetch({ tasks, agents = [], roadmap = { phases: [] }, people = { view: { members: [] }, photos: {} } }) {
   const fn = vi.fn(async (url, init) => {
@@ -43,13 +44,13 @@ describe("groupByPhase", () => {
 describe("a person's own spine", () => {
   const two = () => routeFetch({
     tasks: [
-      task("T-1", { stage: "building", dispatch: { model: "claude-sonnet-5-5" } }),
-      task("T-2", { stage: "building", dispatch: { model: "gemini-3-pro" }, waitingFor: { tasks: ["T-1"], message: "Waits for T-1" } }),
+      task("T-1", { status: "claimed", owner: "a1", workerActivity: { worker: "a1", activity: "working", at: fresh() }, stage: "building", dispatch: { model: "claude-sonnet-5-5" } }),
+      task("T-2", { status: "claimed", owner: "a2", workerActivity: { worker: "a2", activity: "working", at: fresh() }, stage: "building", dispatch: { model: "gemini-3-pro" }, waitingFor: { tasks: ["T-1"], message: "Waits for T-1" } }),
       task("T-3", { stage: "done", dispatch: { model: "gpt-5-codex" } }),
     ],
     agents: [
-      { id: "a1", role: "worker", task: "T-1", model: "claude-sonnet-5-5", person: "sam" },
-      { id: "a2", role: "worker", task: "T-2", model: "gemini-3-pro", person: "jo" },
+      { id: "a1", role: "worker", task: "T-1", model: "claude-sonnet-5-5", person: "sam", lastSeen: fresh() },
+      { id: "a2", role: "worker", task: "T-2", model: "gemini-3-pro", person: "jo", lastSeen: fresh() },
     ],
     roadmap: { phases: [{ id: "build", title: "Build", tasks: [{ task: "T-1", owner: "sam", dependsOnTasks: [] }, { task: "T-2", owner: "jo", dependsOnTasks: ["T-1"] }, { task: "T-3", owner: "sam", dependsOnTasks: ["T-1"] }] }] },
     people: { view: { owner: { person: "sam" }, members: [{ person: "sam", name: "Sam Lee", role: "owner" }, { person: "jo", name: "Jo Park", role: "helper" }, { person: "al", name: "Al Ng", role: "helper" }] }, photos: { sam: "data:image/png;base64,AAAA" } },
@@ -123,11 +124,11 @@ describe("CorePlanSpine", () => {
   test("draws vertebra cards from the ledger: phase, owner picture, running robot only while its worker is live", async () => {
     routeFetch({
       tasks: [
-        task("T-1", { stage: "building", dispatch: { model: "claude-sonnet-5-5" }, clauses: ["It saves", "It loads"], worktree: { branch: "pp/T-1" } }),
+        task("T-1", { status: "claimed", owner: "w1", workerActivity: { worker: "w1", activity: "working", at: fresh() }, stage: "building", dispatch: { model: "claude-sonnet-5-5" }, clauses: ["It saves", "It loads"], worktree: { branch: "pp/T-1" } }),
         task("T-2", { stage: "done", dispatch: { model: "gemini-2.5-pro" }, diffApproval: { commit: "abc" }, proofs: [{ kind: "commit", link: "x" }] }),
         task("T-3", { stage: "review-diff", dispatch: { model: "my-own-model" } }),
       ],
-      agents: [{ id: "w1", role: "worker", task: "T-1", model: "claude-sonnet-5-5", name: "Claude A" }],
+      agents: [{ id: "w1", role: "worker", task: "T-1", model: "claude-sonnet-5-5", name: "Claude A", lastSeen: fresh() }],
       roadmap: { phases: [{ id: "P1", title: "Build", tasks: [{ task: "T-1", owner: "sam" }, { task: "T-2", owner: "sam" }] }] },
       people: { view: { owner: { person: "sam" }, members: [{ person: "sam", name: "Sam Lee" }] }, photos: { sam: "data:image/png;base64,AAAA" } },
     });
@@ -163,9 +164,27 @@ describe("CorePlanSpine", () => {
     const { container } = render(<CorePlanSpine />);
     await waitFor(() => expect(container.querySelector(".core-vertebra")).not.toBeNull());
     expect(container.querySelector(".perimeter-worker.running")).toBeNull();
-    expect(container.querySelector(".perimeter-worker img").getAttribute("src")).toContain("waiting/openai-gpt.svg");
+    expect(container.querySelector(".perimeter-worker img").getAttribute("src")).toContain("dead-still/openai-gpt.svg");
     expect(screen.getAllByRole("button", { name: "Approves: Sam Lee: open their spine" })[0]).toBeTruthy();
     expect(container.querySelector("img.core-owner-photo")).toBeNull();
+  });
+
+  test("keeps durable Codex identity and actionable ledger stages when no agent survives restart", async () => {
+    routeFetch({
+      tasks: [
+        task("T-1", { stage: "test-proposed", owner: "codex-d23a34ad", dispatch: { model: "claude-sonnet-4-5" } }),
+        task("T-2", { stage: "ready-to-claim", owner: "codex-d23a34ad", dispatch: { model: "claude-sonnet-4-5" } }),
+        task("T-3", { stage: "ready-to-merge", check: { passed: true, commit: "abc123" }, proofs: [{ kind: "test", link: "test-output" }], diffApproval: { commit: "abc123", by: { kind: "person", id: "sam" } }, owner: "codex-d23a34ad", dispatch: { model: "claude-sonnet-4-5" } }),
+      ],
+      people: { view: { owner: { person: "sam" }, members: [{ person: "sam", name: "Sam Lee" }] }, photos: {} },
+    });
+    const { container } = render(<CorePlanSpine />);
+    await waitFor(() => expect(container.querySelectorAll(".core-vertebra")).toHaveLength(3));
+    expect(container.querySelectorAll(".perimeter-worker.running")).toHaveLength(0);
+    expect([...container.querySelectorAll(".perimeter-worker img")].every((img) => img.getAttribute("src").includes("openai-gpt.svg"))).toBe(true);
+    expect(screen.getByText("Test waiting for your approval")).toBeTruthy();
+    expect(screen.getByText("Ready for a worker to claim")).toBeTruthy();
+    expect(screen.getByText("Approved, waiting for you to merge")).toBeTruthy();
   });
 
   test("draws nothing with no tasks, and says so plainly when the ledger cannot be read", async () => {
@@ -191,4 +210,26 @@ describe("a plan not yet approved", () => {
     fireEvent.click(card);
     expect(onWorkspace).toHaveBeenCalledWith("planning");
   });
+});
+test("restores requested Codex identity without a live roster or dispatch and never animates it", async () => {
+  routeFetch({ tasks: [task("T-1", { status: "claimed", owner: "worker-opaque", stage: "building", workerDispatch: { requestedModel: "gpt-5.6", requestedAt: "2026-11-04T03:00:00Z" } }), task("T-2", { stage: "building" })] });
+  const { container } = render(<CorePlanSpine />);
+  await waitFor(() => expect(container.querySelectorAll(".core-vertebra")).toHaveLength(2));
+  expect(container.querySelectorAll(".perimeter-worker.running")).toHaveLength(0);
+  const icons = [...container.querySelectorAll(".perimeter-worker img")];
+  expect(icons).toHaveLength(1);
+  expect(icons[0].getAttribute("src")).toContain("openai-gpt.svg");
+  expect(icons[0].closest(".perimeter-worker").getAttribute("aria-label")).toMatch(/Requested provider: Codex/);
+});
+
+test.each(["working", "finished", undefined])("rework activity %s renders the reported icon and preserves last-check state", async (activity) => {
+  const at = fresh();
+  routeFetch({ tasks: [task("T-1", { status: "claimed", owner: "codex-worker", stage: "review-diff", check: { passed: true, commit: "previous" }, proofs: [{ kind: "commit", link: "previous" }], workerDispatch: { requestedModel: "gpt-requested" }, workerReport: { worker: "codex-worker", reportedModel: "gpt-reported" }, workerActivity: activity ? { worker: "codex-worker", activity, at, afterCheck: true } : null, lastProgress: { text: "Navigation repair update", at } })], agents: [{ id: "codex-worker", role: "worker", task: "T-1", requestedModel: "gpt-requested", reportedModel: "gpt-reported", model: "gpt-requested", lastSeen: at }] });
+  const { container } = render(<CorePlanSpine />);
+  await waitFor(() => expect(container.querySelector(".core-vertebra")).not.toBeNull());
+  const icon = container.querySelector(".perimeter-worker");
+  expect(icon.getAttribute("aria-label")).toContain("Worker-reported provider: Codex");
+  expect(icon.getAttribute("aria-label")).toContain("requested gpt-requested, reported gpt-reported (conflict)");
+  expect(icon.classList.contains("running")).toBe(activity === "working");
+  expect(container.querySelector(".core-vertebra").dataset.stage).toBe("review-diff");
 });

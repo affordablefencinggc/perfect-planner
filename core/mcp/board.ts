@@ -20,6 +20,9 @@ export interface TaskView {
   testApproved: boolean;
   proofs: { kind: string; link: string; n: string }[];
   lastProgress: string | null;
+  /** Ledger time of the last accepted progress record; used only to label freshness in the UI. */
+  lastProgressAt?: string | null;
+  workerActivity?: { entry: string; at: string; worker: string; activity: "working" | "waiting" | "finished" } | null;
   lastEntry: string;
 }
 
@@ -114,6 +117,7 @@ export function foldBoard(entries: readonly LedgerEntry[]): Map<string, TaskView
         testApproved: false,
         proofs: [],
         lastProgress: null,
+        lastProgressAt: null,
         lastEntry: entry.n,
       });
       continue;
@@ -129,6 +133,9 @@ export function foldBoard(entries: readonly LedgerEntry[]): Map<string, TaskView
         task.owner = entry.actor.id;
         break;
       case "task.progress":
+        // Preparing a connection records identity, not observed worker progress.
+        if (entry.data?.workerDispatch && isAuthoritative(entry, { personOnly: true })) break;
+        if (entry.data?.workerReport && entry.actor.kind === "system" && entry.actor.id === "worker-identity" && isAuthoritative(entry)) break;
         if (entry.data?.resumeAll === true) {
           if (!signed(entry)) continue;
           if (task.status === "blocked") task.status = task.owner ? "claimed" : "open";
@@ -140,7 +147,11 @@ export function foldBoard(entries: readonly LedgerEntry[]): Map<string, TaskView
         } else if (!agentOrSigned(entry)) {
           continue;
         }
+        // Only the current holder can signal activity; ordinary prose clears busy.
+        task.workerActivity = holder && ["working", "waiting", "finished"].includes(String(entry.data?.activity))
+          ? { entry: entry.n, at: entry.at, worker: entry.actor.id, activity: entry.data!.activity as "working" | "waiting" | "finished" } : null;
         task.lastProgress = entry.summary;
+        task.lastProgressAt = entry.at;
         break;
       case "task.blocked":
         if (entry.data?.pauseAll === true ? !signed(entry) : !holder && !signed(entry)) continue;
@@ -165,6 +176,7 @@ export function foldBoard(entries: readonly LedgerEntry[]): Map<string, TaskView
         task.owner = null;
         task.attempt += 1;
         task.proofs = [];
+        task.workerActivity = null;
         break;
       default:
         break;

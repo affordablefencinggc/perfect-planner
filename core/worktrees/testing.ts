@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, appendFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Ledger, MemoryStore } from "../ledger/index";
@@ -13,10 +13,18 @@ export async function makeRepo(files: Record<string, string> = { "README.md": "h
   const root = path.join(parent, "repo");
   mkdirSync(root);
   await git(root, ["init", "-q", "-b", "main"]);
-  await git(root, ["config", "user.email", "test@example.invalid"]);
-  await git(root, ["config", "user.name", "Core Test"]);
-  await git(root, ["config", "core.autocrlf", "false"]);
-  await git(root, ["config", "commit.gpgsign", "false"]);
+  // Keep identical local settings without four extra Git processes per fixture on Windows.
+  appendFileSync(path.join(root, ".git", "config"), [
+    "",
+    "[user]",
+    "\temail = test@example.invalid",
+    "\tname = Core Test",
+    "[core]",
+    "\tautocrlf = false",
+    "[commit]",
+    "\tgpgsign = false",
+    "",
+  ].join("\n"), "utf8");
   writeFiles(root, files);
   await git(root, ["add", "-A"]);
   await git(root, ["commit", "-q", "-m", "initial"]);

@@ -22,6 +22,8 @@ export interface AgentRecord {
   id: string;
   name: string;
   model?: string;
+  requestedModel?: string;
+  reportedModel?: string;
   person: string;
   role: AgentRole;
   task?: string;
@@ -55,6 +57,7 @@ export interface AgentServiceOptions {
    * anyone. The host lists the agent under the person whose token it holds; true means it is listed now.
    */
   onJoin?: (agent: AgentRecord) => boolean;
+  onIdentityReport?: (agent: AgentRecord, attempt: string) => void;
 }
 
 /** An agent not heard from for this long no longer counts as checked in, and no longer holds the main chat. */
@@ -72,11 +75,13 @@ export class AgentService {
   private readonly lastSeen = new Map<string, number>();
   private readonly now: () => number;
 
+  private readonly onIdentityReport: AgentServiceOptions["onIdentityReport"];
   private readonly onJoin: ((agent: AgentRecord) => boolean) | undefined;
 
   constructor(options: AgentServiceOptions) {
     this.now = options.now ?? Date.now;
     this.onJoin = options.onJoin;
+    this.onIdentityReport = options.onIdentityReport;
     this.ledger = options.ledger;
     this.tokens = options.tokens ?? new TokenStore();
     this.relay = options.relay ?? new Relay({ ledger: options.ledger });
@@ -168,7 +173,17 @@ export class AgentService {
   private hello(token: string, grant: Grant, input: ToolInput<"hello">): { agent: string; role: AgentRole; task?: string; person: string; instructions: string } {
     // A worker token checks in once; reconnecting returns the same agent.
     for (const existing of this.agents.values()) {
-      if (existing.token === token && existing.role === "worker") return this.welcome(existing);
+      if (existing.token === token && existing.role === "worker") {
+        const reportedModel = input.model?.trim() || undefined;
+        if (reportedModel && looksSecret(reportedModel)) throw new ToolError("INVALID", "Do not put credentials in a model report.");
+        if (existing.reportedModel !== reportedModel) {
+          const updated = { ...existing, reportedModel };
+          this.recordIdentity(updated);
+          existing.reportedModel = reportedModel;
+        }
+        this.lastSeen.set(existing.id, this.now());
+        return this.welcome(existing);
+      }
     }
     // Ids are derived from the token, not random, so a reconnect (or a restart with
     // the same token) keeps the agent's id and the tasks it holds.
@@ -190,12 +205,23 @@ export class AgentService {
     }
     // The person-set model wins; a self-declared one is kept but marked unverified.
     const model = grant.model ?? (input.model ? `unverified:${input.model}` : undefined);
-    const record = { id, name: input.name, person: grant.person, role, grant, token, ...(model ? { model } : {}), ...(grant.task ? { task: grant.task } : {}) };
+    const record: AgentRecord & { grant: Grant; token: string } = { id, name: input.name, person: grant.person, role, grant, token, ...(model ? { model } : {}), ...(grant.task ? { task: grant.task } : {}) };
+    record.requestedModel = grant.model;
+    record.reportedModel = input.model?.trim() || undefined;
+    if (record.reportedModel && looksSecret(record.reportedModel)) throw new ToolError("INVALID", "Do not put credentials in a model report.");
+    this.recordIdentity(record);
     this.agents.set(id, record);
     this.lastSeen.set(id, this.now());
     if (role === "main") this.mains.set(grant.person, id);
     this.listUnderPerson(record);
     return this.welcome(record);
+  }
+
+  private recordIdentity(agent: AgentRecord) {
+    if (!this.onIdentityReport || agent.role !== "worker" || !agent.task) return;
+    const task = this.board().get(agent.task);
+    if (!task) throw new ToolError("NOT_FOUND", "The worker task no longer exists.");
+    this.onIdentityReport?.(agent, attemptLabel(task));
   }
 
   /** Never lets a failed listing break a check-in: the agent is then refused with the roster's own words. */
@@ -257,12 +283,12 @@ export class AgentService {
     return { task: attemptLabel(view), status: "claimed", entry: entry.n };
   }
 
-  private progress(agent: AgentRecord, { task, text, usage }: ToolInput<"report_progress">) {
+  private progress(agent: AgentRecord, { task, text, usage, activity }: ToolInput<"report_progress">) {
     this.notPaused(agent);
-    this.ownTask(agent, task, true);
+    const current = this.ownTask(agent, task, true);
     // A usage figure that cannot be believed is dropped, not the progress line: the work was still reported.
     const read = usage === undefined ? null : parseUsage(usage);
-    const entry = this.write({ actor: this.actor(agent), type: "task.progress", subject: task, summary: redactSecrets(text), ...(read?.ok ? { data: { usage: read.usage } } : {}) });
+    const entry = this.write({ actor: this.actor(agent), type: "task.progress", subject: attemptLabel(current), summary: redactSecrets(text), data: { ...(read?.ok ? { usage: read.usage } : {}), ...(activity ? { activity } : {}) } });
     return { entry: entry.n, ...(read && !read.ok ? { usageIgnored: read.problem } : {}) };
   }
 

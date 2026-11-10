@@ -100,6 +100,26 @@ export const runCommand: CommandRunner = async (command, args, options) => {
 };
 
 /**
+ * runCommand for one piece of work (opening a project): where the repo is (its top folder, its git folder, whether
+ * the folder is inside a work tree) is asked of git once per folder while that work runs, however many steps of it
+ * ask, since nothing the work does moves the repo. The next piece of work asks again.
+ */
+function askedOnce(): CommandRunner {
+  const where = new Set(["--show-toplevel", "--git-common-dir", "--is-inside-work-tree"]);
+  const asked = new Map<string, ReturnType<CommandRunner>>();
+  return (command, args, options) => {
+    if (command !== "git" || args.length !== 2 || args[0] !== "rev-parse" || !where.has(args[1]!)) return runCommand(command, args, options);
+    const key = JSON.stringify([options?.cwd ?? "", ...args]);
+    let pending = asked.get(key);
+    if (!pending) {
+      pending = runCommand(command, args, options);
+      asked.set(key, pending);
+    }
+    return pending;
+  };
+}
+
+/**
  * Where the person's own git looks for this repo's hooks: core.hooksPath from their system, global, repo or
  * worktree config (the last one set wins, as in git; command-line values are the runner's own and skipped),
  * else the hooks folder in the repo's common git folder. Reading config runs nothing.
@@ -124,11 +144,12 @@ async function repoHooksDir(cwd: string): Promise<{ code: number; stdout: string
  * project folder that merely sits inside some other checkout must never get that checkout's hook.
  */
 export async function protectRepository(ledger: Ledger, dir: string): Promise<ProtectionReport> {
-  await excludePrivateFolder(dir);
+  const run = askedOnce();
+  await excludePrivateFolder(dir, run);
   try {
-    const top = await runCommand("git", ["rev-parse", "--show-toplevel"], { cwd: dir });
+    const top = await run("git", ["rev-parse", "--show-toplevel"], { cwd: dir });
     const real = (p: string) => fs.realpathSync.native(p);
-    if (top.code === 0 && top.stdout.trim() && real(top.stdout.trim()) === real(dir)) return await protectProject(ledger, { run: runCommand, cwd: dir, protect: registeredRoots() });
+    if (top.code === 0 && top.stdout.trim() && real(top.stdout.trim()) === real(dir)) return await protectProject(ledger, { run, cwd: dir, protect: registeredRoots() });
   } catch (error) {
     installReleaseRules(ledger);
     return { rules: "on", prePush: { state: "not-a-repo", reason: (error as Error).message } };
@@ -180,9 +201,9 @@ export function projectRootFor(baseRoot: string, key: string, override?: string)
  * is inside a repository, so `git add -A` can never stage it (core/worktrees ensureRequiredIgnores).
  * Never throws: a folder outside git has nothing to exclude.
  */
-export async function excludePrivateFolder(dir: string): Promise<string[]> {
+export async function excludePrivateFolder(dir: string, run: CommandRunner = runCommand): Promise<string[]> {
   try {
-    const top = await runCommand("git", ["rev-parse", "--show-toplevel"], { cwd: dir });
+    const top = await run("git", ["rev-parse", "--show-toplevel"], { cwd: dir });
     if (top.code !== 0 || !top.stdout.trim()) return [];
     const rel = path.relative(fs.realpathSync.native(top.stdout.trim()), fs.realpathSync.native(dir)).split(path.sep).join("/");
     if (rel.startsWith("..")) return [];
@@ -347,7 +368,12 @@ export function openCoreProject(baseRoot: string, key: string, override: string 
   const gate = new TestGate({ ledger, requireJevTestReview: policy.requireJevTestReview, ...(run ? { run } : {}) });
   // TestGate copies its policy; give it the shared object so the host's switch reaches the gate and the rule together.
   Object.assign(gate, { policy });
-  const service = new AgentService({ ledger, gate, onJoin: (agent) => listAgent(ledger, agent.person, agent.id) });
+  const service = new AgentService({ ledger, gate, onJoin: (agent) => listAgent(ledger, agent.person, agent.id), onIdentityReport: (agent, attempt) => {
+    ledger.append({ actor: { kind: "system", id: "worker-identity" }, type: "task.progress", subject: attempt,
+      summary: "Received worker model report (self-reported, not runtime verified)", evidence: [], refs: [],
+      data: { workerReport: { version: 1, worker: agent.id, requestedModel: agent.requestedModel ?? null, reportedModel: agent.reportedModel ?? null } },
+    });
+  } });
   // Shipping safety on for every project the app opens: the release rules hold before the first
   // review, and the whole-branch secret scan runs before every push (a non-git folder is reported).
   // The host excludes .perfect-planner/ before it opens a project for a request (host.ts openProject);

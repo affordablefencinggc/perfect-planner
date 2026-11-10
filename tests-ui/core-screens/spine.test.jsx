@@ -1,10 +1,13 @@
+import fs from "node:fs";
+import path from "node:path";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import CoreSpine, { modelFamily } from "../../src/core-screens/CoreSpine.jsx";
 
 const ok = (result) => ({ ok: true, status: 200, json: async () => ({ ok: true, result }) });
 const task = (id, over = {}) => ({ id, label: id, title: `Task ${id}`, status: "open", stage: "needs-test", proofs: [], lastProgress: null, merged: null, dispatch: null, ...over });
-const agent = (over) => ({ id: "w", name: "Worker", role: "worker", person: "owner", ...over });
+const fresh = () => new Date().toISOString();
+const agent = (over) => ({ id: "w", name: "Worker", role: "worker", person: "owner", lastSeen: fresh(), ...over });
 
 function routeFetch({ tasks, agents = [], failTasks = false }) {
   const fn = vi.fn(async (url) => {
@@ -59,24 +62,24 @@ describe("CoreSpine", () => {
 
   test("shows the model working on a task and only animates while it is building", async () => {
     routeFetch({
-      tasks: [task("T-1", { stage: "building", label: "T-1" }), task("T-2", { stage: "ready-to-claim", label: "T-2", dispatch: { model: "gemini-2.5-pro" } }), task("T-3", { stage: "done", label: "T-3" })],
+      tasks: [task("T-1", { status: "claimed", owner: "a1", workerActivity: { worker: "a1", activity: "working", at: fresh() }, stage: "building", label: "T-1", lastProgress: { text: "editing", at: fresh() } }), task("T-2", { stage: "ready-to-claim", label: "T-2", dispatch: { model: "gemini-2.5-pro" } }), task("T-3", { stage: "done", label: "T-3" })],
       agents: [agent({ id: "a1", name: "Worker T-1", task: "T-1", model: "claude-sonnet-5-5" })],
     });
     const { container } = render(<CoreSpine />);
-    const claude = await screen.findByRole("img", { name: /Claude \(claude-sonnet-5-5\), working now/ });
+    const claude = (await screen.findAllByRole("img", { name: /Claude \(claude-sonnet-5-5\), working now/ })).at(-1);
     expect(claude.querySelector(".spine-model-orbit")).toBeTruthy();
     const gemini = screen.getByRole("img", { name: /Gemini/ });
     expect(gemini.getAttribute("aria-label")).not.toMatch(/working now/);
     expect(gemini.querySelector(".spine-model-orbit")).toBeNull();
     // A finished task shows no worker at all.
-    expect(container.querySelectorAll(".spine-model")).toHaveLength(2);
+    expect((await screen.findByRole("list", { name: "Tasks from the ledger" })).querySelectorAll(".spine-model")).toHaveLength(2);
     expect(container.querySelectorAll('[data-working="true"]')).toHaveLength(1);
   });
 
   test("a building task whose worker went quiet is not animated and says so", async () => {
-    routeFetch({ tasks: [task("T-1", { stage: "building" })], agents: [agent({ task: "T-1", model: "claude-opus", quiet: true })] });
+    routeFetch({ tasks: [task("T-1", { stage: "building", lastProgress: { text: "editing", at: fresh() } })], agents: [agent({ task: "T-1", model: "claude-opus", quiet: true })] });
     const { container } = render(<CoreSpine />);
-    await screen.findByText(/has not been heard from lately/);
+    await screen.findByText(/No fresh observed worker activity/);
     expect(container.querySelector(".spine-model-orbit")).toBeNull();
   });
 
@@ -85,6 +88,14 @@ describe("CoreSpine", () => {
     const { container } = render(<CoreSpine />);
     await screen.findByRole("list", { name: "Tasks from the ledger" });
     expect(container.querySelector(".spine-model")).toBeNull();
+  });
+
+  test("keeps durable Codex attribution after restart even when an old configured model says Claude", async () => {
+    routeFetch({ tasks: [task("T-1", { stage: "ready-to-claim", owner: "codex-d23a34ad", dispatch: { model: "claude-sonnet-4-5" } })] });
+    render(<CoreSpine />);
+    const icon = await screen.findByRole("img", { name: /Codex \(configured claude-sonnet-4-5; provider identity is Codex\)/ });
+    expect(icon.querySelector(".spine-model-orbit")).toBeNull();
+    expect(screen.getByText("Ready for a worker to claim")).toBeTruthy();
   });
 
   test("a hostile title and progress note are shown as text, never as markup", async () => {
@@ -134,24 +145,68 @@ describe("CoreSpine", () => {
     const many = [
       ...Array.from({ length: 4 }, (_, i) => task(`T-${i + 1}`)),
       task("T-5", { stage: "test-proposed" }),
-      task("T-6", { stage: "building", dispatch: { model: "gemini-3-pro" } }),
+      task("T-6", { status: "claimed", owner: "gemini-worker", workerActivity: { worker: "gemini-worker", activity: "working", at: fresh() }, stage: "building", dispatch: { model: "gemini-3-pro" }, lastProgress: { text: "editing", at: fresh() } }),
       task("T-7", { stage: "building", dispatch: { model: "gpt-5-codex" } }),
       task("T-8", { stage: "done", merged: { mergeCommit: "abc" } }),
     ];
-    routeFetch({ tasks: many });
+    routeFetch({ tasks: many, agents: [agent({ id: "gemini-worker", task: "T-6", model: "gemini-3-pro" })] });
     render(<CoreSpine />);
     const group = await screen.findByRole("group", { name: "Show tasks" });
     expect(within(group).getByRole("button", { name: /^All 8/ })).toBeTruthy();
     expect(within(group).getByRole("button", { name: /^Need you 1/ })).toBeTruthy();
-    expect(within(group).getByRole("button", { name: /^Working 2/ })).toBeTruthy();
+    expect(within(group).getByRole("button", { name: /^Working 1/ })).toBeTruthy();
     expect(within(group).getByRole("button", { name: /^Not started 4/ })).toBeTruthy();
     expect(within(group).getByRole("button", { name: /^Merged 1/ })).toBeTruthy();
     fireEvent.click(within(group).getByRole("button", { name: /^Working/ }));
     const list = screen.getByRole("list", { name: "Tasks from the ledger" });
-    expect(within(list).getAllByRole("article").map((n) => n.getAttribute("aria-label"))).toEqual(["T-6 Task T-6", "T-7 Task T-7"]);
+    expect(within(list).getAllByRole("article").map((n) => n.getAttribute("aria-label"))).toEqual(["T-6 Task T-6"]);
     fireEvent.click(within(group).getByRole("button", { name: /^All/ }));
     expect(within(list).getAllByRole("article")).toHaveLength(8);
   });
+
+  test("uses the actual animated provider badge for each fresh lane and preserves review when activity predates its check", async () => {
+    let now = fresh();
+    const active = () => [
+      task("T-1", { title: "Continue the Finish-Lines route", status: "claimed", owner: "codex-active", stage: "review-diff", dispatch: { model: "claude-sonnet-5-5" }, workerReport: { worker: "codex-active", reportedModel: "gpt-5.6-terra" }, check: { passed: true, commit: "aabbccdd" }, proofs: [{ kind: "test-run", link: "prior check" }], workerActivity: { worker: "codex-active", activity: "working", afterCheck: true, at: now }, lastProgress: { text: "continuing implementation", at: now } }),
+      task("T-2", { title: "Keep the Build worker visible", status: "claimed", owner: "gemini-build", stage: "building", workerActivity: { worker: "gemini-build", activity: "working", at: now }, lastProgress: { text: "updating the live lane", at: now } }),
+      task("T-3", { title: "Fresh pre-check finish stays still", status: "claimed", owner: "claude-review", stage: "review-diff", check: { passed: true }, proofs: [{ kind: "commit", link: "receipt" }], workerActivity: { worker: "claude-review", activity: "finished", at: now }, lastProgress: { text: "finished the requested change", at: now } }),
+      task("T-4", { title: "Fresh pre-check work stays in review", status: "claimed", owner: "precheck-worker", stage: "review-diff", check: { passed: true }, proofs: [{ kind: "commit", link: "receipt" }], workerActivity: { worker: "precheck-worker", activity: "working", afterCheck: false, at: now }, lastProgress: { text: "old work report", at: now } }),
+      task("T-5", { title: "Waiting after a check stays in review", status: "claimed", owner: "waiting-worker", stage: "review-diff", check: { passed: true }, proofs: [{ kind: "commit", link: "receipt" }], workerActivity: { worker: "waiting-worker", activity: "waiting", afterCheck: false, at: now }, lastProgress: { text: "waiting for review", at: now } }),
+      task("T-6", { title: "Stale work stays still", status: "claimed", owner: "old-worker", stage: "building", workerActivity: { worker: "old-worker", activity: "working", at: "2020-01-01T00:00:00.000Z" }, lastProgress: { text: "old action", at: "2020-01-01T00:00:00.000Z" } }),
+      task("T-7", { title: "Still staged", stage: "test-proposed" }),
+    ];
+    const agents = [
+      agent({ id: "codex-active", task: "T-1", model: "gpt-5.6-terra" }),
+      agent({ id: "gemini-build", task: "T-2", model: "gemini-3-pro" }),
+      agent({ id: "claude-review", task: "T-3", model: "claude-sonnet-5-5" }),
+      agent({ id: "precheck-worker", task: "T-4", model: "gpt-5.6-terra" }),
+      agent({ id: "waiting-worker", task: "T-5", model: "gpt-5.6-terra" }),
+      agent({ id: "old-worker", task: "T-6", model: "gpt-5.6-terra", lastSeen: "2020-01-01T00:00:00.000Z" }),
+    ];
+    routeFetch({ tasks: active, agents });
+    render(<CoreSpine actions />);
+    const live = await screen.findByRole("region", { name: "Live work" });
+    const lanes = within(live).getAllByRole("article");
+    expect(within(live).getAllByRole("article")).toHaveLength(3);
+    expect(within(live).getByText("Continue the Finish-Lines route")).toBeTruthy();
+    expect(lanes?.[0]?.textContent).toMatch(/Working after the last check/);
+    expect(within(live).queryByText(/recheck/i)).toBeNull();
+    expect(within(live).getByText(/Requested claude-sonnet-5-5; worker reported gpt-5.6-terra/)).toBeTruthy();
+    expect(lanes[0].querySelector(".spine-model-orbit")).toBeTruthy();
+    expect(lanes[1].querySelector(".spine-model-orbit")).toBeTruthy();
+    expect(lanes[2].querySelector(".spine-model-orbit")).toBeNull();
+    expect(lanes[2].textContent).toMatch(/Worker reported finished.*Awaiting review/);
+    expect(within(live).queryByText("Fresh pre-check work stays in review")).toBeNull();
+    expect(within(live).queryByText("Waiting after a check stays in review")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /^Need you/ }));
+    expect(within(live).getAllByRole("article")).toHaveLength(3);
+
+    now = fresh();
+    agents[0] = { ...agents[0], lastSeen: "2020-01-01T00:00:00.000Z" };
+    await new Promise((resolve) => setTimeout(resolve, 4200));
+    expect(within(await screen.findByRole("region", { name: "Live work" })).getAllByRole("article")).toHaveLength(2);
+    expect(within(screen.getByRole("region", { name: "Live work" })).getByText("Keep the Build worker visible")).toBeTruthy();
+  }, 20000);
 
   test("a task nobody has touched is a one-line row; one with a worker or waiting on you is a full card", async () => {
     routeFetch({ tasks: [task("T-1"), task("T-2", { stage: "test-proposed" }), task("T-3", { stage: "building", dispatch: { model: "claude-opus-5-5" } }), task("T-4"), task("T-5")] });
@@ -188,5 +243,10 @@ describe("CoreSpine", () => {
     render(<CoreSpine onWorkspace={() => {}} />);
     await screen.findByRole("list", { name: "Tasks from the ledger" });
     expect(screen.queryByRole("button", { name: "Review the test" })).toBeNull();
+  });
+
+  test("reduced motion directly stops the actual Plan spine runner", () => {
+    const css = fs.readFileSync(path.resolve("src/core-screens/CoreSpine.css"), "utf8");
+    expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\)[\s\S]*\.core-plan-spine \.spine-runner \{ animation: none/);
   });
 });

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 // Test helper: a core host on a random loopback port with a throwaway ledger folder.
 import fs from "node:fs";
 import http from "node:http";
@@ -85,7 +86,13 @@ export async function startTestHost({ owned = true, autoStart = true, ...options
 }
 
 /** GET/POST against the test host as the person (pass asAgent to leave the person's window credentials off). */
-export async function hostCall(base: string, method: "GET" | "POST", route: string, body?: unknown, { asAgent = false }: { asAgent?: boolean } = {}): Promise<{ status: number; body: { ok: boolean; result?: any; code?: string; message?: string } }> {
+export async function hostCall(base: string, method: "GET" | "POST", route: string, body?: unknown, { asAgent = false, prepareCheck = true }: { asAgent?: boolean; prepareCheck?: boolean } = {}): Promise<{ status: number; body: { ok: boolean; result?: any; code?: string; message?: string } }> {
+  // Owner workflow tests prepare the same bound request as the UI. Raw protocol tests opt out.
+  if (prepareCheck && !asAgent && method === "POST" && /^\/tasks\/T-\d+\/check(?:\?|$)/.test(route) && (body === undefined || (body !== null && typeof body === "object" && Object.getPrototypeOf(body) === Object.prototype && Object.keys(body).length === 0))) {
+    const prepared = await hostCall(base, "GET", route.replace(/\/check(?=\?|$)/, "/check-input"));
+    if (prepared.status !== 200) return prepared;
+    body = { requestId: randomUUID(), ...prepared.body.result };
+  }
   const headers: Record<string, string> = { ...(asAgent ? {} : personHeaders(base)), ...(body === undefined ? {} : { "content-type": "application/json" }) };
   const res = await fetch(`${base}${route}`, { method, headers, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
   const result = { status: res.status, body: (await res.json()) as { ok: boolean; result?: any; code?: string; message?: string } };
@@ -95,7 +102,7 @@ export async function hostCall(base: string, method: "GET" | "POST", route: stri
     const project = new URL(route, "http://local").searchParams.get("project");
     const started = await hostCall(base, "POST", `/owner/start${project ? `?project=${encodeURIComponent(project)}` : ""}`, {});
     if (started.status !== 200) return started;
-    return hostCall(base, method, route, body, { asAgent });
+    return hostCall(base, method, route, body, { asAgent, prepareCheck });
   }
   return result;
 }

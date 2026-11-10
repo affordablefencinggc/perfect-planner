@@ -191,6 +191,22 @@ describe("settings that only apply on some branches or folders (includeIf) are r
   });
 });
 
+describe("cached filter policy invalidation", () => {
+  it("detects changes in an ordinary included config before checkout", async () => {
+    const ctx = await approvedRepo();
+    const included = path.join(path.dirname(ctx.root), "later-filter.gitconfig");
+    const program = plant(path.join(path.dirname(ctx.root), "filter-clean.sh"), ctx.marker);
+    writeFileSync(included, "");
+    await git(ctx.root, ["config", "include.path", included.replace(/\\/g, "/")]);
+
+    expect(await filterPrograms(ctx.root)).not.toContain("filter.evil.clean");
+    writeFileSync(included, '[filter "evil"]\n\tclean = ' + program + '\n');
+    expect(await filterPrograms(ctx.root)).toContain("filter.evil.clean");
+    await expect(runGit(ctx.root, ["checkout", "-q", "-b", "blocked"])).rejects.toBeInstanceOf(GitProgramRefusedError);
+    expect(existsSync(ctx.marker)).toBe(false);
+  }, SLOW);
+});
+
 describe("include lines that are hard to read are refused, never skipped", () => {
   it("reads an include from a file with a non-ASCII name, and a path with a newline in it", async () => {
     const ctx = await approvedRepo();

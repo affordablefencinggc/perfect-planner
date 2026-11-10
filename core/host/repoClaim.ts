@@ -16,7 +16,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { runGit } from "../worktrees/index";
+import { commonGitDir } from "../worktrees/index";
 import { folderIdentity } from "./folderIdentity";
 import type { CoreProject } from "./project";
 import { chosenRepoRoot } from "./protectedRoots";
@@ -35,19 +35,9 @@ interface Claim {
 
 type Read = { state: "absent" } | { state: "unreadable" } | { state: "ok"; claim: Claim };
 
-/** git is asked once in a while, not on every poll of the Tasks screen. */
-const COMMON_DIR_TTL_MS = 10_000;
-const commonDirs = new Map<string, { dir: string; at: number }>();
-
-/** The git folder shared by every checkout of the repo that contains `from` (the main one and each worktree). */
+/** The git folder shared by every checkout of the repo that contains `from` (the main one and each worktree). Asked of git once in a while, not on every poll of the Tasks screen (core/worktrees commonGitDir). */
 export async function commonDirOf(from: string): Promise<string | null> {
-  const known = commonDirs.get(from);
-  if (known && Date.now() - known.at < COMMON_DIR_TTL_MS) return known.dir;
-  const result = await runGit(from, ["rev-parse", "--git-common-dir"]).catch(() => null);
-  if (!result || result.code !== 0 || !result.stdout.trim()) return null;
-  const dir = path.resolve(from, result.stdout.trim());
-  commonDirs.set(from, { dir, at: Date.now() });
-  return dir;
+  return commonGitDir(from);
 }
 
 function readClaim(file: string): Read {

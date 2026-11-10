@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { git } from "./git";
+import { commonGitDir, git } from "./git";
 import { lines, pathKey, toRepoPath } from "./platform";
 
 /** Planner-private folder inside the user's repo: the ledger, worker tokens, task worktrees. Never committed. */
@@ -14,7 +14,8 @@ export const REQUIRED_IGNORES = [`/${PRIVATE_DIR}/`] as const;
 
 /** Add any missing REQUIRED_IGNORES (plus `extra`) to the repo's info/exclude. Returns the patterns added. */
 export async function ensureRequiredIgnores(cwd: string, extra: readonly string[] = []): Promise<string[]> {
-  const exclude = path.join(path.resolve(cwd, await git(cwd, ["rev-parse", "--git-common-dir"])), "info", "exclude");
+  const common = (await commonGitDir(cwd)) ?? path.resolve(cwd, await git(cwd, ["rev-parse", "--git-common-dir"]));
+  const exclude = path.join(common, "info", "exclude");
   const current = existsSync(exclude) ? readFileSync(exclude, "utf8") : "";
   const present = new Set(current.split(/\r?\n/));
   const missing = [...REQUIRED_IGNORES, ...extra].filter((pattern, index, all) => !present.has(pattern) && all.indexOf(pattern) === index);

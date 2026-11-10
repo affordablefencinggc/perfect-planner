@@ -66,12 +66,12 @@ export const coreWorkspaceContext = {
 
 export const isCoreWorkspace = (workspace) => Object.hasOwn(screens, workspace);
 
-export function CoreWorkspace({ workspace, onWorkspace }) {
+export function CoreWorkspace({ workspace, onWorkspace, pendingDispatches, onPendingDispatchesChange }) {
   const Screen = screens[workspace];
   if (!Screen) return null;
   return (
     <Suspense fallback={<ScreenLoading label={`Loading ${coreWorkspaceLabels[workspace]}`} />}>
-      <Screen onWorkspace={onWorkspace} />
+      <Screen onWorkspace={onWorkspace} pendingDispatches={pendingDispatches} onPendingDispatchesChange={onPendingDispatchesChange} />
     </Suspense>
   );
 }

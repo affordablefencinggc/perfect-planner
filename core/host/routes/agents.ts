@@ -44,6 +44,8 @@ export interface AgentView {
   id: string;
   name: string;
   model?: string;
+  requestedModel?: string | null;
+  reportedModel?: string | null;
   role: AgentRecord["role"];
   person: string;
   task?: string;
@@ -142,7 +144,7 @@ export function nodeCommand(platform: NodeJS.Platform = process.platform, env: N
  * skill. It names the token file, never the token, so nothing secret lands in shell history, a chat
  * transcript or any agent's config.
  */
-export function connectLine(bridgeUrl: string, tokenFile: string, entry: string, platform: NodeJS.Platform = process.platform, agent: AgentKind = "claude"): string {
+export function connectLine(bridgeUrl: string, tokenFile: string, entry: string, platform: NodeJS.Platform = process.platform, agent: AgentKind = "codex"): string {
   const quote = quoteFor(platform === "win32");
   return `${nodeCommand(platform)} ${quote(connectProgram(entry))} --agent ${agent} ${bridgeUrl} ${quote(tokenFile)}`;
 }
@@ -213,6 +215,7 @@ function viewAgents(project: CoreProject): { agents: AgentView[]; connections: C
       ...(project.service.seenAt(record.id) ? { lastSeen: project.service.seenAt(record.id)! } : {}),
       ...(liveIds.has(record.id) ? {} : { quiet: true }),
       ...(record.model ? { model: record.model } : {}),
+      requestedModel: record.requestedModel ?? null, reportedModel: record.reportedModel ?? null,
       ...(record.task ? { task: record.task } : {}),
       ...(conn ? { connection: conn.id } : {}),
       ...(revoked ? { revoked: true } : {}),

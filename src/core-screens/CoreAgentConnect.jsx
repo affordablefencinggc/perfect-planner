@@ -20,14 +20,14 @@ export const AGENT_CHOICES = [
   { id: "gemini", label: "Gemini CLI", start: "start Gemini CLI there (choose Trust folder if it asks)" },
   { id: "codex", label: "Codex CLI", start: "start Codex there" },
 ];
-const AGENT_KEY = "pp.connect.agent";
+const AGENT_KEY = "pp.connect.agent.v2";
 
 function rememberedAgent() {
   try {
     const saved = localStorage.getItem(AGENT_KEY);
-    return AGENT_CHOICES.some((a) => a.id === saved) ? saved : "claude";
+    return AGENT_CHOICES.some((a) => a.id === saved) ? saved : "codex";
   } catch {
-    return "claude";
+    return "codex";
   }
 }
 
@@ -120,8 +120,8 @@ export function CoreAgentConnect() {
     setCopied(null);
     try { localStorage.setItem(AGENT_KEY, id); } catch { /* remembering the pick is only a convenience */ }
   };
-  const choice = AGENT_CHOICES.find((a) => a.id === agentKind) ?? AGENT_CHOICES[0];
-  const command = pending ? (pending.lines?.[choice.id] ?? pending.claudeCode) : "";
+  const choice = AGENT_CHOICES.find((a) => a.id === agentKind) ?? AGENT_CHOICES.find((a) => a.id === "codex");
+  const command = pending ? (pending.lines?.[choice.id] ?? "") : "";
 
   const live = agents.filter((a) => !a.revoked);
 
@@ -190,10 +190,11 @@ export function CoreAgentConnect() {
               {choice.id !== "claude" && <p className="core-muted">Beta. {choice.id === "gemini" ? "Gemini needs Trust folder chosen before the connect line, and its headless shell may be denied." : "Codex allows one connection per computer."}</p>}
               {choice.id === "codex" && <p className="core-muted">Codex keeps one Perfect Planner connection for the whole computer, so this replaces any earlier Codex connection.</p>}
               {pending.warning && <p className="core-agent-connect-warn">{pending.warning}</p>}
+              {!command && <p role="status" className="core-agent-connect-warn">The selected agent's command is unavailable. Connect again or explicitly choose another agent; no other provider was selected automatically.</p>}
               <div className="core-agent-connect-snippet">
                 <div className="core-agent-connect-snippet-head">
                   <strong>{choice.label} command</strong>
-                  <button type="button" className="core-button" onClick={() => copy("cmd", command)} aria-label={`Copy the ${choice.label} command`}>
+                  <button type="button" className="core-button" onClick={() => copy("cmd", command)} disabled={!command} aria-label={`Copy the ${choice.label} command`}>
                     {copied?.id === "cmd" && copied.ok ? <><CheckCircleIcon aria-hidden="true" /> Copied</> : <><CopyIcon aria-hidden="true" /> Copy</>}
                   </button>
                 </div>

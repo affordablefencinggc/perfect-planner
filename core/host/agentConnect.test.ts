@@ -11,7 +11,7 @@ import { childEnv, protectFor } from "./protectedRoots";
 describe("connect line", () => {
   it("replaces this folder's registration and adds the server with the token file, never the token", () => {
     const here = path.join("/pp", "dist", "core-host");
-    const plan = connectPlan({ bridgeUrl: "http://127.0.0.1:5555", tokenFile: "/data/tokens/C-1.token", here, home: "/home/me" });
+    const plan = connectPlan({ bridgeUrl: "http://127.0.0.1:5555", tokenFile: "/data/tokens/C-1.token", here, home: "/home/me", agent: "claude" });
     expect(plan.remove).toEqual(["mcp", "remove", "perfect-planner-core", "-s", "local"]);
     expect(plan.add).toEqual(["mcp", "add", "perfect-planner-core", "-s", "local", "--env", "PP_BRIDGE_URL=http://127.0.0.1:5555", "--env", "PP_AGENT_TOKEN_FILE=/data/tokens/C-1.token", "--", process.execPath, path.join(here, "agent.mjs")]);
     expect(plan.skillFrom).toBe(path.join(here, "skill", "SKILL.md"));
@@ -34,10 +34,11 @@ describe("connect line", () => {
     expect(codex.add).toEqual(["mcp", "add", "perfect-planner-core", "--env", "PP_BRIDGE_URL=http://127.0.0.1:5555", "--env", "PP_AGENT_TOKEN_FILE=/data/tokens/C-1.token", "--", process.execPath, agent]);
   });
 
-  it("picks the first installed agent in order claude, gemini, codex, or none", () => {
-    expect(detectAgent((a) => a !== "claude")).toBe("gemini");
+  it("defaults only to Codex and refuses an implicit fallback to another installed provider", () => {
+    expect(detectAgent((a) => a !== "codex")).toBeNull();
     expect(detectAgent((a) => a === "codex")).toBe("codex");
-    expect(detectAgent(() => true)).toBe("claude");
+    expect(detectAgent(() => true)).toBe("codex");
+    expect(connectPlan({ bridgeUrl: "http://127.0.0.1:5555", tokenFile: "/data/C-1.token", here: "/pp", home: "/home/me" }).agent).toBe("codex");
     expect(detectAgent(() => false)).toBeNull();
   });
 
@@ -327,40 +328,42 @@ describe("finding Claude Code", () => {
     }
   });
 
-  it("starts the agent already told to check in when a person is at the terminal, and only then", () => {
+  it("starts the agent already told to check in when a person is at the terminal, and only then", async () => {
     const outside = temp();
     const project = temp();
     const tokenFile = path.join(project, ".perfect-planner", "tokens", "C-1.token");
     fs.mkdirSync(path.dirname(tokenFile), { recursive: true });
-    fs.writeFileSync(tokenFile, "");
+    fs.writeFileSync(tokenFile, "test-token");
     const cli = path.join(outside, "bin", "node_modules", "@anthropic-ai", "claude-code", "cli.js");
     fs.mkdirSync(path.dirname(cli), { recursive: true });
     fs.writeFileSync(cli, "#!/usr/bin/env node\n", { mode: 0o755 });
     if (windows) fs.writeFileSync(path.join(outside, "bin", "claude.cmd"), "@echo off\r\n");
     else fs.symlinkSync(cli, path.join(outside, "bin", "claude"));
     const PATH = [path.join(outside, "bin"), process.env.PATH ?? ""].join(sep);
-    const run = (extra: string[], interactive: boolean) => {
+    const run = async (extra: string[], interactive: boolean) => {
       const started: string[] = [];
       const output: string[] = [];
-      const code = runConnect(["--agent", "claude", ...extra, "http://127.0.0.1:5555", tokenFile], {
+      const code = await runConnect(["--agent", "claude", ...extra, "http://127.0.0.1:5555", tokenFile], {
         cwd: project, env: { ...process.env, PATH, Path: PATH }, home: temp(), here: path.join(outside, "core-host"),
         out: (t) => output.push(t), err: (t) => output.push(t), interactive,
+        fetch: async () => new Response(JSON.stringify({ ok: true, result: [] })),
         startAgent: (agent) => (started.push(agent), 0),
       });
       return { code, started, text: output.join("") };
     };
-    const person = run([], true);
+    const person = await run([], true);
     expect(person.code, person.text).toBe(0);
     expect(person.started).toEqual(["claude"]);
     expect(person.text).toContain("Starting Claude Code now");
-    const skill = run([], false); // run from an agent's chat: no terminal to hand over
+    const skill = await run([], false); // run from an agent's chat: no terminal to hand over
     expect(skill.started).toEqual([]);
     expect(skill.text).toContain("Next: start Claude Code");
-    const optOut = run(["--no-start"], true);
+    const optOut = await run(["--no-start"], true);
     expect(optOut.started).toEqual([]);
   });
 
-  it("connect.mjs started from a task worktree or from repo/src never runs a claude reached through a PATH link into the repo or the worktree", () => {
+  it("connect.mjs started from a task worktree or from repo/src never runs a claude reached through a PATH link into the repo or the worktree", async () => {
+it("connect.mjs started from a task worktree or from repo/src never runs a claude reached through a PATH link into the repo or the worktree", async () => {
     // Claude Code's npm layout, whose package entry runs under this Node on every OS.
     const npmClaude = (dir: string, body: string) => {
       const cli = path.join(dir, "node_modules", "@anthropic-ai", "claude-code", "cli.js");
@@ -377,7 +380,7 @@ describe("finding Claude Code", () => {
     fs.mkdirSync(worktree, { recursive: true });
     const tokenFile = path.join(project, ".perfect-planner", "tokens", "T-1.token");
     fs.mkdirSync(path.dirname(tokenFile), { recursive: true });
-    fs.writeFileSync(tokenFile, "");
+    fs.writeFileSync(tokenFile, "isolated-cli-test-token");
     // What the host records beside the token: the repo git found and the worktree folders.
     fs.writeFileSync(tokenFile.replace(/\.token$/, ".roots.json"), JSON.stringify({ roots: [project, repo, path.join(repo, ".perfect-planner", "worktrees")] }));
     const marker = path.join(outside, "planted-ran");
@@ -392,7 +395,7 @@ describe("finding Claude Code", () => {
     for (const cwd of [worktree, path.join(repo, "src")]) {
       fs.rmSync(ran, { force: true });
       const output: string[] = [];
-      const code = runConnect(["http://127.0.0.1:5555", tokenFile], { cwd, env: { ...process.env, PATH, Path: PATH }, home: temp(), here: path.join(outside, "core-host"), out: (t) => output.push(t), err: (t) => output.push(t) });
+      const code = await runConnect(["--agent", "claude", "http://127.0.0.1:5555", tokenFile], { cwd, env: { ...process.env, PATH, Path: PATH }, home: temp(), here: path.join(outside, "core-host"), fetch: async () => new Response(JSON.stringify({ ok: true, result: [] })), out: (t) => output.push(t), err: (t) => output.push(t) });
       expect(code, output.join("")).toBe(0);
       expect(fs.existsSync(marker)).toBe(false);
       expect(fs.readFileSync(ran, "utf8")).toContain("mcp add perfect-planner-core -s local");
@@ -403,7 +406,7 @@ describe("finding Claude Code", () => {
     ["gemini", "@google/gemini-cli/bundle/gemini.js", "mcp add -s project perfect-planner-core"],
     ["codex", "@openai/codex/bin/codex.js", "mcp add perfect-planner-core"],
   ] as const) {
-    it(`gives ${agent} a PATH with no folder in the project or repo, and never runs a ${agent} or git planted there through a link`, () => {
+    it(`gives ${agent} a PATH with no folder in the project or repo, and never runs a ${agent} or git planted there through a link`, async () => {
       // The agent's npm layout, whose package entry runs under this Node on every OS.
       const npmAgent = (dir: string, body: string) => {
         const cli = path.join(dir, "node_modules", ...pkg.split("/"));
@@ -419,7 +422,7 @@ describe("finding Claude Code", () => {
       fs.mkdirSync(path.join(repo, "src"), { recursive: true });
       const tokenFile = path.join(project, ".perfect-planner", "tokens", "T-1.token");
       fs.mkdirSync(path.dirname(tokenFile), { recursive: true });
-      fs.writeFileSync(tokenFile, "");
+      fs.writeFileSync(tokenFile, "isolated-cli-test-token");
       fs.writeFileSync(tokenFile.replace(/\.token$/, ".roots.json"), JSON.stringify({ roots: [project, repo] }));
       const marker = path.join(outside, "planted-ran");
       const plant = `require("fs").writeFileSync(${JSON.stringify(marker)}, "x");`;
@@ -433,7 +436,7 @@ describe("finding Claude Code", () => {
       const PATH = [path.join(outside, "to-repo"), path.join(repo, "tools"), path.join(outside, "safe"), process.env.PATH ?? ""].join(sep);
       const cwd = path.join(repo, "src");
       const output: string[] = [];
-      const code = runConnect(["--agent", agent, "http://127.0.0.1:5555", tokenFile], { cwd, env: { ...process.env, PATH, Path: PATH }, home: temp(), here: path.join(outside, "core-host"), out: (t) => output.push(t), err: (t) => output.push(t) });
+      const code = await runConnect(["--agent", agent, "http://127.0.0.1:5555", tokenFile], { cwd, env: { ...process.env, PATH, Path: PATH }, home: temp(), here: path.join(outside, "core-host"), fetch: async () => new Response(JSON.stringify({ ok: true, result: [] })), out: (t) => output.push(t), err: (t) => output.push(t) });
       expect(code, output.join("")).toBe(0);
       expect(fs.existsSync(marker)).toBe(false);
       const runs = fs.readFileSync(seen, "utf8").trim().split("\n").map((line) => JSON.parse(line) as { args: string; path: string });

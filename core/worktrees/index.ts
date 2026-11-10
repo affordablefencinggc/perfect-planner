@@ -1,6 +1,6 @@
 export { WorktreeManager, WorktreeError, type CreateOptions, type ClaimConflict, type FolderClass, type Installer, type Leftover, type RecreateResult, type RemoveResult, type SweepOptions, type SweepResult, type UpdateFromMainResult, type UpdateRefusal, type WorktreeManagerOptions } from "./manager";
 export { folderNote, keepReasons, parseWorktreeList, readFacts, type FolderState, type FolderStatus, type Reconciled, type UntrackedFolder, type WorktreeFacts } from "./hygiene";
-export { filterPrograms, git, GitError, GitHardeningError, GitProgramRefusedError, refreshCarriedSettings, runGit, type GitOptions, type GitResult } from "./git";
+export { commonGitDir, filterPrograms, git, headIdentity, GitError, GitHardeningError, GitProgramRefusedError, refreshCarriedSettings, runGit, type GitOptions, type GitResult } from "./git";
 export { caseInsensitiveFs, isWithin, lines, pathKey, realDir, samePath, toRepoPath } from "./platform";
 export { evidenceValue, GATE_ACTOR, WATCHER_ACTOR, WORKTREES_ACTOR, type LedgerPort } from "./ports";
 export { copyLocalSettings, placeholderSecrets, PLACEHOLDER } from "./settings";
