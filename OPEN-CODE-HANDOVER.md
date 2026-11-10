@@ -148,3 +148,9 @@ The DANS1 log commit warned that LF files may become CRLF because core.autocrlf 
 
 - `npm run test:core` is still active on DANS1 after roughly 38 minutes. The SHIP log remains at 104 bytes with only `typecheck:core` output; Vitest continues to spawn worker pairs.
 - No `test:core` pass/fail has been recorded, and `verify:release` has not started. Keep SHIP in progress, preserve all existing limits, and do not infer completion from process churn.
+
+### 2026-11-11 — Codex status while SHIP runs (4)
+
+- DANS1 still runs the same `npm run test:core` command under ledger item SHIP. Vitest workers continue to be replaced as batches run; observed worker CPU time has increased across checks.
+- After roughly 44 minutes, the only completed SHIP output in `SHIP-001.log` is still the typecheck. No core-suite result, release verification, ledger completion, or live Planner task exists yet.
+- Continue with the existing acceptance and limits. Capture the exact result before deciding whether a code fix is needed.
