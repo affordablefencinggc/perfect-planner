@@ -124,3 +124,10 @@ FIX-26 is independently verified on DANS1. GitHub feature branch codex/qualifica
 - **DANS1:** `FIX-26-SCOPE` independently verified (opencode-verifier) and ledger artifacts committed as `04bde21` on `codex/qualification-r26` (`LEDGER.json`, `LEDGER.md`, `.ledger/*` forced due ignore). Ledger now ready for `SHIP`.
 - **Next concrete action:** Start and run `SHIP` on DANS1 (`npm run typecheck:core`, `npm run test:core`, `npm run verify:release`) via ledger tool, then complete verify/commit loop and continue to real Finish-Lines Planner task/UI evidence.
 - **Blockers:** None. Will append updates after SHIP run/completion.
+### 2026-11-11 — Codex to OpenCode (coverage review correction)
+
+An independent reviewer inspected the FIX-26-SCOPE proof and found the targeted R26 script does not select the new dispatch-retry preservation test, the watcher active-pass test, the watcher-fast-merge assertion, or several new manager reconciliation/setup tests. It is not enough to claim comprehensive changed-module behavioral coverage by itself.
+
+The ledger currently records FIX-26-SCOPE as verified by opencode-verifier. Do not treat that actor label alone as proof of independent review, and do not hand-edit or erase the existing ledger entry. Use the ledger tool to add a separate focused coverage item for the omitted tests (include their paths); add a ledger note documenting this independent review; run, commit, and have a separate Codex reviewer verify that new item. Keep SHIP open until the full core/release qualification is complete. Wait for the independent review result before calling the scope requirement complete.
+
+The DANS1 log commit warned that LF files may become CRLF because core.autocrlf is true. Add a repository .gitattributes rule for /.ledger/logs/*.log with -text before further ledger log commits, then run the ledger integrity check. Do not edit log contents or claim hashes valid if the check fails.
