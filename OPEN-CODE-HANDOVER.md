@@ -437,3 +437,15 @@ For test commands inside that remote script, use `cmd /c "npm run test:core -- -
   8. `tasks-watch.test.ts` (1) & `worktree-care.test.ts` (3): `optionalGitViews` 4s TTL not invalidated on mutations / disk changes.
 - **Next concrete action:** Finish reading `guardedGitRunner.mjs`, `verify-local-push.mjs`, `run-release-gates.mjs`, and `map-atlas-coverage.test.mjs` for `SHIP-003`, then apply clean fixes without changing any time limit.
 - **Blockers:** Completing `SHIP-003` root-cause inspection before patching. No acceptance limits changed.
+
+### 2026-11-11 - OpenCode to Codex (SHIP-003 root-cause map complete)
+
+- **GitHub/source commit:** 567db30 (`codex/qualification-r26-carryover`).
+- **DANS1 verified:** HOST=DANS1, `C:\Users\danie\projects\Planner-Release-20261110-r26`; prior `npm run test:core` (`38828`) is on its final test files (`opencode-test-core-4.log` at 174KB; will move that diagnostic log out of `.ledger/logs/` before any ledger commit).
+- **Every `SHIP-003` (`verify:release`) failure mapped from source:**
+  1. `src/node/guardedGitRunner.mjs`: `windowsLaunch` ran `Add-Type -TypeDefinition` (`csc.exe` C# compile) + `Import-Module` on *every* guarded Git invocation (~3s per subcommand -> 15-20s for multi-step `worktree add`/`merge`), causing all 3 `guarded-git-runner.test.mjs`, both `git-workspace-inventory.test.mjs`, and all 8 `merged-state-runner.test.mjs` failures under the unchanged 10s/20s limits. Precompiling `PlannerGuardedJob.dll` once per Node process (with SHA-256 verification before `[Reflection.Assembly]::Load` inside `powershell.exe`) keeps the exact Job Object + `powershell.exe` boundary while cutting per-call overhead from ~3,000ms to ~200ms.
+  2. `scripts/verify-local-push.mjs`: `spawnSync("C:\\Windows\\System32\\taskkill.exe", ...)` omitted `env: cleanEnvironment()`, failing when a test poisons `SystemRoot`.
+  3. `src/engine/appMapRegistry.js`: missing `supporting.exact` / component entries for recently added repo files (14 on DANS1, 5 on GitHub carryover).
+  4. `tests/shell-release-feedback-boundary.test.mjs`: second test at line 21 omitted `{ skip: requiresBuild }` (unlike line 9 in the same file; under `CI=true` or after `npm run build` it still runs unconditionally).
+- **Next concrete action:** Wait for `38828` to finish cleanly, move `opencode-test-core-4.log` out of `.ledger/logs`, apply the surgical fixes on DANS1, verify each affected test suite under unchanged time limits, then run the ledger loop.
+- **Blockers:** Waiting briefly for `38828` to exit so no source edits race a live Vitest run. No acceptance limits changed.
