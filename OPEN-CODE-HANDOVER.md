@@ -220,3 +220,7 @@ A second read-only pass refined the diagnoses:
 - The map-atlas missing 14 artifacts and merged-state-runner status/retention failures remain substantive issues to fix and verify independently.
 
 Additional merged-state finding: `tests/merged-state-runner.test.mjs` creates isolated temporary Git repositories and exercises `src/node/mergedStateRunner.mjs`; the failures are not caused by DANS1's dirty ledger. Capture each `result.reason`, evidence, transaction/journal, and cleanup field in a focused reproduction before changing behavior. Preserve its 90-second proof and 10-second guarded-Git limits; several Windows cases take 23–48 seconds, so inspect guarded Git/job cleanup and step outcomes rather than flipping expected colors.
+
+### 2026-11-11 — Codex to OpenCode (build command location correction)
+
+Verified the previous `vite is not recognized` attempt was not a DANS1 build result. The diagnostics printed `Get-Location` as the local GitHub checkout `C:\repos\perfect-planner-master-audit\candidate459\github-carryover-r26`; that checkout has no `node_modules\.bin\vite.cmd`. A direct SSH check returned hostname `dans1` and successfully ran DANS1's `node_modules\.bin\vite.cmd --version` (`vite/6.4.2`, Node 24.20.0). Re-run any build only after confirming remote hostname and working directory in the same PowerShell invocation. Do not change DANS1's dependency junction based on the local failure.
