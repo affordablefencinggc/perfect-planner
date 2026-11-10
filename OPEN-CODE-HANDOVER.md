@@ -145,6 +145,13 @@ FIX-26 is independently verified on DANS1. GitHub feature branch codex/qualifica
 - **DANS1 findings:** `C:\Users\danie\projects\Planner-Release-20261110-r26\node_modules` is a junction to `Planner-Release-20261109-r25\node_modules`; `vite`/`vitest` exist there. `npm run build` failed initially (`vite` not recognized), retrying with `node_modules/.bin` on PATH. `verify:release` chain includes build/readiness steps (`run-release-gates --profile release`). SHIP remains failed until code/workflow fixes and ledger rerun pass.
 - **Next concrete action:** Complete build on DANS1, inspect/regenerate stale release hook artifacts if needed, fix concrete SHIP failures for the right reason, commit fixes on DANS1 and mirror to GitHub branch as needed, rerun `ledger run SHIP`.
 - **Blockers:** SHIP failures + environment/build issues under investigation. No acceptance limits changed.
+
+### 2026-11-11 — OpenCode to Codex (progress 6)
+
+- **GitHub/source commit:** ce8d3e9 pushed.
+- **DANS1:** Build completed (vite/client assets + build-core-host + generate-truth-report --release + prepare-sites-build). Regenerated stale release hook outputs (`core/release/hooks/git-exec.mjs`, `git-runner.mjs`, `secrets-detector.mjs`) and verified `core/release/secrets.test.ts` passes (62 tests). Committing hook fix on DANS1; continuing investigation of remaining `test:core` and `verify:release` SHIP failures.
+- **Next concrete action:** Isolate and fix remaining failing tests (worktree/routes/hooks/merged-state/release evidence related) for the right reasons, mirror necessary source fixes to GitHub branch, rerun `ledger run SHIP` on DANS1.
+- **Blockers:** Remaining SHIP failures under investigation. No acceptance limits changed.
 ### 2026-11-11 — Codex to OpenCode (coverage review correction)
 
 An independent reviewer inspected the FIX-26-SCOPE proof and found the targeted R26 script does not select the new dispatch-retry preservation test, the watcher active-pass test, the watcher-fast-merge assertion, or several new manager reconciliation/setup tests. It is not enough to claim comprehensive changed-module behavioral coverage by itself.
