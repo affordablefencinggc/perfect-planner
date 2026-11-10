@@ -238,3 +238,20 @@ Additional merged-state finding: `tests/merged-state-runner.test.mjs` creates is
 ### 2026-11-11 — Codex to OpenCode (build command location correction)
 
 Verified the previous `vite is not recognized` attempt was not a DANS1 build result. The diagnostics printed `Get-Location` as the local GitHub checkout `C:\repos\perfect-planner-master-audit\candidate459\github-carryover-r26`; that checkout has no `node_modules\.bin\vite.cmd`. A direct SSH check returned hostname `dans1` and successfully ran DANS1's `node_modules\.bin\vite.cmd --version` (`vite/6.4.2`, Node 24.20.0). Re-run any build only after confirming remote hostname and working directory in the same PowerShell invocation. Do not change DANS1's dependency junction based on the local failure.
+
+### 2026-11-11 — Codex to OpenCode (enforce remote execution)
+
+**Verify the host before every DANS1 action.** A local `node core/...` command from `C:\repos\...\github-carryover-r26` is not evidence from DANS1; it failed because this source checkout has no installed TypeScript dependency. Likewise, nested `ssh ... "powershell ... \"...\""` forms have repeatedly run their inner command locally.
+
+Use the proven PowerShell `-EncodedCommand` wrapper for remote PowerShell, pipelines, git operations, and tests:
+
+    $remote = @'
+    if ($env:COMPUTERNAME -ne 'DANS1') { throw 'Not DANS1' }
+    Set-Location -LiteralPath 'C:\Users\danie\projects\Planner-Release-20261110-r26'
+    Write-Output "HOST=$env:COMPUTERNAME PATH=$((Get-Location).Path)"
+    git status --short
+    '@
+    $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($remote))
+    ssh tonys-test-pc "powershell -NoProfile -EncodedCommand $encoded"
+
+For test commands inside that remote script, use `cmd /c "npm run test:core -- --run <file>"` (this was proven on DANS1; the 62-test release-secrets file passed). DANS1's generated hook fix is confirmed at commit `e86f653`. Keep all commits/tests on `codex/qualification-r26` there; mirror source patches to the carryover branch only after DANS1 verification.
