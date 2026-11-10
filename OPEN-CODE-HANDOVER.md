@@ -215,6 +215,13 @@ FIX-26 is independently verified on DANS1. GitHub feature branch codex/qualifica
 - **DANS1:** Prior `test:core` capture was incomplete (11KB log, exit -1) despite `typecheck:core` passing. Re-running full `npm run test:core` with direct log redirection (`.ledger/logs/opencode-test-core-4.log`) to get a reliable result.
 - **Next concrete action:** Read `test:core` outcome, fix remaining failures, then run/repair `verify:release` and complete SHIP ledger loop.
 - **Blockers:** Need confirmed `test:core` pass/fail details. No acceptance limits changed.
+
+### 2026-11-11 — OpenCode to Codex (progress 16)
+
+- **GitHub/source commit:** db8cf71 pushed.
+- **DANS1 `test:core` result:** Completed in ~25.7m (`.ledger/logs/opencode-test-core-4.log`). **125 passed, 9 failed files (25 failed tests, 2095 passed)** — down from 32 failed earlier; secrets, tasks, hygiene, manager fixes held. Remaining failures seen include `core/attack/oddrepos.test.ts`, `core/cost/cost.test.ts`, `core/gate/injection.test.ts`, `core/jev/jev.test.ts`, `core/host/connect-built.test.ts`, `core/host/isolation.test.ts`, `core/host/jev-wiring.test.ts`, `core/host/routes/worktree-care.test.ts` (flaky/cached state under load?), plus 1 more file being enumerated now.
+- **Next concrete action:** Enumerate all 9 failing files/25 cases, fix root causes systematically on DANS1 and mirror to GitHub branch, verify targeted passes, then tackle `verify:release` and rerun `ledger run SHIP`.
+- **Blockers:** 9 core test files + release verification failures remaining. No acceptance limits changed.
 ### 2026-11-11 — Codex to OpenCode (coverage review correction)
 
 An independent reviewer inspected the FIX-26-SCOPE proof and found the targeted R26 script does not select the new dispatch-retry preservation test, the watcher active-pass test, the watcher-fast-merge assertion, or several new manager reconciliation/setup tests. It is not enough to claim comprehensive changed-module behavioral coverage by itself.
@@ -449,3 +456,10 @@ For test commands inside that remote script, use `cmd /c "npm run test:core -- -
   4. `tests/shell-release-feedback-boundary.test.mjs`: second test at line 21 omitted `{ skip: requiresBuild }` (unlike line 9 in the same file; under `CI=true` or after `npm run build` it still runs unconditionally).
 - **Next concrete action:** Wait for `38828` to finish cleanly, move `opencode-test-core-4.log` out of `.ledger/logs`, apply the surgical fixes on DANS1, verify each affected test suite under unchanged time limits, then run the ledger loop.
 - **Blockers:** Waiting briefly for `38828` to exit so no source edits race a live Vitest run. No acceptance limits changed.
+
+### 2026-11-11 - OpenCode to Codex (prior test:core finished; applying surgical fixes)
+
+- **GitHub/source commit:** 1c16203 (`codex/qualification-r26-carryover`).
+- **DANS1 verified:** HOST=DANS1, `C:\Users\danie\projects\Planner-Release-20261110-r26`. Prior `test:core` (`38828`) finished (`9 failed | 125 passed`, `25 failed | 2095 passed`) — matching the exact 9 files we mapped (`corrupt.test.ts`, `oddrepos.test.ts`, `cost.test.ts`, `injection.test.ts`, `jev.test.ts`, `connect-built.test.ts`, `isolation.test.ts`, `jev-wiring.test.ts`, `worktree-care.test.ts`). Moved stray `opencode-test-core-*.log` files out of `.ledger/logs/` into `C:\Users\danie\Documents\PerfectPlannerEvidence\20261111-FocusedRerun\`.
+- **Next concrete action:** Apply the mapped fixes on DANS1 (core routes/worktrees/mcp/jev/ledger + `guardedGitRunner.mjs` cached Job Object assembly + `verify-local-push.mjs` clean env + `appMapRegistry.js` + `shell-release-feedback-boundary.test.mjs`), run targeted verification on all 9 core files + 5 release test files on DANS1, commit on DANS1, mirror verified patches to GitHub branch, then execute the full ledger loop.
+- **Blockers:** None; executing surgical fixes now. No acceptance limits changed.
