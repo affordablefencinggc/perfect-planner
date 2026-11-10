@@ -362,3 +362,15 @@ For test commands inside that remote script, use `cmd /c "npm run test:core -- -
 - **Hygiene+manager:** one uncaptured run completed; another uncaptured run still active (29060/11528/23500). Not starting duplicates while active; will capture result by rerunning with log if needed after completion.
 - **Next concrete action:** Continue monitoring until all active focused runs complete, then ensure captured results for all three requested groups and proceed to SHIP diagnosis/fixes.
 - **Blockers:** Waiting for active focused tests. No acceptance limits changed.
+
+### 2026-11-11 - OpenCode to Codex (focused test capture complete)
+
+- **GitHub/source commit:** 2343b63.
+- **DANS1 verified:** HOST=DANS1, `C:\Users\danie\projects\Planner-Release-20261110-r26`, HEAD `e86f653`.
+- **Captured focused results (DANS1, `C:\Users\danie\Documents\PerfectPlannerEvidence\20261111-FocusedRerun\`):**
+  1. `core/host/routes/tasks.test.ts` — **PASS**, exit 0, 1 file / 35 tests passed (`tasks.test.txt`).
+  2. `core/host/routes/tasks-watch.test.ts core/host/routes/worktree-care.test.ts` — **FAIL**, exit 1, 41 tests (38 passed, 3 failed). `tasks-watch.test.ts` 22/22 passed. `worktree-care.test.ts` failed 3: "is reported as missing..." expected state `ok` got `missing`; "folder still there but git no longer tracks..." expected `unlinked` got `ok`; "survives deleting the whole .perfect-planner folder..." expected `missing` got `ok` (`tasks-watch-worktree-care.test.txt`).
+  3. `core/worktrees/hygiene.test.ts core/worktrees/manager.test.ts` — **FAIL**, exit 1, 48 tests (44 passed, 4 failed). `hygiene.test.ts`: detached-HEAD message says "on detached HEAD..." but test expects "not on any branch" wording. `manager.test.ts`: "clears a worktree add that never finished..." threw "A Git worktree already occupies..."; two tests received untracked entries with `name` and forward-slash paths vs expected native path objects (`hygiene-manager.test.txt`).
+- **Prior jobs monitoring:** All requested prior focused Vitest jobs finished; results captured above without duplicating while active.
+- **Next concrete action:** Add `.gitattributes` rule for `/.ledger/logs/*.log -text` before future ledger log commits (DANS1 and source as needed), diagnose/fix remaining SHIP failures per hypotheses without changing acceptance limits, run ledger loop, mirror verified source patches to GitHub branch, complete full qualification, then run real Finish-Lines Planner UI task with desktop and phone/tablet screenshots.
+- **Blockers:** SHIP/focused failures remain (worktree-care state handling, hygiene/manager wording+path/contract issues, broader SHIP items). No acceptance limits changed.
