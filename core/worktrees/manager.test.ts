@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import net from "node:net";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Ledger } from "../ledger/index";
 import { git, runGit } from "./git";
 import { WorktreeManager, preCommitHook } from "./manager";
@@ -40,6 +40,84 @@ describe("WorktreeManager", () => {
     expect(await manager.list()).toHaveLength(1);
   }, SLOW);
 
+  it("creates from an empty registry through dispatch without a full reconciliation", async () => {
+    const reconcile = vi.spyOn(manager, "reconcileWithDisk");
+    const info = await manager.getOrCreateForDispatch({ taskId: "T-19", actor: person });
+    expect(info.taskId).toBe("T-19");
+    expect(existsSync(info.path)).toBe(true);
+    expect(reconcile).not.toHaveBeenCalled();
+  }, SLOW);
+
+  it("forgets gone rows only when at capacity, then creates the dispatched worktree", async () => {
+    const old = await Promise.all(["T-20", "T-21", "T-22"].map((taskId) => manager.create({ taskId, actor: person })));
+    for (const info of old) {
+      await git(repo.root, ["worktree", "remove", "--force", info.path]);
+      await git(repo.root, ["branch", "-D", info.branch]);
+    }
+
+    const info = await manager.getOrCreateForDispatch({ taskId: "T-23", actor: person });
+    expect(info.taskId).toBe("T-23");
+    expect((await manager.list()).map((item) => item.taskId)).toEqual(["T-23"]);
+    expect(ledger.entries().filter((entry) => entry.type === "worktree.removed" && entry.data?.forgotten === true).map((entry) => entry.subject).sort()).toEqual(["T-20", "T-21", "T-22"]);
+  }, SLOW);
+
+  it("forgets only the exact gone row when malformed duplicate task ids include a live worktree", async () => {
+    const live = await manager.create({ taskId: "T-28", actor: person });
+    const registryPath = path.join(repo.root, ".git", "perfect-planner", "worktrees.json");
+    const registry = JSON.parse(readFileSync(registryPath, "utf8")) as { schemaVersion: number; worktrees: (typeof live)[] };
+    const goneDuplicate = {
+      ...live,
+      branch: `${live.branch}-stale-duplicate`,
+      path: path.join(manager.worktreeRoot, "T-28-stale-duplicate"),
+    };
+    registry.worktrees.push(goneDuplicate);
+    writeFileSync(registryPath, `${JSON.stringify(registry, null, 2)}\n`);
+
+    const result = await manager.reconcileWithDisk({ forget: true });
+    expect(result.forgotten).toEqual(["T-28"]);
+    const remaining = await manager.list();
+    expect(remaining).toHaveLength(1);
+    expect(remaining[0]).toMatchObject({ taskId: live.taskId, branch: live.branch, path: live.path });
+    expect(existsSync(live.path)).toBe(true);
+    expect((await manager.reconcileWithDisk()).folders).toEqual([
+      expect.objectContaining({ taskId: live.taskId, branch: live.branch, path: live.path, state: "ok" }),
+    ]);
+  }, SLOW);
+
+  it("refuses a missing or unlinked dispatch target without recreating or changing it", async () => {
+    const missing = await manager.create({ taskId: "T-24", actor: person });
+    await git(repo.root, ["worktree", "remove", "--force", missing.path]);
+    await expect(manager.getOrCreateForDispatch({ taskId: "T-24", actor: person })).rejects.toMatchObject({ reason: "missing" });
+    expect((await runGit(repo.root, ["show-ref", "--verify", "refs/heads/pp/T-24"])).code).toBe(0);
+
+    const unlinked = await manager.create({ taskId: "T-25", actor: person });
+    await git(repo.root, ["worktree", "remove", "--force", unlinked.path]);
+    writeFiles(unlinked.path, { "notes.txt": "keep this folder\n" });
+    await expect(manager.getOrCreateForDispatch({ taskId: "T-25", actor: person })).rejects.toMatchObject({ reason: "unlinked" });
+    expect(readFileSync(path.join(unlinked.path, "notes.txt"), "utf8")).toBe("keep this folder\n");
+  }, SLOW);
+
+  it("refuses a listed task folder on detached HEAD or a different branch with a truthful note", async () => {
+    const info = await manager.create({ taskId: "T-27", actor: person });
+    await git(info.path, ["switch", "--detach", "HEAD"]);
+    await expect(manager.getOrCreateForDispatch({ taskId: "T-27", actor: person })).rejects.toMatchObject({
+      reason: "unlinked",
+      message: expect.stringContaining("detached HEAD"),
+    });
+    const detached = (await manager.reconcileWithDisk()).folders.find((item) => item.taskId === "T-27");
+    expect(detached).toMatchObject({ state: "unlinked" });
+    expect(detached?.note).toContain(info.branch);
+
+    await git(info.path, ["switch", "-c", "wrong-branch"]);
+    await expect(manager.getOrCreateForDispatch({ taskId: "T-27", actor: person })).rejects.toMatchObject({
+      reason: "unlinked",
+      message: expect.stringContaining("branch wrong-branch"),
+    });
+    const wrongBranch = (await manager.reconcileWithDisk()).folders.find((item) => item.taskId === "T-27");
+    expect(wrongBranch).toMatchObject({ state: "unlinked" });
+    expect(wrongBranch?.note).toContain(`not its expected branch ${info.branch}`);
+  }, SLOW);
+
   it("refuses bad ids, a second worktree for a task, and a reused branch", async () => {
     await expect(manager.create({ taskId: "../evil", actor: person })).rejects.toThrow(/not a task id/);
     await manager.create({ taskId: "T-1", actor: person });
@@ -64,6 +142,24 @@ describe("WorktreeManager", () => {
     await expect(manager.create({ taskId: "T-6", actor: person })).rejects.toThrow(/already exists/);
     expect(readFileSync(path.join(kept, "mine.txt"), "utf8")).toBe("work\n");
     expect(await git(repo.root, ["rev-list", "--count", "main..pp/T-6"])).toBe("1");
+  }, SLOW);
+
+  it("leaves an unregistered interrupted worktree with user work untouched", async () => {
+    writeFiles(repo.root, { ".gitignore": "*.local.md\n" });
+    await commitAll(repo.root, "ignore local notes");
+    const folder = path.join(repo.root, ".perfect-planner", "worktrees", "T-26");
+    await git(repo.root, ["worktree", "add", "-b", "pp/T-26", folder, "main"]);
+    writeFiles(folder, { "notes.txt": "unsaved work\n", "ideas.local.md": "ignored idea\n" });
+    const before = await git(folder, ["status", "--porcelain=v1", "--ignored=matching", "--untracked-files=all"]);
+
+    await expect(manager.create({ taskId: "T-26", actor: person })).rejects.toThrow(/left untouched/);
+
+    expect(readFileSync(path.join(folder, "notes.txt"), "utf8")).toBe("unsaved work\n");
+    expect(readFileSync(path.join(folder, "ideas.local.md"), "utf8")).toBe("ignored idea\n");
+    expect(await git(folder, ["status", "--porcelain=v1", "--ignored=matching", "--untracked-files=all"])).toBe(before);
+    expect((await runGit(repo.root, ["show-ref", "--verify", "refs/heads/pp/T-26"])).code).toBe(0);
+    const listed = lines(await git(repo.root, ["worktree", "list", "--porcelain"]));
+    expect(listed.some((line) => line.startsWith("worktree ") && samePath(line.slice("worktree ".length), folder))).toBe(true);
   }, SLOW);
 
   it("relies on git to refuse checking out one branch in two worktrees", async () => {
@@ -132,17 +228,51 @@ describe("WorktreeManager", () => {
     expect((await runGit(repo.root, ["config", "--local", "--get", "core.hooksPath"])).stdout.trim()).toBe("");
   }, SLOW);
 
-  it("runs the dependency installer in the new worktree and rolls back if it fails", async () => {
+  it("preserves a worktree if the add operation fails after the folder is exposed", async () => {
+    const racing = new class extends WorktreeManager {
+      protected override async addTaskWorktree(branch: string, worktreePath: string, baseSha: string): Promise<void> {
+        await super.addTaskWorktree(branch, worktreePath, baseSha);
+        writeFiles(worktreePath, { "concurrent-note.txt": "keep the concurrent worktree\n" });
+        throw new Error("simulated add failure after another process exposed the folder");
+      }
+    }({ repoRoot: repo.root, ledger, install: false });
+    const target = path.join(repo.root, ".perfect-planner", "worktrees", "T-29");
+
+    await expect(racing.create({ taskId: "T-29", actor: person })).rejects.toThrow(/no cleanup was attempted/);
+
+    expect(readFileSync(path.join(target, "concurrent-note.txt"), "utf8")).toBe("keep the concurrent worktree\n");
+    expect((await runGit(repo.root, ["show-ref", "--verify", "refs/heads/pp/T-29"])).code).toBe(0);
+    expect((await racing.reconcileWithDisk()).untracked).toEqual([
+      expect.objectContaining({ path: target, branch: "pp/T-29" }),
+    ]);
+    expect(ledger.entries().filter((entry) => entry.type === "worktree.created" && entry.subject === "T-29")).toEqual([]);
+    await expect(racing.create({ taskId: "T-29", actor: person })).rejects.toThrow(/left untouched/);
+    expect(readFileSync(path.join(target, "concurrent-note.txt"), "utf8")).toBe("keep the concurrent worktree\n");
+  }, SLOW);
+  it("preserves the worktree when dependency setup fails after creation", async () => {
     const seen: string[] = [];
     const ok = new WorktreeManager({ repoRoot: repo.root, ledger, install: async (dir) => void seen.push(dir) });
     const info = await ok.create({ taskId: "T-7", actor: person });
     expect(seen).toEqual([info.path]);
 
-    const failing = new WorktreeManager({ repoRoot: repo.root, ledger, install: async () => { throw new Error("install broke"); } });
-    await expect(failing.create({ taskId: "T-8", actor: person })).rejects.toThrow(/install broke/);
-    expect((await runGit(repo.root, ["show-ref", "--verify", "refs/heads/pp/T-8"])).code).not.toBe(0);
-    expect(existsSync(path.join(repo.root, ".perfect-planner", "worktrees", "T-8"))).toBe(false);
+    const failing = new WorktreeManager({
+      repoRoot: repo.root,
+      ledger,
+      install: async (dir) => {
+        writeFiles(dir, { "notes.txt": "keep the setup failure note\n" });
+        throw new Error("install broke");
+      },
+    });
+    const failedPath = path.join(repo.root, ".perfect-planner", "worktrees", "T-8");
+    await expect(failing.create({ taskId: "T-8", actor: person })).rejects.toThrow(/left in place[\s\S]*install broke/);
+    expect((await runGit(repo.root, ["show-ref", "--verify", "refs/heads/pp/T-8"])).code).toBe(0);
+    expect(readFileSync(path.join(failedPath, "notes.txt"), "utf8")).toBe("keep the setup failure note\n");
     expect((await failing.list()).map((item) => item.taskId)).toEqual(["T-7"]);
+    expect((await failing.reconcileWithDisk()).untracked).toEqual([
+      expect.objectContaining({ path: failedPath, branch: "pp/T-8" }),
+    ]);
+    await expect(failing.create({ taskId: "T-8", actor: person })).rejects.toThrow(/left untouched/);
+    expect(readFileSync(path.join(failedPath, "notes.txt"), "utf8")).toBe("keep the setup failure note\n");
   }, SLOW);
 
   it("removes a merged task's worktree and branch, and logs it", async () => {
@@ -161,7 +291,7 @@ describe("WorktreeManager", () => {
     const info = await manager.create({ taskId: "T-10", actor: person });
     writeFiles(info.path, { "notes.txt": "unsaved idea\n" });
     await expect(manager.remove("T-10")).rejects.toThrow(/uncommitted changes/);
-    expect(existsSync(path.join(info.path, "notes.txt"))).toBe(true);
+    expect(readFileSync(path.join(info.path, "notes.txt"), "utf8")).toBe("unsaved idea\n");
     await commitAll(info.path, "keep idea");
     const result = await manager.remove("T-10");
     expect(result.branchDeleted).toBe(false);
@@ -175,10 +305,12 @@ describe("WorktreeManager", () => {
     const info = await manager.create({ taskId: "T-18", actor: person });
     writeFiles(info.path, { "node_modules/dep/index.js": "export {};\n", "ideas.local.md": "keep me\n" });
     await expect(manager.remove("T-18")).rejects.toThrow(/ignored files[\s\S]*ideas\.local\.md/);
-    expect(existsSync(path.join(info.path, "ideas.local.md"))).toBe(true);
+    expect(readFileSync(path.join(info.path, "ideas.local.md"), "utf8")).toBe("keep me\n");
     writeFiles(info.path, { ".env": "PORT=3000\nAPI_KEY=real-value-typed-in\n" });
     rmSync(path.join(info.path, "ideas.local.md"));
     await expect(manager.remove("T-18")).rejects.toThrow(/\.env/);
+    expect(readFileSync(path.join(info.path, ".env"), "utf8")).toBe("PORT=3000\nAPI_KEY=real-value-typed-in\n");
+    expect(readFileSync(path.join(info.path, "node_modules/dep/index.js"), "utf8")).toBe("export {};\n");
     writeFiles(info.path, { ".env": `PORT=3000\nAPI_KEY=${PLACEHOLDER}\n` });
     expect((await manager.remove("T-18")).taskId).toBe("T-18");
     expect(existsSync(info.path)).toBe(false);

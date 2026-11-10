@@ -27,6 +27,8 @@ export interface ProjectWatchOptions {
 export interface ProjectWatch {
   /** One pass now (shares a pass already running). Never throws; a failure comes back as an error entry and an inbox notice. */
   tick(): Promise<TickResult>;
+  /** Wait for the current pass to finish without starting another one. */
+  waitForCurrentTick(): Promise<void>;
   /** Stops the timer and waits for a pass in flight, so the ledger can close safely. */
   stop(): Promise<void>;
 }
@@ -86,6 +88,7 @@ export function startProjectWatch(project: CoreProject, options: ProjectWatchOpt
         return result;
       }
     },
+    waitForCurrentTick: () => watcher.waitForCurrentTick(),
     stop: () => watcher.stop(),
   };
 }

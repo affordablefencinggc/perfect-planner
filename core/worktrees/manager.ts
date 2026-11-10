@@ -1,4 +1,4 @@
-import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
 import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -159,6 +159,13 @@ export function preCommitHook(env: NodeJS.ProcessEnv = process.env): string {
 
 export class WorktreeError extends Error {}
 
+export class DispatchWorktreeError extends WorktreeError {
+  constructor(readonly reason: "missing" | "unlinked", message: string) {
+    super(message);
+    this.name = "DispatchWorktreeError";
+  }
+}
+
 /** Dev-server ports handed out in this process, by repo. Two projects open at once must not share one while neither server is listening yet. */
 const PORT_LEASES = new Map<number, string>();
 
@@ -217,6 +224,31 @@ export class WorktreeManager {
     return this.serial(() => this.createNow(options));
   }
 
+  /** Fast dispatch path: inspect only the requested task unless capacity cleanup is required. */
+  getOrCreateForDispatch(options: CreateOptions): Promise<WorktreeInfo> {
+    return this.serial(async () => {
+      if (!TASK_ID.test(options.taskId)) throw new WorktreeError('"' + options.taskId + '" is not a task id like T-14 or T-14.a2.');
+      const registry = await this.readRegistry();
+      const existing = registry.worktrees.find((info) => info.taskId === options.taskId);
+      if (existing) {
+        const listed = parseWorktreeList(await git(this.repoRoot, ["worktree", "list", "--porcelain"]));
+        const status = await this.statusOf(existing, listed);
+        if (status.state === "missing" || status.state === "unlinked") {
+          throw new DispatchWorktreeError(status.state, status.note);
+        }
+        if (status.state === "gone") {
+          await this.reconcileWithDiskNow({ forget: true, actor: options.actor });
+          return this.createNow(options);
+        }
+        return existing;
+      }
+      if (registry.worktrees.length >= this.maxParallel) {
+        await this.reconcileWithDiskNow({ forget: true, actor: options.actor });
+      }
+      return this.createNow(options);
+    });
+  }
+
   private async createNow({ taskId, actor, baseRef, claims = [] }: CreateOptions): Promise<WorktreeInfo> {
     if (!TASK_ID.test(taskId)) throw new WorktreeError(`"${taskId}" is not a task id like T-14 or T-14.a2.`);
     const registry = await this.readRegistry();
@@ -230,7 +262,10 @@ export class WorktreeManager {
     const baseSha = await git(this.repoRoot, ["rev-parse", "--verify", `${base}^{commit}`]).catch(() => {
       throw new WorktreeError(`Base "${base}" is not a commit in this repo.`);
     });
-    await this.discardUnfinishedAdd(worktreePath, branch, baseSha);
+    const listedTarget = parseWorktreeList(await git(this.repoRoot, ["worktree", "list", "--porcelain"]))
+      .find((item) => samePath(item.path, worktreePath));
+    if (listedTarget) throw new WorktreeError("A Git worktree already occupies " + toRepoPath(path.relative(this.repoRoot, worktreePath)) + "; it was left untouched. Inspect it before retrying.");
+    if (existsSync(worktreePath)) throw new WorktreeError(toRepoPath(path.relative(this.repoRoot, worktreePath)) + " already exists on disk and was left untouched.");
     if ((await runGit(this.repoRoot, ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`])).code === 0) {
       throw new WorktreeError(`Branch ${branch} already exists. Use the next attempt id instead of reusing it.`);
     }
@@ -245,11 +280,10 @@ export class WorktreeManager {
     mkdirSync(this.worktreeRoot, { recursive: true });
     // git itself refuses a branch already checked out in another worktree; -b also refuses an existing branch.
     try {
-      await git(this.repoRoot, ["worktree", "add", "-b", branch, worktreePath, baseSha]);
+      await this.addTaskWorktree(branch, worktreePath, baseSha);
     } catch (error) {
-      // A failed add (a refused setting, a full disk) can leave the branch, git's half-made worktree and the folder.
-      await this.discardUnfinishedAdd(worktreePath, branch, baseSha, true);
-      throw error;
+      // Another process may have exposed a folder before Git reports an error; preserve it for inspection.
+      throw new WorktreeError("Could not add " + taskId + "'s worktree; no cleanup was attempted, so any folder or branch was left untouched. " + (error as Error).message);
     }
     // A finished add is never locked; a "initializing" lock here is a killed earlier add's, written after our clean-up.
     await runGit(this.repoRoot, ["worktree", "unlock", worktreePath]);
@@ -275,39 +309,14 @@ export class WorktreeManager {
       });
       return info;
     } catch (error) {
-      // Nothing has been written in a worktree this young, so a forced rollback discards no one's work.
-      await runGit(this.repoRoot, ["worktree", "remove", "--force", worktreePath]);
-      await runGit(this.repoRoot, ["branch", "-D", branch]);
-      throw error;
+      throw new WorktreeError("Setup failed for " + taskId + "; its worktree and branch were left in place so no work is discarded. " + (error as Error).message);
     }
   }
 
-  /**
-   * Clear what a `git worktree add` that never finished leaves behind: git's own entry (locked "initializing" while it
-   * checks files out), its index.lock, the half-filled folder and the branch it created. The caller has checked that
-   * no registry entry lists the task, and only a branch with no commit of its own is deleted, so no work can be lost.
-   * `force` is for an add this process just saw fail.
-   */
-  private async discardUnfinishedAdd(worktreePath: string, branch: string, baseSha: string, force = false): Promise<void> {
-    const listed = await runGit(this.repoRoot, ["worktree", "list", "--porcelain"]);
-    const unfinished = listed.stdout.split(/\r?\n\r?\n/).some((block) => {
-      const own = block.split(/\r?\n/).find((line) => line.startsWith("worktree "));
-      return own !== undefined && samePath(own.slice("worktree ".length), worktreePath);
-    });
-    if (!force && !unfinished) return;
-    // A link planted where the folder goes is not git's leftover: leave it for the "already exists" refusal.
-    if (lstatSync(worktreePath, { throwIfNoEntry: false })?.isSymbolicLink()) return;
-    if ((await runGit(this.repoRoot, ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`])).code === 0) {
-      const own = await runGit(this.repoRoot, ["rev-list", "--count", `${baseSha}..${branch}`]);
-      if (own.code !== 0 || own.stdout.trim() !== "0") return; // the branch holds work: leave everything as it is
-    }
-    await runGit(this.repoRoot, ["worktree", "unlock", worktreePath]);
-    await runGit(this.repoRoot, ["worktree", "remove", "--force", worktreePath]);
-    if (isWithin(this.worktreeRoot, worktreePath)) rmSync(worktreePath, { recursive: true, force: true });
-    await runGit(this.repoRoot, ["worktree", "prune"]);
-    await runGit(this.repoRoot, ["branch", "-D", branch]);
+  /** Isolated Git add seam so failures after a folder is exposed can be tested safely. */
+  protected async addTaskWorktree(branch: string, worktreePath: string, baseSha: string): Promise<void> {
+    await git(this.repoRoot, ["worktree", "add", "-b", branch, worktreePath, baseSha]);
   }
-
   /** Add file claims to a running task. Returns the conflicts and records nothing if there are any. */
   claim(taskId: string, files: string[]): Promise<ClaimConflict[]> {
     return this.serial(async () => {
@@ -475,11 +484,12 @@ export class WorktreeManager {
     const info = registry.worktrees.find((item) => item.taskId === taskId);
     if (!info) throw new WorktreeError(`${taskId} has no worktree.`);
     if (existsSync(info.path)) {
-      const dirty = await git(info.path, ["status", "--porcelain=v1", "--untracked-files=all"]);
-      if (dirty) throw new WorktreeError(`${taskId} has uncommitted changes; commit or move them before removing the worktree.`);
+      const status = lines(await git(info.path, ["status", "--porcelain=v1", "--ignored=matching", "--untracked-files=all"]));
+      const dirty = status.filter((line) => !line.startsWith("!! "));
+      if (dirty.length) throw new WorktreeError(taskId + " has uncommitted changes; commit or move them before removing the worktree.");
       // git worktree remove also deletes ignored files, which can be real work (notes, data, edited settings).
-      const kept = await this.ignoredWork(info.path);
-      if (kept.length) throw new WorktreeError(`${taskId} has ignored files that would be deleted with the worktree; move them first: ${kept.slice(0, 10).join(", ")}`);
+      const kept = this.ignoredWorkFromStatus(info.path, status);
+      if (kept.length) throw new WorktreeError(taskId + " has ignored files that would be deleted with the worktree; move them first: " + kept.slice(0, 10).join(", "));
       await git(this.repoRoot, ["worktree", "remove", info.path]);
     } else {
       await git(this.repoRoot, ["worktree", "prune"]);
@@ -513,7 +523,11 @@ export class WorktreeManager {
    * placeholders; anything else counts as work.
    */
   private async ignoredWork(worktreePath: string): Promise<string[]> {
-    const ignored = lines(await git(worktreePath, ["status", "--porcelain=v1", "--ignored=matching", "--untracked-files=all"]))
+    return this.ignoredWorkFromStatus(worktreePath, lines(await git(worktreePath, ["status", "--porcelain=v1", "--ignored=matching", "--untracked-files=all"])));
+  }
+
+  private ignoredWorkFromStatus(worktreePath: string, status: string[]): string[] {
+    const ignored = status
       .filter((line) => line.startsWith("!! "))
       .map((line) => line.slice(3).replace(/^"(.*)"$/, "$1"));
     return ignored.filter((file) => {
@@ -551,36 +565,38 @@ export class WorktreeManager {
    * deletes a folder or a branch.
    */
   async reconcileWithDisk(options: { forget?: boolean; actor?: Actor } = {}): Promise<Reconciled> {
-    const run = async (): Promise<Reconciled> => {
-      const registry = await this.readRegistry();
-      const listed = parseWorktreeList(await git(this.repoRoot, ["worktree", "list", "--porcelain"]));
-      const folders: FolderStatus[] = [];
-      for (const info of registry.worktrees) folders.push(await this.statusOf(info, listed));
-      const untracked = listed
-        .filter((item) => this.underWorktreeRoot(item.path) && !registry.worktrees.some((info) => samePath(item.path, info.path)))
-        .map((item) => ({ name: path.basename(item.path), path: item.path, ...(item.branch ? { branch: item.branch } : {}) }));
-      const forgotten: string[] = [];
-      if (options.forget) {
-        const stale = folders.filter((item) => item.state === "gone").map((item) => registry.worktrees.find((info) => info.taskId === item.taskId)!);
-        if (stale.length) {
-          registry.worktrees = registry.worktrees.filter((info) => !stale.includes(info));
-          await this.writeRegistry(registry);
-          for (const info of stale) {
-            forgotten.push(info.taskId);
-            this.ledger.append({
-              type: "worktree.removed",
-              actor: WORKTREES_ACTOR,
-              subject: info.taskId,
-              summary: `Forgot the record of ${info.taskId}'s folder: the folder and ${info.branch} were both deleted outside Perfect Planner`,
-              evidence: [`branch:${info.branch}`, `port:${info.port}`],
-              data: { removedBy: options.actor ?? WORKTREES_ACTOR, branch: info.branch, branchDeleted: false, forgotten: true },
-            });
-          }
+    const run = () => this.reconcileWithDiskNow(options);
+    return options.forget ? this.serial(run) : run();
+  }
+
+  private async reconcileWithDiskNow(options: { forget?: boolean; actor?: Actor } = {}): Promise<Reconciled> {
+    const registry = await this.readRegistry();
+    const listed = parseWorktreeList(await git(this.repoRoot, ["worktree", "list", "--porcelain"]));
+    const checked = await Promise.all(registry.worktrees.map(async (info) => ({ info, status: await this.statusOf(info, listed) })));
+    const folders = checked.map((item) => item.status);
+    const untracked = listed
+      .filter((item) => this.underWorktreeRoot(item.path) && !registry.worktrees.some((info) => samePath(item.path, info.path)))
+      .map((item) => ({ name: path.basename(item.path), path: item.path, ...(item.branch ? { branch: item.branch } : {}) }));
+    const forgotten: string[] = [];
+    if (options.forget) {
+      const stale = checked.filter(({ status }) => status.state === "gone").map(({ info }) => info);
+      if (stale.length) {
+        registry.worktrees = registry.worktrees.filter((info) => !stale.includes(info));
+        await this.writeRegistry(registry);
+        for (const info of stale) {
+          forgotten.push(info.taskId);
+          this.ledger.append({
+            type: "worktree.removed",
+            actor: WORKTREES_ACTOR,
+            subject: info.taskId,
+            summary: "Forgot the record of " + info.taskId + "'s folder: the folder and " + info.branch + " were both deleted outside Perfect Planner",
+            evidence: ["branch:" + info.branch, "port:" + info.port],
+            data: { removedBy: options.actor ?? WORKTREES_ACTOR, branch: info.branch, branchDeleted: false, forgotten: true },
+          });
         }
       }
-      return { folders, untracked, forgotten };
-    };
-    return options.forget ? this.serial(run) : run();
+    }
+    return { folders, untracked, forgotten };
   }
 
   /** Is this path inside the planner's own worktree folder (as written or as a real path)? */
@@ -593,7 +609,15 @@ export class WorktreeManager {
     const make = (state: FolderState, outside = false): FolderStatus => ({ taskId: info.taskId, branch: info.branch, path: info.path, state, note: folderNote(state, info.taskId, info.branch, info.path, outside) });
     // The registry lives in .git, which any program on this PC can write: a record naming some other folder is never acted on.
     if (!this.underWorktreeRoot(info.path)) return make("unlinked", true);
-    if (existsSync(info.path)) return make(isListed(listed, info.path) ? "ok" : "unlinked");
+    if (existsSync(info.path)) {
+      const entry = isListed(listed, info.path);
+      if (!entry) return make("unlinked");
+      if (entry.branch !== info.branch) {
+        const location = entry.branch ? "branch " + entry.branch : "detached HEAD";
+        return { ...make("unlinked"), note: "The folder for " + info.taskId + " is on " + location + ", not its expected branch " + info.branch + ". Perfect Planner has left it untouched." };
+      }
+      return make("ok");
+    }
     const branch = await runGit(this.repoRoot, ["show-ref", "--verify", "--quiet", `refs/heads/${info.branch}`]);
     return make(branch.code === 0 ? "missing" : "gone");
   }

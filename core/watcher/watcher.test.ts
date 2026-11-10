@@ -57,6 +57,46 @@ describe("GitWatcher commits", { timeout: 60_000 }, () => {
   });
 });
 
+describe("GitWatcher pass coordination", { timeout: 10_000 }, () => {
+  it("waits for an active pass without starting one when idle", async () => {
+    const ledger = await memoryLedger();
+    let release!: () => void;
+    let signalEntered!: () => void;
+    const blocked = new Promise<void>((resolve) => { release = resolve; });
+    const entered = new Promise<void>((resolve) => { signalEntered = resolve; });
+    let calls = 0;
+    const watcher = new GitWatcher({
+      ledger,
+      worktrees: async () => {
+        calls += 1;
+        if (calls === 1) {
+          signalEntered();
+          await blocked;
+        }
+        return [];
+      },
+    });
+
+    await watcher.waitForCurrentTick();
+    expect(calls).toBe(0);
+
+    const active = watcher.tick();
+    await entered;
+    let drained = false;
+    const wait = watcher.waitForCurrentTick().then(() => { drained = true; });
+    await Promise.resolve();
+    expect(drained).toBe(false);
+    expect(calls).toBe(1);
+
+    release();
+    await active;
+    await wait;
+    expect(drained).toBe(true);
+    expect(calls).toBe(1);
+    await watcher.tick();
+    expect(calls).toBe(2);
+  });
+});
 describe("GitWatcher over two repos", { timeout: 60_000 }, () => {
   it("does not call the same file name in two different repos a collision, and still does inside one repo", async () => {
     const one = await makeTaskRepo(["T-1", "T-3"]);

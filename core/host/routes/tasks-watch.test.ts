@@ -331,6 +331,25 @@ describe("the watcher reaches the main chat's inbox", () => {
     expect(ledgerOf("commit.observed").map((e) => e.subject)).toEqual(["T-1"]);
   }, 60_000);
 
+  it("preserves missing and unlinked task folders when dispatch is retried", async () => {
+    const missing = await dispatch("T-1");
+    const missingRef = git(repo, "rev-parse", "refs/heads/" + missing.branch);
+    git(repo, "worktree", "remove", "--force", missing.worktree);
+    const missingRetry = await post("/tasks/T-1/dispatch", { model: "claude-sonnet" });
+    expect(missingRetry.status).toBe(409);
+    expect(missingRetry.body.code).toBe("WORKTREE_MISSING");
+    expect(fs.existsSync(missing.worktree)).toBe(false);
+    expect(git(repo, "rev-parse", "refs/heads/" + missing.branch)).toBe(missingRef);
+
+    const unlinked = await dispatch("T-2");
+    git(repo, "worktree", "remove", "--force", unlinked.worktree);
+    write(unlinked.worktree, "notes.txt", "keep this unlinked folder\n");
+    const unlinkedRetry = await post("/tasks/T-2/dispatch", { model: "claude-sonnet" });
+    expect(unlinkedRetry.status).toBe(409);
+    expect(unlinkedRetry.body.code).toBe("WORKTREE_UNLINKED");
+    expect(fs.readFileSync(path.join(unlinked.worktree, "notes.txt"), "utf8")).toBe("keep this unlinked folder\n");
+    expect(git(repo, "rev-parse", "refs/heads/" + unlinked.branch)).not.toBe("");
+  }, 60_000);
   it("stops with the project and with the host: no pass runs after close and the ledger can be opened again", async () => {
     const passes = vi.spyOn(GitWatcher.prototype, "tick");
     await freshHost({ watch: { intervalMs: 15 } });
@@ -359,6 +378,7 @@ describe("the watcher reaches the main chat's inbox", () => {
   }, 60_000);
 
   it("the whole loop still merges while the watcher ticks as fast as it can", async () => {
+    const drained = vi.spyOn(GitWatcher.prototype, "waitForCurrentTick");
     await freshHost({ watch: { intervalMs: 1 } });
     addTask("Save notes");
     addTask("Export notes");
@@ -368,6 +388,7 @@ describe("the watcher reaches the main chat's inbox", () => {
     // The watcher watched: it wrote the worker's commits to the ledger, none of which got in the way of done.
     expect(ledgerOf("commit.observed").map((e) => e.subject)).toContain("T-1");
     expect(ledgerOf("task.done")).toHaveLength(1);
+    expect(drained).toHaveBeenCalled();
     expect(project().ledger.status.ok).toBe(true);
   }, 90_000);
 });

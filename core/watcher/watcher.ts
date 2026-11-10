@@ -119,6 +119,11 @@ export class GitWatcher {
     this.shouldRun = options.shouldRun;
   }
 
+  /** Wait for a pass already using a worktree without starting a fresh one. */
+  async waitForCurrentTick(): Promise<void> {
+    await this.running?.catch(() => undefined);
+  }
+
   /** One pass over every worktree. Concurrent calls share the pass already running. */
   tick(): Promise<TickResult> {
     if (!this.running) {

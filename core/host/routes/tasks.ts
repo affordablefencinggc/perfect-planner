@@ -15,7 +15,7 @@ import { deriveState, sensitiveChanges, testSupportFiles, unalteredPins, type Ga
 import { isAuthoritative, type Actor, type LedgerEntry } from "../../ledger/index";
 import type { AgentKind } from "../agentKinds";
 import { attemptLabel, unmetDependencies, waitingMessage, type TaskView } from "../../mcp/index";
-import { WorktreeError, WorktreeManager, git, headIdentity, refreshCarriedSettings, runGit, WORKTREES_ACTOR, type WorktreeInfo } from "../../worktrees/index";
+import { DispatchWorktreeError, WorktreeError, WorktreeManager, git, headIdentity, refreshCarriedSettings, runGit, WORKTREES_ACTOR, type WorktreeInfo } from "../../worktrees/index";
 import type { CoreHost } from "../host";
 import type { CoreProject } from "../project";
 import { HttpError, type Router } from "../router";
@@ -23,7 +23,7 @@ import { AGENT_SERVER_NAME, agentEntryPath, connectLine, nodeBinary, quoteFor, t
 
 export { quoteFor };
 import { localPerson, localPersonId } from "./people";
-import { annotate, checkReadiness, prepareForDispatch, quietLabels, registerWorktreeCareRoutes, tidy, withHygieneLock } from "./worktreeCare";
+import { annotate, checkReadiness, quietLabels, registerWorktreeCareRoutes, tidy, withHygieneLock } from "./worktreeCare";
 import { PRIMARY_REPO, readRepos } from "../../repos/index";
 import { sandboxStatus } from "../../exec/index";
 import { replayRoster } from "../../people/index";
@@ -802,16 +802,13 @@ async function dispatch(project: CoreProject, host: CoreHost, id: string, body: 
   if (model !== undefined && !MODEL.test(model)) throw new HttpError(400, "INVALID", "Name the worker's model in letters, digits and . _ : / - (for example claude-sonnet-4).");
   const label = attemptLabel(task);
   const worktrees = await manager(project, root, repoName);
-  await prepareForDispatch(worktrees, label);
-  let tree = await worktrees.get(label);
-  if (!tree) {
-    try {
-      tree = await worktrees.create({ taskId: label, actor: localPerson(project) });
-    } catch (error) {
-      if (error instanceof WorktreeError) throw new HttpError(409, "WORKTREE", error.message);
-      throw error;
+  const tree = await worktrees.getOrCreateForDispatch({ taskId: label, actor: localPerson(project) }).catch((error: unknown) => {
+    if (error instanceof DispatchWorktreeError) {
+      throw new HttpError(409, error.reason === "missing" ? "WORKTREE_MISSING" : "WORKTREE_UNLINKED", error.message);
     }
-  }
+    if (error instanceof WorktreeError) throw new HttpError(409, "WORKTREE", error.message);
+    throw error;
+  });
   // A just-created/reused worktree must be visible on the very next board and
   // watcher read, rather than hidden behind the optional Git view TTL.
   const repo: RepoState = { name: repoName ?? PRIMARY_REPO, ok: true, root };
@@ -1263,7 +1260,7 @@ export function registerTaskRoutes(router: Router): void {
     revokeWorker(project, label);
     dispatches(project).delete(label);
     // A watcher pass that began before the task was done may still have git running in its folder, which Windows will not remove.
-    await project.watch?.tick();
+    await project.watch?.waitForCurrentTick();
     const removed = await (await manager(project, root, task.repo)).remove(label, WORKTREES_ACTOR).catch((error: Error) => ({ error: error.message }));
     return { merged: true, commit: merged.mergeCommit, into: tree.baseRef, removed, ...(await overview(project)) };
   };
