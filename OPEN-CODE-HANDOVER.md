@@ -208,6 +208,13 @@ FIX-26 is independently verified on DANS1. GitHub feature branch codex/qualifica
 - **DANS1:** Applied same worktree test fixes and committed `2d11ae0` on `codex/qualification-r26`. Targeted `core/worktrees/hygiene.test.ts` + `core/worktrees/manager.test.ts` now pass (48/48). Running full `npm run test:core` on DANS1 with clean log capture to confirm remaining core failures before next SHIP attempt.
 - **Next concrete action:** Review full `test:core` result, fix any remaining failures, then address `verify:release`/rerun `ledger run SHIP`.
 - **Blockers:** SHIP not yet green; awaiting full `test:core` confirmation. No acceptance limits changed.
+
+### 2026-11-11 — OpenCode to Codex (progress 15)
+
+- **GitHub/source commit:** 8f076f6 pushed.
+- **DANS1:** Prior `test:core` capture was incomplete (11KB log, exit -1) despite `typecheck:core` passing. Re-running full `npm run test:core` with direct log redirection (`.ledger/logs/opencode-test-core-4.log`) to get a reliable result.
+- **Next concrete action:** Read `test:core` outcome, fix remaining failures, then run/repair `verify:release` and complete SHIP ledger loop.
+- **Blockers:** Need confirmed `test:core` pass/fail details. No acceptance limits changed.
 ### 2026-11-11 — Codex to OpenCode (coverage review correction)
 
 An independent reviewer inspected the FIX-26-SCOPE proof and found the targeted R26 script does not select the new dispatch-retry preservation test, the watcher active-pass test, the watcher-fast-merge assertion, or several new manager reconciliation/setup tests. It is not enough to claim comprehensive changed-module behavioral coverage by itself.
@@ -381,3 +388,11 @@ For test commands inside that remote script, use `cmd /c "npm run test:core -- -
 - **Prior jobs monitoring:** All requested prior focused Vitest jobs finished; results captured above without duplicating while active.
 - **Next concrete action:** Add `.gitattributes` rule for `/.ledger/logs/*.log -text` before future ledger log commits (DANS1 and source as needed), diagnose/fix remaining SHIP failures per hypotheses without changing acceptance limits, run ledger loop, mirror verified source patches to GitHub branch, complete full qualification, then run real Finish-Lines Planner UI task with desktop and phone/tablet screenshots.
 - **Blockers:** SHIP/focused failures remain (worktree-care state handling, hygiene/manager wording+path/contract issues, broader SHIP items). No acceptance limits changed.
+
+### 2026-11-11 - OpenCode to Codex (fix pass started)
+
+- **GitHub/source commit:** b74a34a.
+- **DANS1 verified:** HOST=DANS1, `C:\Users\danie\projects\Planner-Release-20261110-r26`, HEAD now includes local commit `7bd9978` (Add ledger log .gitattributes rule); working tree has modified `LEDGER.json`/`LEDGER.md` and modified `core/worktrees/manager.ts`.
+- **Changes:** Added `.gitattributes` (`/.ledger/logs/*.log -text`) in source and DANS1 (committed on DANS1). Patched `reconcileWithDiskNow` untracked `path` to `path.resolve(item.path)` on DANS1 to normalize Windows path form; running focused `hygiene.test.ts`+`manager.test.ts` to verify impact.
+- **Next concrete action:** Capture focused hygiene/manager result, continue diagnosing/fixing worktree-care state and remaining SHIP failures, mirror verified source fixes to GitHub branch, run ledger loop and full qualification, then real Finish-Lines UI task with desktop and phone/tablet screenshots.
+- **Blockers:** Multiple failures still unresolved; focused verification in progress. No acceptance limits changed.
