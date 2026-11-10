@@ -576,7 +576,7 @@ export class WorktreeManager {
     const folders = checked.map((item) => item.status);
     const untracked = listed
       .filter((item) => this.underWorktreeRoot(item.path) && !registry.worktrees.some((info) => samePath(item.path, info.path)))
-      .map((item) => ({ name: path.basename(item.path), path: item.path, ...(item.branch ? { branch: item.branch } : {}) }));
+      .map((item) => ({ name: path.basename(item.path), path: path.resolve(item.path), ...(item.branch ? { branch: item.branch } : {}) }));
     const forgotten: string[] = [];
     if (options.forget) {
       const stale = checked.filter(({ status }) => status.state === "gone").map(({ info }) => info);
