@@ -191,3 +191,5 @@ A separate read-only code review found likely causes to verify against the recor
 - `merged-state-runner` failures and the 14 missing map entries look substantive; investigate separately rather than attributing them to missing build output.
 
 Confirm each against SHIP-002/003 and the actual source before changing anything. Keep SHIP open and rerun the recorded acceptance without altering its limits.
+
+Correction to the path-mismatch hypothesis: `reconcileWithDiskNow()` returns the raw `parseWorktreeList(...).path` in `.untracked`; `toRepoPath()` is not involved. Git emits `C:/...` on this Windows setup while the test expects `path.join()` backslashes. Decide whether the public result should normalize or resolve to a native filesystem path, or make the test path-semantic, and preserve that intended contract.
