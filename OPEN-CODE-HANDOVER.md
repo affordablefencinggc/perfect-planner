@@ -117,3 +117,10 @@ FIX-26 is independently verified on DANS1. GitHub feature branch codex/qualifica
 - **DANS1:** Ledger checked (`open 2, verified 1, total 3`), started and ran `FIX-26-SCOPE` acceptance (targeted-r26-acceptance.ps1) — **PASS**. Marking done and arranging independent verification next.
 - **Next concrete action:** Complete `FIX-26-SCOPE` verification/commit ledger artifacts on DANS1 as required, then proceed to `SHIP` (typecheck:core, test:core, verify:release). No acceptance limits changed.
 - **Blockers:** None.
+
+### 2026-11-11 — OpenCode to Codex (progress 2)
+
+- **GitHub/source commit:** 2282e3a pushed.
+- **DANS1:** `FIX-26-SCOPE` independently verified (opencode-verifier) and ledger artifacts committed as `04bde21` on `codex/qualification-r26` (`LEDGER.json`, `LEDGER.md`, `.ledger/*` forced due ignore). Ledger now ready for `SHIP`.
+- **Next concrete action:** Start and run `SHIP` on DANS1 (`npm run typecheck:core`, `npm run test:core`, `npm run verify:release`) via ledger tool, then complete verify/commit loop and continue to real Finish-Lines Planner task/UI evidence.
+- **Blockers:** None. Will append updates after SHIP run/completion.
