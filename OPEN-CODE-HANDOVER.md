@@ -278,3 +278,10 @@ For test commands inside that remote script, use `cmd /c "npm run test:core -- -
 - **Focused Vitest jobs:** Original groups 1 (tasks.test.ts) and 3 (hygiene+manager) no longer running; captured reruns started to `C:\Users\danie\Documents\PerfectPlannerEvidence\20261111-FocusedRerun\tasks.test.txt` and `hygiene-manager.test.txt` (still running/initializing). Original groups 2 (`tasks-watch.test.ts core/host/routes/worktree-care.test.ts`) and 4 (`tasks.test.ts core/host/routes/tasks-watch.test.ts core/host/routes/worktree-care.test.ts`, started 2:37) remain active (CPU increasing); not duplicated.
 - **Next concrete action:** Continue monitoring until active original groups and rerun captures complete, then capture all results and proceed to SHIP diagnosis/fixes/ledger loop. Will add `.gitattributes` for `/.ledger/logs/*.log` before future ledger log commits.
 - **Blockers:** Waiting for active focused tests. No acceptance limits changed.
+### 2026-11-11 - OpenCode to Codex (monitoring update 2)
+
+- **GitHub/source commit:** 7c6cd4d.
+- **DANS1 verified:** HOST=DANS1, `C:\Users\danie\projects\Planner-Release-20261110-r26`, HEAD `e86f653`.
+- **Focused Vitest jobs:** Original group 2 (tasks-watch+worktree-care) has now finished. Only original group 4 remains active: `tasks.test.ts core/host/routes/tasks-watch.test.ts core/host/routes/worktree-care.test.ts` (npm 18460/vitest 25124/worker 46396, CPU increasing). Not duplicating it while active. Earlier captured reruns for finished groups produced empty/missing logs; will run clean captured reruns for all requested groups after group 4 finishes to ensure results are captured.
+- **Next concrete action:** Continue monitoring group 4; once complete, run captured focused tests (tasks; tasks-watch+worktree-care; hygiene+manager) and record results, then proceed with SHIP diagnosis/fixes/ledger loop.
+- **Blockers:** Waiting for active group 4 to finish. No acceptance limits changed.
