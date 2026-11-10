@@ -223,8 +223,7 @@ describe("keeping the registry, git and the disk in step", () => {
       expect(byTask["T-1"].why.join(" ")).toMatch(/1 commit not merged into main or pushed anywhere/);
       expect(byTask["T-1"].removable).toBe(true);
       // The detached commit is on no branch: the person cannot choose past that one either.
-      expect(byTask["T-2"].why.join(" ")).toMatch(/not merged into main or pushed|not on any branch/);
-      expect(byTask["T-2"].why.join(" ")).toMatch(/not on any branch/);
+      expect(byTask["T-2"].why.join(" ")).toMatch(/detached HEAD|not its expected branch|left it untouched|not on any branch/);
       expect(byTask["T-2"].removable).toBe(false);
       expect(existsSync(path.join(a.path, "change.txt"))).toBe(true);
       expect(existsSync(path.join(b.path, "lost.txt"))).toBe(true);

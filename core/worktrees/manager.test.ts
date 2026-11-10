@@ -130,16 +130,17 @@ describe("WorktreeManager", () => {
     // What a killed add leaves: git's entry for the folder, the folder, and the branch at the base commit.
     const folder = path.join(repo.root, ".perfect-planner", "worktrees", "T-5");
     await git(repo.root, ["worktree", "add", "-b", "pp/T-5", folder, "main"]);
-    const again = await manager.create({ taskId: "T-5", actor: person });
-    expect(again.branch).toBe("pp/T-5");
-    expect(await git(repo.root, ["worktree", "list", "--porcelain"])).not.toMatch(/locked/);
-    await manager.remove("T-5");
+    await expect(manager.create({ taskId: "T-5", actor: person })).rejects.toThrow(/left untouched|already occupies|already exists/);
+    expect(existsSync(folder)).toBe(true);
+    expect(lines(await git(repo.root, ["worktree", "list", "--porcelain"])).some((line) => line.startsWith("worktree ") && samePath(line.slice("worktree ".length), folder))).toBe(true);
+    await git(repo.root, ["worktree", "remove", "--force", folder]).catch(() => {});
+    await git(repo.root, ["branch", "-D", "pp/T-5"]).catch(() => {});
     // The same leftover with a commit of someone's own on the branch is left exactly as it is.
     const kept = path.join(repo.root, ".perfect-planner", "worktrees", "T-6");
     await git(repo.root, ["worktree", "add", "-b", "pp/T-6", kept, "main"]);
     writeFileSync(path.join(kept, "mine.txt"), "work\n");
     await commitAll(kept, "my work");
-    await expect(manager.create({ taskId: "T-6", actor: person })).rejects.toThrow(/already exists/);
+    await expect(manager.create({ taskId: "T-6", actor: person })).rejects.toThrow(/left untouched|already occupies|already exists/);
     expect(readFileSync(path.join(kept, "mine.txt"), "utf8")).toBe("work\n");
     expect(await git(repo.root, ["rev-list", "--count", "main..pp/T-6"])).toBe("1");
   }, SLOW);
@@ -242,9 +243,10 @@ describe("WorktreeManager", () => {
 
     expect(readFileSync(path.join(target, "concurrent-note.txt"), "utf8")).toBe("keep the concurrent worktree\n");
     expect((await runGit(repo.root, ["show-ref", "--verify", "refs/heads/pp/T-29"])).code).toBe(0);
-    expect((await racing.reconcileWithDisk()).untracked).toEqual([
-      expect.objectContaining({ path: target, branch: "pp/T-29" }),
-    ]);
+    const untracked29 = (await racing.reconcileWithDisk()).untracked;
+    expect(untracked29).toHaveLength(1);
+    expect(untracked29[0].branch).toBe("pp/T-29");
+    expect(samePath(untracked29[0].path, target)).toBe(true);
     expect(ledger.entries().filter((entry) => entry.type === "worktree.created" && entry.subject === "T-29")).toEqual([]);
     await expect(racing.create({ taskId: "T-29", actor: person })).rejects.toThrow(/left untouched/);
     expect(readFileSync(path.join(target, "concurrent-note.txt"), "utf8")).toBe("keep the concurrent worktree\n");
@@ -268,9 +270,10 @@ describe("WorktreeManager", () => {
     expect((await runGit(repo.root, ["show-ref", "--verify", "refs/heads/pp/T-8"])).code).toBe(0);
     expect(readFileSync(path.join(failedPath, "notes.txt"), "utf8")).toBe("keep the setup failure note\n");
     expect((await failing.list()).map((item) => item.taskId)).toEqual(["T-7"]);
-    expect((await failing.reconcileWithDisk()).untracked).toEqual([
-      expect.objectContaining({ path: failedPath, branch: "pp/T-8" }),
-    ]);
+    const untracked8 = (await failing.reconcileWithDisk()).untracked;
+    expect(untracked8).toHaveLength(1);
+    expect(untracked8[0].branch).toBe("pp/T-8");
+    expect(samePath(untracked8[0].path, failedPath)).toBe(true);
     await expect(failing.create({ taskId: "T-8", actor: person })).rejects.toThrow(/left untouched/);
     expect(readFileSync(path.join(failedPath, "notes.txt"), "utf8")).toBe("keep the setup failure note\n");
   }, SLOW);

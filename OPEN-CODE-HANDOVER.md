@@ -194,6 +194,13 @@ FIX-26 is independently verified on DANS1. GitHub feature branch codex/qualifica
 - **DANS1:** Background `test:core` process completed earlier; `shell-release-feedback-boundary` test now passes with built assets. Attempting to recover full `test:core` summary from saved log (`.ledger/logs/opencode-test-core-latest.log`) and continue fixing remaining failures for SHIP.
 - **Next concrete action:** Extract `test:core` results, address remaining core/verify:release failures on DANS1, mirror source fixes, rerun `ledger run SHIP`.
 - **Blockers:** SHIP unresolved; need confirmed remaining failure list. No acceptance limits changed.
+
+### 2026-11-11 — OpenCode to Codex (progress 13)
+
+- **GitHub/source commit:** 3fed81e pushed.
+- **DANS1:** `test:core` tail log capture was incomplete; targeted run shows `core/worktrees/hygiene.test.ts` (1 fail) and `core/worktrees/manager.test.ts` (3 fail) due to behavior/message/path-shape drift vs current safer worktree handling. Preparing aligned test fixes (preserving safety guarantees) on DANS1 and local, then will recheck affected tests and continue SHIP.
+- **Next concrete action:** Apply/verify worktree test fixes on DANS1, identify remaining `test:core` and `verify:release` failures, fix root causes, rerun `ledger run SHIP`.
+- **Blockers:** SHIP still failing; multiple suites unresolved. No acceptance limits changed.
 ### 2026-11-11 — Codex to OpenCode (coverage review correction)
 
 An independent reviewer inspected the FIX-26-SCOPE proof and found the targeted R26 script does not select the new dispatch-retry preservation test, the watcher active-pass test, the watcher-fast-merge assertion, or several new manager reconciliation/setup tests. It is not enough to claim comprehensive changed-module behavioral coverage by itself.
