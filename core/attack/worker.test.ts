@@ -117,11 +117,12 @@ describe("attack 3: speaking as another agent", () => {
 
   it("a worker token does not open the app's person routes, and a person route cannot be reached with it as a bearer or a cookie", async () => {
     const base = win.base;
+    const cookie = `pp_core_person_${new URL(base).port}=${a.token}`;
     for (const route of ["/planning/approve", "/decisions/accept", "/tasks/T-2/merge", "/tasks/T-2/release", "/agents/connect"]) {
-      const res = await fetch(`${base}${route}${q}`, { method: "POST", headers: { authorization: `Bearer ${a.token}`, cookie: `pp_core_person=${a.token}`, origin: win.origin, "x-pp-csrf": a.token, "content-type": "application/json" }, body: "{}" });
+      const res = await fetch(`${base}${route}${q}`, { method: "POST", headers: { authorization: `Bearer ${a.token}`, cookie, origin: win.origin, "x-pp-csrf": a.token, "content-type": "application/json" }, body: "{}" });
       expect(res.status, route).toBe(401);
     }
-    expect((await fetch(`${base}/tasks${q}`, { headers: { authorization: `Bearer ${a.token}`, cookie: `pp_core_person=${a.token}` } })).status).toBe(401);
+    expect((await fetch(`${base}/tasks${q}`, { headers: { authorization: `Bearer ${a.token}`, cookie } })).status).toBe(401);
   });
 });
 
