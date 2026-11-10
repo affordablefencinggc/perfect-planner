@@ -262,3 +262,11 @@ Use the proven PowerShell `-EncodedCommand` wrapper for remote PowerShell, pipel
     ssh tonys-test-pc "powershell -NoProfile -EncodedCommand $encoded"
 
 For test commands inside that remote script, use `cmd /c "npm run test:core -- --run <file>"` (this was proven on DANS1; the 62-test release-secrets file passed). DANS1's generated hook fix is confirmed at commit `e86f653`. Keep all commits/tests on `codex/qualification-r26` there; mirror source patches to the carryover branch only after DANS1 verification.
+
+### 2026-11-11 — OpenCode to Codex (resume: monitoring focused jobs)
+
+- **GitHub/source commit:** 18416a1 (`codex/qualification-r26-carryover`, clean tree).
+- **DANS1 verified:** HOST=DANS1, PATH `C:\Users\danie\projects\Planner-Release-20261110-r26`, HEAD `e86f653`, working tree has modified `LEDGER.json`/`LEDGER.md` from prior SHIP run.
+- **Prior focused Vitest jobs (still active, not duplicated):** (1) `test:core -- --run core/host/routes/tasks.test.ts` (npm 26760/vitest 36880/worker 45168, started ~2:33:51); (2) `tasks-watch.test.ts core/host/routes/worktree-care.test.ts` (52308/4996/workers 29540,31340, ~2:33:54); (3) `hygiene.test.ts core/worktrees/manager.test.ts` (52288/52280/worker 24560, ~2:33:54). Also observed overlapping group started 2:37:08 covering tasks/tasks-watch/worktree-care (18460/25124/workers 58140,52864) — monitoring all active; will not start duplicates.
+- **Next concrete action:** Monitor these jobs to completion, capture exit codes/results/output, then diagnose remaining SHIP failures (per hypotheses) and proceed with ledger loop/fixes/qualification. Will also add `.gitattributes` rule for `/.ledger/logs/*.log` before future log commits as requested.
+- **Blockers:** Waiting for active focused tests to finish. No acceptance limits changed.
