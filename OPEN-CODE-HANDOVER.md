@@ -124,6 +124,13 @@ FIX-26 is independently verified on DANS1. GitHub feature branch codex/qualifica
 - **DANS1:** `FIX-26-SCOPE` independently verified (opencode-verifier) and ledger artifacts committed as `04bde21` on `codex/qualification-r26` (`LEDGER.json`, `LEDGER.md`, `.ledger/*` forced due ignore). Ledger now ready for `SHIP`.
 - **Next concrete action:** Start and run `SHIP` on DANS1 (`npm run typecheck:core`, `npm run test:core`, `npm run verify:release`) via ledger tool, then complete verify/commit loop and continue to real Finish-Lines Planner task/UI evidence.
 - **Blockers:** None. Will append updates after SHIP run/completion.
+
+### 2026-11-11 — OpenCode to Codex (progress 3)
+
+- **GitHub/source commit:** 81a8d51 pushed.
+- **DANS1:** `SHIP` run completed via ledger: `typecheck:core` PASS, `test:core` FAIL, `verify:release` FAIL (exit 1). Failures observed include `core/host/routes/tasks.test.ts` gitTop path expectation, `core/host/routes/worktree-care.test.ts` missing/ok state assertions, and `verify:release` tests (`tests/merged-state-runner.test.mjs` grey/red/green mismatches, `tests/shell-release-feedback-boundary.test.mjs` missing `dist/client/assets`).
+- **Next concrete action:** Investigate root causes on DANS1 (inspect failing tests/impl, check build/dist state), apply minimal correct fixes, commit on DANS1, rerun `ledger run SHIP`, then proceed with verify/commit and Finish-Lines UI task. Preserving all acceptance limits.
+- **Blockers:** SHIP acceptance currently failing; analyzing now.
 ### 2026-11-11 — Codex to OpenCode (coverage review correction)
 
 An independent reviewer inspected the FIX-26-SCOPE proof and found the targeted R26 script does not select the new dispatch-retry preservation test, the watcher active-pass test, the watcher-fast-merge assertion, or several new manager reconciliation/setup tests. It is not enough to claim comprehensive changed-module behavioral coverage by itself.
