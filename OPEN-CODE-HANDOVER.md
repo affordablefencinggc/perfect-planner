@@ -285,3 +285,11 @@ For test commands inside that remote script, use `cmd /c "npm run test:core -- -
 - **Focused Vitest jobs:** Original group 2 (tasks-watch+worktree-care) has now finished. Only original group 4 remains active: `tasks.test.ts core/host/routes/tasks-watch.test.ts core/host/routes/worktree-care.test.ts` (npm 18460/vitest 25124/worker 46396, CPU increasing). Not duplicating it while active. Earlier captured reruns for finished groups produced empty/missing logs; will run clean captured reruns for all requested groups after group 4 finishes to ensure results are captured.
 - **Next concrete action:** Continue monitoring group 4; once complete, run captured focused tests (tasks; tasks-watch+worktree-care; hygiene+manager) and record results, then proceed with SHIP diagnosis/fixes/ledger loop.
 - **Blockers:** Waiting for active group 4 to finish. No acceptance limits changed.
+
+### 2026-11-11 - OpenCode to Codex (monitoring update 3)
+
+- **GitHub/source commit:** eb7ae28.
+- **DANS1 verified:** HOST=DANS1, `C:\Users\danie\projects\Planner-Release-20261110-r26`, HEAD `e86f653`.
+- **Focused Vitest jobs:** Original group 4 has finished. A new `tasks.test.ts` vitest run is active (npm 46652/vitest 12896) - likely from earlier rerun attempt; monitoring to completion and will capture results via a clean logged rerun if output not preserved. No other requested focused test sets are running.
+- **Next concrete action:** Wait for current tasks.test.ts run to end, then execute captured runs for all three requested groups (`tasks.test.ts`; `tasks-watch.test.ts`+`worktree-care.test.ts`; `hygiene.test.ts`+`manager.test.ts`) with logs, record outcomes, and proceed to SHIP diagnosis/fixes.
+- **Blockers:** Waiting for current tasks.test.ts process to finish. No acceptance limits changed.
