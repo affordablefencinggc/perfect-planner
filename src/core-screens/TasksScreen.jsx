@@ -376,7 +376,7 @@ function TaskCard({ contained, task, repoRoot, project, act, busy, notice, dispa
         </form>
       )}
 
-      {task.stage === "needs-test" && task.worktree && <OwnTestForm onSave={(body) => run("test", `/tasks/${id}/test`, body)} />}
+      {(task.stage === "needs-test" || task.stage === "test-passes-already") && task.worktree && <OwnTestForm onSave={(body) => run("test", `/tasks/${id}/test`, body)} />}
 
       {sendBack && (
         <form className="core-tasks-sendback" onSubmit={async (e) => { e.preventDefault(); const ok = await run("reject", `/tasks/${id}/reject`, { notes: notes.trim() }); if (ok) { setSendBack(false); setNotes(""); } }}>

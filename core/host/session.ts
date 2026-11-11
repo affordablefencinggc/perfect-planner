@@ -31,7 +31,17 @@ function same(a: string, b: string): boolean {
   return x.length === y.length && timingSafeEqual(x, y);
 }
 
-export function cookieValue(req: IncomingMessage, name = PERSON_COOKIE): string | undefined {
+// Cookies are scoped by hostname and path, not by port. Each desktop instance
+// serves a different loopback port, so a fixed name lets the newest instance
+// overwrite every older window's cookie in their shared WebView profile.
+// Use the actual listening socket, never the caller-controlled Host header.
+function personCookieName(req: IncomingMessage): string | undefined {
+  const port = req.socket?.localPort;
+  return typeof port === "number" && Number.isInteger(port) && port > 0 && port <= 65535 ? `${PERSON_COOKIE}_${port}` : undefined;
+}
+
+export function cookieValue(req: IncomingMessage, name = personCookieName(req)): string | undefined {
+  if (!name) return undefined;
   return String(req.headers.cookie ?? "")
     .split(";")
     .map((part) => part.trim())
@@ -111,7 +121,9 @@ export class PersonSessions {
     return Boolean(session && same(session.csrf, csrf));
   }
 
-  setCookieHeader(cookie: string, path: string): string {
-    return `${PERSON_COOKIE}=${cookie}; HttpOnly; SameSite=Strict; Path=${path}`;
+  setCookieHeader(cookie: string, path: string, req: IncomingMessage): string {
+    const name = personCookieName(req);
+    if (!name) throw new Error("The session has no local serving port.");
+    return `${name}=${cookie}; HttpOnly; SameSite=Strict; Path=${path}`;
   }
 }

@@ -1,0 +1,29 @@
+/* Imported-project pages share a fixed-height stage with the other workspaces.
+   Own the overflow here: the shell clips its children and cannot scroll for them. */
+.app-shell .imported-workflow-workspace {
+  position: relative;
+  width: 100%;
+  max-width: none;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  margin-inline: 0;
+  padding-inline: var(--frame-pad);
+  padding-bottom: calc(var(--space-5) + 80px);
+  overflow: auto;
+  scrollbar-gutter: stable;
+}
+
+/* Keep the native draggable controls visible wherever a strip overflows. */
+.app-shell {
+  scrollbar-color: #68736d #e7eae5;
+}
+.app-shell .workspace-nav,
+.app-shell .workspace-route-controls .stage-subnav,
+.app-shell .ops-dock .ops-handle {
+  scrollbar-width: thin;
+}
+
+@media (forced-colors: active) {
+  .app-shell { scrollbar-color: auto; }
+}

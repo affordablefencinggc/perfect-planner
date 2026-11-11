@@ -15,6 +15,7 @@ import "./styles/polish/build.css";
 import "./styles/polish/prove.css";
 import "./styles/polish/release-index.css";
 import "./styles/polish/structure.css";
+import "./styles/scrolling.css";
 
 function LocalAgentation() {
   const [Toolbar, setToolbar] = React.useState(null);

@@ -84,7 +84,7 @@ describe("person-only writes", () => {
     expect(plain.headers.get("set-cookie")).toBeNull();
     const claimed = await claimLaunch(url, hostOf(url).issueLaunch());
     expect(claimed.status).toBe(200);
-    expect(claimed.cookie).toMatch(/^pp_core_person=[\w-]{20,}$/);
+    expect(claimed.cookie).toMatch(new RegExp(`^pp_core_person_${new URL(url).port}=[\\w-]{20,}$`));
     expect(claimed.csrf).toMatch(/^[\w-]{20,}$/);
   });
 
@@ -102,8 +102,33 @@ describe("person-only writes", () => {
     const withCookie = await fetch(`${url}/status`, { headers: { ...forged, cookie: claimed.cookie! } });
     expect(withCookie.status).toBe(200);
     expect(((await withCookie.json()) as any).ok).toBe(true);
-    const madeUp = await fetch(`${url}/status`, { headers: { ...forged, cookie: "pp_core_person=not-a-real-session-cookie-value" } });
+    const madeUp = await fetch(`${url}/status`, { headers: { ...forged, cookie: `pp_core_person_${new URL(url).port}=not-a-real-session-cookie-value` } });
     expect(madeUp.status).toBe(401);
+  });
+
+  it("keeps two desktop instances signed in when their browser shares cookies across ports", async () => {
+    const other = await startTestHost();
+    try {
+      // A browser replaces cookies with the same name, domain and path, regardless of port.
+      const jar = new Map<string, string>();
+      for (const base of [url, other.base]) {
+        const pair = personHeaders(base).cookie;
+        const split = pair.indexOf("=");
+        jar.set(pair.slice(0, split), pair.slice(split + 1));
+      }
+      const sharedCookie = [...jar].map(([name, value]) => `${name}=${value}`).join("; ");
+      for (const [own, foreign] of [[url, other.base], [other.base, url]]) {
+        expect((await fetch(`${own}/status`, { headers: { cookie: sharedCookie } })).status).toBe(200);
+        expect((await fetch(`${own}/status`, { headers: { cookie: personHeaders(foreign).cookie } })).status).toBe(401);
+        expect((await hostCall(own, "POST", "/owner/start", {})).status).toBe(200);
+        const headers = { ...personHeaders(own), cookie: sharedCookie, "content-type": "application/json" };
+        expect((await fetch(`${own}/session/new-window`, { method: "POST", headers, body: "{}" })).status).toBe(200);
+        expect((await fetch(`${own}/session/new-window`, { method: "POST", headers: { ...headers, "x-pp-csrf": personHeaders(foreign)["x-pp-csrf"] }, body: "{}" })).status).toBe(401);
+        expect((await fetch(`${own}/session/new-window`, { method: "POST", headers: { ...headers, origin: new URL(foreign).origin }, body: "{}" })).status).toBe(401);
+      }
+    } finally {
+      await other.stop();
+    }
   });
 
 });

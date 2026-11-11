@@ -83,10 +83,11 @@ describe("worker tokens and the app's own routes", () => {
     const { ctx, alpha, beta } = await twoProjects();
     const a = await dispatch(ctx, alpha);
     const origin = ctx.base.replace(/\/api\/core$/, "");
+    const cookie = `pp_core_person_${new URL(ctx.base).port}=${a.token}`;
     const attempts: Record<string, string>[] = [
       { authorization: `Bearer ${a.token}` },
-      { cookie: `pp_core_person=${a.token}` },
-      { cookie: `pp_core_person=${a.token}`, "x-pp-csrf": a.token, origin },
+      { cookie },
+      { cookie, "x-pp-csrf": a.token, origin },
       { "x-pp-csrf": a.token, origin },
     ];
     for (const key of [alpha.key, beta.key]) {

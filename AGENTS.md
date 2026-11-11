@@ -10,6 +10,8 @@ Build app UI in `src/`. Keep `.openai/hosting.json`, `worker/index.js`, `scripts
 
 ## Perfect Planner design contract
 
+- Target platform (user decision, 2026-11-11): only the desktop PC experience matters. Design, fix and verify UI at desktop width; phone and tablet layouts are not a priority, and phone/tablet checks are not required to call a UI change verified in this project.
+
 - Agent onboarding (2026-09-14): primary entry is a right-hand Connect your agent drawer, without navigation or new tabs. The first journey is one plan, not an app tour. Target one-paste setup with explicit native consent, verified project/plan identity and shared browser/Tauri authority. A diagnostic prompt is not one-paste setup; existing project-level permissions are not plan-level isolation. Never describe either as completed until the native/public-helper journey is proven.
 
 - Live walkthrough priority (2026-09-14): one installed journey takes precedence over unrelated component work: connect an IDE agent, submit a small plan, see its nodes, run one approved change and inspect its result. User wants to watch this live. Developer Notes must separately summarize each exchanged prompt/reply, observable actions, errors, suspected cause, proposed solution and verification evidence. Summaries are not private reasoning or proof; missing exchange capture must be explicit. Do not claim MCP tools automatically expose full IDE conversations. Reuse the existing browser tab; never open repeated evidence tabs.
