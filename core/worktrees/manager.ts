@@ -322,6 +322,23 @@ export class WorktreeManager {
     });
   }
 
+  /**
+   * Frees the file claims of a task whose worker has stopped (its attempt was sent back and a new attempt
+   * takes its files). The worktree, its branch and its commits stay exactly as they are. Returns the claims
+   * that were dropped.
+   */
+  dropClaims(taskId: string): Promise<string[]> {
+    return this.serial(async () => {
+      const registry = await this.readRegistry();
+      const info = registry.worktrees.find((item) => item.taskId === taskId);
+      if (!info || info.claims.length === 0) return [];
+      const dropped = info.claims;
+      info.claims = [];
+      await this.writeRegistry(registry);
+      return dropped;
+    });
+  }
+
   private conflictsWith(worktrees: WorktreeInfo[], taskId: string, files: string[]): ClaimConflict[] {
     const conflicts: ClaimConflict[] = [];
     for (const other of worktrees) {

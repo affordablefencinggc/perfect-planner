@@ -139,6 +139,31 @@ export interface MindMap {
 
 export type PhaseId = "foundation" | "core" | "integrations" | "hardening" | "release";
 
+/** How much one task may change: the most files, and the most lines (added plus deleted). */
+export interface SizeCap {
+  maxFiles: number;
+  maxLines: number;
+}
+
+/**
+ * What one task is told to do and nothing else: the plain sentences it must meet, the files it may change
+ * (paths or globs, guessed from the repo and the task's words), the test or check that proves it, and a size
+ * cap. Plan approval signs it (its digest goes into plan.approved), and the gate measures the work against
+ * it. See contract.ts.
+ */
+export interface TaskContract {
+  clauses: string[];
+  allowedFiles: string[];
+  doneWhen: string;
+  sizeCap: SizeCap;
+}
+
+/** Why a task's contract needs the person's eye before the plan is approved ("split this"). */
+export interface ContractFlag {
+  code: "NO_FILES" | "TOO_MANY_FILES" | "TOO_MANY_CLAUSES";
+  message: string;
+}
+
 export interface RoadmapTask {
   /** Local key until the task is written to the ledger and gets its T- number. */
   key: string;
@@ -150,6 +175,10 @@ export interface RoadmapTask {
   node: string;
   change: "fix" | "feature" | "breaking";
   dependsOn: string[];
+  /** What this task may do: signed at plan approval, enforced at "Check the work". */
+  contract: TaskContract;
+  /** Reasons the person must look at this contract before approving; empty when it is fine. */
+  contractFlags?: ContractFlag[];
   /** Repos this task touches (names from the project's repos). Several make one task per repo, linked as a group. */
   repos?: string[];
   /** Set on a task a plan template suggested (see templates.ts). Its own block: the contract fields live elsewhere. */

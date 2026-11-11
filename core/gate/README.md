@@ -155,6 +155,56 @@ the test's own environment, so a missing program is caught without relying on th
 shell's exit code or its localised error message; exit 126/127, 9009 and cmd's
 "is not recognized" are still treated as not run.
 
+## The contract check (added; only ever adds refusals)
+
+A task written by planning carries a contract (core/planning): the files it may
+change, a size cap, the clauses it must meet and its done-when test. `contract.ts`
+measures a task's work against it; nothing above (the test pin, the diff and
+merge approvals, the sensitive-files list, the merge candidate) was changed or
+relaxed for it.
+
+```ts
+import { checkContract, recordContractVerdict, contractRule } from "../gate/index";
+
+// The host reads the limits from the signed ledger (core/planning contractOf); a worker never supplies them.
+const check = await checkContract(worktreePath, {
+  base,                 // the commit the worktree branched from, as the signed worktree.created entry recorded it
+  tip,                  // the worktree's HEAD
+  limits: { allowedFiles: ["src/billing/**"], sizeCap: { maxFiles: 5, maxLines: 150 } },
+  context: { taskLabel: "T-3", otherClaims: [{ taskId: "T-4", claims: ["src/auth/**"] }], approvedTestFiles: ["tests/billing.check.mjs"] },
+});
+recordContractVerdict(ledger, "T-3", check);   // review.verdict, scope:contract, written by the gate
+ledger.addRule(contractRule());                // refuses a diff or merge approval without a passing check at that commit
+```
+
+`checkContract` compares `git diff --raw --numstat --no-renames base..tip` (git
+objects only; nothing in the worktree is run or followed) and refuses, naming the
+files, when:
+
+- a changed file is not covered by `allowedFiles` (paths and globs; a folder covers what is inside it; matching is case sensitive). A rename is a delete of the old path plus an add of the new one, so a file moved out of the list, or in from outside it, is refused;
+- a dependency or lockfile changes (package.json and the other package managers' manifests and lockfiles, `.npmrc`, `.gitmodules`, a submodule) unless that exact path is listed by name; a wildcard such as `**` never allows one;
+- a file is covered by another running task's claim (`otherClaims`), even if this task's list covers it too;
+- the planner's own folder (`.perfect-planner`, where the ledger lives) or anything in a `.git` folder changes, in any letter case;
+- a symbolic link added or changed points outside the project, at the planner's folder, or at a file that is not on the list (a symlink whose target stays on the list is fine);
+- a path has an odd spelling (colon, backslash, a name ending in a dot or space);
+- more files changed than `sizeCap.maxFiles`, or more lines (added plus deleted) than `sizeCap.maxLines` (a binary file counts as `BINARY_LINES`, 200);
+- the branch no longer contains `base` (history rewritten), git cannot be read (including a repo setting that names a filter program), or the limits are missing or malformed.
+
+The approved test's pinned files (`approvedTestFiles`) are allowed besides the list
+only when they look like test files and are not dependency or planner files: the
+person approved exactly those files with their content pinned.
+
+`contractRule()` is a ledger rule that refuses `review.verdict` approvals of scope
+`diff` or `merge` for a task whose signed `task.created` carries a contract, unless
+the gate itself signed a passing contract verdict (`contractVerdictAt`) for that exact
+commit. A person's or Jev's `scope:contract` entry is not a measurement and does not
+count; rejecting a diff is never blocked; tasks without a contract are not affected.
+
+**This directory is a safety-checked path.** Merging a change here needs the owner's
+own typed approval. The contract commit adds files (`contract.ts`, `contractPaths.ts`,
+`claim-patterns.d.ts` and tests), two exports in `index.ts` and this section; `gate.ts`
+is untouched, so no existing rule moved.
+
 ## Entries written
 
 | Entry | When | data |

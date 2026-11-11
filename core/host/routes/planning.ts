@@ -23,19 +23,28 @@ import {
   isTemplateId,
   latestByQuestionId,
   openBlockers,
+  approvalContracts,
+  contractOf,
   ownTasks,
   planningAnswers,
   profileRepo,
   readRepoContext,
   readRepoStack,
+  roadmapTasks,
   stackForIdea,
+  summarizeContracts,
   suggestionFor,
   templateCards,
   toMermaid,
+  unacceptedFlags,
+  writtenContracts,
   type AnswerInput,
   type IdeaProfile,
-  type PlanTemplate,
+  type PlanContractSummary,
+  type PlannedContract,
   type PlanningQuestionState,
+  type Roadmap,
+  type PlanTemplate,
   type TemplateChoice,
   type TemplateDepth,
   type TemplateId,
@@ -43,10 +52,13 @@ import {
 import type { CoreProject } from "../project";
 import { fingerprintOf, requireFingerprint } from "../fingerprint";
 import { HttpError, type Router } from "../router";
+import { repoIndex } from "./contract";
 import { knownRepoNames } from "../repoNames";
 import { groupKey, splitByRepo } from "../../repos/index";
 import { randomUUID } from "node:crypto";
 import { localPerson, localPersonId } from "./people";
+import { chosenRepository, isHomeOrDrive } from "../project";
+import { listRepoFiles } from "../../planning/repo";
 
 const STATE_KEY = "planning";
 const IDEA_FILE = "planning-idea.json";
@@ -84,12 +96,31 @@ function saveIdea(project: CoreProject, idea: string): void {
   }
 }
 
+const PLANNING_REPO_FILE = "planning-repo.json";
+
+/**
+ * The folder planning reads to learn what the project already is: the git folder the person chose for workers,
+ * else the folder they pointed planning at (POST /planning/repo), else the project folder when that is the
+ * person's own folder. The app's own data folder holds no code, so it is read last and finds nothing.
+ */
+export function planningRoot(project: CoreProject): string {
+  const git = chosenRepository(project.root);
+  if (git) return git;
+  try {
+    const pointed = (JSON.parse(fs.readFileSync(path.join(project.root, ".perfect-planner", PLANNING_REPO_FILE), "utf8")) as { root?: unknown }).root;
+    if (typeof pointed === "string" && path.isAbsolute(pointed) && fs.statSync(pointed).isDirectory() && !isHomeOrDrive(pointed)) return pointed;
+  } catch {
+    // none chosen
+  }
+  return project.root;
+}
+
 function planning(project: CoreProject): PlanningState {
   const person = localPersonId(project);
   let state = project.state.get(STATE_KEY) as PlanningState | undefined;
   if (!state || state.person !== person) {
     const idea = state?.idea ?? readIdea(project);
-    state = { session: new PlanningSession(project.ledger, { person }), person, idea, profile: idea ? profileRepo(idea, stackForIdea(readRepoStack(project.root), idea)) : null };
+    state = { session: new PlanningSession(project.ledger, { person }), person, idea, profile: idea ? profileRepo(idea, stackForIdea(readRepoStack(planningRoot(project)), idea)) : null };
     project.state.set(STATE_KEY, state);
   }
   return state;
@@ -186,6 +217,24 @@ function tasksView(entries: readonly LedgerEntry[]) {
   };
 }
 
+/**
+ * The contracts the plan being shown carries. Before the roadmap is written they are the draft's (guessed from
+ * the repo's files right now); once it is written they are the ones in the ledger, so the plan does not look
+ * "changed since approval" every time the repo changes. A roadmap written before contracts existed has none.
+ */
+function contractPlan(project: CoreProject, state: PlanningState): { roadmap?: Roadmap; summary: PlanContractSummary; written: boolean; legacy: boolean } {
+  const entries = project.entries();
+  const written = writtenContracts(entries);
+  if (written.size > 0) {
+    const planned: PlannedContract[] = [...written].map(([key, w]) => ({ key, title: w.task, contract: w.contract, flags: w.flags }));
+    return { summary: summarizeContracts(planned), written: true, legacy: false };
+  }
+  if (writtenTasks(entries).size > 0) return { summary: summarizeContracts([]), written: true, legacy: true };
+  const roadmap = state.session.roadmap(ideaLabel(state), state.person, repoIndex(project));
+  const planned: PlannedContract[] = roadmapTasks(roadmap).map((t) => ({ key: t.key, title: t.title, contract: t.contract, flags: t.contractFlags ?? [] }));
+  return { roadmap, summary: summarizeContracts(planned), written: false, legacy: false };
+}
+
 /** What a template suggests for one open question, in the words the screen shows. Never an answer. */
 function suggestionView(template: PlanTemplate | undefined, choice: TemplateChoice | null, q: PlanningQuestionState, signals: readonly string[]) {
   if (!template || !choice || q.status !== "open") return undefined;
@@ -218,7 +267,7 @@ function templateView(state: PlanningState, questions: readonly PlanningQuestion
   };
 }
 
-function overview(project: CoreProject) {
+function overview(project: CoreProject, plan?: ReturnType<typeof contractPlan>) {
   const state = planning(project);
   const entries = project.entries();
   // A question asked again (reopened) replaces the older one: list only the newest per id.
@@ -246,9 +295,11 @@ function overview(project: CoreProject) {
     };
   }).filter((a) => a.questions.length > 0);
   const answered = questions.filter((q) => q.status !== "open").length;
-  // A different starter is a different plan to look at: it is part of what an approval is bound to.
-  const fingerprint = planFingerprint(state.idea, areas, choice ? { id: choice.id, depth: choice.depth, context: choice.context } : undefined);
+  const contracts = plan ?? contractPlan(project, state);
+  // A different starter is a different plan to look at, and so is a different contract: both are part of what an approval is bound to.
+  const fingerprint = planFingerprint(state.idea, areas, contracts.legacy ? undefined : { digest: contracts.summary.digest, flagged: contracts.summary.flagged.map((f) => ({ key: f.key, flags: f.flags })) }, choice ? { id: choice.id, depth: choice.depth, context: choice.context } : undefined);
   const approved = approvals(entries);
+  const needsAcceptance = contracts.written ? [] : contracts.summary.flagged;
   // The plan exactly as shown is already approved: approving it again would only add a duplicate P-n.
   const current = approved.length > 0 && approved[approved.length - 1]!.fingerprint === fingerprint;
   return {
@@ -264,7 +315,10 @@ function overview(project: CoreProject) {
     template: templateView(state, questions),
     description: descriptionView(state, questions),
     tasks: tasksView(entries),
+    contracts: { written: contracts.written, flagged: contracts.summary.flagged },
     approval: {
+      /** Tasks whose contract the person must read and accept before approving ("split this"). */
+      flagged: needsAcceptance,
       canApprove: questions.length > 0 && open.length === 0 && !current,
       current,
       /** The same fact under the names the core-screens UI reads. */
@@ -276,9 +330,9 @@ function overview(project: CoreProject) {
   };
 }
 
-/** What the person reviews before approving: the idea and every question as shown (see fingerprint.ts). */
-function planFingerprint(idea: unknown, areas: unknown, template?: unknown): string {
-  return fingerprintOf({ idea: idea ?? null, areas, ...(template ? { template } : {}) });
+/** What the person reviews before approving: the idea, every question and every task's contract as shown (see fingerprint.ts). */
+function planFingerprint(idea: unknown, areas: unknown, contracts?: { digest: string; flagged: unknown }, template?: unknown): string {
+  return fingerprintOf({ idea: idea ?? null, areas, ...(contracts ? { contracts } : {}), ...(template ? { template } : {}) });
 }
 
 function mindMapView(project: CoreProject) {
@@ -301,9 +355,20 @@ function writtenTasks(entries: readonly LedgerEntry[]): Map<string, { task: stri
   return out;
 }
 
+/** A task's contract as the Plan screen shows it: the signed one once written, else the draft. */
+function contractShown(entries: readonly LedgerEntry[], written: { task: string } | undefined, draft: { contract: unknown; contractFlags?: unknown }) {
+  const view = written ? contractOf(entries, written.task) : null;
+  if (!view) return { contract: draft.contract, contractFlags: draft.contractFlags ?? [] };
+  return {
+    contract: view.contract,
+    contractFlags: view.flags,
+    contractState: { status: view.status, ...(view.problem ? { problem: view.problem } : {}), allowedFiles: view.allowedFiles, flagsAccepted: view.flagsAccepted, widened: view.widened.length },
+  };
+}
+
 function roadmapView(project: CoreProject) {
   const state = planning(project);
-  const roadmap = state.session.roadmap(ideaLabel(state), state.person);
+  const roadmap = contractPlan(project, state).roadmap ?? state.session.roadmap(ideaLabel(state), state.person, repoIndex(project));
   const entries = project.entries();
   const written = writtenTasks(entries);
   const number = (key: string) => written.get(key)?.task;
@@ -322,6 +387,7 @@ function roadmapView(project: CoreProject) {
       tasks: [
         ...p.tasks.map((t) => ({
           ...t,
+          ...contractShown(entries, written.get(t.key), t),
           ...(written.get(t.key) ? { task: written.get(t.key)!.task, entry: written.get(t.key)!.entry } : {}),
           ...(t.template ? { suggested: !written.has(t.key) } : {}),
           dependsOnTasks: t.dependsOn.map((d) => number(d) ?? d),
@@ -352,6 +418,14 @@ function roadmapView(project: CoreProject) {
   };
 }
 
+/** The task keys the person ticked as "read, and accepted as they are". */
+function acceptedKeys(body: unknown): string[] {
+  const raw = body && typeof body === "object" ? (body as { acceptFlagged?: unknown }).acceptFlagged : undefined;
+  if (raw === undefined) return [];
+  if (!Array.isArray(raw) || raw.length > 500 || raw.some((key) => typeof key !== "string" || key.length > 200)) throw new HttpError(400, "INVALID", "acceptFlagged must be a list of task keys.");
+  return raw as string[];
+}
+
 function text(value: unknown, field: string, max = 4000): string {
   if (value === undefined || value === null) return "";
   if (typeof value !== "string") throw new HttpError(400, "INVALID", `${field} must be text.`);
@@ -378,12 +452,12 @@ function templateRequest(body: unknown): { id: TemplateId | null; depth?: Templa
 
 /** Records the person's pick, reading the folder as it is now. Nothing else is written. */
 function pickTemplate(project: CoreProject, state: PlanningState, request: NonNullable<ReturnType<typeof templateRequest>>, idea: string) {
-  const stack = stackForIdea(readRepoStack(project.root), idea);
+  const stack = stackForIdea(readRepoStack(planningRoot(project)), idea);
   try {
     return state.session.chooseTemplate(actorFor(project), {
       id: request.id,
       ...(request.depth ? { depth: request.depth } : {}),
-      ...(request.id ? { context: readRepoContext(project.root, stack, idea) } : {}),
+      ...(request.id ? { context: readRepoContext(planningRoot(project), stack, idea) } : {}),
     });
   } catch (error) {
     refuse(error);
@@ -402,7 +476,7 @@ export function registerPlanningRoutes(router: Router): void {
     const wanted = templateRequest(body);
     const state = planning(project);
     // What the repo already has (package.json, config files) and what the idea says both count; the idea wins.
-    const stack = stackForIdea(readRepoStack(project.root), idea);
+    const stack = stackForIdea(readRepoStack(planningRoot(project)), idea);
     const profile = profileRepo(idea, stack);
     const picked = wanted ? pickTemplate(project, state, wanted, idea) : undefined;
     let fromRepo: string[] = [];
@@ -423,6 +497,46 @@ export function registerPlanningRoutes(router: Router): void {
     state.profile = profile;
     saveIdea(project, idea);
     return { asked, described, fromRepo, signals: profile.signals, research: { live: false, note: RESEARCH_NOTE }, ...(picked ? { template: { changed: picked.changed, id: picked.choice.id ?? "blank" } } : {}), overview: overview(project) };
+  });
+
+  /**
+   * GET /planning/repo: what planning learned from the project's folder before any idea is typed: the stack it
+   * found, how many files, how it tests, and which starter fits. `known` is false when the folder holds no code
+   * (the app's own data folder), and the screen then asks the person to point at their repo.
+   */
+  router.get("/planning/repo", ({ project }) => {
+    const root = planningRoot(project);
+    const stack = readRepoStack(root);
+    const index = listRepoFiles(root);
+    const known = index.files.length > 0 && (stack.facts.length > 0 || index.files.length >= 3);
+    return {
+      known,
+      root: known ? root : null,
+      name: path.basename(root),
+      facts: stack.facts.map((f) => ({ id: f.id, text: f.text })),
+      fileCount: index.files.length,
+      truncated: index.truncated,
+      tests: index.tests?.suite ?? index.tests?.runners[0]?.script ?? null,
+      suggestedTemplate: known ? "add-feature" : null,
+    };
+  });
+
+  /** POST /planning/repo { path }: the person points planning at their repo folder (any folder with code; no git needed). Read-only. */
+  router.post("/planning/repo", ({ project, body }) => {
+    const raw = (body as { path?: unknown })?.path;
+    if (typeof raw !== "string" || !raw.trim() || !path.isAbsolute(raw.trim())) throw new HttpError(400, "INVALID", "Give the full path of your project's folder.");
+    let dir: string;
+    try {
+      dir = fs.realpathSync(raw.trim());
+      if (!fs.statSync(dir).isDirectory()) throw new Error("not a folder");
+    } catch {
+      throw new HttpError(422, "NOT_A_FOLDER", `${raw.trim()} is not a folder on this computer.`);
+    }
+    if (isHomeOrDrive(dir)) throw new HttpError(422, "NOT_A_PROJECT", `${dir} is a whole drive or your home folder. Choose your project's own folder.`);
+    if (listRepoFiles(dir, { maxFiles: 50 }).files.length === 0) throw new HttpError(422, "EMPTY_FOLDER", `${dir} has no files to read.`);
+    fs.mkdirSync(path.join(project.root, ".perfect-planner"), { recursive: true });
+    fs.writeFileSync(path.join(project.root, ".perfect-planner", PLANNING_REPO_FILE), JSON.stringify({ root: dir, at: new Date().toISOString() }, null, 2));
+    return { root: dir };
   });
 
   /** GET /planning/templates: the starter templates, the same for every project and repo, and which one is in use. */
@@ -603,24 +717,39 @@ export function registerPlanningRoutes(router: Router): void {
     if (!state.session.questions().length) throw new HttpError(409, "NOT_STARTED", "Start with your idea first; there is nothing to approve yet.");
     const open = openBlockers(entries);
     if (open.length) throw new HttpError(409, "BLOCKERS_OPEN", blockerMessage(open));
-    // Bound to the plan the person is looking at: a changed plan needs a fresh look.
-    const view = overview(project);
+    // Bound to the plan the person is looking at: a changed plan needs a fresh look. The contracts signed below are
+    // the very draft this fingerprint covers (one repo scan, read once), and nothing else.
+    const contracts = contractPlan(project, state);
+    const view = overview(project, contracts);
     requireFingerprint(body, view.fingerprint, "plan");
     if (view.approval.current) throw new HttpError(409, "ALREADY_APPROVED", "This plan is already approved as it stands.");
     const actor = actorFor(project);
     const already = writtenTasks(entries).size > 0;
+    // A task flagged "split this" is approved only when the person says so for that task; nothing is accepted silently.
+    const accepted = acceptedKeys(body);
+    const unaccepted = already ? [] : unacceptedFlags(contracts.summary, accepted);
+    if (unaccepted.length) {
+      const names = unaccepted.map((f) => `"${f.title}"`).join(", ");
+      throw new HttpError(409, "CONTRACT_FLAGGED", `${unaccepted.length === 1 ? "A task is" : `${unaccepted.length} tasks are`} marked "split this" and need your eye before the plan is approved: ${names}. Read what is wrong, then accept ${unaccepted.length === 1 ? "it" : "them"} as ${unaccepted.length === 1 ? "it is" : "they are"} or split ${unaccepted.length === 1 ? "it" : "them"} into smaller tasks.`);
+    }
     // The ledger's planning rule refuses this too if a blocker is open (LedgerError -> 422).
     const plan = appendNumbered(project.ledger, {
       actor,
       type: "plan.approved",
       summary: `Plan approved: ${(state.idea ?? "deep planning").replace(/\s+/g, " ").slice(0, 100)}`,
       refs: ["plan"],
-      data: { source: "planning", idea: state.idea, fingerprint: view.fingerprint, answered: state.session.questions().filter((q) => q.status !== "open").length },
+      data: {
+        source: "planning",
+        idea: state.idea,
+        fingerprint: view.fingerprint,
+        answered: state.session.questions().filter((q) => q.status !== "open").length,
+        ...(already ? {} : { contracts: approvalContracts(contracts.summary, accepted) }),
+      },
     });
     let tasks: Record<string, string> = {};
-    if (!already) {
+    if (!already && contracts.roadmap) {
       try {
-        tasks = state.session.writeRoadmap(actor, state.session.roadmap(ideaLabel(state), state.person));
+        tasks = state.session.writeRoadmap(actor, contracts.roadmap);
       } catch (error) {
         refuse(error);
       }

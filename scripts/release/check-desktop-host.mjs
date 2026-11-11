@@ -204,8 +204,15 @@ export async function runLoop(origin, headers, work, appNode) {
   } finally {
     worker.stop();
   }
-  // The person checks, reads the diff, approves it and merges.
-  const checked = await api("POST", `/tasks/${task.id}/check`);
+  // The person checks, reads the diff, approves it and merges. The task's contract (guessed from the repo's files)
+  // does not list src/save.js, so the check refuses in plain words without running anything; the person's own
+  // widening lets that file in, and the check runs again.
+  let checked = await api("POST", `/tasks/${task.id}/check`);
+  steps.contractRefusedFirst = checked.contractRefused === true;
+  if (checked.contractRefused) {
+    await api("POST", `/tasks/${task.id}/widen`, { files: ["src/save.js"], reason: "The release check's worker saves notes in src/save.js." });
+    checked = await api("POST", `/tasks/${task.id}/check`);
+  }
   if (!checked.passed) throw new Error(`The check did not pass: ${JSON.stringify(checked).slice(0, 300)}`);
   steps.checkPassed = true;
   const diff = await api("GET", `/tasks/${task.id}/diff`);

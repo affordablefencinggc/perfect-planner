@@ -3,6 +3,7 @@ import { CheckCircleIcon, CopyIcon, GitMergeIcon, PlayIcon, SpinnerGapIcon, Warn
 import { describeLaunchFolder } from "../browser/launchFolder.js";
 import { copyText } from "../project/connectAgentSetup.js";
 import { WorkHeader } from "./WorkHeader.jsx";
+import ContractDetails from "./ContractDetails.jsx";
 import { AdvancedOnly, CoreScreen, useAdvanced } from "./CoreScreen.jsx";
 import { coreGet, corePost, useCoreResource } from "./coreApi.js";
 import { CostPanel, GroupBar, RepoBar } from "./TasksRepos.jsx";
@@ -217,6 +218,27 @@ function KeptFolders({ project, version, onChange }) {
   );
 }
 
+// Only the person can allow more files; a worker can only ask (ask_main). The server checks all of it.
+function WidenForm({ label, working, onWiden }) {
+  const [open, setOpen] = useState(false);
+  const [files, setFiles] = useState("");
+  const [why, setWhy] = useState("");
+  if (!open) return <button type="button" className="core-button" onClick={() => setOpen(true)} disabled={working}>Allow more files</button>;
+  const submit = async (e) => {
+    e.preventDefault();
+    const ok = await onWiden({ files: files.split(/\n+/).map((f) => f.trim()).filter(Boolean), reason: why.trim() });
+    if (ok) { setOpen(false); setFiles(""); setWhy(""); }
+  };
+  return (
+    <form className="core-tasks-sendback" aria-label={`Allow more files for ${label}`} onSubmit={submit}>
+      <label>Files or folders to allow (one per line)<textarea value={files} onChange={(e) => setFiles(e.target.value)} rows={2} /></label>
+      <label>Why<input value={why} onChange={(e) => setWhy(e.target.value)} autoComplete="off" /></label>
+      <button type="submit" className="core-button primary" disabled={working || !files.trim() || !why.trim()}>Allow these files</button>
+      <button type="button" className="core-button" onClick={() => setOpen(false)}>Cancel</button>
+    </form>
+  );
+}
+
 function TaskCard({ contained, task, repoRoot, project, act, busy, notice, dispatchFor, onDispatched, onHideDispatch, showRepo }) {
   const [model, setModel] = useState(task.dispatch?.model ?? DEFAULT_WORKER_MODEL);
   const [diff, setDiff] = useState(null);
@@ -309,6 +331,24 @@ function TaskCard({ contained, task, repoRoot, project, act, busy, notice, dispa
       )}
       {task.waitingFor && task.stage !== "done" && <p className="core-tasks-warn">{task.waitingFor.message}</p>}
       {task.claims?.length > 0 && <p className="core-tasks-line"><span className="core-muted">File claims</span> {task.claims.join(", ")}{task.staleClaims ? ` (${task.staleClaims}, so these can be released)` : ""}</p>}
+
+      {task.contract ? (
+        <ContractDetails
+          contract={{
+            files: task.contract.allowedFiles,
+            sizeCap: task.contract.sizeCap,
+            clauses: task.contract.clauses,
+            doneWhen: task.contract.doneWhen,
+            warnings: task.contract.status === "signed" ? [] : [`${task.contract.problem ?? "This contract is not the one you approved."} Nothing is started or checked until it is.`],
+            widened: task.contract.widened,
+            check: task.contract.check,
+          }}
+        >
+          {task.contract.status === "signed" && task.stage !== "done" && <WidenForm label={task.label} working={working} onWiden={(body) => run("widen", `/tasks/${id}/widen`, body)} />}
+        </ContractDetails>
+      ) : (
+        <p className="core-tasks-line"><span className="core-muted">Contract</span> None. This task is not limited to any files.</p>
+      )}
 
       {notice && !(folder && notice.text.startsWith(folder.note)) && <p className={`core-tasks-notice ${notice.tone}`} role="status">{notice.text}</p>}
 
@@ -505,6 +545,7 @@ const NOTICE = {
   check: (r) => (r.passed
     ? { tone: "good", text: `The approved test passes in the worktree at ${String(r.commit ?? "").slice(0, 12)}. Review the diff next.` }
     : { tone: "bad", text: withTail(r.reason ?? "The test failed.", r.output) }),
+  widen: (r) => ({ tone: "good", text: `Allowed ${(r.widened?.files ?? []).join(", ")}. Dependency files stay outside unless named exactly. The next check uses the longer list.` }),
   "approve-diff": (r) => {
     if (r.merged) return { tone: "good", text: `Approved and merged into ${r.into} at ${String(r.commit ?? "").slice(0, 12)} (auto-merge is on). The test passed on the merge and the task is done.` };
     if (r.autoMergeStopped) return { tone: "bad", text: `Approved, but auto-merge stopped: ${r.autoMergeStopped}` };

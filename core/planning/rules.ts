@@ -8,8 +8,11 @@
 //      planning question. The actor is the entry's own, never a payload field.
 //   4. A spike is a real task: it names a task.created that carries a due
 //      date within MAX_SPIKE_DAYS and a written risk.
+//   5. Contracts: a task planning writes carries a valid contract whose digest
+//      matches, and only a person can widen a task's contract (see contract.ts).
 import type { EntryDraft, Ledger, LedgerEntry } from "../ledger/index";
 import { catchDeferral, spikeProblem, type SpikePlan } from "./catcher";
+import { contractWriteRefusal } from "./contract";
 import { allQuestions, openBlockers } from "./state";
 
 export interface PlanningRuleOptions {
@@ -26,6 +29,9 @@ export function installPlanningRules(ledger: Ledger, options: PlanningRuleOption
 export function planningRefusal(draft: EntryDraft, entries: readonly LedgerEntry[], options: PlanningRuleOptions = {}): string | null {
   const now = options.now ?? (() => new Date());
   const data = draft.data ?? {};
+
+  const contract = contractWriteRefusal(draft, entries);
+  if (contract) return contract;
 
   if (draft.type === "plan.approved") {
     const open = openBlockers(entries, options.scope ?? "planning");

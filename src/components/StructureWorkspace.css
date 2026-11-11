@@ -213,11 +213,9 @@
   font: 700 9px var(--mono);
 }
 .structure-disclosure small {
-  overflow: hidden;
   color: var(--muted);
-  font: 6px var(--mono);
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  font: 10px var(--mono);
+  overflow-wrap: anywhere;
 }
 .structure-disclosure code {
   font: 800 8px var(--mono);
@@ -1295,13 +1293,11 @@
 }
 .tree-node-card code {
   color: #377d57;
-  font: 900 7px var(--mono);
+  font: 900 10px var(--mono);
 }
 .tree-node-card strong {
-  overflow: hidden;
-  font: 800 9px var(--mono);
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  font: 800 11px var(--mono);
+  overflow-wrap: anywhere;
 }
 .tree-node-card small {
   grid-column: 1/-1;
@@ -1316,7 +1312,7 @@
   padding-top: 7px;
   border-top: 1px solid var(--line);
   color: var(--muted);
-  font: normal 6px var(--mono);
+  font: normal 10px var(--mono);
   text-align: right;
 }
 .workspace-tree-file-section {

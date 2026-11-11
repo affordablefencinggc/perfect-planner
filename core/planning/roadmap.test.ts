@@ -3,6 +3,7 @@ import { Ledger, MemoryStore } from "../ledger/index";
 import type { Actor, LedgerEntry } from "../ledger/index";
 import { appendNumbered, installNumberingRules } from "../numbering/index";
 import { buildMindMap, linkNodes } from "./mindmap";
+import { contractDigest } from "./contract";
 import { FINAL_TASK_KEY, OWN_TASK_SOURCE, buildRoadmap, droppedRoadmapTasks, ownTasks, roadmapTasks, writeRoadmap } from "./roadmap";
 import type { Area, PlanningAnswer, Roadmap } from "./types";
 
@@ -135,12 +136,40 @@ describe("writeRoadmap", () => {
     const ledger = await Ledger.open(new MemoryStore());
     const task = (key: string, dependsOn: string[]) => ({
       key, title: key, phase: "core" as const, owner: "o", doneWhen: "a test proves it", node: "root", change: "feature" as const, dependsOn,
+      contract: { clauses: ["Do the one thing."], allowedFiles: [`src/${key}.ts`], doneWhen: "a test proves it", sizeCap: { maxFiles: 3, maxLines: 100 } },
     });
     const swapped: Roadmap = { phases: [{ id: "core", title: "Core", tasks: [task("K-b", ["K-a"]), task("K-a", [])] }] };
     expect(writeRoadmap(ledger, actor, swapped)).toEqual({ "K-a": "T-1", "K-b": "T-2" });
     const bad: Roadmap = { phases: [{ id: "core", title: "Core", tasks: [task("K-c", ["K-missing"])] }] };
     expect(() => writeRoadmap(ledger, actor, bad)).toThrow(/unknown/);
     expect(ledger.entries()).toHaveLength(2);
+  });
+
+  it("refuses a task with no usable contract before writing anything", async () => {
+    const ledger = await Ledger.open(new MemoryStore());
+    const good = { clauses: ["Do the one thing."], allowedFiles: ["src/a.ts"], doneWhen: "a test proves it", sizeCap: { maxFiles: 3, maxLines: 100 } };
+    const task = (key: string, contract: unknown) => ({
+      key, title: key, phase: "core" as const, owner: "o", doneWhen: "x", node: "root", change: "feature" as const, dependsOn: [], contract: contract as typeof good,
+    });
+    for (const broken of [undefined, null, { ...good, clauses: [] }, { ...good, doneWhen: " " }, { ...good, allowedFiles: ["../outside"] }, { ...good, allowedFiles: [".perfect-planner/**"] }, { ...good, sizeCap: { maxFiles: 0, maxLines: 5 } }]) {
+      const roadmap: Roadmap = { phases: [{ id: "core", title: "Core", tasks: [task("K-a", good), task("K-b", broken)] }] };
+      expect(() => writeRoadmap(ledger, actor, roadmap)).toThrow(/K-b has no usable contract/);
+    }
+    expect(ledger.entries()).toHaveLength(0);
+  });
+
+  it("writes each task's contract and its digest into the task.created entry", async () => {
+    const ledger = await Ledger.open(new MemoryStore());
+    const roadmap = buildRoadmap(buildMindMap("a habit tracker", []));
+    writeRoadmap(ledger, actor, roadmap);
+    const tasks = roadmapTasks(roadmap);
+    const created = ledger.entries().filter((e) => e.type === "task.created");
+    expect(created).toHaveLength(tasks.length);
+    for (const e of created) {
+      const task = tasks.find((t) => t.key === e.data!.key)!;
+      expect(e.data!.contract).toEqual(task.contract);
+      expect(e.data!.contractDigest).toBe(contractDigest(task.contract));
+    }
   });
 });
 

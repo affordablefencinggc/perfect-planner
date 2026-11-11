@@ -6,7 +6,7 @@ import { Ledger, MemoryStore, type Actor } from "../ledger/index";
 import { installNumberingRules } from "../numbering/index";
 import { installPlanningRules } from "./rules";
 import { PlanningSession } from "./session";
-import { profileRepo, readRepoStack } from "./repo";
+import { listRepoFiles, profileRepo, readRepoStack } from "./repo";
 import { planningAnswers } from "./state";
 
 const agent: Actor = { kind: "agent", id: "claude-code", model: "test-model" };
@@ -184,5 +184,36 @@ describe("roadmap for an existing repo", () => {
     expect(ids({ main: "db.js", dependencies: { pg: "8" } }).filter((i) => i === "data.store")).toHaveLength(1);
     const fact = readRepoStack(tmp({ "package.json": JSON.stringify({ bin: "cli.js" }) })).facts.find((f) => f.id === "data.store")!;
     expect(fact).toMatchObject({ choice: "none", evidence: ["package.json"] });
+  });
+});
+
+describe("listRepoFiles", () => {
+  it("lists files by relative path, sorted, skipping dependencies, build output and the planner's folder", () => {
+    const root = tmp({
+      "src/b.ts": "",
+      "src/a.ts": "",
+      "README.md": "",
+      "node_modules/pkg/index.js": "",
+      "dist/bundle.js": "",
+      ".git/config": "",
+      ".perfect-planner/ledger/2026-10.jsonl": "",
+      "src/deep/er/c.ts": "",
+    });
+    expect(listRepoFiles(root)).toEqual({ files: ["README.md", "src/a.ts", "src/b.ts", "src/deep/er/c.ts"], truncated: false });
+  });
+
+  it("never follows or lists a symbolic link", () => {
+    const outside = tmp({ "secret.txt": "x", "inner/more.txt": "y" });
+    const root = tmp({ "src/a.ts": "" });
+    fs.symlinkSync(path.join(outside, "secret.txt"), path.join(root, "src", "link.txt"));
+    fs.symlinkSync(outside, path.join(root, "src", "folder-link"));
+    expect(listRepoFiles(root).files).toEqual(["src/a.ts"]);
+  });
+
+  it("stops at its file limit and depth limit and says so, and reads a missing folder as empty", () => {
+    const root = tmp({ "a.ts": "", "b.ts": "", "c.ts": "", "x/y/z/d.ts": "" });
+    expect(listRepoFiles(root, { maxFiles: 2 })).toEqual({ files: ["a.ts", "b.ts"], truncated: true });
+    expect(listRepoFiles(root, { maxDepth: 1 }).files).toEqual(["a.ts", "b.ts", "c.ts"]);
+    expect(listRepoFiles(path.join(root, "nope"))).toEqual({ files: [], truncated: false });
   });
 });
