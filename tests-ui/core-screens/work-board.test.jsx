@@ -53,9 +53,10 @@ const receipt = {
 };
 
 function routeFetch(routes) {
+  const all = { "GET /teams": () => ok({ members: [] }), ...routes };
   const fn = vi.fn(async (url, init = {}) => {
     const path = String(url).split("?")[0].replace("/api/core", "");
-    const handler = routes[`${init.method ?? "GET"} ${path}`];
+    const handler = all[`${init.method ?? "GET"} ${path}`];
     if (!handler) throw new Error(`unexpected ${init.method ?? "GET"} ${path}`);
     return handler(init);
   });
@@ -160,6 +161,21 @@ describe("WorkBoardScreen", () => {
     routeFetch({ "GET /board": () => ok(board()) });
     renderBoard();
     expect(await screen.findByText(/Nothing needs a decision right now/)).toBeTruthy();
+  });
+
+  test("shows derived reminders with their next action, without repeating the rail", async () => {
+    routeFetch({
+      "GET /board": () => ok(board({
+        reminders: [
+          { code: "review-waiting", level: "risk", task: "T-1", title: "Add note search", owner: "dani", message: "T-1 has waited 40 minutes for review.", action: "Open the diff and review it." },
+          { code: "plan-changed", level: "risk", task: "T-1", title: "Add note search", owner: "dani", message: "The plan changed.", action: "Re-read the plan." },
+        ],
+      })),
+    });
+    renderBoard();
+    expect(await screen.findByText("1 reminder")).toBeTruthy();
+    expect(screen.getByText(/waited 40 minutes/)).toBeTruthy();
+    expect(screen.queryByText("The plan changed.")).toBeNull();
   });
 });
 

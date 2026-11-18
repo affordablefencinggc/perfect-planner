@@ -1,0 +1,67 @@
+.task-terminal {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+.task-terminal > header {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.task-terminal > header svg { width: 20px; height: 20px; color: var(--muted); flex: 0 0 auto; }
+.task-terminal h4 { margin: 0; font-size: var(--text-sm); }
+.task-terminal header p { margin: 2px 0 0; color: var(--muted); font-size: var(--text-xs); }
+.task-terminal-empty { margin: 0; color: var(--muted); font-size: var(--text-xs); }
+.task-terminal-presets { display: flex; flex-wrap: wrap; gap: 6px; }
+.task-terminal-presets .core-button { padding: 3px 8px; font-size: 10px; }
+.task-terminal-form { display: flex; gap: 6px; align-items: stretch; }
+.task-terminal-input {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--paper);
+}
+.task-terminal-input span { color: var(--muted); font: 12px var(--mono); }
+.task-terminal-input input {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  padding: 7px 0;
+  font: 12px var(--mono);
+  outline: none;
+}
+.task-terminal-error { margin: 0; color: var(--red); font-size: var(--text-xs); }
+.task-terminal-result { display: grid; gap: 6px; }
+.task-terminal-meta { margin: 0; color: var(--muted); font: 10px var(--mono); overflow-wrap: anywhere; }
+.task-terminal-meta .ok { color: var(--green); }
+.task-terminal-meta .bad { color: var(--red); }
+.task-terminal-result pre {
+  max-height: 220px;
+  margin: 0;
+  overflow: auto;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: #1f2421;
+  color: #e8efe9;
+  font: 11px/1.45 var(--mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.task-terminal-result details pre { margin-top: 4px; max-height: 140px; }
+.task-terminal-hash { margin: 0; color: var(--muted); font: 10px var(--mono); }
+
+@media (max-width: 600px) {
+  .task-terminal-form { flex-direction: column; }
+  .task-terminal-form .core-button { justify-content: center; }
+}

@@ -104,8 +104,8 @@
 .wb-budget-error { font-size: var(--text-xs); color: var(--red); }
 .wb-plan-line { margin: 0; font-size: var(--text-xs); }
 
-.wb-backdrop { position: fixed; inset: var(--app-header-height) 0 42px; z-index: 44; background: rgba(39, 48, 43, .34); }
-.wb-drawer { position: fixed; z-index: 45; top: var(--app-header-height); right: 0; bottom: 42px; width: min(560px, 94vw); overflow-y: auto; padding: var(--space-4) var(--space-5) var(--space-7); background: var(--surface); border-left: 2px solid var(--chrome-dark); box-shadow: -12px 0 30px rgba(39, 48, 43, .18); display: grid; gap: var(--space-4); align-content: start; }
+.wb-backdrop { position: fixed; inset: var(--app-header-height) 0 42px; z-index: 69; background: rgba(39, 48, 43, .34); }
+.wb-drawer { position: fixed; z-index: 70; top: var(--app-header-height); right: 0; bottom: 42px; width: min(560px, 94vw); overflow-y: auto; padding: var(--space-4) var(--space-5) var(--space-7); background: var(--surface); border-left: 2px solid var(--chrome-dark); box-shadow: -12px 0 30px rgba(39, 48, 43, .18); display: grid; gap: var(--space-4); align-content: start; }
 .wb-drawer > header { display: flex; justify-content: space-between; gap: var(--space-3); align-items: start; }
 .wb-drawer h3 { margin: 2px 0 4px; font-size: var(--text-xl); }
 .wb-drawer h4 { margin: 0 0 var(--space-2); font-size: var(--text-base); }
@@ -128,6 +128,38 @@
 .wb-readonly-project { padding: var(--space-3); border: 1px solid var(--amber); border-radius: var(--radius-md); background: var(--amber-soft); font-size: var(--text-sm); }
 .wb-history ol { margin: 0; padding-left: 18px; font-size: var(--text-xs); display: grid; gap: 3px; }
 .wb-history code { font-family: var(--mono); color: var(--muted); }
+
+.wb-reminders {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+.wb-reminders header { display: flex; gap: 8px; align-items: flex-start; }
+.wb-reminders header svg { width: 20px; height: 20px; color: var(--amber, #a66a12); flex: 0 0 auto; }
+.wb-reminders header strong { font-size: var(--text-sm); }
+.wb-reminders header p { margin: 2px 0 0; color: var(--muted); font-size: var(--text-xs); }
+.wb-reminders ul { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; max-height: 240px; overflow-y: auto; }
+.wb-reminder {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: start;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-left-width: 3px;
+  border-radius: var(--radius-sm);
+  background: var(--paper);
+}
+.wb-reminder strong { font-size: var(--text-xs); }
+.wb-reminder p { margin: 2px 0 0; color: var(--muted); font-size: 10px; line-height: 1.35; }
+.wb-reminder-task { padding: 2px 6px; border: 1px solid var(--border); border-radius: 4px; background: var(--surface); font-family: var(--mono); font-size: 10px; letter-spacing: .04em; text-transform: uppercase; }
+.wb-reminder small { align-self: center; color: var(--muted); font: 10px var(--mono); }
+.wb-reminder-stop { border-left-color: var(--red); }
+.wb-reminder-risk { border-left-color: var(--amber, #a66a12); }
+.wb-reminder-info { border-left-color: var(--border); }
 
 @media (max-width: 900px) {
   .wb-columns { grid-auto-columns: minmax(232px, 1fr); scroll-snap-type: x mandatory; }

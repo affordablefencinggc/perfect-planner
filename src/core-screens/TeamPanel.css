@@ -1,0 +1,82 @@
+.team-panel {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+.team-panel-empty {
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  color: var(--muted);
+}
+.team-panel-empty svg { width: 22px; height: 22px; color: var(--muted); }
+.team-panel-empty strong { color: var(--ink); font-size: var(--text-sm); }
+.team-panel-empty p { margin: 2px 0 0; font-size: var(--text-xs); }
+.team-panel header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+.team-panel header strong { font-size: var(--text-sm); }
+.team-panel header span { color: var(--muted); font: var(--text-xs) var(--mono); }
+.team-panel ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.team-member {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-width: 220px;
+  max-width: 340px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--paper);
+}
+.team-avatar {
+  display: inline-grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--chrome-dark, #3a3f3b);
+  color: var(--paper);
+  font: 700 10px var(--mono);
+  letter-spacing: 0.02em;
+}
+.team-name { display: grid; min-width: 0; }
+.team-name strong { overflow: hidden; font-size: var(--text-xs); text-overflow: ellipsis; white-space: nowrap; }
+.team-name small { overflow: hidden; color: var(--muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.team-task {
+  max-width: 150px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--ink);
+  padding: 3px 8px;
+  font: 10px var(--mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.team-task:hover { border-color: var(--ink); }
+.team-free { color: var(--muted); font: 10px var(--mono); }
+.team-online .team-avatar { background: var(--green, #2f7d4a); }
+.team-busy .team-avatar { background: var(--amber, #a66a12); }
+.team-offline .team-avatar { background: var(--muted, #6b746d); }
+.team-offline { opacity: 0.75; }
+
+@media (max-width: 600px) {
+  .team-panel ul { flex-wrap: nowrap; overflow-x: auto; padding-bottom: 4px; }
+  .team-member { min-width: 240px; }
+}

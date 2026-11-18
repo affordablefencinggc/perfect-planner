@@ -5,6 +5,7 @@ import { registerBoardRoutes } from "./board";
 import { registerCodexLoginRoutes } from "./codexLogin";
 import { registerCostRoutes } from "./cost";
 import { registerDecisionRoutes } from "./decisions";
+import { registerGitHubRoutes } from "./github";
 import { registerKeyRoutes } from "./keys";
 import { registerMvpRoutes } from "./mvp";
 import { registerPeopleRoutes } from "./people";
@@ -13,6 +14,8 @@ import { registerPlanningRoutes } from "./planning";
 import { registerSearchRoutes } from "./search";
 import { registerRepoRoutes } from "./repos";
 import { registerTaskRoutes } from "./tasks";
+import { registerTaskTerminalRoutes } from "./taskTerminal";
+import { registerTeamsRoutes } from "./teams";
 import { registerSummaryRoutes } from "./summary";
 import { registerTerminalRoutes } from "./terminal";
 
@@ -25,6 +28,9 @@ export function registerRoutes(router: Router): void {
   registerAgentRoutes(router);
   registerCodexLoginRoutes(router);
   registerTaskRoutes(router);
+  registerTaskTerminalRoutes(router);
+  registerTeamsRoutes(router);
+  registerGitHubRoutes(router);
   registerBoardRoutes(router);
   registerRepoRoutes(router);
   registerCostRoutes(router);

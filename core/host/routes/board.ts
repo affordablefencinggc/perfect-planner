@@ -16,6 +16,7 @@ import { costView, readPrices, type CostView } from "../../cost/index";
 import { deriveState } from "../../gate/index";
 import { FileStore, isAuthoritative, verifyChain, type LedgerEntry } from "../../ledger/index";
 import { attemptLabel, foldBoard, unmetDependencies, waitingMessage, type TaskStatus, type TaskView } from "../../mcp/index";
+import { deriveReminders, type Reminder } from "../../board/reminders";
 import { replayRoster } from "../../people/index";
 import { PRIVATE_DIR } from "../../worktrees/index";
 import { recordedWorkerDispatch, recordedWorkerReport, stageOf, taskSettings, type TaskStage } from "./tasks";
@@ -124,8 +125,10 @@ export interface BoardView {
     failed: number;
     stalled: number;
     attention: number;
+    reminders: number;
   };
   attention: Array<BoardAttention & { task: string; project: string; title: string }>;
+  reminders: Reminder[];
   plan: { approved: boolean; latest: string | null; at: string | null; count: number; entry: string | null };
   budget: { tokenBudget: number | null; tokensSpent: number; state: "uncapped" | "ok" | "reached" };
   guards: {
@@ -424,6 +427,7 @@ export function boardView(options: {
       title: "Token budget",
     });
   }
+  const reminders = deriveReminders(tasks, { now });
   const others = (options.otherFolders ?? []).map(({ key, folder }) => {
     const counts = recordedCounts(folder);
     return {
@@ -452,11 +456,13 @@ export function boardView(options: {
       failed: tasks.filter((task) => task.check?.passed === false).length,
       stalled: tasks.filter((task) => task.health === "stalled").length,
       attention: attention.length,
+      reminders: reminders.length,
     },
     attention: attention.sort((left, right) => {
       const rank = { stop: 0, risk: 1, info: 2 } as const;
       return rank[left.level] - rank[right.level];
     }),
+    reminders,
     plan,
     budget: { tokenBudget: budget, tokensSpent, state: budget == null ? "uncapped" : tokensSpent >= budget ? "reached" : "ok" },
     guards: {

@@ -3,6 +3,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { AdvancedOnly, CoreScreen, useAdvanced } from "./CoreScreen.jsx";
 import { coreGet, corePost, useCoreResource } from "./coreApi.js";
+import { TeamPanel } from "./TeamPanel.jsx";
+import { TaskTerminalPanel } from "./TaskTerminalPanel.jsx";
 import "./WorkBoardScreen.css";
 
 // One board for every plan. The columns are the real workflow stages, the cards are the
@@ -216,6 +218,10 @@ function ReceiptDrawer({ task, project, columnLabel, onClose, onWorkspace, onCha
   const [people, setPeople] = useState([]);
   const [handoverNote, setHandoverNote] = useState("");
   const [handoverError, setHandoverError] = useState("");
+  const [tagNote, setTagNote] = useState("");
+  const [tagBusy, setTagBusy] = useState(false);
+  const [tagMessage, setTagMessage] = useState("");
+  const [tagError, setTagError] = useState("");
   const drawerRef = useRef(null);
   const readOnlyProject = task.project !== project;
 
@@ -276,6 +282,23 @@ function ReceiptDrawer({ task, project, columnLabel, onClose, onWorkspace, onCha
     }
   };
 
+  const tagIn = async (event) => {
+    event.preventDefault();
+    setTagBusy(true); setTagError(""); setTagMessage("");
+    try {
+      const result = await corePost(`/tasks/${task.id}/handover/accept`, project, { note: tagNote });
+      setTagMessage(`Tagged in as ${result.incoming}. ${result.nextAction ?? ""}`.trim());
+      setTagNote("");
+      onChanged?.();
+      const fresh = await coreGet(`/tasks/${task.id}/receipt`, project);
+      setReceipt(fresh);
+    } catch (failure) {
+      setTagError(failure?.message ?? "The handover could not be accepted.");
+    } finally {
+      setTagBusy(false);
+    }
+  };
+
   if (typeof document === "undefined") return null;
   return createPortal(
     <>
@@ -301,6 +324,8 @@ function ReceiptDrawer({ task, project, columnLabel, onClose, onWorkspace, onCha
               <div><dt>Assignee</dt><dd>{receipt.task.assignee ?? "nobody"}</dd></div>
               <div><dt>Model</dt><dd>{receipt.task.model ?? "not reported"}{receipt.task.modelConflict ? " (conflict)" : ""}</dd></div>
               <div><dt>Branch</dt><dd>{receipt.work.branch ?? "no worktree yet"}</dd></div>
+              <div><dt>Worktree</dt><dd>{receipt.work.worktree ?? "none"}</dd></div>
+              <div><dt>Base</dt><dd>{receipt.work.base ?? "unknown"}</dd></div>
               <div><dt>Claims</dt><dd>{receipt.work.claims.length ? receipt.work.claims.join(", ") : "none"}</dd></div>
               <div><dt>Test</dt><dd>{receipt.checks.test ?? "not written"}</dd></div>
               <div><dt>Check</dt><dd>{receipt.checks.check ? (receipt.checks.check.passed ? "passed" : "FAILED") : "not run"}</dd></div>
@@ -327,7 +352,7 @@ function ReceiptDrawer({ task, project, columnLabel, onClose, onWorkspace, onCha
 
           {readOnlyProject ? (
             <p className="wb-readonly-project" role="note">This task belongs to <strong>{task.project}</strong>. Open that project to act on it; the board is showing it read-only.</p>
-          ) : (
+          ) : receipt.task.owner ? (
             <form className="wb-handover" onSubmit={handOver}>
               <h4>Hand this task over</h4>
               <p className="core-muted">The worker's token stops, the claim is released, and the worktree, branch and commits are kept for whoever picks it up.</p>
@@ -352,6 +377,23 @@ function ReceiptDrawer({ task, project, columnLabel, onClose, onWorkspace, onCha
               {handoverNote && <p role="status" className="wb-handover-note">{handoverNote}</p>}
               {handoverError && <p role="alert" className="wb-handover-error">{handoverError}</p>}
             </form>
+          ) : null}
+          {!readOnlyProject && !receipt.task.owner && (
+            <form className="wb-handover" onSubmit={tagIn}>
+              <h4>Tag in to this task</h4>
+              <p className="core-muted">Read the brief above, then record that you are picking it up. The worktree, branch and commits stay.</p>
+              <label>What you are taking on
+                <textarea value={tagNote} onChange={(event) => setTagNote(event.target.value)} rows={3} placeholder="I will finish the search path and run the approved check." />
+              </label>
+              <div className="wb-handover-actions">
+                <button type="submit" className="core-button primary" disabled={tagBusy}>{tagBusy ? "Recording…" : "Accept handover"}</button>
+              </div>
+              {tagMessage && <p role="status" className="wb-handover-note">{tagMessage}</p>}
+              {tagError && <p role="alert" className="wb-handover-error">{tagError}</p>}
+            </form>
+          )}
+          {!readOnlyProject && (
+            <TaskTerminalPanel taskId={task.id} project={project} hasWorktree={Boolean(receipt.work.worktree)} />
           )}
           {advanced && receipt.history.length > 0 && (
             <section className="wb-history" aria-label="Recent ledger entries">
@@ -386,6 +428,11 @@ export default function WorkBoardScreen({ onWorkspace }) {
   }, [data, phaseFilter]);
 
   const columns = data?.columns ?? [];
+  // The rail already owns plan changes, the token cap, model conflicts and failed checks.
+  // The reminder strip adds the facts the rail does not: quiet claims, waiting reviews,
+  // unowned work, unmet dependencies, handover waits and stale worktrees.
+  const REMINDER_CODES_IN_RAIL = new Set(["plan-changed", "token-cap", "model-conflict", "check-failed"]);
+  const extraReminders = (data?.reminders ?? []).filter((reminder) => !REMINDER_CODES_IN_RAIL.has(reminder.code));
   const byColumn = useMemo(() => {
     const map = new Map(columns.map((column) => [column.id, []]));
     for (const task of tasks) map.get(task.column)?.push(task);
@@ -436,7 +483,33 @@ export default function WorkBoardScreen({ onWorkspace }) {
             </div>
           )}
 
+          <TeamPanel onOpenTask={openTask} />
+
           <AttentionRail items={data.attention} onOpen={openTask} onProject={goToBudget} />
+
+          {extraReminders.length > 0 && (
+            <section className="wb-reminders" aria-label="Reminders">
+              <header>
+                <WarningCircleIcon weight="fill" aria-hidden="true" />
+                <div>
+                  <strong>{extraReminders.length} reminder{extraReminders.length === 1 ? "" : "s"}</strong>
+                  <p>Derived from the same ledger facts, with the exact next action.</p>
+                </div>
+              </header>
+              <ul>
+                {extraReminders.slice(0, 8).map((reminder) => (
+                  <li key={`${reminder.task}-${reminder.code}`} className={`wb-reminder wb-reminder-${reminder.level}`}>
+                    <span className="wb-reminder-task">{reminder.task}</span>
+                    <div>
+                      <strong>{reminder.message}</strong>
+                      <p>{reminder.action}</p>
+                    </div>
+                    {reminder.dueAt && <small>due {new Date(reminder.dueAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</small>}
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
 
           <div className="wb-columns" aria-label="Workflow columns">
             {columns.map((column) => {

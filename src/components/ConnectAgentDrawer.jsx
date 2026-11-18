@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { ArrowRightIcon, RobotIcon, XIcon } from "@phosphor-icons/react";
 import { CoreAgentConnect } from "../core-screens/CoreAgentConnect.jsx";
+import { ConnectionCards } from "../core-screens/ConnectionCards.jsx";
 import "./ConnectAgentDrawer.css";
 
 // Loaded only when the drawer opens, so the main bundle does not carry the terminal.
@@ -53,6 +54,7 @@ export function ConnectAgentDrawer({ open, onClose, onWorkspace, hasProject = tr
         </header>
 
         <div className="connect-agent-scroll">
+          <ConnectionCards />
           <CoreAgentConnect />
           {hasProject && <Suspense fallback={null}><CoreTerminal /></Suspense>}
           <section className="connect-agent-section" aria-label="Hand your plan to the agent">
