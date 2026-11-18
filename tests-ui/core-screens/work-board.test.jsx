@@ -135,6 +135,27 @@ describe("WorkBoardScreen", () => {
     expect(posted.to).toBe("sam");
   });
 
+  test("closes the drawer with Escape and a backdrop click", async () => {
+    routeFetch({
+      "GET /board": () => ok(board()),
+      "GET /tasks/T-1/receipt": () => ok(receipt),
+      "GET /people": () => ok({ view: { members: [] } }),
+    });
+    renderBoard();
+    fireEvent.click(await screen.findByRole("button", { name: /T-1: Add note search/ }));
+    expect(await screen.findByRole("heading", { name: "Handover receipt" })).toBeTruthy();
+    // The drawer is portalled to the body, so it must not live inside the screen subtree.
+    const dialog = document.querySelector(".wb-drawer");
+    expect(dialog).toBeTruthy();
+    expect(document.querySelector(".wb-backdrop")).toBeTruthy();
+    expect(dialog.closest(".core-screen-board")).toBeNull();
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(document.querySelector(".wb-drawer")).toBeNull();
+    fireEvent.click(await screen.findByRole("button", { name: /T-1: Add note search/ }));
+    fireEvent.click(document.querySelector(".wb-backdrop"));
+    expect(document.querySelector(".wb-drawer")).toBeNull();
+  });
+
   test("says nothing needs a decision when the rail is clear", async () => {
     routeFetch({ "GET /board": () => ok(board()) });
     renderBoard();
