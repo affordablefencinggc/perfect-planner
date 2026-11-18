@@ -1332,7 +1332,9 @@ export function registerTaskRoutes(router: Router): void {
     // A key saved in Settings a moment ago counts at once: refresh Jev's policy, then refuse an ineligible check
     // here (409) before the journal reserves a receipt for it. The gate repeats the same refusal inside.
     await syncJevPolicy(project, { fresh: true });
-    const early = startRefusal(project.service.gate.state(request.attempt), project.policy);
+    // An exact saved request is answered from its durable record, even after the task is done and
+    // its worktree is gone. Only a new check is refused here, before the journal reserves a receipt.
+    const early = project.service.gate.checks.status(request.requestId) ? null : startRefusal(project.service.gate.state(request.attempt), project.policy);
     if (early) throw new HttpError(409, "REFUSED", early);
     const scope = JSON.stringify([project.root, project.entries()[0]?.hash]);
     const run = await project.service.gate.proveRequest(request, scope, async () => {
