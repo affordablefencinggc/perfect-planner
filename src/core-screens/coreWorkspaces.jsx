@@ -10,6 +10,7 @@ const screens = {
   mvp: lazy(() => import("./MvpBoardScreen.jsx")),
   decisions: lazy(() => import("./DecisionsScreen.jsx")),
   people: lazy(() => import("./PeopleScreen.jsx")),
+  board: lazy(() => import("./WorkBoardScreen.jsx")),
   tasks: lazy(() => import("./TasksScreen.jsx")),
   lookup: lazy(() => import("./LedgerLookupScreen.jsx")),
 };
@@ -21,6 +22,7 @@ export const coreWorkspaceLabels = {
   mvp: "MVP board",
   decisions: "Decisions",
   people: "People",
+  board: "Work board",
   tasks: "Tasks",
   lookup: "Ledger search",
 };
@@ -49,6 +51,12 @@ export const coreWorkspaceContext = {
     purpose: "Who is on this project, where each person is, and the documents you share.",
     outcome: "Helpers added with the right role; shared docs versioned.",
     unlock: "Add a helper or share a document.",
+  },
+  board: {
+    stage: "build",
+    purpose: "See every plan's tasks as one workflow: building, broken, waiting on you, or ready to ship.",
+    outcome: "One board where a failure, a stalled worker and a ship decision are visible together.",
+    unlock: "Clear the top item in the attention rail.",
   },
   tasks: {
     stage: "build",

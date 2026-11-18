@@ -328,7 +328,7 @@ function TaskCard({ contained, task, repoRoot, project, act, busy, notice, dispa
       {task.waitingFor && task.stage !== "done" && <p className="core-tasks-warn">{task.waitingFor.message}</p>}
       {task.claims?.length > 0 && <p className="core-tasks-line"><span className="core-muted">File claims</span> {task.claims.join(", ")}{task.staleClaims ? ` (${task.staleClaims}, so these can be released)` : ""}</p>}
 
-      {notice && !(folder && notice.text.startsWith(folder.note)) && <p className={`core-tasks-notice ${notice.tone}`} role="status">{notice.text}</p>}
+      {notice && !(folder && notice.text.startsWith(folder.note)) && <p className={`core-tasks-notice ${notice.tone}`} role={notice.tone === "bad" ? "alert" : "status"}>{notice.text}</p>}
 
       {(task.stage === "test-proposed" || task.stage === "test-approved") && <Disclosure contained={contained} />}
       <div className="core-tasks-actions">

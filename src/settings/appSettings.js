@@ -8,7 +8,7 @@ export const APP_SETTINGS_STORAGE_KEY = "perfect-planner.settings.v1";
 export const STAGE_PAGES = Object.freeze({
   define: ["blueprint", "structure", "components"],
   coordinate: ["plan", "collision", "allocation"],
-  build: ["build"],
+  build: ["build", "board"],
   prove: ["integrity", "evidence"],
   release: ["ledger"],
 });

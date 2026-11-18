@@ -363,7 +363,6 @@ describe("finding Claude Code", () => {
   });
 
   it("connect.mjs started from a task worktree or from repo/src never runs a claude reached through a PATH link into the repo or the worktree", async () => {
-it("connect.mjs started from a task worktree or from repo/src never runs a claude reached through a PATH link into the repo or the worktree", async () => {
     // Claude Code's npm layout, whose package entry runs under this Node on every OS.
     const npmClaude = (dir: string, body: string) => {
       const cli = path.join(dir, "node_modules", "@anthropic-ai", "claude-code", "cli.js");

@@ -12,7 +12,8 @@ import { checkRequest } from "../../gate/execution";
 import fs from "node:fs";
 import path from "node:path";
 import { deriveState, sensitiveChanges, startRefusal, testSupportFiles, unalteredPins, type GateState } from "../../gate/index";
-import { isAuthoritative, LedgerError, type Actor, type LedgerEntry } from "../../ledger/index";
+import { costView, readPrices } from "../../cost/index";
+import { isAuthoritative, LedgerError, sha256, type Actor, type LedgerEntry } from "../../ledger/index";
 import type { AgentKind } from "../agentKinds";
 import { attemptLabel, unmetDependencies, waitingMessage, type TaskView } from "../../mcp/index";
 import { DispatchWorktreeError, WorktreeError, WorktreeManager, git, headIdentity, refreshCarriedSettings, runGit, WORKTREES_ACTOR, type WorktreeInfo } from "../../worktrees/index";
@@ -26,7 +27,7 @@ import { localPerson, localPersonId } from "./people";
 import { annotate, checkReadiness, quietLabels, registerWorktreeCareRoutes, tidy, withHygieneLock } from "./worktreeCare";
 import { PRIMARY_REPO, readRepos } from "../../repos/index";
 import { sandboxStatus } from "../../exec/index";
-import { replayRoster } from "../../people/index";
+import { assignTask, replayRoster } from "../../people/index";
 import { protectRepository } from "../project";
 import { chosenRepoRoot, repoRefusal } from "../protectedRoots";
 import { syncJevPolicy } from "./decisions";
@@ -322,6 +323,12 @@ export interface TaskSettings {
   limit: number;
   /** When on, approving a diff that touches no flagged file merges it straight away. */
   autoMerge: boolean;
+  /**
+   * A project-wide token allowance for worker runs, or null for no cap. Tokens are self-reported,
+   * so this is a person's own guard: when the reported total reaches it, new workers are refused
+   * and the board says why. It never pretends to measure a model's real context window.
+   */
+  tokenBudget: number | null;
 }
 
 function settingsFile(project: CoreProject): string {
@@ -330,12 +337,28 @@ function settingsFile(project: CoreProject): string {
 
 export function taskSettings(project: CoreProject): TaskSettings {
   try {
-    const raw = JSON.parse(fs.readFileSync(settingsFile(project), "utf8")) as { limit?: unknown; autoMerge?: unknown };
+    const raw = JSON.parse(fs.readFileSync(settingsFile(project), "utf8")) as { limit?: unknown; autoMerge?: unknown; tokenBudget?: unknown };
     const limit = typeof raw.limit === "number" && Number.isInteger(raw.limit) && raw.limit >= 1 && raw.limit <= MAX_LIMIT ? raw.limit : DEFAULT_LIMIT;
-    return { limit, autoMerge: raw.autoMerge === true };
+    const tokenBudget = typeof raw.tokenBudget === "number" && Number.isInteger(raw.tokenBudget) && raw.tokenBudget > 0 ? raw.tokenBudget : null;
+    return { limit, autoMerge: raw.autoMerge === true, tokenBudget };
   } catch {
-    return { limit: DEFAULT_LIMIT, autoMerge: false };
+    return { limit: DEFAULT_LIMIT, autoMerge: false, tokenBudget: null };
   }
+}
+
+/** Tokens workers reported for this project, summed from their own progress records. Never a measurement. */
+export function tokenSpend(entries: readonly LedgerEntry[]): number {
+  let total = 0;
+  for (const entry of entries) {
+    if (entry.type !== "task.progress" || entry.actor?.kind !== "agent") continue;
+    const usage = entry.data?.usage;
+    if (!usage || typeof usage !== "object" || Array.isArray(usage)) continue;
+    const input = (usage as { inputTokens?: unknown }).inputTokens;
+    const output = (usage as { outputTokens?: unknown }).outputTokens;
+    if (typeof input === "number" && Number.isFinite(input) && input >= 0) total += input;
+    if (typeof output === "number" && Number.isFinite(output) && output >= 0) total += output;
+  }
+  return Math.round(total);
 }
 
 /** A worker is running on the task and has not handed in work yet; a task waiting on a diff or a merge holds no slot. */
@@ -808,6 +831,13 @@ async function dispatch(project: CoreProject, host: CoreHost, id: string, body: 
   // A task whose dependencies are not done yet does not start: say which ones, in plain words.
   const unmet = unmetDependencies(project.service.board(), task);
   if (unmet.length) throw new HttpError(409, "WAITING_FOR_DEPENDENCY", waitingMessage(attemptLabel(task), unmet));
+  // The person's own token allowance is a hard stop for new runs. Tokens are self-reported, so this
+  // says "reported", never "measured": a worker that dies before reporting spends nothing here.
+  const budget = taskSettings(project).tokenBudget;
+  const spent = tokenSpend(project.entries());
+  if (budget !== null && spent >= budget) {
+    throw new HttpError(409, "TOKEN_BUDGET", `The token budget is spent: workers have reported ${spent.toLocaleString()} of ${budget.toLocaleString()} tokens. Raise the budget on the Work board, or hand the remaining work over, before starting another worker.`);
+  }
   const model = typeof body.model === "string" && body.model.trim() ? body.model.trim() : undefined;
   if (model !== undefined && !MODEL.test(model)) throw new HttpError(400, "INVALID", "Name the worker's model in letters, digits and . _ : / - (for example claude-sonnet-4).");
   const label = attemptLabel(task);
@@ -1015,6 +1045,158 @@ async function changedFiles(project: CoreProject, label: string, tree: { path: s
 export function withOutputTail(reason: string, output?: string): string {
   const tail = (output ?? "").split(/\r?\n/).filter((line) => line.trim()).slice(-20).join("\n").slice(-2000);
   return tail ? `${reason}\n\nEnd of the test output:\n${tail}` : reason;
+}
+
+export interface HandoverReceipt {
+  version: 1;
+  generatedAt: string;
+  digest: string;
+  project: string;
+  task: {
+    id: string; label: string; title: string; repo: string; stage: TaskStage; status: string;
+    attempt: number; owner: string | null; assignee: string | null;
+    model: string | null; requestedModel: string | null; reportedModel: string | null; modelConflict: boolean;
+  };
+  plan: { approved: boolean; latest: string | null; at: string | null; count: number; changedSince: boolean };
+  work: { branch: string | null; worktree: string | null; base: string | null; port: number | null; claims: string[]; staleClaims: string | null; lastProgress: string | null; progressAt: string | null; proofs: Array<{ kind: string; link: string }> };
+  checks: {
+    test: string | null; approval: string | null; baseline: { passed: boolean } | null;
+    check: { passed: boolean; commit?: string } | null; diffApproval: string | null; merged: string | null;
+  };
+  usage: { calls: number; inputTokens: number; outputTokens: number; usd: number; unpricedTokens: number; tokenBudget: number | null; tokensSpent: number };
+  history: Array<{ n: string; at: string; type: string; summary: string }>;
+  openRisks: string[];
+  nextAction: string;
+  text: string;
+}
+
+const NEXT_BY_STAGE: Record<TaskStage, string> = {
+  "needs-test": "Write the done-when test and approve it.",
+  "test-proposed": "Approve the proposed test (it must fail before the work starts).",
+  "test-approved": "Run the baseline check, then start a worker.",
+  "test-passes-already": "The test already passes without the change: rewrite the test so it fails first.",
+  "waiting-for-jev": "Wait for Jev's test review, or answer the gaps it raised.",
+  "jev-found-gaps": "Fix the gaps Jev found in the test, then approve it again.",
+  "ready-to-claim": "Start a worker on this task.",
+  building: "Wait for the worker, or hand the task over if it has gone quiet.",
+  "review-diff": "Read the diff and the proof, then approve the diff or send it back.",
+  "ready-to-merge": "Merge the approved commit, or hand it to whoever ships.",
+  reopened: "Dispatch the next attempt; the previous worktree is kept.",
+  done: "Nothing: it is merged and recorded.",
+};
+
+/** The cold-start receipt for one task, built only from the ledger and the gate's own state. */
+export async function handoverReceipt(project: CoreProject, id: string): Promise<HandoverReceipt> {
+  const view = await overview(project);
+  const task = view.tasks.find((item) => item.id === id);
+  if (!task) throw new HttpError(404, "NOT_FOUND", `${id} is not on the board. Approve the plan or add the task first.`);
+  const boardTask = project.service.board().get(id);
+  if (!boardTask) throw new HttpError(404, "NOT_FOUND", `${id} is not on the board.`);
+  const label = attemptLabel(task);
+  const entries = project.entries();
+  const gate = deriveState(entries, label);
+  const stage = stageOf(boardTask, gate);
+  const plan = (() => {
+    const approvals = entries.filter((entry) => entry.type === "plan.approved" && isAuthoritative(entry, { personOnly: true }));
+    const last = approvals[approvals.length - 1];
+    return { approved: Boolean(last), latest: last?.subject ?? null, at: last?.at ?? null, count: approvals.length, entry: last?.n ?? null };
+  })();
+  const created = entries.find((entry) => entry.type === "task.created" && entry.subject === task.id);
+  const changedSince = Boolean(plan.entry && created && plan.entry > created.n && task.status !== "done");
+  const cost = costView(entries, project.service.board(), readPrices(project.root));
+  const row = cost.byTask.find((item) => item.key === task.id);
+  const settings = taskSettings(project);
+  const usage = {
+    calls: row?.calls ?? 0,
+    inputTokens: row?.inputTokens ?? 0,
+    outputTokens: row?.outputTokens ?? 0,
+    usd: Math.round((row?.usd ?? 0) * 1e4) / 1e4,
+    unpricedTokens: row?.unpricedTokens ?? 0,
+    tokenBudget: settings.tokenBudget,
+    tokensSpent: tokenSpend(entries),
+  };
+  const risks: string[] = [];
+  if (task.check?.passed === false) risks.push(`The approved test failed on its last run (${task.check.commit ? `commit ${task.check.commit.slice(0, 8)}` : "no commit recorded"}).`);
+  if (task.status === "blocked") risks.push("The task is blocked on the ledger.");
+  if (stage === "reopened") risks.push("The task was sent back for another attempt.");
+  if (task.status === "claimed" && task.lastProgress?.at && Date.now() - Date.parse(task.lastProgress.at) >= 15 * 60 * 1000) risks.push("No worker progress for 15 minutes or more: the worker may have stopped or lost its model.");
+  if (task.status === "claimed" && !task.lastProgress) risks.push("Claimed, but no progress has ever been reported.");
+  const unmet = unmetDependencies(project.service.board(), boardTask);
+  if (unmet.length) risks.push(waitingMessage(label, unmet));
+  if (changedSince) risks.push(`The plan was approved again after this task was created (${plan.latest} at ${plan.at}).`);
+  if (task.workerDispatch?.requestedModel && task.workerReport?.reportedModel && task.workerDispatch.requestedModel !== task.workerReport.reportedModel) risks.push(`Requested ${task.workerDispatch.requestedModel}; the worker reported ${task.workerReport.reportedModel}.`);
+  if (task.staleClaims) risks.push(`File claims: ${task.staleClaims}`);
+  if (usage.tokenBudget !== null && usage.tokensSpent >= usage.tokenBudget) risks.push(`The token budget is spent (${usage.tokensSpent.toLocaleString()} of ${usage.tokenBudget.toLocaleString()}).`);
+  const nextAction = NEXT_BY_STAGE[stage];
+  const repoRoot = await requireRepo(project, task.repo).catch(() => null);
+  const worktreePath = task.worktree?.path ? (path.isAbsolute(task.worktree.path) ? task.worktree.path : repoRoot ? path.join(repoRoot, task.worktree.path) : task.worktree.path) : null;
+  const body: Omit<HandoverReceipt, "text" | "digest"> = {
+    version: 1,
+    generatedAt: new Date().toISOString(),
+    project: project.key,
+    task: {
+      id: task.id, label, title: task.title, repo: task.repo, stage, status: task.status, attempt: task.attempt,
+      owner: task.owner, assignee: replayRoster(entries, project.ledger.owner).assignments.get(task.id) ?? null,
+      model: task.workerReport?.reportedModel ?? task.workerDispatch?.requestedModel ?? null,
+      requestedModel: task.workerDispatch?.requestedModel ?? null,
+      reportedModel: task.workerReport?.reportedModel ?? null,
+      modelConflict: Boolean(task.workerDispatch?.requestedModel && task.workerReport?.reportedModel && task.workerDispatch.requestedModel !== task.workerReport.reportedModel),
+    },
+    plan: { approved: plan.approved, latest: plan.latest, at: plan.at, count: plan.count, changedSince },
+    work: {
+      branch: task.worktree?.branch ?? null, worktree: worktreePath,
+      base: task.worktree?.base ?? null, port: task.worktree?.port ?? null,
+      claims: task.claims ?? [], staleClaims: task.staleClaims ?? null,
+      lastProgress: task.lastProgress?.text ?? null, progressAt: task.lastProgress?.at ?? null,
+      proofs: task.proofs.map((proof) => ({ kind: proof.kind, link: proof.link })),
+    },
+    checks: {
+      test: task.test?.command ?? null,
+      approval: task.approval ? `${task.approval.entry} by ${task.approval.by?.id ?? "unknown"}` : null,
+      baseline: task.baseline ? { passed: task.baseline.passed } : null,
+      check: task.check ? { passed: task.check.passed, ...(task.check.commit ? { commit: task.check.commit } : {}) } : null,
+      diffApproval: task.diffApproval ? `${task.diffApproval.entry} by ${task.diffApproval.by?.id ?? "unknown"}` : null,
+      merged: task.merged ? String((task.merged as { commit?: unknown }).commit ?? "merged") : null,
+    },
+    usage,
+    history: task.history.map((entry) => ({ n: entry.n, at: "", type: entry.type, summary: entry.summary })),
+    openRisks: risks,
+    nextAction,
+  };
+  const digest = sha256(JSON.stringify(body));
+  const text = [
+    `Handover receipt · ${label} · ${task.title}`,
+    `Project ${project.key} · repo ${task.repo} · stage ${stage} · attempt ${task.attempt}`,
+    `Generated ${body.generatedAt} · receipt ${digest.slice(0, 16)}`,
+    "",
+    `Plan: ${plan.approved ? `${plan.latest} approved ${plan.at}` : "no approved plan"}${changedSince ? " (changed after this task was created)" : ""}`,
+    `Worker: ${task.owner ?? "none"}${body.task.model ? ` · model ${body.task.model}` : ""}${body.task.modelConflict ? " · MODEL CONFLICT" : ""}`,
+    `Assignee: ${body.task.assignee ?? "nobody"}`,
+    "",
+    `Worktree: ${body.work.branch ?? "none"}${body.work.worktree ? ` at ${body.work.worktree}` : ""}`,
+    `Claims: ${body.work.claims.length ? body.work.claims.join(", ") : "none"}`,
+    `Last progress: ${body.work.lastProgress ?? "none"}${body.work.progressAt ? ` (${body.work.progressAt})` : ""}`,
+    `Proofs: ${body.work.proofs.length}`,
+    "",
+    `Test: ${body.checks.test ?? "not written"}`,
+    `Approval: ${body.checks.approval ?? "not approved"}`,
+    `Baseline: ${body.checks.baseline ? (body.checks.baseline.passed ? "passes already (must fail first)" : "fails first, as it must") : "not run"}`,
+    `Check: ${body.checks.check ? (body.checks.check.passed ? "passed" : "FAILED") : "not run"}`,
+    `Diff approval: ${body.checks.diffApproval ?? "not approved"}`,
+    `Merged: ${body.checks.merged ?? "not merged"}`,
+    "",
+    `Reported usage: ${usage.inputTokens.toLocaleString()} in / ${usage.outputTokens.toLocaleString()} out · ${usage.calls} reports · $${usage.usd.toFixed(4)}${usage.unpricedTokens ? ` · ${usage.unpricedTokens.toLocaleString()} unpriced tokens` : ""}`,
+    `Token budget: ${usage.tokenBudget === null ? "no cap" : `${usage.tokensSpent.toLocaleString()} of ${usage.tokenBudget.toLocaleString()} spent`}`,
+    "",
+    "Open risks:",
+    ...(risks.length ? risks.map((risk) => `- ${risk}`) : ["- none recorded"]),
+    "",
+    `Next action: ${nextAction}`,
+    "",
+    "Recent ledger:",
+    ...body.history.map((entry) => `- ${entry.n} ${entry.at} ${entry.type}: ${entry.summary}`),
+  ].join("\n");
+  return { ...body, digest, text };
 }
 
 export function registerTaskRoutes(router: Router): void {
@@ -1242,6 +1424,60 @@ export function registerTaskRoutes(router: Router): void {
    */
   router.post("/tasks/:id/release", ({ project, params, body }) => releaseClaim(project, params.id!, bodyOf(body)));
 
+  /**
+   * GET /tasks/:id/receipt: everything a person needs to take over a task cold, built from the
+   * ledger. It is a read: nothing is released and nothing is claimed.
+   */
+  router.get("/tasks/:id/receipt", ({ project, params }) => handoverReceipt(project, params.id!));
+  /**
+   * POST /tasks/:id/handover { note, nextAction, to? }: hand the task to a person, or back to the
+   * pool, with a receipt. The worker's token stops, the claim is released and the worktree, branch
+   * and claims are kept for whoever picks it up. The note and next action are signed by the person.
+   */
+  router.post("/tasks/:id/handover", async ({ project, params, body }) => {
+    const task = findTask(project, params.id!);
+    const b = bodyOf(body);
+    const note = typeof b.note === "string" ? b.note.replace(/\s+/g, " ").trim().slice(0, 2000) : "";
+    const nextAction = typeof b.nextAction === "string" ? b.nextAction.replace(/\s+/g, " ").trim().slice(0, 500) : "";
+    const to = typeof b.to === "string" && b.to.trim() ? b.to.trim().slice(0, 80) : null;
+    if (!note) throw new HttpError(400, "EMPTY_NOTE", "Say what the next person needs to know; a handover without a note is just a dropped task.");
+    if (!nextAction) throw new HttpError(400, "EMPTY_NEXT", "Say the next concrete action.");
+    if (to) {
+      const roster = replayRoster(project.entries(), project.ledger.owner);
+      if (!roster.members.has(to)) throw new HttpError(400, "NOT_A_MEMBER", `${to} is not on this project's roster.`);
+    }
+    const label = attemptLabel(task);
+    const receipt = await handoverReceipt(project, params.id!);
+    const from = task.owner;
+    const entry = project.ledger.append({
+      actor: localPerson(project),
+      type: "task.progress",
+      subject: label,
+      summary: `Handover for ${label}${to ? ` to ${to}` : ""}: ${nextAction}`,
+      reason: note,
+      data: {
+        released: true,
+        handover: {
+          version: 1,
+          at: new Date().toISOString(),
+          from,
+          to,
+          note,
+          nextAction,
+          stage: receipt.task.stage,
+          attempt: receipt.task.attempt,
+          risks: receipt.openRisks,
+          usage: receipt.usage,
+          receipt: receipt.digest,
+        },
+      },
+    });
+    revokeWorker(project, label);
+    project.service.tokens.revokeTask(task.id);
+    if (to) assignTask(project.ledger, localPerson(project), task.id, to, `Handover of ${label}: ${nextAction}`);
+    return { handover: entry.n, receipt: await handoverReceipt(project, params.id!), ...(await overview(project)) };
+  });
+
   /** POST /tasks/:id/update-from-main: merge the integration branch into the task's branch, inside its worktree, never touching unsaved work. */
   router.post("/tasks/:id/update-from-main", ({ project, params }) => updateFromMain(project, params.id!));
 
@@ -1342,12 +1578,18 @@ export function registerTaskRoutes(router: Router): void {
     }
   };
 
-  /** POST /tasks/settings { limit?, autoMerge? }: the worker limit and the auto-merge switch. */
+  /** POST /tasks/settings { limit?, autoMerge?, tokenBudget? }: the worker limit, the auto-merge switch and the token allowance. */
   router.post("/tasks/settings", async ({ project, body }) => {
-    const { limit, autoMerge } = bodyOf(body);
+    const { limit, autoMerge, tokenBudget } = bodyOf(body);
     if (limit !== undefined && !(typeof limit === "number" && Number.isInteger(limit) && limit >= 1 && limit <= MAX_LIMIT)) throw new HttpError(400, "INVALID", `The worker limit is a whole number from 1 to ${MAX_LIMIT}.`);
     if (autoMerge !== undefined && typeof autoMerge !== "boolean") throw new HttpError(400, "INVALID", "Auto-merge is on or off.");
-    const next = { ...taskSettings(project), ...(limit !== undefined ? { limit: limit as number } : {}), ...(autoMerge !== undefined ? { autoMerge: autoMerge as boolean } : {}) };
+    if (tokenBudget !== undefined && tokenBudget !== null && !(typeof tokenBudget === "number" && Number.isInteger(tokenBudget) && tokenBudget > 0 && tokenBudget <= 1_000_000_000)) throw new HttpError(400, "INVALID", "The token budget is a whole number above 0, or null for no cap.");
+    const next = {
+      ...taskSettings(project),
+      ...(limit !== undefined ? { limit: limit as number } : {}),
+      ...(autoMerge !== undefined ? { autoMerge: autoMerge as boolean } : {}),
+      ...(tokenBudget !== undefined ? { tokenBudget: tokenBudget as number | null } : {}),
+    };
     fs.mkdirSync(path.dirname(settingsFile(project)), { recursive: true });
     fs.writeFileSync(settingsFile(project), JSON.stringify(next, null, 2));
     return overview(project);

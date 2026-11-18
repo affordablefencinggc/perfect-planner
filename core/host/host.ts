@@ -4,6 +4,7 @@
 // scripts/build-core-host.mjs writes). Loopback, same-origin callers only, and every route
 // except /session/claim needs the session cookie of a window opened from a one-time link.
 import fs from "node:fs";
+import path from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { LedgerError } from "../ledger/index";
 import { startBridge, ToolError, type Bridge } from "../mcp/index";
@@ -128,6 +129,25 @@ export class CoreHost {
       this.folders.set(folder, key);
     }
     return project;
+  }
+
+  /**
+   * Every project on this computer that has a ledger, for the work board. Read-only: the board
+   * folds the files itself and never opens a project (no watcher, no bridge, no writer lock).
+   */
+  boardFolders(activeKey: string): Array<{ key: string; folder: string }> {
+    if (this.options.projectRootOverride) return [{ key: activeKey, folder: this.options.projectRootOverride }];
+    const projects = path.join(this.options.root, "projects");
+    let names: string[];
+    try {
+      names = fs.readdirSync(projects, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => entry.name);
+    } catch {
+      return [];
+    }
+    return names
+      .filter((name) => fs.existsSync(path.join(projects, name, ".perfect-planner", "ledger")))
+      .sort()
+      .map((name) => ({ key: name, folder: path.join(projects, name) }));
   }
 
   /** Stops one project's watcher, agent bridge and ledger, in that order, and forgets it. A later request opens it again. */

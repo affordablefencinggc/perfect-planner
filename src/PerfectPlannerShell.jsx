@@ -164,7 +164,7 @@ const stageNavigation = [
     number: "02",
     workspaces: ["plan", "collision", "allocation", "decisions", "people"],
   },
-  { id: "build", label: "Build", number: "03", workspaces: ["build", "tasks"] },
+  { id: "build", label: "Build", number: "03", workspaces: ["build", "board", "tasks"] },
   {
     id: "prove",
     label: "Prove",
