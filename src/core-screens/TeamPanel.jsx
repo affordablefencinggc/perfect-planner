@@ -23,7 +23,7 @@ function initials(name) {
 // on, what each person holds, and what is free. An empty roster says so instead of inventing
 // a teammate; a member with no active task says "free" instead of showing a stale claim.
 export function TeamPanel({ onOpenTask }) {
-  const resource = useCoreResource("/teams", { pollMs: 5000, isEmpty: (data) => !data?.members?.length });
+  const resource = useCoreResource("/teams", { pollMs: 15000, isEmpty: (data) => !data?.members?.length });
   const members = resource.status === "ready" ? resource.data?.members ?? [] : [];
 
   if (resource.status === "error") {
