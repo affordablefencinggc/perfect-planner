@@ -18,8 +18,8 @@ export const RELEASE_APPROVAL_FILE = path.join(".cache", "release-approval.json"
 // Verification that does not depend on dist runs first, so the build can bind its truth to it; the
 // dist-dependent gates follow and the chain stops at the first failure.
 export const RELEASE_CHAINS = Object.freeze({
-  web: Object.freeze([...RELEASE_PROFILES.web.filter((step) => step !== "test:sites"), "build", "test:sites", "truth:release", "verify:performance", "verify:readiness"]),
-  release: Object.freeze([...RELEASE_PROFILES.release.filter((step) => step !== "test:sites"), "build", "tauri:build -- --no-bundle", "test:sites", "truth:release", "verify:performance", "verify:readiness"]),
+  web: Object.freeze([...RELEASE_PROFILES.web.filter((step) => step !== "test:sites"), "build", "test:sites", "truth:release", "sites:prepare", "verify:performance", "verify:readiness"]),
+  release: Object.freeze([...RELEASE_PROFILES.release.filter((step) => step !== "test:sites"), "build", "tauri:build -- --no-bundle", "test:sites", "truth:release", "sites:prepare", "verify:performance", "verify:readiness"]),
 });
 
 const sealed = (record) => ({ ...record, digest: releaseRecordDigest(record) });
