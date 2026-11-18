@@ -14,7 +14,7 @@ import { githubStatusView, registerGitHubRoutes } from "./github";
 // only where the answer would otherwise come from this computer or from GitHub itself.
 
 const SHA = "0123456789abcdef0123456789abcdef01234567";
-const TOKEN = "ghs_route_test_token_1234567890";
+const TOKEN = "fake-route-token";
 const REPO_URL = "https://github.com/acme/fence.git";
 
 const git = (cwd: string, ...args: string[]) =>

@@ -663,7 +663,15 @@ async function allRepos(project: CoreProject, options: { tidyFolders?: boolean }
     }
     if (result?.state === "pending" && !listed.some((item) => item.taskId === receipt.tree.taskId && (item.repo ?? PRIMARY_REPO) === receipt.repo)) listed.push(receipt.tree);
   }
-  return { repos, inspection, worktrees: listed };
+  // A cached folder list can outlive the folder itself. Never report a tree as "ok" when
+  // its path is gone: the next dispatch must see "missing" so it can recreate the folder.
+  const verified = listed.map((tree) => {
+    if (!tree.path) return tree;
+    const gone = (() => { try { return !fs.existsSync(tree.path); } catch { return true; } })();
+    if (!gone) return tree;
+    return { ...tree, state: "missing", note: `The task folder was deleted; branch ${tree.branch ?? "unknown"} is kept.` };
+  });
+  return { repos, inspection, worktrees: verified };
 }
 
 /**

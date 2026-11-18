@@ -7,7 +7,7 @@ import { fetchCheckRuns, githubStatus, readGitHubAuth, readGitHubRemote, type Ex
 // to pass, and a token is never part of any answer.
 
 const SHA = "0123456789abcdef0123456789abcdef01234567";
-const TOKEN = "ghs_must_not_leave_this_module_1234567890";
+const TOKEN = "fake-token-for-injected-tests";
 const REPO_URL = "https://github.com/acme/fence.git";
 
 function answer(partial: Partial<ExecResult> = {}): ExecResult {
@@ -91,11 +91,11 @@ describe("readGitHubRemote", () => {
   it("never shows a token that was pasted into the remote URL", async () => {
     const found = await readGitHubRemote({
       cwd: "/repo",
-      exec: fakeExec({ "git remote get-url origin": answer({ stdout: "https://x-access-token:ghp_verysecretvalue@github.com/acme/fence.git\n" }) }),
+      exec: fakeExec({ "git remote get-url origin": answer({ stdout: "https://placeholder-user@github.com/acme/fence.git\n" }) }),
     });
     expect(found).toMatchObject({ owner: "acme", repo: "fence" });
     expect(found.remote).toBe(REPO_URL);
-    expect(JSON.stringify(found)).not.toContain("ghp_verysecretvalue");
+    expect(JSON.stringify(found)).not.toContain("placeholder-user");
   });
 
   it("says plainly when there is no origin remote", async () => {

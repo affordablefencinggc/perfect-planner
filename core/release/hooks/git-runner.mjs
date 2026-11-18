@@ -1,9 +1,10 @@
 // GENERATED from core/worktrees/git.ts by core/release/hooks/build-detector.mjs. Do not edit.
+import { createHash } from "node:crypto";
 import { execFileSync, spawn } from "node:child_process";
-import { chmodSync, existsSync, lstatSync, mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { gitExecutable, NO_CWD_SEARCH_ENV } from "./git-exec.mjs";
+import { gitExecutable, isLocalWindowsPath, isWithin, NO_CWD_SEARCH_ENV } from "./git-exec.mjs";
 const CARRIED_SETTINGS = ["user.name", "user.email", "safe.directory", "core.autocrlf", "core.eol", "core.longpaths", "core.symlinks"];
 const fixedConfig = (hooksPath, attributesFile) => [
     `core.hooksPath=${hooksPath}`,
@@ -27,6 +28,30 @@ const fixedConfig = (hooksPath, attributesFile) => [
     "merge.verifySignatures=false",
     "protocol.allow=never",
 ];
+const directGitCache = new Map();
+export function directGit(program, platform = process.platform) {
+    if (platform !== "win32")
+        return program;
+    const known = directGitCache.get(program);
+    if (known !== undefined)
+        return known;
+    let chosen = program;
+    try {
+        const launcherDir = path.win32.dirname(program);
+        if (path.win32.basename(program).toLowerCase() === "git.exe" && path.win32.basename(launcherDir).toLowerCase() === "cmd") {
+            const installDir = path.win32.dirname(launcherDir);
+            const candidate = path.win32.join(installDir, "mingw64", "bin", "git.exe");
+            const realInstall = realpathSync.native(installDir);
+            const realCandidate = realpathSync.native(candidate);
+            if (statSync(realCandidate).isFile() && isLocalWindowsPath(realCandidate) && isWithin(realInstall, realCandidate, path.win32))
+                chosen = candidate;
+        }
+    }
+    catch {
+    }
+    directGitCache.set(program, chosen);
+    return chosen;
+}
 const DIFF_COMMANDS = new Set(["diff", "show", "log", "diff-tree", "diff-index", "diff-files"]);
 const NO_PROGRAM_COMMANDS = new Set(["rev-parse", "symbolic-ref", "show-ref", "for-each-ref", "merge-base", "ls-tree", "rev-list", "update-ref", "config", "init", "var", "count-objects", "verify-commit", "check-ref-format", "branch"]);
 function mayRunPrograms(args, command) {
@@ -43,21 +68,31 @@ let hardening;
 export function hooklessPath(program, platform = process.platform) {
     return platform === "win32" ? program : "/dev/null";
 }
-function copyCarriedSettings(program, root, target) {
-    for (const key of CARRIED_SETTINGS) {
-        for (const scope of ["--system", "--global"]) {
-            let values = [];
-            try {
-                const out = execFileSync(program, ["config", scope, "--get-all", key], { cwd: root, env: { ...process.env, ...NO_CWD_SEARCH_ENV }, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], windowsHide: true, timeout: 10_000 });
-                values = out.split(/\r?\n/).filter(Boolean);
-            }
-            catch {
-            }
-            for (const value of values) {
-                execFileSync(program, ["config", "--file", target, "--add", key, value], { cwd: root, env: { ...process.env, ...NO_CWD_SEARCH_ENV }, stdio: "ignore", windowsHide: true, timeout: 10_000 });
+export function copyCarriedSettings(program, root, target) {
+    const pattern = "^(" + CARRIED_SETTINGS.map((key) => key.replaceAll(".", "\\.")).join("|") + ")$";
+    const scopes = [];
+    for (const scope of ["--system", "--global"]) {
+        const settings = new Map();
+        try {
+            const out = execFileSync(program, ["config", scope, "--null", "--get-regexp", pattern], { cwd: root, env: { ...process.env, ...NO_CWD_SEARCH_ENV }, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], windowsHide: true, timeout: 10_000 });
+            for (const record of out.split("\0")) {
+                const split = record.indexOf("\n");
+                if (split < 0)
+                    continue;
+                const key = record.slice(0, split), value = record.slice(split + 1);
+                if (!CARRIED_SETTINGS.includes(key) || !value)
+                    continue;
+                settings.set(key, [...(settings.get(key) ?? []), value]);
             }
         }
+        catch { }
+        scopes.push(settings);
     }
+    for (const key of CARRIED_SETTINGS)
+        for (const settings of scopes)
+            for (const value of settings.get(key) ?? []) {
+                execFileSync(program, ["config", "--file", target, "--add", key, value], { cwd: root, env: { ...process.env, ...NO_CWD_SEARCH_ENV }, stdio: "ignore", windowsHide: true, timeout: 10_000 });
+            }
 }
 export function refreshCarriedSettings() {
     if (!hardening)
@@ -154,8 +189,15 @@ function subcommand(args) {
     return undefined;
 }
 export class GitProgramRefusedError extends Error {
+    createdBranch;
+    constructor(message, createdBranch = false) {
+        super(message);
+        this.createdBranch = createdBranch;
+        this.name = "GitProgramRefusedError";
+    }
 }
 const PROGRAM_KEYS = "^(filter\\..+\\.(clean|smudge|process)|merge\\..+\\.driver)$";
+const POLICY_KEYS = "^(filter\\..+\\.(clean|smudge|process)|merge\\..+\\.driver|include\\.path|includeif\\..*\\.path)$";
 const MAX_INCLUDE_FILES = 64;
 function originRecords(stdout) {
     const fields = stdout.split("\0");
@@ -184,39 +226,396 @@ function includeTarget(origin, value, cwd) {
         return { refused: `an include path in another user's home folder (${value})` };
     return { file: path.resolve(path.dirname(path.resolve(cwd, origin.slice("file:".length))), value) };
 }
-export async function filterPrograms(cwd) {
+const FILTER_CACHE_LIMIT = 128;
+const MAX_CONFIG_FILE_BYTES = 1024 * 1024;
+const filterCache = new Map();
+function isMissingPath(error) {
+    const code = error?.code;
+    return code === "ENOENT" || code === "ENOTDIR";
+}
+function fingerprintPath(file) {
+    let linkStat;
+    try {
+        linkStat = lstatSync(file);
+    }
+    catch (error) {
+        return isMissingPath(error) ? "missing" : undefined;
+    }
+    let link = "";
+    if (linkStat.isSymbolicLink()) {
+        try {
+            link = readlinkSync(file);
+        }
+        catch {
+            return undefined;
+        }
+    }
+    let targetStat = linkStat;
+    if (linkStat.isSymbolicLink()) {
+        try {
+            targetStat = statSync(file);
+        }
+        catch (error) {
+            return isMissingPath(error) ? "link:" + link + ":missing" : undefined;
+        }
+    }
+    let content = "";
+    if (targetStat.isFile()) {
+        if (targetStat.size > MAX_CONFIG_FILE_BYTES)
+            return undefined;
+        let bytes;
+        let after;
+        try {
+            bytes = readFileSync(file);
+            after = statSync(file);
+        }
+        catch {
+            return undefined;
+        }
+        if (after.dev !== targetStat.dev || after.ino !== targetStat.ino ||
+            after.size !== targetStat.size || after.mtimeMs !== targetStat.mtimeMs)
+            return undefined;
+        content = createHash("sha256").update(bytes).digest("hex");
+    }
+    if (targetStat.isDirectory())
+        return ["directory", link, targetStat.dev, targetStat.ino].join("\0");
+    const kind = targetStat.isFile() ? "file" : "other";
+    return [kind, link, targetStat.dev, targetStat.ino, targetStat.size, targetStat.mtimeMs, content].join("\0");
+}
+function configDiscoveryPaths(cwd) {
+    const paths = new Set();
+    if (hardening)
+        paths.add(hardening.globalConfig);
+    let directory = path.resolve(cwd);
+    let gitDir;
+    while (true) {
+        const marker = path.join(directory, ".git");
+        paths.add(marker);
+        let markerStat;
+        try {
+            markerStat = lstatSync(marker);
+        }
+        catch (error) {
+            if (!isMissingPath(error))
+                return undefined;
+        }
+        if (markerStat) {
+            let targetStat = markerStat;
+            if (markerStat.isSymbolicLink()) {
+                try {
+                    targetStat = statSync(marker);
+                }
+                catch {
+                    return undefined;
+                }
+            }
+            if (targetStat.isDirectory()) {
+                gitDir = marker;
+                break;
+            }
+            if (targetStat.isFile()) {
+                if (targetStat.size > 4096)
+                    return undefined;
+                let contents;
+                try {
+                    contents = readFileSync(marker, "utf8");
+                }
+                catch {
+                    return undefined;
+                }
+                const match = contents.match(/^\s*gitdir:\s*(.+?)\s*$/im);
+                if (!match)
+                    return undefined;
+                gitDir = path.resolve(directory, match[1]);
+                paths.add(gitDir);
+                break;
+            }
+            return undefined;
+        }
+        const parent = path.dirname(directory);
+        if (parent === directory)
+            break;
+        directory = parent;
+    }
+    if (!gitDir) {
+        const head = path.join(path.resolve(cwd), "HEAD");
+        const objects = path.join(path.resolve(cwd), "objects");
+        const refs = path.join(path.resolve(cwd), "refs");
+        try {
+            if (lstatSync(head).isFile() && lstatSync(objects).isDirectory() && lstatSync(refs).isDirectory())
+                gitDir = path.resolve(cwd);
+        }
+        catch (error) {
+            if (!isMissingPath(error))
+                return undefined;
+        }
+    }
+    if (gitDir) {
+        paths.add(path.join(gitDir, "config"));
+        paths.add(path.join(gitDir, "config.worktree"));
+        const commonFile = path.join(gitDir, "commondir");
+        paths.add(commonFile);
+        try {
+            const commonStat = statSync(commonFile);
+            if (!commonStat.isFile() || commonStat.size > 4096)
+                return undefined;
+            const common = readFileSync(commonFile, "utf8").trim();
+            if (common) {
+                const commonDir = path.resolve(gitDir, common);
+                paths.add(commonDir);
+                paths.add(path.join(commonDir, "config"));
+                paths.add(path.join(commonDir, "config.worktree"));
+            }
+        }
+        catch (error) {
+            if (!isMissingPath(error))
+                return undefined;
+        }
+    }
+    return [...paths];
+}
+function policyFingerprint(cwd, extraPaths) {
+    const discovered = configDiscoveryPaths(cwd);
+    if (!discovered)
+        return undefined;
+    const paths = new Set([...discovered, ...extraPaths]);
+    const hash = createHash("sha256");
+    for (const file of [...paths].sort()) {
+        const value = fingerprintPath(file);
+        if (value === undefined)
+            return undefined;
+        hash.update(path.resolve(file)).update("\0").update(value).update("\0");
+    }
+    return hash.digest("hex");
+}
+function filterCacheKey(cwd) {
+    try {
+        const resolved = path.resolve(cwd);
+        return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+    }
+    catch {
+        return undefined;
+    }
+}
+function readFilterCache(key) {
+    const entry = filterCache.get(key);
+    if (!entry)
+        return undefined;
+    filterCache.delete(key);
+    filterCache.set(key, entry);
+    return entry;
+}
+function writeFilterCache(key, entry) {
+    filterCache.delete(key);
+    filterCache.set(key, entry);
+    if (filterCache.size > FILTER_CACHE_LIMIT) {
+        const oldest = filterCache.keys().next().value;
+        if (oldest !== undefined)
+            filterCache.delete(oldest);
+    }
+}
+function sameStrings(left, right) {
+    return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+async function scanFilterPrograms(cwd) {
     const found = new Set();
+    const discovered = configDiscoveryPaths(cwd);
+    const paths = new Set(discovered ?? []);
+    let cacheable = discovered !== undefined;
     const seen = new Set();
     const queue = [[]];
     while (queue.length) {
         const source = queue.shift();
-        const programs = await spawnGit(cwd, ["config", ...source, "--includes", "-z", "--get-regexp", PROGRAM_KEYS], {});
-        for (const entry of programs.stdout.split("\0").filter(Boolean))
-            found.add(entry.split("\n")[0]);
-        const includes = await spawnGit(cwd, ["config", ...source, "--includes", "-z", "--show-origin", "--get-regexp", "^includeif\\..*\\.path$"], {});
-        for (const record of originRecords(includes.stdout)) {
-            const target = includeTarget(record.origin, record.value, cwd);
-            if ("refused" in target) {
-                found.add(`includeIf (${target.refused})`);
+        const policy = await spawnGit(cwd, ["config", ...source, "--includes", "-z", "--show-origin", "--get-regexp", POLICY_KEYS], {});
+        if (policy.code !== 0 && policy.code !== 1)
+            cacheable = false;
+        for (const record of originRecords(policy.stdout)) {
+            if (!record.key || !record.origin)
+                cacheable = false;
+            if (record.origin.startsWith("file:"))
+                paths.add(path.resolve(record.origin.slice("file:".length)));
+            if (new RegExp(PROGRAM_KEYS).test(record.key))
+                found.add(record.key);
+            if (record.key === "include.path") {
+                const target = includeTarget(record.origin, record.value, cwd);
+                if ("refused" in target)
+                    cacheable = false;
+                else
+                    paths.add(target.file);
                 continue;
             }
+            if (!/^includeif\..*\.path$/.test(record.key))
+                continue;
+            const target = includeTarget(record.origin, record.value, cwd);
+            if ("refused" in target) {
+                found.add("includeIf (" + target.refused + ")");
+                continue;
+            }
+            paths.add(target.file);
             if (seen.has(target.file))
                 continue;
             seen.add(target.file);
             if (seen.size > MAX_INCLUDE_FILES) {
-                found.add(`includeIf (more than ${MAX_INCLUDE_FILES} conditional config files)`);
-                return [...found];
+                found.add("includeIf (more than " + MAX_INCLUDE_FILES + " conditional config files)");
+                cacheable = false;
+                return { programs: [...found], paths, cacheable };
             }
             if (existsSync(target.file))
                 queue.push(["--file", target.file]);
         }
     }
-    return [...found];
+    if (hardening)
+        paths.add(hardening.globalConfig);
+    return { programs: [...found], paths, cacheable };
 }
-function refuseFilters(programs) {
+function validCachedPrograms(cwd, key) {
+    const cached = readFilterCache(key);
+    if (!cached)
+        return undefined;
+    const current = policyFingerprint(cwd, cached.paths);
+    if (current && current === cached.fingerprint)
+        return [...cached.programs];
+    filterCache.delete(key);
+    return undefined;
+}
+const filterScansInFlight = new Map();
+export async function filterPrograms(cwd) {
+    const key = filterCacheKey(cwd);
+    if (key) {
+        const cached = validCachedPrograms(cwd, key);
+        if (cached)
+            return cached;
+        const running = filterScansInFlight.get(key);
+        if (running) {
+            await running.catch(() => undefined);
+            const shared = validCachedPrograms(cwd, key);
+            if (shared)
+                return shared;
+        }
+    }
+    const scan = scanAndCacheFilterPrograms(cwd, key);
+    if (!key)
+        return scan;
+    const mine = scan.catch(() => undefined);
+    filterScansInFlight.set(key, mine);
+    try {
+        return await scan;
+    }
+    finally {
+        if (filterScansInFlight.get(key) === mine)
+            filterScansInFlight.delete(key);
+    }
+}
+async function scanAndCacheFilterPrograms(cwd, key) {
+    const first = await scanFilterPrograms(cwd);
+    if (!key || !first.cacheable)
+        return first.programs;
+    const firstPaths = [...first.paths].sort();
+    const firstFingerprint = policyFingerprint(cwd, firstPaths);
+    if (!firstFingerprint)
+        return first.programs;
+    const second = await scanFilterPrograms(cwd);
+    const secondPaths = [...second.paths].sort();
+    const secondFingerprint = policyFingerprint(cwd, secondPaths);
+    const samePrograms = sameStrings([...first.programs].sort(), [...second.programs].sort());
+    if (second.cacheable && sameStrings(firstPaths, secondPaths) &&
+        firstFingerprint === secondFingerprint && samePrograms) {
+        writeFilterCache(key, { paths: secondPaths, fingerprint: secondFingerprint, programs: [...second.programs] });
+        return second.programs;
+    }
+    return [...new Set([...first.programs, ...second.programs])];
+}
+function gitEntryMarker(cwd) {
+    let directory = path.resolve(cwd);
+    while (true) {
+        const entry = path.join(directory, ".git");
+        try {
+            const stat = lstatSync(entry);
+            if (stat.isDirectory())
+                return ["folder", entry, stat.dev, stat.ino, stat.birthtimeMs].join("\0");
+            if (stat.isFile() && stat.size <= 4096)
+                return ["file", entry, stat.dev, stat.ino, stat.birthtimeMs, stat.size, stat.mtimeMs, readFileSync(entry, "utf8")].join("\0");
+            return undefined;
+        }
+        catch (error) {
+            if (!isMissingPath(error))
+                return undefined;
+        }
+        const parent = path.dirname(directory);
+        if (parent === directory)
+            return undefined;
+        directory = parent;
+    }
+}
+function statSignature(file) {
+    try {
+        const stat = statSync(file);
+        return `${stat.size}:${stat.mtimeMs}`;
+    }
+    catch {
+        return "none";
+    }
+}
+export function headIdentity(cwd) {
+    const marker = gitEntryMarker(cwd);
+    if (!marker)
+        return undefined;
+    try {
+        const parts = marker.split("\0");
+        const entry = parts[1];
+        let gitDir = entry;
+        if (parts[0] === "file") {
+            const match = /^gitdir:\s*(.+?)\s*$/im.exec(parts.slice(7).join("\0"));
+            if (!match)
+                return undefined;
+            gitDir = path.resolve(path.dirname(entry), match[1]);
+        }
+        let commonDir = gitDir;
+        if (existsSync(path.join(gitDir, "commondir")))
+            commonDir = path.resolve(gitDir, readFileSync(path.join(gitDir, "commondir"), "utf8").trim());
+        const head = readFileSync(path.join(gitDir, "HEAD"), "utf8");
+        const named = /^ref:\s*(refs\/[^\r\n]+?)\s*$/.exec(head);
+        if (!named || named[1].includes(".."))
+            return undefined;
+        const tip = readFileSync(path.join(commonDir, ...named[1].split("/")), "utf8").trim();
+        if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(tip))
+            return undefined;
+        return [marker, head, tip, statSignature(path.join(commonDir, "config")), statSignature(path.join(gitDir, "config.worktree"))].join("\u0001");
+    }
+    catch {
+        return undefined;
+    }
+}
+const COMMON_DIR_TTL_MS = 5 * 60_000;
+const COMMON_DIR_LIMIT = 256;
+const commonDirCache = new Map();
+export async function commonGitDir(cwd) {
+    const key = filterCacheKey(cwd);
+    const marker = key ? gitEntryMarker(cwd) : undefined;
+    if (key && marker) {
+        const known = commonDirCache.get(key);
+        if (known && known.marker === marker && Date.now() - known.at < COMMON_DIR_TTL_MS && existsSync(known.dir))
+            return known.dir;
+    }
+    const result = await runGit(cwd, ["rev-parse", "--git-common-dir"]).catch(() => null);
+    if (!result || result.code !== 0 || !result.stdout.trim())
+        return null;
+    const dir = path.resolve(cwd, result.stdout.trim());
+    if (key && marker) {
+        commonDirCache.delete(key);
+        commonDirCache.set(key, { dir, marker, at: Date.now() });
+        if (commonDirCache.size > COMMON_DIR_LIMIT) {
+            const oldest = commonDirCache.keys().next().value;
+            if (oldest !== undefined)
+                commonDirCache.delete(oldest);
+        }
+    }
+    return dir;
+}
+function refuseFilters(programs, createdBranch = false) {
     if (!programs.length)
         return;
-    throw new GitProgramRefusedError(`This repo's git settings run a program (${programs.join(", ")}) when files are checked out, compared or merged. Perfect Planner will not run it; a person must review and remove it (git config --unset) before continuing.`);
+    throw new GitProgramRefusedError(`This repo's git settings run a program (${programs.join(", ")}) when files are checked out, compared or merged. Perfect Planner will not run it; a person must review and remove it (git config --unset) before continuing.`, createdBranch);
 }
 function worktreeAddPath(args, at) {
     for (let index = at + 1; index < args.length; index += 1) {
@@ -230,10 +629,30 @@ function worktreeAddPath(args, at) {
     }
     return undefined;
 }
+function worktreeAddCreatesBranch(args, at) {
+    for (let index = at + 2; index < args.length; index += 1) {
+        const arg = args[index];
+        if (arg === "--")
+            return false;
+        if (arg === "-b")
+            return Boolean(args[index + 1]);
+        if (arg === "-B")
+            return false;
+        if (arg === "--reason") {
+            index += 1;
+            continue;
+        }
+        if (arg.startsWith("-"))
+            continue;
+        return false;
+    }
+    return false;
+}
 export async function runGit(cwd, args, options = {}) {
     const command = subcommand(args);
     const at = command ? args.indexOf(command) : -1;
     const addsWorktree = command === "worktree" && args[at + 1] === "add";
+    const createsBranch = addsWorktree && worktreeAddCreatesBranch(args, at);
     if (mayRunPrograms(args, command))
         refuseFilters(await filterPrograms(cwd));
     if (!addsWorktree)
@@ -248,7 +667,7 @@ export async function runGit(cwd, args, options = {}) {
     const programs = await filterPrograms(folder);
     if (programs.length) {
         await spawnGit(cwd, ["worktree", "remove", "--force", folder], {});
-        refuseFilters(programs);
+        refuseFilters(programs, createsBranch);
     }
     if (!wantsFiles || rest.includes("--orphan"))
         return added;
@@ -260,7 +679,7 @@ function spawnGit(cwd, args, options) {
         let program;
         let files;
         try {
-            program = gitExecutable(cwd);
+            program = directGit(gitExecutable(cwd));
             files = hardeningFiles(program);
             checkHardening(files);
         }

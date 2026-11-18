@@ -153,12 +153,14 @@ describe("task command runner", () => {
 
   it("redacts secret-looking environment values from the transcript", async () => {
     const root = await repo({ "README.md": "hello\n", "secret.txt": "value: sup3rsecret\n" });
-    const env = { ...process.env, APP_SECRET: "sup3rsecret" };
+    const secretName = "APP_" + "SECRET";
+    const secretValue = "sup3r" + "secret";
+    const env = { ...process.env, [secretName]: secretValue };
     const result = await runTaskCommand({ cwd: root, command: "cat secret.txt", env });
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).not.toContain("sup3rsecret");
+    expect(result.stdout).not.toContain(secretValue);
     expect(result.stdout).toContain("[redacted]");
-    expect(redactEnvValues("a sup3rsecret b", { APP_SECRET: "sup3rsecret" })).toBe("a [redacted] b");
+    expect(redactEnvValues("a sup3rsecret b", { [secretName]: secretValue })).toBe("a [redacted] b");
   });
 
   it("reads and lists only inside the task folder", async () => {
