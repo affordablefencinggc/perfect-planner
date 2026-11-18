@@ -3,11 +3,12 @@
 // revision, in .cache/release-evidence.json. The release build reads that evidence (see
 // generate-truth-report.mjs) so the completion report can only reach GO when every required gate
 // passed on the same revision in this run. A human approval for that revision is a separate input.
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { existsSync, realpathSync } from "node:fs";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { tmpdir } from "node:os";
 import { createInterface } from "node:readline/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { RELEASE_APPROVAL_KIND, RELEASE_EVIDENCE_KIND, RELEASE_PROFILES, computeWorkspaceRevision, releaseRecordDigest } from "../src/node/ciDerivation.mjs";
@@ -17,8 +18,8 @@ export const RELEASE_APPROVAL_FILE = path.join(".cache", "release-approval.json"
 // Verification that does not depend on dist runs first, so the build can bind its truth to it; the
 // dist-dependent gates follow and the chain stops at the first failure.
 export const RELEASE_CHAINS = Object.freeze({
-  web: Object.freeze([...RELEASE_PROFILES.web, "build", "verify:performance", "verify:readiness"]),
-  release: Object.freeze([...RELEASE_PROFILES.release, "build", "verify:performance", "tauri:build -- --no-bundle", "verify:readiness"]),
+  web: Object.freeze([...RELEASE_PROFILES.web.filter((step) => step !== "test:sites"), "build", "test:sites", "truth:release", "verify:performance", "verify:readiness"]),
+  release: Object.freeze([...RELEASE_PROFILES.release.filter((step) => step !== "test:sites"), "build", "tauri:build -- --no-bundle", "test:sites", "truth:release", "verify:performance", "verify:readiness"]),
 });
 
 const sealed = (record) => ({ ...record, digest: releaseRecordDigest(record) });
@@ -47,9 +48,17 @@ export function npmCliPath(root, env = process.env) {
 // Gate scripts themselves run under npm's script shell; on Windows this stops cmd.exe searching the
 // repository folder first when one of them names a bare program.
 const NO_CWD_SEARCH_ENV = "NoDefaultCurrentDirectoryInExePath";
-export function runGateStep(root, step) {
-  const cli = npmCliPath(root);
-  return spawnSync(process.execPath, [cli, "run", ...step.split(" ")], { cwd: root, stdio: "inherit", shell: false, windowsHide: true, env: { ...process.env, [NO_CWD_SEARCH_ENV]: "1" } }).status ?? 1;
+export function releaseCargoTargetDir(root) {
+  const workspace = path.resolve(root);
+  const identity = createHash("sha256").update(process.platform === "win32" ? workspace.toLowerCase() : workspace).digest("hex").slice(0, 12);
+  return path.join(tmpdir(), "perfect-planner-cargo-release-" + identity);
+}
+export function runGateStep(root, step, baseEnv = process.env) {
+  const cli = npmCliPath(root, baseEnv);
+  const env = { ...baseEnv, [NO_CWD_SEARCH_ENV]: "1" };
+  // Keep a running desktop app from locking Cargo's default release executable on Windows.
+  if (step.split(" ")[0] === "tauri:build") env.CARGO_TARGET_DIR = releaseCargoTargetDir(root);
+  return spawnSync(process.execPath, [cli, "run", ...step.split(" ")], { cwd: root, stdio: "inherit", shell: false, windowsHide: true, env }).status ?? 1;
 }
 
 export async function runReleaseGates(root, profile, options = {}) {

@@ -38,6 +38,16 @@ test("release gates run every step through npm's own entry script, never a plant
   assert.equal(existsSync(planted), false, "a planted npm in the repository ran");
 });
 
+test("Sites artifact verification runs after the final package build, then truth is regenerated", () => {
+  assert.ok(RELEASE_CHAINS.web.indexOf("build") < RELEASE_CHAINS.web.indexOf("test:sites"));
+  assert.ok(RELEASE_CHAINS.release.indexOf("tauri:build -- --no-bundle") < RELEASE_CHAINS.release.indexOf("test:sites"));
+  assert.ok(RELEASE_CHAINS.release.indexOf("test:sites") < RELEASE_CHAINS.release.indexOf("verify:performance"));
+  for (const profile of ["web", "release"]) {
+    assert.ok(RELEASE_CHAINS[profile].indexOf("test:sites") < RELEASE_CHAINS[profile].indexOf("truth:release"));
+    assert.ok(RELEASE_CHAINS[profile].indexOf("truth:release") < RELEASE_CHAINS[profile].indexOf("verify:performance"));
+  }
+});
+
 test("an npm entry script inside the repository, directly or through a junction or symlink, is refused", (t) => {
   const { root, outside } = plantedRepository(t);
   const inRepo = path.join(root, "npm-cli.js");
