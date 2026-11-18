@@ -438,6 +438,11 @@ export class Ledger {
     return this.trust.owner;
   }
 
+  /** The ledger's clock, so reviewers sharing this ledger use the same month boundary. */
+  currentTime(): Date {
+    return this.now();
+  }
+
   /**
    * The owner makes a new recovery code (specs/owner-key-recovery.md). Only
    * the code's public key is recorded, in owner.recovery.set signed by the

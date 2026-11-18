@@ -3,7 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { Actor } from "../ledger/index";
 import { gitExecutable } from "../exec/index";
-import { filterPrograms, git, GitHardeningError, GitProgramRefusedError, runGit } from "../worktrees/git";
+import { directGit, filterPrograms, git, GitHardeningError, GitProgramRefusedError, runGit } from "../worktrees/git";
 import { WorktreeManager } from "../worktrees/manager";
 import { commitAll, makeRepo, memoryLedger, writeFiles } from "../worktrees/testing";
 import { pinTestFiles } from "./gate";
@@ -244,7 +244,7 @@ describe("the app's own git settings cannot be used to run a program", () => {
     const ctx = await approvedRepo();
     // Through the hardened runner the hooks folder is /dev/null (git.exe's own path on Windows), not a temp folder.
     const hooks = await git(ctx.root, ["rev-parse", "--git-path", "hooks"]);
-    expect(process.platform === "win32" ? path.resolve(hooks) : hooks).toBe(process.platform === "win32" ? path.resolve(gitExecutable(ctx.root)) : "/dev/null");
+    expect(process.platform === "win32" ? path.resolve(hooks) : hooks).toBe(process.platform === "win32" ? path.resolve(directGit(gitExecutable(ctx.root))) : "/dev/null");
     // The old layout: an empty no-hooks folder beside the app's attributes file. Plant every hook there.
     const attributes = await git(ctx.root, ["config", "--get", "core.attributesFile"]);
     for (const hook of HOOKS) plant(path.join(path.dirname(attributes), "no-hooks", hook), ctx.marker);

@@ -18,7 +18,7 @@ test('shell release assets do not ship the development annotation toolbar', { sk
 
 // Scripted folder intake answers the folder picker for automation. It exists only on the dev
 // server or in a build made with PP_TEST_INTAKE=1, never in a release build.
-test('shell release assets do not ship the scripted folder intake hook', async () => {
+test('shell release assets do not ship the scripted folder intake hook', { skip: requiresBuild }, async () => {
   const assets = new URL('../dist/client/assets/', import.meta.url);
   const scripts = (await readdir(assets)).filter(name => name.endsWith('.js'));
   assert.ok(scripts.some(name => name.startsWith('index-')), 'Build the release client before testing');

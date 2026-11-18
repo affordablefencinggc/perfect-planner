@@ -11,8 +11,8 @@ import { checkRequest } from "../../gate/execution";
 // this screen. Agents never reach these routes; they use the MCP tools.
 import fs from "node:fs";
 import path from "node:path";
-import { deriveState, sensitiveChanges, testSupportFiles, unalteredPins, type GateState } from "../../gate/index";
-import { isAuthoritative, type Actor, type LedgerEntry } from "../../ledger/index";
+import { deriveState, sensitiveChanges, startRefusal, testSupportFiles, unalteredPins, type GateState } from "../../gate/index";
+import { isAuthoritative, LedgerError, type Actor, type LedgerEntry } from "../../ledger/index";
 import type { AgentKind } from "../agentKinds";
 import { attemptLabel, unmetDependencies, waitingMessage, type TaskView } from "../../mcp/index";
 import { DispatchWorktreeError, WorktreeError, WorktreeManager, git, headIdentity, refreshCarriedSettings, runGit, WORKTREES_ACTOR, type WorktreeInfo } from "../../worktrees/index";
@@ -491,19 +491,22 @@ function rememberAllocatedWorktree(project: CoreProject, repo: string | null, ro
   const name = repo ?? PRIMARY_REPO;
   known.set(name + "\u0000" + tree.taskId, { selection, root, repo: name, tree: name === PRIMARY_REPO ? tree : { ...tree, repo: name } });
 }
-function optionalWorktreeKey(repo: RepoState, options: { tidyFolders?: boolean }) {
-  // Root and access state are part of the identity: a changed/refused repo may
-  // never inherit folder facts from its previous root.
-  return `${options.tidyFolders === false ? "watch" : "board"}\u0000${repo.name}\u0000${repo.ok ? repo.root ?? "" : `refused:${repo.reason ?? "unknown"}`}`;
+function optionalWorktreeKey(repo: RepoState, options: { tidyFolders?: boolean }): string {
+  return (options.tidyFolders === false ? "watch" : "board") + "\u0000" + repo.name + "\u0000"
+    + (repo.ok ? repo.root ?? "" : "refused:" + (repo.reason ?? "unknown"));
 }
+
 function invalidateOptionalWorktreeView(project: CoreProject, repo: RepoState, options: { tidyFolders?: boolean } = {}) {
   optionalCache(project).invalidate(optionalWorktreeKey(repo, options));
 }
+function invalidateAllOptionalWorktreeViews(project: CoreProject) {
+  optionalCache(project).clear();
+}
 function optionalWorktreeView(project: CoreProject, repo: RepoState, options: { tidyFolders?: boolean }): Promise<OptionalGitResult<FolderInfo[]>> {
   if (!repo.ok || !repo.root) return Promise.resolve({ state: "unavailable", reason: repo.reason ?? "This repository is unavailable." });
-  return optionalCache(project).read(optionalWorktreeKey(repo, options), () => listWorktrees(project, repo, options));
+  const key = optionalWorktreeKey(repo, options);
+  return optionalCache(project).read(key, () => listWorktrees(project, repo, options));
 }
-
 function viewTask(project: CoreProject, task: TaskView, worktrees: FolderInfo[], worktreeKnown: boolean, board: ReadonlyMap<string, TaskView>, assignments: ReadonlyMap<string, string>) {
   const label = attemptLabel(task);
   const gate = deriveState(project.entries(), label);
@@ -795,6 +798,8 @@ function bodyOf(raw: unknown): Record<string, unknown> {
 
 async function dispatch(project: CoreProject, host: CoreHost, id: string, body: Record<string, unknown>) {
   if (!host.bridgeEnabled) throw new HttpError(503, "BRIDGE_OFF", "Agent connections are turned off for this app, so a worker has nothing to connect to.");
+  if (!project.ledger.status.writable) throw new LedgerError("READ_ONLY", "This project's ledger is read-only.");
+  if (!project.ledger.status.ok) throw new LedgerError("CHAIN_BROKEN", `Writes are stopped: ${project.ledger.status.detail ?? "the ledger chain is damaged"}; acknowledge it first.`);
   const repoName = repoOfLabel(project, id);
   const selectionAtDispatch = repoSelectionIdentity(project, repoName ?? PRIMARY_REPO);
   const root = await requireRepo(project, repoName);
@@ -952,6 +957,7 @@ async function releaseFileClaims(project: CoreProject, id: string, body: Record<
     data: { claimsReleased: files, stale, by: "person" },
   });
   const done = await (await manager(project, root, repoName)).releaseClaims(id, files);
+  invalidateAllOptionalWorktreeViews(project);
   return { released: done.released, remaining: done.remaining, stale, message: `Released ${done.released.join(", ")}. Other tasks can claim ${done.released.length === 1 ? "it" : "them"} now.`, ...(await overview(project)) };
 }
 
@@ -1141,6 +1147,11 @@ export function registerTaskRoutes(router: Router): void {
     let request;
     try { request = checkRequest(body); } catch (error) { throw new HttpError(400, "INVALID_CHECK_REQUEST", (error as Error).message); }
     if (request.attempt.replace(/\.a\d+$/, "") !== params.id) throw new HttpError(400, "INVALID_CHECK_REQUEST", "The saved request names a different task.");
+    // A key saved in Settings a moment ago counts at once: refresh Jev's policy, then refuse an ineligible check
+    // here (409) before the journal reserves a receipt for it. The gate repeats the same refusal inside.
+    await syncJevPolicy(project, { fresh: true });
+    const early = startRefusal(project.service.gate.state(request.attempt), project.policy);
+    if (early) throw new HttpError(409, "REFUSED", early);
     const scope = JSON.stringify([project.root, project.entries()[0]?.hash]);
     const run = await project.service.gate.proveRequest(request, scope, async () => {
       const current = findTask(project, params.id!);
@@ -1267,6 +1278,7 @@ export function registerTaskRoutes(router: Router): void {
     // A watcher pass that began before the task was done may still have git running in its folder, which Windows will not remove.
     await project.watch?.waitForCurrentTick();
     const removed = await (await manager(project, root, task.repo)).remove(label, WORKTREES_ACTOR).catch((error: Error) => ({ error: error.message }));
+    invalidateAllOptionalWorktreeViews(project);
     return { merged: true, commit: merged.mergeCommit, into: tree.baseRef, removed, ...(await overview(project)) };
   };
   router.post("/tasks/:id/merge", ({ project, params, body }) => mergeTask(project, params.id!, body));
@@ -1406,5 +1418,5 @@ export function registerTaskRoutes(router: Router): void {
     return { results, ...(await overview(project)) };
   });
 
-  registerWorktreeCareRoutes(router, { requireRepo, manager, repoNames: (project) => [null, ...readRepos(project.root).repos.map((repo) => repo.name)], repoOf: repoOfLabel, dispatched: dispatches, findTask, overview });
+  registerWorktreeCareRoutes(router, { requireRepo, manager, repoNames: (project) => [null, ...readRepos(project.root).repos.map((repo) => repo.name)], repoOf: repoOfLabel, dispatched: dispatches, findTask, overview, invalidate: (project) => invalidateAllOptionalWorktreeViews(project) });
 }

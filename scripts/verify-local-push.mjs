@@ -40,7 +40,7 @@ export function runBoundedCommand(command, args, { root, input = "", timeoutMs, 
       if (process.platform === "win32" && child.pid) {
         // Do not resolve this security boundary through PATH or attacker-controlled
         // SystemRoot. taskkill /T is the only generally available Windows tree kill.
-        const taskkill = spawnSync("C:\\Windows\\System32\\taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true, shell: false, stdio: "ignore", timeout: 5_000 });
+        const taskkill = spawnSync("C:\\Windows\\System32\\taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], { env: cleanEnvironment(), windowsHide: true, shell: false, stdio: "ignore", timeout: 5_000 });
         if (taskkill.error || taskkill.status !== 0) {
           try { child.kill("SIGKILL"); } catch {}
         }

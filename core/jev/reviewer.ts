@@ -135,7 +135,8 @@ export class JevReviewer implements SettledAnswerer {
     this.ledger = options.ledger;
     this.transport = options.transport;
     this.settings = { ...DEFAULT_SETTINGS, ...options.settings };
-    this.now = options.now ?? (() => new Date());
+    const ledgerClock = (options.ledger as { currentTime?: () => Date }).currentTime;
+    this.now = options.now ?? (typeof ledgerClock === "function" ? () => ledgerClock.call(options.ledger) : () => new Date());
     const { estimatedCostPerCall, monthlyLimit } = this.settings;
     if (!(Number.isFinite(estimatedCostPerCall) && estimatedCostPerCall >= 0)) throw new Error("Jev's estimated cost per call must be a number of dollars, 0 or more.");
     if (monthlyLimit !== null && !(Number.isFinite(monthlyLimit) && monthlyLimit >= 0)) throw new Error("Jev's monthly limit must be a number of dollars, 0 or more, or none.");

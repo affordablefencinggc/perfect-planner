@@ -162,6 +162,7 @@ export interface CareContext {
   dispatched(project: CoreProject): ReadonlyMap<string, unknown>;
   findTask(project: CoreProject, id: string): TaskView;
   overview(project: CoreProject): Promise<unknown>;
+  invalidate?(project: CoreProject, repoName?: string | null): void;
 }
 
 const asHttp = (error: unknown): never => {
@@ -209,6 +210,7 @@ export function registerWorktreeCareRoutes(router: Router, ctx: CareContext): vo
         });
         removed.push(...result.removed.map((item) => ({ task: item.taskId, path: item.path, branchDeleted: item.branchDeleted, ...(item.branchKeptReason ? { branchKept: item.branchKeptReason } : {}) })));
         folders.push(...result.kept.map((item) => row(project, item)));
+        ctx.invalidate?.(project, name);
       }
       return { removed, folders };
     }).catch(asHttp),
@@ -222,13 +224,15 @@ export function registerWorktreeCareRoutes(router: Router, ctx: CareContext): vo
       const root = await ctx.requireRepo(project, repo);
       const classify = classifyFolder(project, ctx.dispatched(project));
       const worktrees = await ctx.manager(project, root, repo);
-      return withWatcherAway(project, [label], () =>
+      const removed = await withWatcherAway(project, [label], () =>
         worktrees.removeChecked(label, localPerson(project), (info) => {
           const kind = classify(info);
           if (kind === "active") return { refuse: `${label} is still being worked on. Release its claim first.` };
           return { needMerged: kind !== "finished" };
         }),
-      ).then((removed) => ({ task: label, branchDeleted: removed.branchDeleted, ...(removed.branchKeptReason ? { branchKept: removed.branchKeptReason } : {}) }));
+      );
+      ctx.invalidate?.(project, repo);
+      return { task: label, branchDeleted: removed.branchDeleted, ...(removed.branchKeptReason ? { branchKept: removed.branchKeptReason } : {}) };
     }).catch(asHttp),
   );
 
@@ -237,8 +241,10 @@ export function registerWorktreeCareRoutes(router: Router, ctx: CareContext): vo
     withHygieneLock(project, async () => {
       const task = ctx.findTask(project, params.id!);
       const label = attemptLabel(task);
-      const root = await ctx.requireRepo(project, task.repo ?? null);
-      const result = await (await ctx.manager(project, root, task.repo ?? null)).recreate(label, localPerson(project));
+      const repoName = task.repo ?? null;
+      const root = await ctx.requireRepo(project, repoName);
+      const result = await (await ctx.manager(project, root, repoName)).recreate(label, localPerson(project));
+      ctx.invalidate?.(project, repoName);
       return { recreated: label, branch: result.info.branch, ...(result.ledgerNote ? { ledgerNote: result.ledgerNote } : {}), ...((await ctx.overview(project)) as object) };
     }).catch(asHttp),
   );

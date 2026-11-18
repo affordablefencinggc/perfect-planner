@@ -261,7 +261,12 @@ function subcommand(args: readonly string[]): string | undefined {
   return undefined;
 }
 
-export class GitProgramRefusedError extends Error {}
+export class GitProgramRefusedError extends Error {
+  constructor(message: string, readonly createdBranch = false) {
+    super(message);
+    this.name = "GitProgramRefusedError";
+  }
+}
 
 const PROGRAM_KEYS = "^(filter\\..+\\.(clean|smudge|process)|merge\\..+\\.driver)$";
 // One hardened `git config` query must find both program settings and conditional
@@ -713,10 +718,11 @@ export async function commonGitDir(cwd: string): Promise<string | null> {
   return dir;
 }
 
-function refuseFilters(programs: string[]): void {
+function refuseFilters(programs: string[], createdBranch = false): void {
   if (!programs.length) return;
   throw new GitProgramRefusedError(
     `This repo's git settings run a program (${programs.join(", ")}) when files are checked out, compared or merged. Perfect Planner will not run it; a person must review and remove it (git config --unset) before continuing.`,
+    createdBranch,
   );
 }
 
@@ -729,6 +735,23 @@ function worktreeAddPath(args: readonly string[], at: number): string | undefine
     else if (!arg.startsWith("-")) return arg;
   }
   return undefined;
+}
+
+/** True only for `worktree add -b`, which refuses an existing branch and creates this ref on success. */
+function worktreeAddCreatesBranch(args: readonly string[], at: number): boolean {
+  for (let index = at + 2; index < args.length; index += 1) {
+    const arg = args[index]!;
+    if (arg === "--") return false;
+    if (arg === "-b") return Boolean(args[index + 1]);
+    if (arg === "-B") return false;
+    if (arg === "--reason") {
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith("-")) continue;
+    return false; // The path is positional; options after it cannot change branch ownership.
+  }
+  return false;
 }
 
 /**
@@ -744,6 +767,7 @@ export async function runGit(cwd: string, args: string[], options: GitOptions = 
   const command = subcommand(args);
   const at = command ? args.indexOf(command) : -1;
   const addsWorktree = command === "worktree" && args[at + 1] === "add";
+  const createsBranch = addsWorktree && worktreeAddCreatesBranch(args, at);
   if (mayRunPrograms(args, command)) refuseFilters(await filterPrograms(cwd));
   if (!addsWorktree) return spawnGit(cwd, args, options);
 
@@ -757,7 +781,9 @@ export async function runGit(cwd: string, args: string[], options: GitOptions = 
   if (programs.length) {
     // Nothing was checked out, so the folder holds no work; take it away again.
     await spawnGit(cwd, ["worktree", "remove", "--force", folder], {});
-    refuseFilters(programs);
+    // The preceding add succeeded, so only this error proves that this call created the branch.
+    // The manager may clean that known-empty result; ordinary failed adds carry no such ownership.
+    refuseFilters(programs, createsBranch);
   }
   if (!wantsFiles || rest.includes("--orphan")) return added;
   const filled = await spawnGit(folder, ["reset", "--hard", "-q"], options);

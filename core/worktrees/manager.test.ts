@@ -3,7 +3,7 @@ import net from "node:net";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Ledger } from "../ledger/index";
-import { git, runGit } from "./git";
+import { GitProgramRefusedError, git, runGit } from "./git";
 import { WorktreeManager, preCommitHook } from "./manager";
 import { lines, samePath } from "./platform";
 import { PLACEHOLDER } from "./settings";
@@ -251,6 +251,76 @@ describe("WorktreeManager", () => {
     await expect(racing.create({ taskId: "T-29", actor: person })).rejects.toThrow(/left untouched/);
     expect(readFileSync(path.join(target, "concurrent-note.txt"), "utf8")).toBe("keep the concurrent worktree\n");
   }, SLOW);
+
+  it("cleans an empty worktree only when the refusal proves this add created it", async () => {
+    const refusing = new class extends WorktreeManager {
+      protected override async addTaskWorktree(branch: string, worktreePath: string, baseSha: string): Promise<void> {
+        await super.addTaskWorktree(branch, worktreePath, baseSha);
+        throw new GitProgramRefusedError("simulated target policy refusal", true);
+      }
+    }({ repoRoot: repo.root, ledger, install: false, secretScan: false });
+    const target = path.join(repo.root, ".perfect-planner", "worktrees", "T-30");
+
+    const failure = await refusing.create({ taskId: "T-30", actor: person }).then(() => undefined, (error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(GitProgramRefusedError);
+    expect((failure as Error).message).toContain("simulated target policy refusal");
+    expect(existsSync(target)).toBe(false);
+    expect((await runGit(repo.root, ["show-ref", "--verify", "--quiet", "refs/heads/pp/T-30"])).code).not.toBe(0);
+  }, SLOW);
+
+  it("preserves an owned worktree when its branch advanced before the policy refusal", async () => {
+    const refusing = new class extends WorktreeManager {
+      protected override async addTaskWorktree(branch: string, worktreePath: string, baseSha: string): Promise<void> {
+        await super.addTaskWorktree(branch, worktreePath, baseSha);
+        writeFiles(worktreePath, { "notes.txt": "keep this committed work\n" });
+        await commitAll(worktreePath, "keep the concurrent commit");
+        throw new GitProgramRefusedError("simulated target policy refusal", true);
+      }
+    }({ repoRoot: repo.root, ledger, install: false, secretScan: false });
+
+    const failure = await refusing.create({ taskId: "T-32", actor: person }).then(() => undefined, (error: unknown) => error);
+    const target = path.join(repo.root, ".perfect-planner", "worktrees", "T-32");
+
+    expect(failure).toBeInstanceOf(GitProgramRefusedError);
+    expect((failure as Error).message).toContain("left in place because its ownership or empty state could not be confirmed");
+    expect(existsSync(target)).toBe(true);
+    expect(readFileSync(path.join(target, "notes.txt"), "utf8")).toBe("keep this committed work\n");
+    expect(await git(repo.root, ["rev-parse", "refs/heads/pp/T-32"])).toBe(await git(target, ["rev-parse", "HEAD"]));
+  }, SLOW);
+
+  it("preserves the winning worktree when two manager instances race to add the same new branch", async () => {
+    let waiting = 0;
+    let release!: () => void;
+    const bothAtAdd = new Promise<void>((resolve) => { release = resolve; });
+    class RacingManager extends WorktreeManager {
+      protected override async addTaskWorktree(branch: string, worktreePath: string, baseSha: string): Promise<void> {
+        waiting += 1;
+        if (waiting === 2) release();
+        await bothAtAdd;
+        return super.addTaskWorktree(branch, worktreePath, baseSha);
+      }
+    }
+    const first = new RacingManager({ repoRoot: repo.root, ledger, install: false, secretScan: false });
+    const second = new RacingManager({ repoRoot: repo.root, ledger: await memoryLedger(), install: false, secretScan: false });
+    const attempts = await Promise.allSettled([
+      first.create({ taskId: "T-31", actor: person }),
+      second.create({ taskId: "T-31", actor: person }),
+    ]);
+    const winner = attempts[0]?.status === "fulfilled" ? attempts[0] : attempts[1];
+    const loser = attempts[0]?.status === "rejected" ? attempts[0] : attempts[1];
+
+    expect(waiting).toBe(2);
+    expect(winner?.status).toBe("fulfilled");
+    expect(loser?.status).toBe("rejected");
+    if (winner?.status !== "fulfilled") return;
+    expect(existsSync(winner.value.path)).toBe(true);
+    expect(await git(repo.root, ["rev-parse", winner.value.branch])).toBe(winner.value.baseSha);
+    const listed = lines(await git(repo.root, ["worktree", "list", "--porcelain"]));
+    expect(listed.some((line) => line.startsWith("worktree ") && samePath(line.slice("worktree ".length), winner.value.path))).toBe(true);
+    expect(listed).toContain("branch refs/heads/pp/T-31");
+  }, SLOW);
+
   it("preserves the worktree when dependency setup fails after creation", async () => {
     const seen: string[] = [];
     const ok = new WorktreeManager({ repoRoot: repo.root, ledger, install: async (dir) => void seen.push(dir) });

@@ -1,8 +1,10 @@
 // The BUILT connect.mjs (one esbuild bundle, like dist/core-host/connect.mjs), run the way a person runs
 // the connect line: nothing bundled into it may start a program on load, and neither connect.mjs nor the
 // Claude Code it starts may ever run a git or claude planted in the repo, even through a PATH link.
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
+import http from "node:http";
+import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { build } from "esbuild";
@@ -17,6 +19,15 @@ const temp = () => {
   return dir;
 };
 const link = (target: string, at: string) => fs.symlinkSync(target, at, windows ? "junction" : "dir");
+/** The fake bridge below answers from this very process, so the child runs asynchronously; spawnSync would starve the server. */
+const runNode = (args: string[], options: { cwd: string; env: NodeJS.ProcessEnv }) => new Promise<{ status: number | null; stdout: string; stderr: string }>((resolve) => {
+  const child = spawn(process.execPath, args, { ...options, stdio: ["ignore", "pipe", "pipe"] });
+  let stdout = ""; let stderr = "";
+  child.stdout.setEncoding("utf8"); child.stderr.setEncoding("utf8");
+  child.stdout.on("data", (chunk: string) => { stdout += chunk; });
+  child.stderr.on("data", (chunk: string) => { stderr += chunk; });
+  child.on("close", (status) => resolve({ status, stdout, stderr }));
+});
 
 let connect = "";
 beforeAll(async () => {
@@ -40,7 +51,7 @@ describe("built connect.mjs", () => {
     expect(run.stdout).toContain("Installed the perfect-planner-connect skill");
   });
 
-  it("runs from outside any repo and from repo/src without running a planted git or claude", () => {
+  it("runs from outside any repo and from repo/src without running a planted git or claude", async () => {
     const outside = temp();
     const project = temp();
     const repo = temp();
@@ -48,59 +59,73 @@ describe("built connect.mjs", () => {
     fs.mkdirSync(path.join(repo, "tools"));
     const tokenFile = path.join(project, ".perfect-planner", "tokens", "connect-C-1.token");
     fs.mkdirSync(path.dirname(tokenFile), { recursive: true });
-    fs.writeFileSync(tokenFile, "");
+    fs.writeFileSync(tokenFile, "test-token");
     fs.writeFileSync(tokenFile.replace(/\.token$/, ".roots.json"), JSON.stringify({ roots: [project, repo] }));
-    // Planted in the repo and reached through a PATH folder outside it that links in.
-    const marker = path.join(outside, "planted-ran");
-    if (!windows) {
-      for (const name of ["git", "claude", "node"]) fs.writeFileSync(path.join(repo, "tools", name), `#!/bin/sh\necho "${name} $*" >> '${marker}'\n`, { mode: 0o755 });
-    } else {
-      fs.writeFileSync(path.join(repo, "tools", "claude.cmd"), "@echo off\r\n");
-    }
-    link(path.join(repo, "tools"), path.join(outside, "to-repo"));
-    // The real Claude Code (npm layout); like Claude, it looks git up on its PATH.
-    const report = path.join(outside, "claude-ran");
-    const cli = path.join(outside, "safe", "node_modules", "@anthropic-ai", "claude-code", "cli.js");
-    fs.mkdirSync(path.dirname(cli), { recursive: true });
-    fs.writeFileSync(
-      cli,
-      `#!/usr/bin/env node
+    const server = http.createServer((req, res) => {
+      if (req.method === "POST" && req.url === "/route" && req.headers.authorization === "Bearer test-token") {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ ok: true, result: [] }));
+        return;
+      }
+      res.writeHead(401).end();
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+    const bridgeUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    try {
+      // Planted in the repo and reached through a PATH folder outside it that links in.
+      const marker = path.join(outside, "planted-ran");
+      if (!windows) {
+        for (const name of ["git", "claude", "node"]) fs.writeFileSync(path.join(repo, "tools", name), `#!/bin/sh\necho "${name} $*" >> '${marker}'\n`, { mode: 0o755 });
+      } else {
+        fs.writeFileSync(path.join(repo, "tools", "claude.cmd"), "@echo off\r\n");
+      }
+      link(path.join(repo, "tools"), path.join(outside, "to-repo"));
+      // The real Claude Code (npm layout); like Claude, it looks git up on its PATH.
+      const report = path.join(outside, "claude-ran");
+      const cli = path.join(outside, "safe", "node_modules", "@anthropic-ai", "claude-code", "cli.js");
+      fs.mkdirSync(path.dirname(cli), { recursive: true });
+      fs.writeFileSync(
+        cli,
+        `#!/usr/bin/env node
 const { appendFileSync } = require("node:fs");
 require("node:child_process").spawnSync("git", ["--version"]);
 appendFileSync(${JSON.stringify(report)}, JSON.stringify({ args: process.argv.slice(2), path: process.env.PATH ?? process.env.Path }) + "\\n");
 `,
-      { mode: 0o755 },
-    );
-    if (windows) fs.writeFileSync(path.join(outside, "safe", "claude.cmd"), "@echo off\r\n");
-    else fs.symlinkSync(cli, path.join(outside, "safe", "claude"));
-    const PATH = [path.join(outside, "to-repo"), path.join(outside, "safe"), process.env.PATH ?? process.env.Path ?? ""].join(sep);
-    const env: NodeJS.ProcessEnv = { ...process.env, HOME: temp(), USERPROFILE: temp() };
-    for (const key of Object.keys(env)) if (key.toUpperCase() === "PATH") delete env[key];
-    env[windows ? "Path" : "PATH"] = PATH;
+        { mode: 0o755 },
+      );
+      if (windows) fs.writeFileSync(path.join(outside, "safe", "claude.cmd"), "@echo off\r\n");
+      else fs.symlinkSync(cli, path.join(outside, "safe", "claude"));
+      const PATH = [path.join(outside, "to-repo"), path.join(outside, "safe"), process.env.PATH ?? process.env.Path ?? ""].join(sep);
+      const env: NodeJS.ProcessEnv = { ...process.env, HOME: temp(), USERPROFILE: temp() };
+      for (const key of Object.keys(env)) if (key.toUpperCase() === "PATH") delete env[key];
+      env[windows ? "Path" : "PATH"] = PATH;
 
-    // A plain folder that is no repo, and a subfolder of the repo.
-    for (const cwd of [temp(), path.join(repo, "src")]) {
-      fs.rmSync(report, { force: true });
-      const run = spawnSync(process.execPath, [connect, "http://127.0.0.1:5555", tokenFile], { cwd, env, encoding: "utf8" });
-      expect(run.status, `${cwd}\n${run.stdout}\n${run.stderr}`).toBe(0);
-      expect(fs.existsSync(marker) ? fs.readFileSync(marker, "utf8") : "").toBe("");
-      const calls = fs.readFileSync(report, "utf8").trim().split("\n").map((line) => JSON.parse(line) as { args: string[]; path: string });
-      expect(calls.at(-1)!.args.join(" ")).toContain("mcp add perfect-planner-core -s local");
-      // Claude's PATH holds nothing that resolves into the repo.
-      const realRepo = fs.realpathSync.native(repo);
-      for (const call of calls) {
-        for (const dir of call.path.split(sep).filter(Boolean)) {
-          let real = dir;
-          try {
-            real = fs.realpathSync.native(dir);
-          } catch {
-            // missing folders cannot hold a program
+      // A plain folder that is no repo, and a subfolder of the repo.
+      for (const cwd of [temp(), path.join(repo, "src")]) {
+        fs.rmSync(report, { force: true });
+        const run = await runNode([connect, "--agent", "claude", bridgeUrl, tokenFile], { cwd, env });
+        expect(run.status, `${cwd}\n${run.stdout}\n${run.stderr}`).toBe(0);
+        expect(fs.existsSync(marker) ? fs.readFileSync(marker, "utf8") : "").toBe("");
+        const calls = fs.readFileSync(report, "utf8").trim().split("\n").map((line) => JSON.parse(line) as { args: string[]; path: string });
+        expect(calls.at(-1)!.args.join(" ")).toContain("mcp add perfect-planner-core -s local");
+        // Claude's PATH holds nothing that resolves into the repo.
+        const realRepo = fs.realpathSync.native(repo);
+        for (const call of calls) {
+          for (const dir of call.path.split(sep).filter(Boolean)) {
+            let real = dir;
+            try {
+              real = fs.realpathSync.native(dir);
+            } catch {
+              // missing folders cannot hold a program
+            }
+            // On another drive path.relative gives an absolute path: that folder is outside the repo too.
+            const rel = path.relative(realRepo, real);
+            expect(rel.startsWith("..") || path.isAbsolute(rel), dir).toBe(true);
           }
-          // On another drive path.relative gives an absolute path: that folder is outside the repo too.
-          const rel = path.relative(realRepo, real);
-          expect(rel.startsWith("..") || path.isAbsolute(rel), dir).toBe(true);
         }
       }
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
     }
   });
 });

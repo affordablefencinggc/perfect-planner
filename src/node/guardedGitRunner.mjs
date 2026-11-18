@@ -1,4 +1,6 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { lstat, mkdtemp, readdir, realpath, rmdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -93,12 +95,61 @@ public static class PlannerGuardedJob {
 function windowsQuote(value) {
   return '"' + value.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\+)$/g, '$1$1') + '"';
 }
-function windowsLaunch(command, args, cwd) {
+let cachedWindowsJobAssembly = null;
+let windowsJobAssemblyUnavailable = false;
+function ensureWindowsJobAssembly(timeoutMs) {
+  if (windowsJobAssemblyUnavailable) return null;
+  if (cachedWindowsJobAssembly) {
+    let valid = false;
+    if (existsSync(cachedWindowsJobAssembly.dllPath)) {
+      try { valid = createHash("sha256").update(readFileSync(cachedWindowsJobAssembly.dllPath)).digest("hex").toUpperCase() === cachedWindowsJobAssembly.sha256; } catch {}
+    }
+    if (valid) return cachedWindowsJobAssembly;
+    try { rmSync(cachedWindowsJobAssembly.dir, { recursive: true, force: true }); } catch {}
+    cachedWindowsJobAssembly = null;
+  }
+  let dir, retainDir = false;
+  try {
+    dir = mkdtempSync(path.join(realpathSync(tmpdir()), "pp-guarded-job-"));
+    const csPath = path.join(dir, "PlannerGuardedJob.cs"), dllPath = path.join(dir, "PlannerGuardedJob.dll");
+    writeFileSync(csPath, windowsJobSource, "utf8");
+    const csc = [
+      "C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319\\csc.exe",
+      "C:\\Windows\\Microsoft.NET\\Framework\\v4.0.30319\\csc.exe",
+    ].find((candidate) => existsSync(candidate));
+    if (!csc) { windowsJobAssemblyUnavailable = true; return null; }
+    const out = spawnSync(csc, ["/nologo", "/optimize+", "/target:library", "/out:" + dllPath, csPath], {
+      cwd: dir, env: { SystemRoot: "C:\\Windows", WINDIR: "C:\\Windows", TEMP: dir, TMP: dir },
+      shell: false, windowsHide: true, stdio: "ignore", timeout: Math.max(1, Math.min(2_000, timeoutMs)),
+    });
+    if (out.status !== 0 || !existsSync(dllPath)) { windowsJobAssemblyUnavailable = true; return null; }
+    try { rmSync(csPath, { force: true }); } catch {}
+    const sha256 = createHash("sha256").update(readFileSync(dllPath)).digest("hex").toUpperCase();
+    process.once("exit", () => { try { rmSync(dir, { recursive: true, force: true }); } catch {} });
+    cachedWindowsJobAssembly = { dir, dllPath, sha256 };
+    retainDir = true;
+    return cachedWindowsJobAssembly;
+  } catch {
+    windowsJobAssemblyUnavailable = true;
+    return null;
+  } finally {
+    if (!retainDir && dir) { try { rmSync(dir, { recursive: true, force: true }); } catch {} }
+  }
+}
+function windowsLaunch(command, args, cwd, timeoutMs) {
+  const executable = "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe";
+  const assembly = ensureWindowsJobAssembly(timeoutMs);
+  if (assembly) {
+    const cmdB64 = Buffer.from(command, "utf8").toString("base64");
+    const argsB64 = Buffer.from(args.map(windowsQuote).join(" "), "utf8").toString("base64");
+    const cwdB64 = Buffer.from(cwd, "utf8").toString("base64");
+    const safeDll = assembly.dllPath.replaceAll("'", "''");
+    const script = `$ErrorActionPreference='Stop'; $ProgressPreference='SilentlyContinue'; $PSModuleAutoLoadingPreference='None'; try { $b=[IO.File]::ReadAllBytes('${safeDll}'); if ([BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash($b)).Replace('-','') -ne '${assembly.sha256}') { exit 125 }; [void][Reflection.Assembly]::Load($b); $u=[Text.Encoding]::UTF8; exit [PlannerGuardedJob]::Run($u.GetString([Convert]::FromBase64String('${cmdB64}')),$u.GetString([Convert]::FromBase64String('${argsB64}')),$u.GetString([Convert]::FromBase64String('${cwdB64}'))) } catch { exit 125 }`;
+    return { command: executable, args: ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")] };
+  }
   const payload = Buffer.from(JSON.stringify({ command, arguments: args.map(windowsQuote).join(" "), cwd })).toString("base64");
   const source = Buffer.from(windowsJobSource).toString("base64");
   const script = `$ErrorActionPreference='Stop'; $ProgressPreference='SilentlyContinue'; $PSModuleAutoLoadingPreference='None'; try { Import-Module ($PSHOME + '\\Modules\\Microsoft.PowerShell.Utility\\Microsoft.PowerShell.Utility.psd1'); Add-Type -TypeDefinition ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${source}'))); $p=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${payload}')) | ConvertFrom-Json; exit [PlannerGuardedJob]::Run($p.command,$p.arguments,$p.cwd) } catch { exit 125 }`;
-  // This is the process-containment boundary, not a child-selectable tool.
-  const executable = "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe";
   return { command: executable, args: ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")] };
 }
 
@@ -128,7 +179,13 @@ function boundedProcess(command, args, { cwd, env = process.env, timeoutMs = 10_
     env = { ...Object.fromEntries(Object.entries(env).filter(([key]) => !["SYSTEMROOT", "WINDIR"].includes(key.toUpperCase()))), SystemRoot: "C:\\Windows", WINDIR: "C:\\Windows" };
   }
   return new Promise((resolve) => {
-    const launch = process.platform === "win32" ? windowsLaunch(command, args, cwd) : { command, args };
+    const setupStarted = Date.now();
+    const launch = process.platform === "win32" ? windowsLaunch(command, args, cwd, timeoutMs) : { command, args };
+    const remainingMs = timeoutMs - (Date.now() - setupStarted);
+    if (remainingMs < 1) {
+      resolve({ exit: null, signal: null, stdout: "", stderr: "", reason: "git-time-limit", timedOut: true, outputBytes: 0, outputComplete: false, cleanupComplete: true });
+      return;
+    }
     const child = spawn(launch.command, launch.args, { cwd, env, shell: false, windowsHide: true, detached: process.platform !== "win32", stdio: ["pipe", "pipe", "pipe"] });
     const stdout = [], stderr = [];
     let bytes = 0, reason = null, finished = false, fallback, timer;
@@ -164,7 +221,7 @@ function boundedProcess(command, args, { cwd, env = process.env, timeoutMs = 10_
       else destination.push(Buffer.from(chunk));
     };
     const onAbort=()=>stop('git-cancelled');
-    timer = setTimeout(() => stop("git-time-limit"), timeoutMs);
+    timer = setTimeout(() => stop("git-time-limit"), Math.max(1, timeoutMs - (Date.now() - setupStarted)));
     child.stdout.on("data", (chunk) => {
       collect(chunk,stdout);if(!onFrame||reason||finished)return;
       frameBuffer=Buffer.concat([frameBuffer,chunk]);

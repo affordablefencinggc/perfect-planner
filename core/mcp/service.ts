@@ -288,7 +288,8 @@ export class AgentService {
     const current = this.ownTask(agent, task, true);
     // A usage figure that cannot be believed is dropped, not the progress line: the work was still reported.
     const read = usage === undefined ? null : parseUsage(usage);
-    const entry = this.write({ actor: this.actor(agent), type: "task.progress", subject: attemptLabel(current), summary: redactSecrets(text), data: { ...(read?.ok ? { usage: read.usage } : {}), ...(activity ? { activity } : {}) } });
+    const data = { ...(read?.ok ? { usage: read.usage } : {}), ...(activity ? { activity } : {}) };
+    const entry = this.write({ actor: this.actor(agent), type: "task.progress", subject: attemptLabel(current), summary: redactSecrets(text), ...(Object.keys(data).length ? { data } : {}) });
     return { entry: entry.n, ...(read && !read.ok ? { usageIgnored: read.problem } : {}) };
   }
 

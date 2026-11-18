@@ -369,6 +369,7 @@ export function openCoreProject(baseRoot: string, key: string, override: string 
   // TestGate copies its policy; give it the shared object so the host's switch reaches the gate and the rule together.
   Object.assign(gate, { policy });
   const service = new AgentService({ ledger, gate, onJoin: (agent) => listAgent(ledger, agent.person, agent.id), onIdentityReport: (agent, attempt) => {
+    if (!ledger.status.writable || !ledger.status.ok) return;
     ledger.append({ actor: { kind: "system", id: "worker-identity" }, type: "task.progress", subject: attempt,
       summary: "Received worker model report (self-reported, not runtime verified)", evidence: [], refs: [],
       data: { workerReport: { version: 1, worker: agent.id, requestedModel: agent.requestedModel ?? null, reportedModel: agent.reportedModel ?? null } },

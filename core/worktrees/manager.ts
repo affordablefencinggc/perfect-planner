@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { surfacesOverlap } from "../../src/engine/collisionEngine.js";
 import { ensureRequiredIgnores, privatePaths } from "./ignores";
 import { INSTALL_SCRIPTS_HINT, NPM_CONFIG_HINT, runNpm } from "./npm";
-import { git, GitError, runGit } from "./git";
+import { git, GitError, GitHardeningError, GitProgramRefusedError, runGit } from "./git";
 import { directorySize, folderNote, isListed, keepReasons, parseWorktreeList, readFacts, type FolderState, type FolderStatus, type ListedWorktree, type Reconciled, type WorktreeFacts } from "./hygiene";
 import { isWithin, lines, realDir, samePath, toRepoPath } from "./platform";
 import { type Actor, type LedgerPort, WORKTREES_ACTOR } from "./ports";
@@ -282,8 +282,16 @@ export class WorktreeManager {
     try {
       await this.addTaskWorktree(branch, worktreePath, baseSha);
     } catch (error) {
-      // Another process may have exposed a folder before Git reports an error; preserve it for inspection.
-      throw new WorktreeError("Could not add " + taskId + "'s worktree; no cleanup was attempted, so any folder or branch was left untouched. " + (error as Error).message);
+      if (error instanceof GitProgramRefusedError && error.createdBranch) {
+        // runGit sets this only after its own `worktree add -b` returned success. A
+        // non-zero add result or an add of an existing branch has no ownership proof.
+        const cleaned = await this.rollbackEmptyFailedAdd(branch, worktreePath, baseSha);
+        if (!cleaned) error.message += " The created folder or branch was left in place because its ownership or empty state could not be confirmed.";
+      }
+      if (error instanceof GitProgramRefusedError || error instanceof GitHardeningError) throw error;
+      // A generic add failure may belong to another manager that won the same-ref race.
+      // Leave every artifact in place rather than infer ownership from a clean-looking folder.
+      throw new WorktreeError("Could not add " + taskId + "'s worktree; no cleanup was attempted because ownership could not be confirmed, so any folder or branch was left untouched for inspection. " + (error as Error).message);
     }
     // A finished add is never locked; a "initializing" lock here is a killed earlier add's, written after our clean-up.
     await runGit(this.repoRoot, ["worktree", "unlock", worktreePath]);
@@ -317,6 +325,48 @@ export class WorktreeManager {
   protected async addTaskWorktree(branch: string, worktreePath: string, baseSha: string): Promise<void> {
     await git(this.repoRoot, ["worktree", "add", "-b", branch, worktreePath, baseSha]);
   }
+
+  /**
+   * Only the post-add filter refusal carries proof that this call created the branch. Remove its empty worktree,
+   * then ask Git for a normal (non-force) branch deletion. A branch that is now checked out, changed, unmerged,
+   * or otherwise uncertain is kept. Generic/non-zero `worktree add` failures never reach this method.
+   */
+  private async rollbackEmptyFailedAdd(branch: string, worktreePath: string, baseSha: string): Promise<boolean> {
+    try {
+      const shown = await runGit(this.repoRoot, ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`]);
+      if (shown.code === 1) return !existsSync(worktreePath);
+      if (shown.code !== 0) return false;
+      const ref = await runGit(this.repoRoot, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}^{commit}`]);
+      if (ref.code !== 0) return false;
+      if (ref.stdout.trim() !== baseSha) return false;
+      if (existsSync(worktreePath)) {
+        const head = await runGit(worktreePath, ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"]);
+        if (head.code !== 0 || head.stdout.trim() !== baseSha) return false;
+        const status = await runGit(worktreePath, ["status", "--porcelain=v1", "--ignored=matching", "--untracked-files=all"]);
+        if (status.code !== 0 || lines(status.stdout).length > 0) return false;
+        const staged = await runGit(worktreePath, ["ls-files", "--stage"]);
+        if (staged.code !== 0) return false;
+        for (const line of lines(staged.stdout)) {
+          if (!line.startsWith("160000 ")) continue;
+          const tab = line.indexOf("\t");
+          if (tab < 0) continue;
+          const subDir = path.join(worktreePath, line.slice(tab + 1));
+          try { if (existsSync(subDir) && readdirSync(subDir).length > 0) return false; } catch { return false; }
+        }
+        await runGit(this.repoRoot, ["worktree", "unlock", worktreePath]);
+        const removed = await runGit(this.repoRoot, ["worktree", "remove", "--force", worktreePath]);
+        if (removed.code !== 0 || existsSync(worktreePath)) return false;
+      }
+      const listed = parseWorktreeList(await git(this.repoRoot, ["worktree", "list", "--porcelain"]));
+      if (listed.some((item) => item.branch === branch || samePath(item.path, worktreePath))) return false;
+      const deleted = await runGit(this.repoRoot, ["branch", "-d", branch]);
+      const after = await runGit(this.repoRoot, ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`]);
+      return deleted.code === 0 && after.code === 1;
+    } catch {
+      return false; // Any doubt keeps the branch and folder for inspection.
+    }
+  }
+
   /** Add file claims to a running task. Returns the conflicts and records nothing if there are any. */
   claim(taskId: string, files: string[]): Promise<ClaimConflict[]> {
     return this.serial(async () => {
