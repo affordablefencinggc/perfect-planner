@@ -127,14 +127,16 @@ function AttentionRail({ items, onOpen, onProject }) {
             <div>
               <strong>{group.message}</strong>
               <p>{group.action}</p>
-              {group.tasks.length > 1 && <p className="wb-rail-tasks">{group.tasks.map((item) => item.task).join(" · ")}</p>}
             </div>
             {group.code === "token-budget" ? (
               <button type="button" className="core-button" onClick={onProject}>Raise the cap</button>
             ) : (
-              group.tasks.slice(0, 4).map((item) => (
-                <button type="button" className="core-button wb-rail-open" key={`${item.task}-${item.code}`} onClick={() => onOpen({ id: item.task, label: item.task, title: item.title, project: item.project })} disabled={item.task === "project"}>{item.task}</button>
-              ))
+              <div className="wb-rail-actions" aria-label={`Open ${group.tasks.map((item) => item.task).join(", ")}`}>
+                {group.tasks.slice(0, 4).map((item) => (
+                  <button type="button" className="core-button wb-rail-open" key={`${item.task}-${item.code}`} onClick={() => onOpen({ id: item.task, label: item.task, title: item.title, project: item.project })} disabled={item.task === "project"}>{item.task}</button>
+                ))}
+                {group.tasks.length > 4 && <span className="wb-rail-more">+{group.tasks.length - 4}</span>}
+              </div>
             )}
           </li>
         ))}
