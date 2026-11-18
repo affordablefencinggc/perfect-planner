@@ -80,12 +80,16 @@ const stageOf = async (id: string) => (await view()).tasks.find((t) => t.id === 
 describe("worker limit and Start all", () => {
   it("saves a limit between 1 and 8, refuses anything else, and refuses a forged call", async () => {
     addTask("Save notes");
-    expect((await view()).settings).toEqual({ limit: 3, autoMerge: false });
+    expect((await view()).settings).toEqual({ limit: 3, autoMerge: false, tokenBudget: null });
     expect((await post("/tasks/settings", { limit: 2, autoMerge: true })).status).toBe(200);
-    expect((await view()).settings).toEqual({ limit: 2, autoMerge: true });
+    expect((await view()).settings).toEqual({ limit: 2, autoMerge: true, tokenBudget: null });
+    expect((await post("/tasks/settings", { tokenBudget: 5000 })).status).toBe(200);
+    expect((await view()).settings).toEqual({ limit: 2, autoMerge: true, tokenBudget: 5000 });
+    expect((await post("/tasks/settings", { tokenBudget: 0 })).status).toBe(400);
+    expect((await view()).settings).toEqual({ limit: 2, autoMerge: true, tokenBudget: 5000 });
     for (const bad of [0, 9, 1.5, "3", null]) expect((await post("/tasks/settings", { limit: bad })).status, String(bad)).toBe(400);
     expect((await post("/tasks/settings", { autoMerge: "yes" })).status).toBe(400);
-    expect((await view()).settings).toEqual({ limit: 2, autoMerge: true });
+    expect((await view()).settings).toEqual({ limit: 2, autoMerge: true, tokenBudget: 5000 });
     const forged = await hostCall(ctx.base, "POST", `/tasks/settings${q}`, { limit: 8 }, { asAgent: true });
     expect(forged.status).toBe(401);
     expect((await view()).settings.limit).toBe(2);
