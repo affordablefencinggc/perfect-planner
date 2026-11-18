@@ -43,6 +43,7 @@ test("Sites artifact verification runs after the final package build, then truth
   assert.ok(RELEASE_CHAINS.release.indexOf("tauri:build -- --no-bundle") < RELEASE_CHAINS.release.indexOf("test:sites"));
   assert.ok(RELEASE_CHAINS.release.indexOf("test:sites") < RELEASE_CHAINS.release.indexOf("verify:performance"));
   for (const profile of ["web", "release"]) {
+    assert.equal(RELEASE_CHAINS[profile][0], "clean:dist");
     assert.ok(RELEASE_CHAINS[profile].indexOf("test:sites") < RELEASE_CHAINS[profile].indexOf("truth:release"));
     assert.ok(RELEASE_CHAINS[profile].indexOf("truth:release") < RELEASE_CHAINS[profile].indexOf("sites:prepare"));
     assert.ok(RELEASE_CHAINS[profile].indexOf("sites:prepare") < RELEASE_CHAINS[profile].indexOf("verify:performance"));

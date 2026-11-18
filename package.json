@@ -12,6 +12,7 @@
     "truth:report": "node scripts/generate-truth-report.mjs",
     "truth:release": "node scripts/generate-truth-report.mjs --release",
     "sites:prepare": "node scripts/prepare-sites-build.mjs",
+    "clean:dist": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
     "attest:screenshot": "node scripts/attest-screenshot-viewing.mjs",
     "mcp": "node scripts/run-perfect-planner-mcp.mjs",
     "verify:mcp": "node scripts/verify-perfect-planner-mcp.mjs",
