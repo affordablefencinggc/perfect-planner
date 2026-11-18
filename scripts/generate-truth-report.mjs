@@ -31,7 +31,7 @@ import { authorizeNativeOperation, compileNativeCapabilityPolicy } from "../src/
 import { createIdentityVault, inspectIdentityVault, openIdentityVault } from "../src/node/identityVault.mjs";
 import { acceptLocalDraft, inspectDraftReceipt, listLocalInbox, publishLocalDraft } from "../src/node/draftMailbox.mjs";
 import { inspectProviderBudget, prepareProviderReviewRequest, recordProviderReviewUsage, reserveProviderReviewBudget, validateProviderReviewResponse } from "../src/node/providerReviewGateway.mjs";
-import { captureIsolatedScreenshot, createChromiumScreenshotAdapter, validatePngScreenshot } from "../src/node/screenshotEvidence.mjs";
+import { captureIsolatedScreenshot, createChromiumScreenshotAdapter, readScreenshotViewingAttestation, validatePngScreenshot } from "../src/node/screenshotEvidence.mjs";
 import { inspectArchitectureContracts, publishArchitectureContract, readArchitectureContract } from "../src/node/architectureContractStore.mjs";
 import { assessComponentPlans } from "../src/engine/componentPlanEngine.js";
 import { currentComponentPlanInput } from "../src/engine/componentPlanSeed.js";
@@ -237,11 +237,12 @@ try {
   const screenshotTruth = await assessScreenshotTruth(projectRoot, temporaryRoot, options.screenshotCapture);
   const screenshotEngineValid = screenshotTruth.engineValid;
   const screenshotCapturedThisRun = screenshotTruth.capturePerformedThisRun;
-  // Viewing is never inferred from release approval or from a fresh capture. Only an explicit viewing attestation
-  // could set this; none exists today, so the screenshot stays unviewed.
-  const explicitViewingAttestation = null;
-  const screenshotViewedThisRun = Boolean(explicitViewingAttestation) && screenshotCapturedThisRun;
-  const screenshotProofAccepted = screenshotEngineValid && screenshotViewedThisRun;
+  // Viewing is never inferred from release approval or from a fresh capture. A durable attestation
+  // must name the exact artifact bytes, plan and item; otherwise the screenshot stays unviewed.
+  const screenshotViewingStore = options.screenshotViewingStore ?? process.env.PP_SCREENSHOT_VIEWING_STORE ?? path.join(projectRoot, ".cache", "screenshot-viewing.json");
+  const explicitViewingAttestation = await readScreenshotViewingAttestation(screenshotViewingStore, { planId: "PP-CLEANROOM", itemId: "SCREENSHOT", artifactHash: screenshotTruth.artifactHash }, { allowedRoot: path.dirname(path.resolve(screenshotViewingStore)) });
+  const screenshotViewedForExactArtifact = Boolean(explicitViewingAttestation);
+  const screenshotProofAccepted = screenshotEngineValid && screenshotViewedForExactArtifact;
   const repositorySonar = assessRepositorySonar({ requiredCapabilities: ["planning-ledger", "collision-guard"], candidates: [] }, { now: Date.parse(generatedAt) });
   const nameSonar = assessNameCandidates(generateUnverifiedNames(["perfect", "planner"]), { now: Date.parse(generatedAt) });
   const nativePolicy = compileNativeCapabilityPolicy({ planId: "PP-TRUTH", taskId: "NATIVE-1", mode: "autopilot", grants: [{ capability: "filesystem.read", roots: [projectRoot] }, { capability: "device.control", devices: ["phone"] }] });
@@ -280,7 +281,7 @@ try {
     mailboxOneTimeAcceptance: mailboxValid,
     peerQuorumFailClosed: peerReview.verdict === "BLOCKED" && peerReview.providers.length === 1,
     providerBudgetRedaction: reviewGatewayValid,
-    screenshotUnprovenWithoutViewing: screenshotEngineValid && !screenshotViewedThisRun,
+    screenshotProofRequiresViewing: !screenshotProofAccepted || screenshotViewedForExactArtifact,
     sonarNoAutoImport: repositorySonar.verdict === "BLOCKED" && nameSonar.every((name) => name.status !== "AVAILABLE_AT_CHECK_TIME"),
     autopilotDeviceDenial: nativePolicyValid,
     identityPrivateKeyRedaction: identityVaultValid,
@@ -308,7 +309,7 @@ try {
     localHandoff: { valid: handoffOpened.draft.planId === "PP-TRUTH" && !JSON.stringify(handoffEnvelope).includes("PP-TRUTH"), senderSigningFingerprint: handoffSender.signingFingerprint, recipientEncryptionFingerprint: handoffRecipient.encryptionFingerprint, plaintextExposed: JSON.stringify(handoffEnvelope).includes("PP-TRUTH") },
     peerReviewGate: { vaultValid: openedProviderVault.length === 2 && !JSON.stringify(providerVault).includes("ephemeral-a"), vault: redactProviderVault(providerVault), verdict: peerReview.verdict, providerCount: peerReview.providers.length, requiredQuorum: peerReview.requiredQuorum, blockers: peerReview.blockers },
     providerReviewGateway: { valid: reviewGatewayValid, requestHash: reviewRequest.requestHash, promptHash: reviewRequest.promptHash, artifactHash: reviewRequest.artifactHash, redactionCount: reviewRequest.redactions.length, reservedCostUsd: reviewRequest.estimatedCostUsd, usageStatus: reviewUsage.reservation.status, overruns: reviewBudget.totals.overruns, liveProviderCalled: false },
-    screenshotEvidence: { ...screenshotTruth, viewingAttestedThisRun: screenshotViewedThisRun, proofAccepted: screenshotProofAccepted },
+    screenshotEvidence: { ...screenshotTruth, viewingAttestedThisRun: Boolean(explicitViewingAttestation) && Date.parse(explicitViewingAttestation.viewedAt) >= Date.parse(generatedAt), viewingAttestedForExactArtifact: screenshotViewedForExactArtifact, viewing: explicitViewingAttestation ? { viewedBy: explicitViewingAttestation.viewedBy, viewedAt: explicitViewingAttestation.viewedAt, observation: explicitViewingAttestation.observation, challengeId: explicitViewingAttestation.viewingChallengeId } : null, proofAccepted: screenshotProofAccepted },
     releaseGates: { profile: releaseGates.profile, runId: releaseGates.runId ?? null, valid: releaseGates.valid, passed: releaseGates.passed, missing: releaseGates.missing, reasons: releaseGates.reasons, revision: workspaceRevision ? { head: workspaceRevision.head, treeDigest: workspaceRevision.treeDigest } : null, humanApproval: humanApproval.valid ? { approvedBy: humanApproval.approvedBy, approvedAt: humanApproval.approvedAt } : { reason: humanApproval.reason } },
     sonarGate: { repositoryVerdict: repositorySonar.verdict, candidateCount: repositorySonar.candidates.length, autoImportAllowed: false, nameCount: nameSonar.length, verifiedNameCount: nameSonar.filter((name) => name.status === "AVAILABLE_AT_CHECK_TIME").length, generatedNameStatus: nameSonar[0]?.status ?? "UNAVAILABLE" },
     mutationGate: { verdict: mutationReport.verdict, totals: mutationReport.totals, coverage: mutationReport.coverage, results: mutationReport.results.map(({ id, guarantee, state }) => ({ id, guarantee, state })) },

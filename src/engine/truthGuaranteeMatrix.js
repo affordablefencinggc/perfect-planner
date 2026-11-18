@@ -17,7 +17,7 @@ export const TRUTH_GUARANTEES = Object.freeze([
   "mailbox-one-time-acceptance",
   "peer-quorum-fail-closed",
   "provider-budget-redaction",
-  "screenshot-unproven-without-viewing",
+  "screenshot-proof-requires-viewing",
   "sonar-no-auto-import",
   "autopilot-device-denial",
   "identity-private-key-redaction",

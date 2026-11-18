@@ -223,3 +223,21 @@ export async function inspectDurableScreenshotViewing(storePath, options = {}) {
 }
 
 export async function revalidateScreenshotRecord(record, options = {}) { return validatePngScreenshot(await readFile(record.artifactPath), options); }
+
+// The release truth accepts a human viewing only when a durable attestation names the exact
+// artifact bytes, plan and item. A capture or a release approval is never treated as viewing.
+export async function readScreenshotViewingAttestation(storePath, record, options = {}) {
+  if (!record?.artifactHash || !record?.planId || !record?.itemId) throw new Error("Screenshot viewing lookup requires an exact artifact, plan and item.");
+  await validateViewingStorePath(options.allowedRoot, storePath);
+  const store = await readViewingStore(storePath);
+  const attestation = store.attestations.find((item) =>
+    item.planId === record.planId &&
+    item.itemId === record.itemId &&
+    item.artifactHash === record.artifactHash &&
+    item.viewingStatus === "VIEWED" &&
+    String(item.viewedBy ?? "").trim().length > 0 &&
+    Number.isFinite(Date.parse(item.viewedAt)) &&
+    String(item.observation ?? "").trim().length >= 12
+  );
+  return attestation ? Object.freeze({ ...attestation }) : null;
+}

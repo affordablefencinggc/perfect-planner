@@ -5,7 +5,7 @@ import { mkdtemp, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { deflateSync } from "node:zlib";
-import { attestScreenshotViewing, captureIsolatedScreenshot, completeDurableScreenshotViewing, createChromiumScreenshotAdapter, createScreenshotViewingChallenge, inspectDurableScreenshotViewing, issueDurableScreenshotViewingChallenge, revalidateScreenshotRecord, validatePngScreenshot } from "../src/node/screenshotEvidence.mjs";
+import { attestScreenshotViewing, captureIsolatedScreenshot, completeDurableScreenshotViewing, createChromiumScreenshotAdapter, createScreenshotViewingChallenge, inspectDurableScreenshotViewing, issueDurableScreenshotViewingChallenge, readScreenshotViewingAttestation, revalidateScreenshotRecord, validatePngScreenshot } from "../src/node/screenshotEvidence.mjs";
 import { assessScreenshotTruth } from "../scripts/generate-truth-report.mjs";
 
 function crc32(bytes) { let crc = 0xffffffff; for (const byte of bytes) { crc ^= byte; for (let bit = 0; bit < 8; bit += 1) crc = (crc >>> 1) ^ ((crc & 1) ? 0xedb88320 : 0); } return (crc ^ 0xffffffff) >>> 0; }
@@ -50,6 +50,20 @@ test("durable viewing workflow stores a named pending challenge and one token-fr
   const viewed = await completeDurableScreenshotViewing(storePath, record, { challengeId: challenge.challengeId, token: challenge.token, actor: "danie", explicitGesture: true, observation: "The disabled release gate is visible." }, { allowedRoot: root, now: Date.parse("2026-09-02T00:05:00.000Z"), timestamp: "2026-09-02T00:05:00.000Z", validation: { minWidth: 2, minHeight: 2 } });
   assert.equal(viewed.viewingStatus, "VIEWED"); inspected = await inspectDurableScreenshotViewing(storePath, { allowedRoot: root }); assert.equal(inspected.attestations.length, 1); assert.equal(inspected.challenges[0].status, "VIEWED"); assert.doesNotMatch(JSON.stringify(inspected), new RegExp(challenge.token));
   await assert.rejects(() => completeDurableScreenshotViewing(storePath, record, { challengeId: challenge.challengeId, token: challenge.token, actor: "danie", explicitGesture: true, observation: "Trying to replay the same viewing." }, { allowedRoot: root, now: Date.parse("2026-09-02T00:06:00.000Z"), validation: { minWidth: 2, minHeight: 2 } }), /exact pending/);
+});
+
+test("durable viewing lookup returns only an attestation for the exact artifact, plan and item", async (t) => {
+  const root = await fixture(); t.after(() => rm(root, { recursive: true, force: true }));
+  const outputPath = path.join(root, "proof.png"); const storePath = path.join(root, "viewing.json");
+  const record = await captureIsolatedScreenshot({ planId: "PP", itemId: "VIEW-3", targetUrl: "https://example.test/proof", allowedRoot: root, outputPath, adapter: async () => png() }, { validation: { minWidth: 2, minHeight: 2 } });
+  const challenge = await issueDurableScreenshotViewingChallenge(storePath, record, { allowedRoot: root, requestedViewer: "danie", validation: { minWidth: 2, minHeight: 2 } });
+  await completeDurableScreenshotViewing(storePath, record, { challengeId: challenge.challengeId, token: challenge.token, actor: "danie", explicitGesture: true, observation: "The release gate is visible and disabled." }, { allowedRoot: root, validation: { minWidth: 2, minHeight: 2 } });
+  const found = await readScreenshotViewingAttestation(storePath, { planId: record.planId, itemId: record.itemId, artifactHash: record.artifactHash }, { allowedRoot: root });
+  assert.equal(found.viewedBy, "danie");
+  assert.equal(found.artifactHash, record.artifactHash);
+  assert.equal(await readScreenshotViewingAttestation(storePath, { planId: record.planId, itemId: record.itemId, artifactHash: "b".repeat(64) }, { allowedRoot: root }), null);
+  assert.equal(await readScreenshotViewingAttestation(storePath, { planId: record.planId, itemId: "OTHER", artifactHash: record.artifactHash }, { allowedRoot: root }), null);
+  assert.equal(await readScreenshotViewingAttestation(storePath, { planId: "OTHER", itemId: record.itemId, artifactHash: record.artifactHash }, { allowedRoot: root }), null);
 });
 
 test("durable viewing refuses wrong viewers, forged tokens, and changed artifacts without inventing proof", async (t) => {
