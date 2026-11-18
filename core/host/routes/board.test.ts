@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { STALL_MS, stillInsideClaimWindow } from "./board";
 import { hostCall, startTestHost } from "../testing";
 
 // The work board is a projection, not a store: these tests drive the real routes and read
@@ -88,5 +89,17 @@ describe("work board route", () => {
     const board = (await hostCall(ctx.base, "GET", `/board${P}`)).body.result;
     expect(board.projects.find((project: { key: string }) => project.key === "other")).toMatchObject({ tasks: 1, active: false, readable: true });
     expect(board.tasks.every((task: { project: string }) => task.project === "board")).toBe(true);
+  });
+
+  it("gives a fresh claim its grace window before calling it stalled", () => {
+    const now = Date.parse("2026-11-19T04:00:00Z");
+    // A worker that claimed seconds or minutes ago has not stalled, even with no report yet.
+    expect(stillInsideClaimWindow("2026-11-19T03:59:44Z", now)).toBe(true);
+    expect(stillInsideClaimWindow(new Date(now - STALL_MS + 1000).toISOString(), now)).toBe(true);
+    // At and past the window, silence is a stall.
+    expect(stillInsideClaimWindow(new Date(now - STALL_MS).toISOString(), now)).toBe(false);
+    expect(stillInsideClaimWindow("2026-11-19T03:20:00Z", now)).toBe(false);
+    // No readable claim time cannot earn a grace window.
+    expect(stillInsideClaimWindow(null, now)).toBe(false);
   });
 });

@@ -144,6 +144,16 @@ interface TaskFacts {
   reportedModel: string | null;
   branch: string | null;
   worktree: string | null;
+  claimedAt: string | null;
+}
+
+/**
+ * A claim has a grace window: a worker that claimed seconds ago has not "stalled for 15 minutes"
+ * just because it has not reported yet. Only a claim older than STALL_MS with no sign of life is stalled.
+ */
+export function stillInsideClaimWindow(claimedAt: string | null, now: number): boolean {
+  const at = Date.parse(String(claimedAt ?? ""));
+  return Number.isFinite(at) && now - at < STALL_MS;
 }
 
 function projectLabel(folder: string, key: string): string {
@@ -180,6 +190,15 @@ function latestPlan(entries: readonly LedgerEntry[]): { approved: boolean; lates
 
 function createdEntry(entries: readonly LedgerEntry[], id: string): LedgerEntry | undefined {
   return entries.find((entry) => entry.type === "task.created" && entry.subject === id);
+}
+
+/** Ledger time of the last claim on this attempt, so an old claim can be told from a fresh one. */
+function claimedEntry(entries: readonly LedgerEntry[], label: string): LedgerEntry | undefined {
+  for (let index = entries.length - 1; index >= 0; index--) {
+    const entry = entries[index]!;
+    if (entry.type === "task.claimed" && entry.subject === label) return entry;
+  }
+  return undefined;
 }
 
 function phaseOf(entry: LedgerEntry | undefined): string | null {
@@ -235,7 +254,10 @@ function healthFor(task: TaskView, column: BoardColumnId, now: number, facts: Ta
   if ((Number.isFinite(progressAt) && now - progressAt >= STALL_MS) || (Number.isFinite(activityAt) && now - activityAt >= STALL_MS)) {
     return { health: "stalled", label: "Stalled: no sign of life for 15 minutes" };
   }
-  if (!Number.isFinite(progressAt) && !Number.isFinite(activityAt)) return { health: "stalled", label: "Claimed, but no progress was ever reported" };
+  if (!Number.isFinite(progressAt) && !Number.isFinite(activityAt)) {
+    if (stillInsideClaimWindow(facts.claimedAt, now)) return { health: "quiet", label: "Claimed; waiting for the first report" };
+    return { health: "stalled", label: "Claimed, but no worker sign of life for 15 minutes" };
+  }
   return { health: "quiet", label: "Quiet" };
 }
 
@@ -273,7 +295,14 @@ function attentionFor(options: {
     out.push({ code: "reopened", level: "risk", message: `${task.id} was sent back for another attempt.`, action: "Dispatch the next attempt; the previous worktree and claims are kept." });
   }
   if (health === "stalled") {
-    out.push({ code: "stalled", level: "stop", message: `${task.id} has had no worker sign of life for 15 minutes.`, action: "Release the claim, then hand the task over or dispatch a new worker. The worktree is kept." });
+    // Say how long the board has actually seen nothing, not a flat "15 minutes".
+    const lastSign = [
+      Date.parse(String(task.lastProgressAt ?? "")),
+      Date.parse(String(task.workerActivity?.at ?? "")),
+      Date.parse(String(facts.claimedAt ?? "")),
+    ].filter((value) => Number.isFinite(value)).sort((a, b) => b - a)[0];
+    const silence = Number.isFinite(lastSign) ? Math.max(1, Math.round((now - lastSign) / 60_000)) : 15;
+    out.push({ code: "stalled", level: "stop", message: `${task.id} has had no worker sign of life for ${silence} minutes.`, action: "Release the claim, then hand the task over or dispatch a new worker. The worktree is kept." });
   }
   if (agentLive === false && task.status === "claimed") {
     out.push({ code: "disconnected", level: "risk", message: `${task.id}'s worker is not checked in any more.`, action: "A restart ends every connection. Release the claim and dispatch again; the work is kept." });
@@ -319,12 +348,14 @@ export function boardView(options: {
     const dispatch = recordedWorkerDispatch(entries, attempt);
     const report = recordedWorkerReport(entries, attempt, task.owner);
     const tree = worktreeOf(entries, task.id, attempt);
+    const claimed = claimedEntry(entries, attempt);
     const facts: TaskFacts = {
       check: gate.worktree ? { passed: gate.worktree.passed, ...(gate.worktree.commit ? { commit: gate.worktree.commit } : {}) } : null,
       requestedModel: dispatch?.requestedModel ?? null,
       reportedModel: report?.reportedModel ?? null,
       branch: tree.branch,
       worktree: tree.path,
+      claimedAt: claimed?.at ?? null,
     };
     const health = healthFor(task, column, now, facts, task.owner ? Boolean(options.agents?.find((item) => item.id === task.owner)) : null);
     const created = createdEntry(entries, task.id);
