@@ -1123,7 +1123,7 @@ export async function handoverReceipt(project: CoreProject, id: string): Promise
   if (task.status === "claimed" && !task.lastProgress) risks.push("Claimed, but no progress has ever been reported.");
   const unmet = unmetDependencies(project.service.board(), boardTask);
   if (unmet.length) risks.push(waitingMessage(label, unmet));
-  if (changedSince) risks.push(`The plan was approved again after this task was created (${plan.latest} at ${plan.at}).`);
+  if (changedSince) risks.push(`The plan was approved after this task was created (${plan.latest} at ${plan.at}).`);
   if (task.workerDispatch?.requestedModel && task.workerReport?.reportedModel && task.workerDispatch.requestedModel !== task.workerReport.reportedModel) risks.push(`Requested ${task.workerDispatch.requestedModel}; the worker reported ${task.workerReport.reportedModel}.`);
   if (task.staleClaims) risks.push(`File claims: ${task.staleClaims}`);
   if (usage.tokenBudget !== null && usage.tokensSpent >= usage.tokenBudget) risks.push(`The token budget is spent (${usage.tokensSpent.toLocaleString()} of ${usage.tokenBudget.toLocaleString()}).`);

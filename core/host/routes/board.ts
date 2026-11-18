@@ -38,7 +38,7 @@ export const BOARD_COLUMNS: ReadonlyArray<{ id: BoardColumnId; label: string; hi
   { id: "done", label: "Shipped", hint: "Merged and recorded on the ledger" },
 ]);
 
-export type BoardHealth = "working" | "finished" | "quiet" | "stalled" | "failed" | "blocked" | "review" | "ship" | "done" | "idle";
+export type BoardHealth = "working" | "finished" | "quiet" | "stalled" | "failed" | "blocked" | "review" | "ship" | "ready" | "done" | "idle";
 
 export interface BoardAttention {
   code: string;
@@ -210,13 +210,18 @@ function columnFor(task: TaskView, stage: TaskStage): BoardColumnId {
   return "ready";
 }
 
-function healthFor(task: TaskView, column: BoardColumnId, now: number, check: TaskFacts["check"], agentLive: boolean | null): { health: BoardHealth; label: string } {
+function healthFor(task: TaskView, column: BoardColumnId, now: number, facts: TaskFacts, agentLive: boolean | null): { health: BoardHealth; label: string } {
   if (column === "done") return { health: "done", label: "Shipped" };
-  if (check?.passed === false) return { health: "failed", label: "Test failed" };
+  if (facts.check?.passed === false) return { health: "failed", label: "Test failed" };
   if (column === "blocked") return { health: "blocked", label: "Blocked" };
   if (column === "ship") return { health: "ship", label: "Approved, waiting to merge" };
   if (column === "review") return { health: "review", label: "Waiting for your review" };
-  if (task.status !== "claimed") return { health: "idle", label: "Not started" };
+  if (task.status !== "claimed") {
+    // A task that already has a worktree or a progress record is not untouched: it came back
+    // from a worker. Saying "not started" here would contradict the Tasks screen.
+    if (facts.worktree || task.lastProgress) return { health: "ready", label: "Ready to claim" };
+    return { health: "idle", label: "Not started" };
+  }
   // A fresh report from a worker that is no longer checked in is still a dropped worker:
   // the report may predate the disconnect by seconds, and the token is already dead.
   if (agentLive === false) return { health: "stalled", label: "Worker not checked in" };
@@ -277,7 +282,7 @@ function attentionFor(options: {
     out.push({ code: "model-conflict", level: "risk", message: `${task.id} asked for ${facts.requestedModel}, but the worker reported ${facts.reportedModel}.`, action: "Check which model actually worked before accepting the result." });
   }
   if (planEntry && createdEntry && planEntry > createdEntry && task.status !== "done") {
-    out.push({ code: "plan-changed", level: "risk", message: `The plan was approved again after ${task.id} was created.`, action: "Re-read the plan and confirm this task still says what the plan now asks for." });
+    out.push({ code: "plan-changed", level: "risk", message: `The plan was approved after ${task.id} was created.`, action: "Re-read the plan and confirm this task still says what the plan now asks for." });
   }
   if (task.lastProgressAt && Number.isFinite(Date.parse(task.lastProgressAt)) && now - Date.parse(task.lastProgressAt) > 24 * 60 * 60 * 1000 && task.status === "claimed") {
     out.push({ code: "stale-day", level: "risk", message: `${task.id} has not reported progress for more than a day.`, action: "Release the claim and decide whether to continue or hand it over." });
@@ -321,7 +326,7 @@ export function boardView(options: {
       branch: tree.branch,
       worktree: tree.path,
     };
-    const health = healthFor(task, column, now, facts.check, task.owner ? Boolean(options.agents?.find((item) => item.id === task.owner)) : null);
+    const health = healthFor(task, column, now, facts, task.owner ? Boolean(options.agents?.find((item) => item.id === task.owner)) : null);
     const created = createdEntry(entries, task.id);
     const createdAt = created?.at ?? null;
     const usage = usageFor(cost, task.id);

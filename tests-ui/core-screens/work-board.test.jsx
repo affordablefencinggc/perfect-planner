@@ -94,10 +94,10 @@ describe("WorkBoardScreen", () => {
     renderBoard();
     expect(await screen.findByText(/has had no worker sign of life/)).toBeTruthy();
     expect(screen.getByText(/Release the claim, then hand the task over/)).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Open" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "T-1" })).toBeTruthy();
   });
 
-  test("shows the token cap as a project item and saves a new one", async () => {
+  test("shows the token cap as a project item and jumps to the cap control", async () => {
     const fetchFn = routeFetch({
       "GET /board": () => ok(board({
         attention: [{ code: "token-budget", level: "stop", message: "The token budget is spent (1,200 of 1,000 reported tokens).", action: "Raise the cap below.", task: "project", project: "default", title: "Token budget" }],
@@ -107,7 +107,7 @@ describe("WorkBoardScreen", () => {
     });
     renderBoard();
     expect(await screen.findByText(/The token budget is spent/)).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Project" }).disabled).toBe(true);
+    expect(screen.getByRole("button", { name: "Raise the cap" })).toBeTruthy();
     fireEvent.change(screen.getByLabelText(/Token cap for new workers/i), { target: { value: "5000" } });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(fetchFn.mock.calls.some(([url, init]) => String(url).includes("/tasks/settings") && init.method === "POST")).toBe(true));

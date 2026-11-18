@@ -2684,11 +2684,15 @@ function WorkspaceContextBar({
             ? `Generate and approve ${workspaceLabels[workspace] ?? "workspace"} evidence.`
             : "Run or recover the read-only folder census.",
         }
-      : {
-          purpose: "Choose a local app folder without inventing project facts.",
-          outcome: "One stable project identity and a redacted census receipt.",
-          unlock: "Add a project folder or open the clearly labelled Demo.",
-        };
+      : isCoreWorkspace(workspace) && coreSummary?.started
+        // A core screen with a live core project is not the onboarding case: show its own
+        // purpose, outcome and unlock instead of the "choose a folder" copy.
+        ? context
+        : {
+            purpose: "Choose a local app folder without inventing project facts.",
+            outcome: "One stable project identity and a redacted census receipt.",
+            unlock: "Add a project folder or open the clearly labelled Demo.",
+          };
   const stage = stageNavigation.find((item) => item.id === context.stage);
   const subpages = stage?.workspaces ?? [];
   const [projectMenuOpen, setProjectMenuOpen] = useState(false);

@@ -1,5 +1,6 @@
 import { ArrowClockwiseIcon, ArrowRightIcon, CheckCircleIcon, CopyIcon, GitBranchIcon, ShieldCheckIcon, UserIcon, WarningCircleIcon, XIcon } from "@phosphor-icons/react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { AdvancedOnly, CoreScreen, useAdvanced } from "./CoreScreen.jsx";
 import { coreGet, corePost, useCoreResource } from "./coreApi.js";
 import "./WorkBoardScreen.css";
@@ -19,11 +20,33 @@ const HEALTH_LABEL = {
   blocked: "Blocked",
   review: "Needs review",
   ship: "Ready to ship",
+  ready: "Ready to claim",
   done: "Shipped",
   idle: "Not started",
 };
 
 const LEVEL_ORDER = { stop: 0, risk: 1, info: 2 };
+
+/** One row per kind of problem, with the tasks that have it. Four identical "plan changed" rows
+ *  used to push the board below the fold; the facts are the same, so they share a row. */
+function groupedAttention(items) {
+  const order = [...items].sort((left, right) => LEVEL_ORDER[left.level] - LEVEL_ORDER[right.level]);
+  const groups = new Map();
+  for (const item of order) {
+    const group = groups.get(item.code);
+    if (group) group.tasks.push(item);
+    else groups.set(item.code, { code: item.code, level: item.level, action: item.action, sample: item, tasks: [item] });
+  }
+  return [...groups.values()].map((group) => {
+    const many = group.tasks.length > 1;
+    const message = many && group.code === "plan-changed"
+      ? `The plan was approved after ${group.tasks.length} open tasks were created.`
+      : many
+        ? `${group.tasks.length} tasks: ${group.sample.message.replace(/^T-[\d.a]+\s*/, "")}`
+        : group.sample.message;
+    return { ...group, message, project: group.sample.project };
+  });
+}
 
 function ago(ms) {
   if (ms == null || !Number.isFinite(ms)) return "—";
@@ -81,7 +104,7 @@ function Card({ task, onOpen, activeProject }) {
   );
 }
 
-function AttentionRail({ items, onOpen }) {
+function AttentionRail({ items, onOpen, onProject }) {
   if (!items.length) {
     return (
       <div className="wb-rail wb-rail-clear" role="status">
@@ -90,7 +113,7 @@ function AttentionRail({ items, onOpen }) {
       </div>
     );
   }
-  const sorted = [...items].sort((left, right) => LEVEL_ORDER[left.level] - LEVEL_ORDER[right.level]);
+  const groups = groupedAttention(items);
   return (
     <section className="wb-rail" aria-label="Needs attention">
       <header>
@@ -98,14 +121,21 @@ function AttentionRail({ items, onOpen }) {
         <div><strong>{items.length} thing{items.length === 1 ? "" : "s"} need{items.length === 1 ? "s" : ""} a person</strong><p>Every one is derived from the ledger; nothing here is a guess.</p></div>
       </header>
       <ul>
-        {sorted.map((item, index) => (
-          <li key={`${item.task}-${item.code}-${index}`} data-level={item.level}>
-            <span className="wb-rail-task">{item.task}</span>
+        {groups.map((group) => (
+          <li key={group.code} data-level={group.level}>
+            <span className="wb-rail-task">{group.code}</span>
             <div>
-              <strong>{item.message}</strong>
-              <p>{item.action}</p>
+              <strong>{group.message}</strong>
+              <p>{group.action}</p>
+              {group.tasks.length > 1 && <p className="wb-rail-tasks">{group.tasks.map((item) => item.task).join(" · ")}</p>}
             </div>
-            <button type="button" className="core-button" onClick={() => onOpen({ id: item.task, label: item.task, title: item.title, project: item.project })} disabled={item.task === "project"}>{item.task === "project" ? "Project" : "Open"}</button>
+            {group.code === "token-budget" ? (
+              <button type="button" className="core-button" onClick={onProject}>Raise the cap</button>
+            ) : (
+              group.tasks.slice(0, 4).map((item) => (
+                <button type="button" className="core-button wb-rail-open" key={`${item.task}-${item.code}`} onClick={() => onOpen({ id: item.task, label: item.task, title: item.title, project: item.project })} disabled={item.task === "project"}>{item.task}</button>
+              ))
+            )}
           </li>
         ))}
       </ul>
@@ -116,8 +146,8 @@ function AttentionRail({ items, onOpen }) {
 function Guards({ data }) {
   const guards = data.guards;
   const rows = [
-    ["Ledger chain", guards.ledger.ok ? `verified · ${guards.ledger.entries} entries` : `BROKEN at ${guards.ledger.firstBad ?? "an unknown entry"}`, guards.ledger.ok],
-    ["Pre-push secret scan", guards.secretScan === "installed" ? "installed in the repo" : guards.secretScan === "opted-out" ? "switched off by a person" : guards.secretScan === "not-installed" ? "not installed" : "unknown", guards.secretScan === "installed"],
+    ["Ledger chain", guards.ledger.ok ? `verified · ${guards.ledger.entries} entries` : `BROKEN at ${guards.ledger.firstBad ?? "an unknown entry"}`, guards.ledger.ok ? true : null],
+    ["Pre-push secret scan", guards.secretScan === "installed" ? "installed in the repo" : guards.secretScan === "opted-out" ? "switched off by a person" : guards.secretScan === "not-installed" ? "not installed" : "not checked yet", guards.secretScan === "installed" ? true : guards.secretScan === "unknown" ? null : false],
     ["Test containment", guards.containment === "contained" ? "contained" : "not contained on this OS", guards.containment === "contained"],
     ["Malware scan", "not assessed — no scanner is connected", null],
     ["Dependency audit", "not run — no vulnerability gate exists", null],
@@ -173,7 +203,7 @@ function Budget({ data, post, onSaved }) {
   );
 }
 
-function ReceiptDrawer({ task, project, onClose, onWorkspace, onChanged }) {
+function ReceiptDrawer({ task, project, columnLabel, onClose, onWorkspace, onChanged }) {
   const advanced = useAdvanced();
   const [receipt, setReceipt] = useState(null);
   const [error, setError] = useState("");
@@ -184,6 +214,7 @@ function ReceiptDrawer({ task, project, onClose, onWorkspace, onChanged }) {
   const [people, setPeople] = useState([]);
   const [handoverNote, setHandoverNote] = useState("");
   const [handoverError, setHandoverError] = useState("");
+  const drawerRef = useRef(null);
   const readOnlyProject = task.project !== project;
 
   useEffect(() => {
@@ -204,6 +235,16 @@ function ReceiptDrawer({ task, project, onClose, onWorkspace, onChanged }) {
     );
     return () => { live = false; };
   }, [project]);
+
+  // The drawer is portalled to the body: a transformed ancestor (.workspace-stage) would
+  // otherwise capture position:fixed and push it 192px down, under the topbar on phone.
+  useEffect(() => {
+    const onKey = (event) => { if (event.key === "Escape") { event.stopPropagation(); onClose(); } };
+    document.addEventListener("keydown", onKey);
+    const first = drawerRef.current?.querySelector("button");
+    first?.focus?.();
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
 
   useEffect(() => {
     if (!receipt) return;
@@ -233,13 +274,16 @@ function ReceiptDrawer({ task, project, onClose, onWorkspace, onChanged }) {
     }
   };
 
-  return (
-    <aside className="wb-drawer" role="dialog" aria-modal="false" aria-labelledby="wb-drawer-title">
+  if (typeof document === "undefined") return null;
+  return createPortal(
+    <>
+      <div className="wb-backdrop" onClick={onClose} aria-hidden="true" />
+      <aside className="wb-drawer" role="dialog" aria-modal="true" aria-labelledby="wb-drawer-title" ref={drawerRef}>
       <header>
         <div>
           <span className="wb-id">{task.label ?? task.id}</span>
           <h3 id="wb-drawer-title">{task.title}</h3>
-          <p className="core-muted">{task.projectLabel ?? task.project} · {task.stage} · attempt {task.attempt ?? 1}</p>
+          <p className="core-muted">{task.projectLabel ?? task.project} · {columnLabel ?? task.stage} · attempt {task.attempt ?? 1}</p>
         </div>
         <button type="button" className="icon-button" onClick={onClose} aria-label="Close task details"><XIcon aria-hidden="true" /></button>
       </header>
@@ -315,7 +359,9 @@ function ReceiptDrawer({ task, project, onClose, onWorkspace, onChanged }) {
           )}
         </>
       )}
-    </aside>
+      </aside>
+    </>,
+    document.body,
   );
 }
 
@@ -349,6 +395,12 @@ export default function WorkBoardScreen({ onWorkspace }) {
     setOpen(full);
   };
 
+  const goToBudget = () => {
+    const input = document.getElementById("wb-budget-input");
+    input?.scrollIntoView({ block: "center", behavior: "smooth" });
+    input?.focus?.();
+  };
+
   return (
     <CoreScreen
       id="board"
@@ -362,7 +414,8 @@ export default function WorkBoardScreen({ onWorkspace }) {
         <div className="wb-shell">
           <div className="wb-totals" role="status" aria-label="Board totals">
             <span><strong>{data.totals.working}</strong> working</span>
-            <span><strong>{data.totals.needsYou}</strong> need you</span>
+            <span><strong>{data.totals.needsYou}</strong> in review</span>
+            <span className={data.totals.attention ? "wb-total-bad" : ""}><strong>{data.totals.attention}</strong> need a decision</span>
             <span><strong>{data.totals.blocked}</strong> blocked</span>
             <span><strong>{data.totals.ship}</strong> ready to ship</span>
             <span><strong>{data.totals.done}</strong> shipped</span>
@@ -381,7 +434,7 @@ export default function WorkBoardScreen({ onWorkspace }) {
             </div>
           )}
 
-          <AttentionRail items={data.attention} onOpen={openTask} />
+          <AttentionRail items={data.attention} onOpen={openTask} onProject={goToBudget} />
 
           <div className="wb-columns" aria-label="Workflow columns">
             {columns.map((column) => {
@@ -415,6 +468,7 @@ export default function WorkBoardScreen({ onWorkspace }) {
         <ReceiptDrawer
           task={open}
           project={project}
+          columnLabel={columns.find((column) => column.id === open.column)?.label}
           onClose={() => setOpen(null)}
           onWorkspace={onWorkspace}
           onChanged={resource.reload}
