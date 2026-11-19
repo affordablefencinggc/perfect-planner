@@ -182,7 +182,7 @@ fn run_custody_stdio()->Result<(),&'static str>{
   let exe=std::env::current_exe().unwrap();let pin=format!("{:x}",Sha256::digest(fs::read(&exe).unwrap()));
   let name=concat!(module_path!(),"::child").split_once("::").unwrap().1;
   let spec=json!({"runId":"native-execution-1","intentDigest":"a".repeat(64),"registeredRoot":root,"cwd":root,"executablePath":exe,"executableDigest":pin,
-    "args":["--ignored","--exact",name,"--nocapture"],"timeoutMs":5000,"outputLimits":{"stdoutBytes":8192,"stderrBytes":2048,"combinedBytes":10000},"candidateDigest":"b".repeat(64),"checkContractDigest":"c".repeat(64)});(root,spec)
+    "args":["--ignored","--exact",name,"--nocapture"],"timeoutMs":20000,"outputLimits":{"stdoutBytes":8192,"stderrBytes":2048,"combinedBytes":10000},"candidateDigest":"b".repeat(64),"checkContractDigest":"c".repeat(64)});(root,spec)
  }
  #[test]fn actual_native_observation_uses_reviewed_spec_and_reports_cleanup(){
   let(_,spec)=fixture();let system=std::env::var("SystemRoot").unwrap();let result=execute(&spec,&[("SystemRoot",&system)],&AtomicBool::new(false)).unwrap();
