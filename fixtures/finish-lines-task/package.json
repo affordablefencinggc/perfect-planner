@@ -1,0 +1,8 @@
+{
+  "name": "finish-lines-formatter-fixture",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test"
+  }
+}
