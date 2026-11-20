@@ -21,7 +21,7 @@ The finish line is:
 - Local checkout: C:\repos\perfect-planner-master-audit\candidate459\github-carryover-r26
 - Branch: codex/qualification-r26-carryover
 - Remote: https://github.com/affordablefencinggc/perfect-planner.git
-- This branch was pushed to GitHub. The latest local source commits before this handover were 3870548 and 0e88348; the handover files will add another commit.
+- This feature branch was pushed to GitHub earlier. Continue on `codex/qualification-r26-carryover`; publish new work only as a normal fast-forward push to that same branch. Read `git log -1` and `git status -sb` for the current local and upstream position before pushing; never force-push or merge.
 - A pull request can be opened from:
   https://github.com/affordablefencinggc/perfect-planner/pull/new/codex/qualification-r26-carryover
 - Do not force-push or merge. Push new commits to this same branch.
