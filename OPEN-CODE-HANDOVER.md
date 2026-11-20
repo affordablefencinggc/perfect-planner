@@ -21,6 +21,7 @@ The finish line is:
 - Local checkout: C:\repos\perfect-planner-master-audit\candidate459\github-carryover-r26
 - Branch: codex/qualification-r26-carryover
 - Remote: https://github.com/affordablefencinggc/perfect-planner.git
+- To change the current PowerShell session to this checkout and display its status, dot-source `scripts\cd-r26.ps1`.
 - This feature branch was pushed to GitHub earlier. Continue on `codex/qualification-r26-carryover`; publish new work only as a normal fast-forward push to that same branch. Read `git log -1` and `git status -sb` for the current local and upstream position before pushing; never force-push or merge.
 - A pull request can be opened from:
   https://github.com/affordablefencinggc/perfect-planner/pull/new/codex/qualification-r26-carryover
@@ -594,4 +595,4 @@ This is a concise handover of the recent Codex discussion, not a verbatim chat e
 - **Acceptance contract:** implement pure `formatFinishLine(work)`; trim title/status/owner; use `unassigned` for absent or blank owner; reject missing work, blank title or blank status with descriptive `TypeError`; preserve five tests and add no dependencies. The `node --test` failure-first baseline is 1 pass / 4 expected failures while implementation remains a TODO. This is not a Planner task result.
 - **Scope:** this fixture has no account data, credentials, network dependencies or database. The DANS1 app checkout and its running Planner process were not changed; the staged Stage-03 app was not launched.
 - **Next concrete action:** on a DANS1-identified desktop, open the exact Stage-03 executable and use the fixture as the project for a real Planner task. The owner must perform native folder-picker consent and IDE pairing. Then capture attributable planning, active-worker and completion states and review them in desktop, phone and tablet views.
-- **Source file references:** `fixtures/finish-lines-task/README.md`, `TASK.md`, `package.json`, `src/format-finish-line.mjs`, `test/format-finish-line.test.mjs`; handover details are in `docs/R26-DANS1-CONTINUOUS-DELIVERY.md`.
+- **Source file references:** `scripts/cd-r26.ps1`; `fixtures/finish-lines-task/README.md`, `TASK.md`, `package.json`, `src/format-finish-line.mjs`, `test/format-finish-line.test.mjs`; handover details are in `docs/R26-DANS1-CONTINUOUS-DELIVERY.md`.
