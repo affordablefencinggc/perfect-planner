@@ -15,6 +15,15 @@ This is a **staging** step. It does not create or install an MSI/NSIS installer,
 - Ledger at the time of handover: 5/5 items verified; the exact `ledger.mjs check` receipt remains authoritative.
 - Default isolated stage: `C:\Users\danie\Documents\PerfectPlannerEvidence\20261120-R26-DANS1-Stage-03`
 
+## Verified Windows performance repairs
+
+The DANS1 ledger records `FIX-26`, `FIX-26-SCOPE`, `FIX-26-COVERAGE` and `SHIP` as verified. A read-only `ledger.mjs check` from the pinned checkout returned `open 0 · in_progress 0 · blocked 0 · done 0 · verified 5 · total 5` and `FINISHED: every item verified at current HEAD with intact receipts.`
+
+- The original-limit acceptance script at `C:\Users\danie\Documents\PerfectPlannerEvidence\20261104-Spine\r26\targeted-r26-acceptance.ps1` has SHA-256 `a9a9bd0933926c41d80bec540e62161782435f9431d87b266c17a91bb147a9fe`.
+- The independent `FIX-26` verifier's run 40 exited 0 at source revision `173a4c2a12583b28ffc9622e9554b86876b351f0`; its retained log is `.ledger/logs/FIX-26-040.log`, SHA-256 `c728ea032cbba9e3820317f968a4ef7e8574b2635cc461a437e827e2060c9edb`. The output reports the empty-only-commit whole flow at 3,816 ms and the “20,000 files” whole flow at 5,279 ms.
+- `core/attack/oddrepos.test.ts` is byte-identical on DANS1 and the committed source branch (SHA-256 `6b3b5ef8da08b78247eeebdd4f6fdb6e65bd2220a2e39e5ca1cb0a80bc6be6dd`). Its empty-commit case remains capped at 60,000 ms. The large-repository flow still asserts `<30` seconds and retains its 90,000 ms outer case ceiling. The test's title is “20,000 files”; on Windows its original fixture remains 20 folders × 100 files = 2,000 files. No acceptance limit was raised.
+- The preserved baseline receipt is run 39, SHA-256 `cea767c8fb592448c36bee3a3ee6f58cb32e194f9766c22b3c032588d64ab918`; it is separate from the successful targeted run and remains intact.
+
 The checkout is one ledger-record commit ahead of the qualified release commit. The script allows only that exact state and rejects any product/source diff outside `LEDGER.json`, `LEDGER.md`, and `.ledger/logs/**`.
 
 ## Run
