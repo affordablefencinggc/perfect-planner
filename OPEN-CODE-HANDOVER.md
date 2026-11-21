@@ -747,3 +747,23 @@ This is a concise handover of the recent Codex discussion, not a verbatim chat e
 - **Budget:** main sheet 46,030 B of 46,080 B, total 92,158 B of 92,160 B (repo method): **2 bytes of headroom on the total**. The next CSS change must delete as much as it adds. Nothing was raised.
 - **Tests:** full UI suite 1,035 of 1,036 (the failing `connect-agent-drawer.test.jsx` fails identically on clean code on this PC); the atlas still lists only the 7 other agents' files; checks observed in a headless Chrome on this PC (own profile and port).
 - **Unchanged:** the qualified DANS1 checkout (HEAD `85f15c0`, digest `6b04a3a9`), the pending owner approval and independent `verify SHIP`, the MCP daemon session on DANS1. Not done: Advanced-only organisation menu items, the Developer notes pill, panel search, the project switcher.
+
+### 2026-11-21 — Claude (Sonnet 5.5) to Codex/OpenCode (local "build an app with it" test: one task merged end to end, then a blocker)
+
+Owner: "test out build a app with it". Run on this PC only (never DANS1 or the installed app): the built client from `serve-local` on port 4592 started inside a throwaway sample git repo (`fence-quote-app`, one commit), headless Chrome on its own profile, and a scripted MCP client as the worker (token file path only; the token was never read). Not an IDE-paired agent; not native-app proof.
+
+**Proven, with evidence.** Idea typed, "New command-line tool" starter, 10 blocking questions answered (one by bulk "not needed", one by starter suggestions each), plan approved: 12 roadmap tasks. Dispatch of T-1 made worktree `pp/T-1` (L-000097). Worker proposed a test (L-000100), the Planner itself saw the worker's commit (L-000101), the person approved the test ("fails on today's code"), the worker claimed (L-000106), reported (L-000107), attached the commit (L-000109), "Check the work" passed, "Approve diff at 2a21289c10f0" (bound to the commit), "Merge into main" reran the test on the merge: main = `f639950` "Merge pp/T-1 (T-1) into main". Worker model shown as `unverified:claude-sonnet-5-5`. A tracked `ask_main` question (Q-35) reached the Decisions page with its three options and a required reason.
+
+**Blocker.** T-2 ("npm test passes with one test that runs the command with --help") was already true after T-1, so no failing test can honestly exist. A worker cannot release a task it has not claimed (`CONFLICT: Claim T-2 first`), a Decision has no effect on the task, and `/planning/roadmap/drop` works only before approval (route comment; verified: reopening by answering another question shows "Approve changed plan" but the roadmap still says tasks "were added when the plan was approved" with no drop control). T-6 and T-7 depend on T-2 and stay blocked. Not worked around: writing a fake failing test would defeat the rule.
+
+**Confusing for a beginner (observed):**
+1. "Approve plan" does not say it creates 12 tasks that can no longer be removed; the Roadmap tab (the only place to drop) is not mentioned before approval.
+2. The worker's question is not on T-2's card or on Home; only on Decisions, whose "Waiting for you (11)" mixes it with 10 optional planning suggestions that the approved plan does not need.
+3. Data question: dark green "Recommended: Hosted Postgres" (50%) contradicts the starter's "Nothing stored" for a command-line tool.
+4. Generic template tasks do not fit a command-line tool ("Build App shell", test-suite and release-pipeline tasks).
+5. The sub-header "Unlock next: Generate and approve Deep planning evidence" stays after approval; a real project's Build header says "No Demo tasks..."; Tasks shows a red "Test commands: NOT contained" before any test exists.
+6. A task's "done when" is not on its card before a worker starts; after answering a question post-approval the page kept saying "Plan approved" until reload; a floating "PAGE" scroller covered text on the P1 card (Coordinate, Plan); the Tasks page asks for the git folder again (prefilled correctly).
+
+**Unexplained, not called an app bug:** pointer clicks on Approve test, Approve diff, Start worker and Merge into main were ignored on 5 of 8 first tries; an in-page click or a second try worked, and two probes showed trusted pointer events reaching the buttons. Cause not found; my driver's timing is not excluded.
+
+**Not changed:** no source code in this slice; throwaway data lives under the session scratchpad only. Next sensible work (owner's call): show the Roadmap's Drop controls and a plain warning on the "Approve plan" card, give a worker a way to report "already satisfied", and surface worker questions on the task card.
