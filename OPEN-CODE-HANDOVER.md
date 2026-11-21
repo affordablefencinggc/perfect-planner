@@ -788,7 +788,7 @@ Owner: "do everything properly and thoroughly so we dont miss anything with perf
 
 **Register:** `docs/R26-CHANGE-REGISTER.md` (C-00 to C-14 from the header plan, B-01 to B-22 from three build-test runs, gate results, held items). It is the list to read first.
 
-**Local commits, unpushed:** `9d3099e` (B-01 to B-21 and the Ship screen) and `89ae4ab` (layout audit, overlay fixes, Projects search, old-verdict wording, vocabulary). They sit on top of the earlier local UI commits; the qualified DANS1 checkout (`85f15c0`, digest `6b04a3a9`) contains none of this.
+**Local commits, unpushed** (named by subject, because their hashes change whenever they are re-parented): "Build-test findings B-01 to B-21, and a real Release screen (Ship)" and "Layout audit, overlay fixes, Projects search, clearer old verdicts, one vocabulary". They sit on top of the earlier local UI commits; the qualified DANS1 checkout (`85f15c0`, digest `6b04a3a9`) contains none of this.
 
 **Run 3 (fresh sample repo, new build, headless Chrome):** the whole journey again. Roadmap trimmed before approval, plan approved, four tasks through the gate, including the final task that used to be impossible, then **R-1 v1.0.0 cut on the new Ship screen** (stamp `R-1 · v1.0.0 · P-1 · L-000195 · 8523708`). The gate refused one worker mistake (README example) until it was fixed.
 
