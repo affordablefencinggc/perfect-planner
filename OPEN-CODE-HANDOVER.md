@@ -803,3 +803,29 @@ Owner: "do everything properly and thoroughly so we dont miss anything with perf
 **Held for the owner (nothing changed):** a person-only `task.withdrawn` entry (B-14, B-15, changes the signed ledger schema); disposition of left-behind task folders (B-11); one truth for the Plan and Build verdicts (B-22 only clarifies the wording); a project switcher (C-11); dropping the `layout` flag (C-12); whether "Choose app folder" becomes "Add project folder"; release rollback and deploy (a release only records the commit); the release approval and an independent verifier (C-14); pushing the source commits.
 
 **Not covered:** Define sub-pages, Prove, Index and Settings were not audited; keyboard and accessibility, data safety for the new screens and independent review were not run; B-19 (ignored clicks in run 1) is still unexplained; the test servers keep keys in memory, so after a restart a test ledger is readable but cannot be signed ("Owner key missing").
+
+### 2026-11-21 — Claude (Sonnet 5.5): RESUME HERE (end-of-session handover)
+
+Read `docs/R26-CHANGE-REGISTER.md` first; it is the list of every numbered change with its status and evidence. This entry says where things are and what to do next.
+
+**Where the work is**
+- Repo worktree: `C:\repos\perfect-planner-master-audit\candidate459\github-carryover-r26`, branch `codex/qualification-r26-carryover`. Docs are pushed. **Six source commits exist only on this PC, unpushed** (the owner has not decided to push): "Projects: remove from list with Undo…", "Header: strip dropdown, capped project tabs…", "UI: whole-header dropdown, sharper Projects panel…", "Top bar: one Status button…", "Build-test findings B-01 to B-21, and a real Release screen (Ship)", "Layout audit, overlay fixes, Projects search, clearer old verdicts, one vocabulary". Their hashes change whenever a docs push re-parents them, so find them with `git log origin/codex/qualification-r26-carryover..HEAD`.
+- A safety copy of those commits, the run-3 evidence (audit before/after, screenshots) and my test harness is in `C:\repos\perfect-planner-master-audit\candidate459\handover-20261121-r26\` (outside any worktree). The harness scripts are scratch tools, not product code; `scripts/ui-layout-audit.mjs` is the one that was promoted into the repo.
+- The qualified DANS1 checkout (`85f15c0`, digest `6b04a3a9`) and the installed app contain none of this. Porting the six commits there voids the pending SHIP verification, so it is the owner's call.
+
+**To work on it**
+- Build: `PP_TEST_INTAKE=1 npx vite build` then `node scripts/build-core-host.mjs`.
+- Run a test copy: start `node scripts/serve-local.mjs` from inside a small git repo folder, with `PORT=<free> PP_CORE_KEYS=memory LOCALAPPDATA=<scratch>`; it prints a one-time link. Keys are in memory, so after a restart a test ledger is readable but cannot be signed.
+- Tests: `npx vitest run` (UI; expect 1 known failure, `connect-agent-drawer`), `npx vitest run --config vitest.core.config.mjs` (core; expect 6 failures that also fail on the commit before this work: symlink permission on this Windows account and a `cmd.exe` quirk), `npx tsc -p tsconfig.core.json --noEmit`, `node --test tests/ui-layout-audit.test.mjs tests/map-atlas-coverage.test.mjs` (the atlas lists 7 files that belong to other agents' work).
+- Layout audit: `node scripts/ui-layout-audit.mjs --url <app> --launch <one-time link> --profile <kept folder> --local-storage <registry json> --project <id> --out <folder>` (see the register and the header comment of the script).
+- Stylesheet budget: measure with gzip level 9 per file and in total (limits 46,080 and 92,160 bytes; now 46,007 and 92,135). `npm run verify:performance` fails on this branch for a reason that predates this work (654 files from `public/generated`, limit 200) and stops before the stylesheet checks.
+
+**Next steps, in order**
+1. Owner decisions (register, "Held for the owner"): a person-only `task.withdrawn` entry (B-14, B-15); disposition of left-behind task folders (B-11); one truth for the Plan and Build verdicts (B-22); a project switcher (C-11); dropping the `layout` flag (C-12); renaming "Choose app folder" (C-13); the `public/generated` file-count breach; pushing the six commits.
+2. If the owner wants this in the qualified build: port the commits onto DANS1's base, then one batched SHIP cycle with the owner's release approval and an independent verifier (C-14).
+3. Gates not yet run: keyboard and accessibility (G4), data safety for the new screens (G5), independent review (G7); audit the screens the audit did not cover (Define sub-pages, Prove, Index, Settings, open drawers and popovers); build a repo-owned beginner-walk replay (second half of C-00).
+4. Not built: release rollback and any deploy (a release only records the commit); B-19 (ignored clicks in run 1) is still unexplained.
+
+**Do not:** touch the installed app's ledger or DANS1's qualified checkout without the owner; raise the stylesheet budget (owner only); bend the gate (only the gate writes `task.done`); activate windows or capture the desktop on this PC (DANS1 only).
+
+**Still running:** a test server on `127.0.0.1:4593` (finished run-3 project). Stop it with `Stop-Process -Id (Get-NetTCPConnection -LocalPort 4593 -State Listen).OwningProcess`.
