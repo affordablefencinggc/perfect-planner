@@ -781,3 +781,25 @@ Owner: "start from the start. and we work our way through". Same local harness a
 **Also observed:** step order matters in the UI (approving a diff needs the diff loaded in the same page session; a reload between "Show diff" and "Approve diff" leaves the button inert); T-1's test lives in `test/` while the template names `tests/`; the merge notice says the finished task's folder stays ("Perfect Planner has not changed it and will not remove it") and the UI offers no tidy-up; "Test commands: NOT contained" stays red on Tasks.
 
 **Not changed:** no source code. Run-2 data is in the session scratchpad only.
+
+### 2026-11-21 — Claude (Sonnet 5.5) to Codex/OpenCode (full change register; build-test findings fixed; Ship screen; layout audit)
+
+Owner: "do everything properly and thoroughly so we dont miss anything with perfect planners structure". Read as: one numbered register with honest statuses (`AGENTS.md` change accounting), the plan's phases and gates, and a real-browser check of each change. Nothing was run on DANS1 or in the installed app, and the installed ledger was not touched.
+
+**Register:** `docs/R26-CHANGE-REGISTER.md` (C-00 to C-14 from the header plan, B-01 to B-22 from three build-test runs, gate results, held items). It is the list to read first.
+
+**Local commits, unpushed:** `bd021a5` (B-01 to B-21 and the Ship screen) and `2e0af13` (layout audit, overlay fixes, Projects search, old-verdict wording, vocabulary). They sit on top of the earlier local UI commits; the qualified DANS1 checkout (`85f15c0`, digest `6b04a3a9`) contains none of this.
+
+**Run 3 (fresh sample repo, new build, headless Chrome):** the whole journey again. Roadmap trimmed before approval, plan approved, four tasks through the gate, including the final task that used to be impossible, then **R-1 v1.0.0 cut on the new Ship screen** (stamp `R-1 · v1.0.0 · P-1 · L-000195 · 8523708`). The gate refused one worker mistake (README example) until it was fixed.
+
+**New in the product:** `GET /release` and `POST /release/cut` (person's act, bound to the fingerprint of what was shown, open tasks need acknowledging); the Ship screen (Release lands there once a core project has started); the roadmap's last task is now "Make the first release ready"; a worker's open question shows on its task card; the plan's done-when shows before a worker starts; "Approve plan" says tasks cannot be removed afterwards; weak default recommendations no longer contradict the starter; the sub-header keeps a core screen's own purpose; the plan pager and Developer notes no longer cover content (Developer notes is a right-edge handle); the Projects panel has search above six projects; organisation menu entries are Advanced-only.
+
+**New tool:** `scripts/ui-layout-audit.mjs` (C-00). On 24 pages (4 desktop widths x Home, Deep planning, Plan, Decisions, Tasks, Ship): 17 violations before the fixes, 0 after. Look-only; own browser; see the register for how to run it (a one-time launch link works once; use `--profile`).
+
+**Checks on this PC:** UI suite 1,065 of 1,066 (the one failure also fails on the commit before this work and passes on DANS1); core type-check clean; core suite 2,261 passed and 6 failed (the same 6 fail on the commit before this work: EPERM symlink creation on this Windows account, and a cmd.exe quirk); stylesheet budget 46,007 B main and 92,135 B total (limits 46,080 and 92,160; was 46,030 and 92,158).
+
+**Found, not mine:** `npm run verify:performance` fails on this branch with "more than 200 files" (654): 580 tracked files under `public/` (452 in `public/generated/generations`) are copied into the client package, identical at `a126721`. It stops before the stylesheet checks, so the stylesheet figures come from my script using the repo's method.
+
+**Held for the owner (nothing changed):** a person-only `task.withdrawn` entry (B-14, B-15, changes the signed ledger schema); disposition of left-behind task folders (B-11); one truth for the Plan and Build verdicts (B-22 only clarifies the wording); a project switcher (C-11); dropping the `layout` flag (C-12); whether "Choose app folder" becomes "Add project folder"; release rollback and deploy (a release only records the commit); the release approval and an independent verifier (C-14); pushing the source commits.
+
+**Not covered:** Define sub-pages, Prove, Index and Settings were not audited; keyboard and accessibility, data safety for the new screens and independent review were not run; B-19 (ignored clicks in run 1) is still unexplained; the test servers keep keys in memory, so after a restart a test ledger is readable but cannot be signed ("Owner key missing").
