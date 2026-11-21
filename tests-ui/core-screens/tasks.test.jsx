@@ -837,6 +837,19 @@ describe("TasksScreen queue and batch", () => {
       expect(screen.getAllByText("NOT contained").length).toBeGreaterThan(0);
       expect(screen.queryByText("contained: bubblewrap")).toBeNull();
     });
+    // task.check records only { passed, commit }, not how that run was contained, so the line must stay a plain sentence
+    // (an inline "NOT contained" badge read as "Last recorded check NOT contained passed at …" and implied a fact we never recorded).
+    test.each([[true, "passed"], [false, "failed"]])("recorded check line is a plain sentence with no containment badge (passed=%s)", async (passed, word) => {
+      const reviewed = task({ stage: "review-diff", status: "claimed", owner: "worker-1", check: { passed, commit: "aaaaaaaaaaaa1234" }, proofs: [{ kind: "commit", link: "bbbbbbbbbbbb" }], checkReady: { ok: true }, diffApproval: { commit: "aaaaaaaaaaaa1234" } });
+      routeFetch({ "GET /tasks": async () => ok(view([reviewed])) });
+      renderScreen();
+      const c = await card("T-1 Save notes");
+      const line = within(c).getByText("Last recorded check").closest("p");
+      expect(line.textContent).toBe(`Last recorded check ${word} at aaaaaaaaaaaa. Later changes need another check.`);
+      expect(line.querySelector(".core-pill")).toBeNull();
+      // containment is still disclosed where it is actually known: the screen-level "Test commands" line.
+      expect(screen.getAllByText("NOT contained").length).toBeGreaterThan(0);
+    });
     test("contained: shows the bubblewrap pill and not the runs-as-you sentence", async () => {
       routeFetch({ "GET /tasks": async () => ok({ ...view([proposed()]), containment: { contained: true, by: "bubblewrap" } }) });
       renderScreen();

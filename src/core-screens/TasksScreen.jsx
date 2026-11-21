@@ -300,7 +300,7 @@ function TaskCard({ contained, task, repoRoot, project, act, busy, notice, dispa
       {progressText(task.lastProgress) && <p className="core-tasks-line"><span className="core-muted">Latest</span> {progressText(task.lastProgress)}</p>}
       {task.proofs.length > 0 && <p className="core-tasks-line"><span className="core-muted">Proof</span> {task.proofs.map((p) => `${p.kind} ${p.link.slice(0, 12)}`).join(", ")}</p>}
       {task.check && task.stage !== "done" && (
-        <p className="core-tasks-line"><span className="core-muted">Last recorded check</span> <Pill contained={contained} /> {task.check.passed ? "passed" : "failed"}{task.check.commit ? ` at ${task.check.commit.slice(0, 12)}` : ""}. Later changes need another check.</p>
+        <p className="core-tasks-line"><span className="core-muted">Last recorded check</span> {task.check.passed ? "passed" : "failed"}{task.check.commit ? ` at ${task.check.commit.slice(0, 12)}` : ""}. Later changes need another check.</p>
       )}
       {task.workerReport?.reportedModel && (task.dispatch?.model ?? task.workerDispatch?.requestedModel) && task.workerReport.reportedModel !== (task.dispatch?.model ?? task.workerDispatch?.requestedModel) && <p className="core-tasks-warn">Model conflict: requested {task.dispatch?.model ?? task.workerDispatch?.requestedModel}; worker reported {task.workerReport.reportedModel}. The report does not verify the runtime model.</p>}
       {task.merged && <p className="core-tasks-line"><span className="core-muted">Merged</span> {task.merged.commit?.slice(0, 12)}</p>}
