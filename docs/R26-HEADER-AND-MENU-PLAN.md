@@ -1,6 +1,6 @@
 # R26 header and menu re-organisation plan
 
-**Status: PLAN. Nothing in this document is implemented yet.** Written 2026-11-21 by Claude (Sonnet 5.5) at the owner's request: "the grey creamy header at the top should be a drop down", "the menu layout up top", "the menu layout left side", "make a bullet proof plan", plus "there's no way to close working folders or remove them, just a long pile of folders".
+**Status: P1 (remove from list and the Settings/Add-project overlap fix) is implemented in the carryover working tree and proven in a scratch build on DANS1 (section 13). It is committed locally, not pushed, and not on the qualified DANS1 checkout. P0 and P2-P6 are not started.** Written 2026-11-21 by Claude (Sonnet 5.5) at the owner's request: "the grey creamy header at the top should be a drop down", "the menu layout up top", "the menu layout left side", "make a bullet proof plan", plus "there's no way to close working folders or remove them, just a long pile of folders".
 
 Scope: desktop only (owner decision 2026-11-11, reconfirmed 2026-11-21). Phone and tablet layouts are not a target and are not checked.
 
@@ -170,7 +170,7 @@ The edge handle is renamed "Projects". The footer is padded by the layer contrac
 3. **Soft remove.** The full project session is copied to a separate key, `perfect-planner.removed-projects.v1`, before it leaves the registry, so **no registry schema change is needed** (the registry validates its keys strictly, so a schema bump would be a risk). A toast offers **Undo** for 10 seconds; afterwards the project stays under "Recently removed" with **Restore** and **Forget permanently**. Nothing is purged automatically.
 4. **Re-adding the same folder** gives the same project id (`createImportedProjectId`, `src/project/projectIds.js:43`, derived from the folder's identity), so drafts and approvals saved in browser storage for that id reconnect. To be confirmed by the C-01 test, not assumed.
 5. **Active project.** Removing the open project switches to the next remaining one, or to Home if none, and rewrites the URL and history so Back never lands on a removed id.
-6. **Unfinished work.** If the host reports tasks in progress or claimed for the project, removal is refused with the reason and the exact next action (finish or release them), matching the `REPO_BUSY` rule already in `core/host/routes/repos.ts:73-90`.
+6. **Unfinished work.** Intended: if the host reports tasks in progress or claimed for the project, removal is refused with the reason and the exact next action, matching the `REPO_BUSY` rule in `core/host/routes/repos.ts:73-90`. **P1 downgrade, stated plainly:** the host summary (`core/host/routes/summary.ts`) carries only the checked-in agent count and the plan's task total, not tasks in progress, so the client cannot refuse honestly. P1 shows a warning in the confirm ("N agents are checked in to this project. Removing it from the list does not stop them.") and does not block. The refusal needs a host field first (backlog B-1).
 7. **Failure.** If storage refuses the write, nothing is removed and the user is told why; a corrupt "removed" shelf is ignored with a notice and never blocks the app.
 8. **Two windows.** The registry already synchronises across tabs through the `storage` event; the removal must use the same path (`rebaseBeforeMutation`) so it cannot resurrect a removed project.
 
@@ -227,6 +227,7 @@ Counted by `git grep` on 2026-11-21 (files, not cases): project tabs and folder 
 | WebView2 (desktop) renders differently from Chrome | G2/G3 run in Chrome first; native confirmation stays a separate, labelled step with the staged executable. |
 | The owner dislikes the result | The `layout` setting reverts instantly; each phase is separately revertable. |
 | Another full qualification cycle | Batched into one (section 8.4). |
+| **The main stylesheet is almost at its budget.** Measured the way `scripts/verify-performance-budget.mjs` does (gzip level 9): `index-*.css` was 45,800 B against the 46,080 B (45 KiB) limit before P1 and is 46,015 B after the compacted P1 styles, leaving 65 B (total 89,926 B of 92,160 B). My first P1 styles took it to 46,162 B, which would have failed `verify:release`; that was caught only by measuring. | P2-P4 add CSS, so each phase must measure before it is committed. Either the owner approves a budget raise (the budget file's own history shows previous raises were owner-approved) or new styles move into on-demand chunks. Agents must not raise it themselves. |
 
 ## 11. Decisions made on the owner's behalf (reversible) and open questions
 
@@ -244,3 +245,35 @@ Backlog from the same walk, not part of this plan: choose-folder confirmation is
 4. I can find Settings in one click and it is not red.
 5. No button is ever covered by another button.
 6. Every status I could read before, I can still read, in one click.
+
+## 13. P1 status and evidence (2026-11-21)
+
+**Built (local commits in the carryover working tree; not pushed; not on the DANS1 qualified checkout):**
+
+| Change | What | Files |
+|---|---|---|
+| C-01 | Soft-remove shelf: a removed project's full session is copied to its own storage key (`perfect-planner.removed-projects.v1`) before it leaves the registry; unreadable data is copied aside, never overwritten; nothing is purged automatically. | `src/project/removedProjects.js` |
+| C-02 | "Remove from list" on every drawer row with an inline confirm (focus starts on Cancel, Escape cancels), a toast with **Undo** (kept at least 10 s, and kept when the open project changes), a "Recently removed" section (Restore, and a confirmed Forget permanently), the drawer stays open so several folders can be tidied in one go, and removing the last project goes to Home with no project in the address. Provider API: `removeProject`, `restoreRemovedProject`, `forgetRemovedProject`, `removedProjects`. | `src/project/RemovableProjectRow.jsx`, `src/project/ProjectProvider.jsx`, `src/PerfectPlannerShell.jsx`, `src/styles.css` |
+| C-03 | Interim overlap fix: while the left drawer is open the Settings button and the toast sit to the right of it, so neither covers the drawer footer. | `src/settings/settings.css`, `src/styles.css`, `src/PerfectPlannerShell.jsx` |
+| C-03b | The three new files and this document are registered in the app atlas (`src/engine/appMapRegistry.js`, component C032 and the supporting docs list). | `src/engine/appMapRegistry.js` |
+
+**Evidence** (Chrome owned by the run, never port 9333; web route of the real client on DANS1, 1600x1000, a patched copy of DANS1's own base, not the qualified checkout):
+
+| Check | Result |
+|---|---|
+| New tests `tests-ui/removed-projects.test.jsx` (20: shelf, provider, row, and end-to-end through the real shell) | 20/20 pass locally and 20/20 on DANS1 |
+| Full local UI suite after the changes (two full runs) | 1,030 of 1,031 pass in the first run and 1,029 of 1,031 in the second. `connect-agent-drawer` fails the same way on the clean committed code (pre-existing on this PC). `core-api-session` "agent model label" hit its 20 s limit under full-suite load in the second run only; it passes alone, twice, with the changes. |
+| Existing tests touching the drawer (94) | pass |
+| Overlap audit, old build, drawer open | **1 covered control**: "Add project" under "Settings" |
+| Overlap audit, patched build, drawer open, with and without the toast, five sample points per control | **0 covered controls** |
+| Remove, confirm, toast with Undo, Undo, remove the open project, remove another, Restore, Forget (cancel, then confirm) | each step observed in the running app |
+| Disk and host data before and after all of that: five sample folders (115 files) and the host data folder (6 files) | byte-identical (digests `7d95ce82bd30ed32`, `1fc3b3470adc9094`) |
+| Main stylesheet budget (repo's own method) | 46,015 B of 46,080 B: passes with 65 B of headroom (see the risk table) |
+| Atlas coverage | my files registered; 7 other carryover-only files (`docs/R26-DANS1-CONTINUOUS-DELIVERY.md`, the five `fixtures/finish-lines-task/` files, `scripts/stage-r26-dans1.mjs`) are still unregistered and make this test fail on the branch regardless of P1 |
+| `tests-ui/connect-agent-drawer.test.jsx` on this PC | fails identically on the clean committed code (pre-existing on this PC; the same suite passed on DANS1 during `verify:release`) |
+
+**Not done in P1, still planned:** removal on the top tabs and the folder+ menu rows (P4's project switcher replaces both); the busy refusal (B-1: needs a host field for tasks in progress); a restored project returns to the end of the list, not its old position (B-2); the unexplained "generated" badge and the small remove icon (P2/P5). The inline confirm inherits the drawer's body font instead of the monospace used elsewhere (polish).
+
+**Not claimed:** nothing here is native-app proof, nothing is on the qualified DANS1 checkout, the ledger is untouched, and no phone/tablet check was made (owner decision). The audit and walk driver used for the evidence lives in the DANS1 run folder `20261121-R26-BeginnerWalk` (`bw.mjs`) and is not yet a repository script; making it one is P0 (C-00).
+
+**To land P1 on DANS1:** port the same change to the qualified checkout, run the focused ledger item, then include it in the single batched `SHIP` cycle (section 8).
