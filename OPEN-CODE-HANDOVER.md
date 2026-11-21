@@ -767,3 +767,17 @@ Owner: "test out build a app with it". Run on this PC only (never DANS1 or the i
 **Unexplained, not called an app bug:** pointer clicks on Approve test, Approve diff, Start worker and Merge into main were ignored on 5 of 8 first tries; an in-page click or a second try worked, and two probes showed trusted pointer events reaching the buttons. Cause not found; my driver's timing is not excluded.
 
 **Not changed:** no source code in this slice; throwaway data lives under the session scratchpad only. Next sensible work (owner's call): show the Roadmap's Drop controls and a plain warning on the "Approve plan" card, give a worker a way to report "already satisfied", and surface worker questions on the task card.
+
+### 2026-11-21 — Claude (Sonnet 5.5) to Codex/OpenCode (build test, run 2: a working app built through the loop; the last roadmap task cannot be completed)
+
+Owner: "start from the start. and we work our way through". Same local harness as run 1 (fresh sample repo, fresh Planner data, own headless Chrome, scripted worker with the token file path only; not an IDE-paired agent, not native proof), this time reviewing the roadmap BEFORE approving.
+
+**Built and merged through the app (4 tasks):** T-1 `--help` scaffold (main `e169b49`), T-2 itemised quote from `--length/--style/--gates` (`99b0a91`), T-3 plain messages and exit code 2 for bad input (`950a0c8`), T-5 columns lined up (`1faeae0`), where T-5 was the person's own task added through "Add your own task" after a visible defect ("Colorbond fence25 m") in merged work. Every task: failing test proposed, person approval ("fails on today's code"), claim, proof commit, "Check the work", "Approve diff at <hash>", merge that reran the test. `npm test` on main: 11 of 11; a real quote and a real error ("The fence length must be a number of metres, but you gave "ten"", exit 2) were run from main.
+
+**What made the difference:** the draft Roadmap tab offers "Leave out" on each task before approval ("A draft… you can leave any of them out"). I left out T-2 (already true), App shell, Main layout, Framework and four release-filler tasks (12 -> 4 tasks). The "Approve plan" card never mentions this tab. After approval nothing can be removed; "Add your own task" still works.
+
+**Last task cannot be completed:** "Cut the first release" (done when a release entry R-1, v1.0.0 is in the ledger) needs `cutRelease` (core/numbering/release.ts), which has no caller outside tests: no host route, no screen, no MCP tool. I did not fake it; T-4 stays not started. The Release stage opens the browser-side "Project record ledger", which showed "Local draft · 0 tasks" and "No task drafts yet" for a project with five finished tasks.
+
+**Also observed:** step order matters in the UI (approving a diff needs the diff loaded in the same page session; a reload between "Show diff" and "Approve diff" leaves the button inert); T-1's test lives in `test/` while the template names `tests/`; the merge notice says the finished task's folder stays ("Perfect Planner has not changed it and will not remove it") and the UI offers no tidy-up; "Test commands: NOT contained" stays red on Tasks.
+
+**Not changed:** no source code. Run-2 data is in the session scratchpad only.
